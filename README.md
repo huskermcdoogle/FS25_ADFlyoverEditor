@@ -104,6 +104,35 @@ situation and the second wrapper is carrying the HUD suppression alone. Either a
 nothing load-bearing depends on it — but it is the one open question from the build plan, and this
 is where it gets answered.
 
+## Stage 4 — the proxy
+
+The network gets re-centred on a cursor instead of the vehicle, by handing
+`AutoDrive:onDrawEditorMode` a stand-in `self` whose `components[1].node` sits at the cursor and
+whose `__index` sends everything else to the real vehicle. This is the mechanism the whole companion
+approach rests on, already measured once by the spike at 4,813 calls with zero errors.
+
+Sit in an AutoDrive vehicle, then:
+
+```
+FlyoverProxyAt
+```
+
+With no arguments it drops the cursor 200 m from you — a red vertical marker. **The network should
+draw around the marker, not around you.** `FlyoverProxyAt <x> <z>` aims it anywhere;
+`FlyoverProxyOff` ends it.
+
+Then `FlyoverStatus`. Two counters matter:
+
+- **`proxy draws`** climbing — the stand-in is being accepted frame after frame. If the stand-in were
+  wrong, `self.ad` or `self.components[1].node` would throw on the *first* frame and the proxy would
+  disable itself with the error in the log.
+- **`onDrawUIInfo`** climbing — this is now allowed to fire, because `proxyOwnsNetwork` is true and
+  something else is drawing. If it stays at 0 while the network still appears at the cursor, then
+  `onDrawUIInfo` is not raising and `Hud.drawHud` is doing the HUD suppression alone.
+
+Note this stage still has no `GuiTopDownCamera`, so it does **not** settle whether `onDrawUIInfo`
+survives the camera — that is genuinely stage 5. What it settles is the stand-in.
+
 ## Layout
 
 | File | |
@@ -111,6 +140,7 @@ is where it gets answered.
 | `scripts/Prelude.lua` | the only `<extraSourceFiles>` entry; orders everything |
 | `scripts/Arming.lua` | listener scan → `getfenv` → republish |
 | `scripts/EnvProbe.lua` | one line, answers the environment question |
+| `scripts/Proxy.lua` | the stand-in `self` that re-centres the network |
 | `scripts/Wrappers.lua` | the five fork edits as runtime wrappers |
 | `scripts/Settings.lua` | six companion-owned settings; never touches `AutoDrive.settings` |
 | `tools/make_icon.py` | regenerates `icon.dds` |

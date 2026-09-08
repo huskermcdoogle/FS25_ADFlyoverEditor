@@ -143,8 +143,20 @@ function W.install(AD)
         return originalHandleSplineCurvature(selfArg, offset, ...)
     end
 
+    -- 6. The proxy's ride. AutoDrive.draw is a mod event listener, so the engine looks it up by
+    -- name on this table every frame. Queueing the cursor-centred network here means it lands in
+    -- ADDrawingManager immediately before AutoDrive's own flush on the next line - so we never have
+    -- to reach ADDrawingManager, which is another global inside AutoDrive's environment.
+    local originalDraw = AD.draw
+    AD.draw = function(selfArg, ...)
+        if editorActive() and ADFlyoverProxy ~= nil then
+            ADFlyoverProxy.run()
+        end
+        return originalDraw(selfArg, ...)
+    end
+
     W.installed = true
-    log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature",
+    log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature, draw",
         W.hudWrapped and "Hud.drawHud, " or "")
     return true
 end

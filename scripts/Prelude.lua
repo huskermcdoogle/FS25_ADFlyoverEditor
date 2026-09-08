@@ -30,6 +30,7 @@ local P = ADFlyoverPrelude
 source(Utils.getFilename("scripts/Arming.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Settings.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Wrappers.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -166,6 +167,12 @@ function P:update(dt)
     log("ARMED. %d editor file(s) sourced. Settings: %s", #P.sourcedFiles, ADFlyoverSettings.describe())
 end
 
+function P:draw()
+    if ADFlyoverProxy ~= nil then
+        ADFlyoverProxy.drawMarker()
+    end
+end
+
 function P:deleteMap()
     P.state = "waiting"
     P.sourcedFiles = {}
@@ -181,6 +188,7 @@ function P:consoleStatus()
         string.format("sourced files land in: %s", tostring(P.sourceEnvName)),
         string.format("editor files sourced: %d", #P.sourcedFiles),
         ADFlyoverWrappers.describe(),
+        ADFlyoverProxy.describe(),
         ADFlyoverSettings.describe(),
     }
     for _, line in ipairs(lines) do
@@ -255,6 +263,34 @@ function P:consoleFakeActive()
     return "Fake active OFF. All four should come back. " .. ADFlyoverWrappers.describe()
 end
 
+--- Stage 4: put the network somewhere the vehicle is not, and see whether it follows.
+function P:consoleProxyAt(xArg, zArg)
+    local x, z = tonumber(xArg), tonumber(zArg)
+    if x == nil or z == nil then
+        -- No coordinates given: drop it a long way from the host vehicle, which is the whole point.
+        local vehicle = ADFlyoverArming.autoDrive ~= nil and ADFlyoverArming.autoDrive.getControlledVehicle() or nil
+        if vehicle == nil then
+            return "Usage: FlyoverProxyAt <x> <z>   (or get in a vehicle and call it with no arguments)"
+        end
+        local vx, _, vz = getWorldTranslation(vehicle.components[1].node)
+        x, z = vx, vz + 200
+    end
+    ADFlyoverProxy.setCursor(x, z)
+    ADFlyoverProxy.enabled = true
+    ADFlyoverWrappers.testActive = true
+    log("proxy cursor at %.1f / %.1f", x, z)
+    return string.format("Proxy ON, cursor at %.1f / %.1f (red marker). The network should draw "
+        .. "THERE rather than around your vehicle. FlyoverStatus for the counters.", x, z)
+end
+
+function P:consoleProxyOff()
+    ADFlyoverProxy.clear()
+    ADFlyoverWrappers.testActive = false
+    return "Proxy OFF. " .. ADFlyoverProxy.describe()
+end
+
+addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)
+addConsoleCommand("FlyoverProxyOff", "Stage 4: turn the proxy and the fake gate off", "consoleProxyOff", P)
 addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 
