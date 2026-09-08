@@ -47,7 +47,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.6.0.0"
+P.BUILD = "0.6.1.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -150,6 +150,10 @@ function P:update(dt)
         ADFlyoverProxy.drewThisFrame = false
     end
 
+    if editorLoaded() then
+        ADFlyoverEditor:update(dt)
+    end
+
     if P.state ~= "waiting" then
         return
     end
@@ -205,7 +209,37 @@ function P:update(dt)
         P.versionString(), #P.sourcedFiles, ADFlyoverSettings.describe())
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Event dispatch to the editor.
+--
+-- The fork does this from AutoDrive's own register.lua, whose AutoDriveRegister listener forwards
+-- keyEvent, mouseEvent, update and draw to ADFlyoverEditor. That file is AutoDrive's, so a
+-- companion cannot add to it - and without an equivalent the editor opens perfectly and then sits
+-- deaf: no mouse, no keys, and no update, which also means the camera never moves however
+-- successfully registerActionEvents ran. This is the seventh upstream edit; the port inventory
+-- counted the six edited FILES and missed it.
+-- ---------------------------------------------------------------------------------------------
+
+local function editorLoaded()
+    return ADFlyoverEditor ~= nil
+end
+
+function P:keyEvent(unicode, sym, modifier, isDown)
+    if editorLoaded() then
+        ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
+    end
+end
+
+function P:mouseEvent(posX, posY, isDown, isUp, button)
+    if editorLoaded() then
+        ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
+    end
+end
+
 function P:draw()
+    if editorLoaded() then
+        ADFlyoverEditor:draw()
+    end
     if ADFlyoverProxy ~= nil then
         ADFlyoverProxy.drawMarker()
     end
