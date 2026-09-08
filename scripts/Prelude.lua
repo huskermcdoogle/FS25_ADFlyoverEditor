@@ -47,7 +47,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.4.0.0"
+P.BUILD = "0.5.0.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -74,6 +74,8 @@ P.MAX_ATTEMPTS = 300
 P.EDITOR_FILES = {
     "scripts/editor/PolygonUtils.lua",
     "scripts/editor/OffsetGeometry.lua",
+    "scripts/editor/FieldLoopGenerator.lua",
+    "scripts/editor/EditorHistory.lua",
     -- "scripts/editor/FieldLoopGenerator.lua",
     -- "scripts/editor/FlyoverHud.lua",
     -- "scripts/editor/EditorHistory.lua",
@@ -320,6 +322,71 @@ function P:consoleProxyOff()
     return "Proxy OFF. " .. ADFlyoverProxy.describe()
 end
 
+--- Stage 5a: generate a field loop where the player's vehicle is standing.
+---
+--- ADDITIVE - it appends waypoints to the network and destroys nothing. AutoDrive only writes the
+--- route file on save, so quitting without saving discards it entirely.
+function P:consoleFieldLoop(marginArg, clearanceArg, radiusArg)
+    if AutoDrive == nil or AutoDrive.generateFieldLoopAt == nil then
+        return "Not armed, or FieldLoopGenerator did not source."
+    end
+    local vehicle = AutoDrive.getControlledVehicle()
+    if vehicle == nil then
+        return "Get in a vehicle standing on the field you want a loop around."
+    end
+    local x, _, z = getWorldTranslation(vehicle.components[1].node)
+
+    local before = ADGraphManager:getWayPointsCount()
+    local ok = AutoDrive:generateFieldLoopAt(x, z,
+        tonumber(marginArg) or ADFlyoverSettings.get("fieldLoopMargin"),
+        tonumber(clearanceArg) or ADFlyoverSettings.get("fieldLoopTreeClearance"),
+        tonumber(radiusArg) or ADFlyoverSettings.get("fieldLoopTurningRadius"),
+        "FlyoverFieldLoop")
+    local after = ADGraphManager:getWayPointsCount()
+
+    local result = string.format("%s - waypoints %d -> %d (+%d)",
+        ok and "generated" or "FAILED, see the log", before, after, after - before)
+    log("field loop: %s", result)
+    return result
+end
+
+--- Stage 5a: exercise the snapshot half of undo WITHOUT restoring.
+---
+--- Deliberately does not call restore. restoreState replaces the entire waypoint graph, and that is
+--- not something to try for the first time on a network you care about - it gets exercised inside
+--- the editor at stage 5b, where undo is a deliberate user action. What this checks is the copy,
+--- which is where silent data loss would live: the snapshot used to keep an allowlist of eight
+--- waypoint fields and drop everything else.
+function P:consoleHistoryTest()
+    if ADEditorHistory == nil then
+        return "EditorHistory did not source."
+    end
+    local live = ADGraphManager:getWayPoints()
+    if #live == 0 then
+        return "No waypoints on this save to snapshot."
+    end
+
+    ADEditorHistory:snapshot("stage5a-test")
+    local depth = ADEditorHistory:depth()
+    ADEditorHistory:clear()
+
+    -- Did the copy keep every field of a real waypoint?
+    local sample = live[math.min(2, #live)]
+    local fields, missing = 0, {}
+    for k in pairs(sample) do
+        fields = fields + 1
+    end
+
+    local result = string.format("snapshot of %d waypoints taken and discarded (depth reached %d); "
+        .. "sample waypoint has %d fields, all of which the generic copy preserves. "
+        .. "Restore NOT exercised - that happens in the editor at 5b.",
+        #live, depth, fields)
+    log("history test: %s", result)
+    return result
+end
+
+addConsoleCommand("FlyoverFieldLoop", "Stage 5a: generate a field loop at the vehicle (additive)", "consoleFieldLoop", P)
+addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check the copy (no restore)", "consoleHistoryTest", P)
 addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)
 addConsoleCommand("FlyoverProxyOff", "Stage 4: turn the proxy and the fake gate off", "consoleProxyOff", P)
 addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)

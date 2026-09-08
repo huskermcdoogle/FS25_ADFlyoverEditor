@@ -10,13 +10,13 @@
 
 Requires FS25_AutoDrive to be installed and active. This mod does not modify AutoDrive; it attaches to it at runtime and refuses to load if it cannot.
 
-STAGE 4 - infrastructure, the copied geometry, the host wrappers and the network proxy. There is no editor yet.
+STAGE 5a - adds the field-loop generator and the undo history. There is no editor yet.
 
 Console: FlyoverStatus, FlyoverGeomTest, FlyoverFakeActive, FlyoverProxyAt, FlyoverProxyOff.
 ]]>
 		</en>
 	</description>
-	<version>0.4.0.0</version>
+	<version>0.5.0.0</version>
 	<multiplayer supported="false" />
 	<iconFilename>icon.dds</iconFilename>
 	<extraSourceFiles>
