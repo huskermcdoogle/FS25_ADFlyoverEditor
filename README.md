@@ -1,6 +1,8 @@
 # FS25_ADFlyoverEditor
 
-## Tested (2026-09-08, build 0.7.1.0, stock AutoDrive 3.0.0.8, fork disabled)
+## Tested — all eleven tools pass
+
+2026-09-08, build 0.7.3.0, against stock AutoDrive 3.0.0.8 with `FS25_AutoDrive_Gibbs` disabled.
 
 | Tool | |
 |---|---|
@@ -14,7 +16,7 @@
 | merge | ✅ |
 | field loop | ✅ via console |
 | divide | ✅ incl. the fork/direction fixes |
-| **convert** | **not confirmed** — selected, but no completed conversion in any log |
+| convert | ✅ all four operations |
 
 Also verified: **settings persistence** end to end — a changed value written to
 `modSettings/FS25_ADFlyoverEditor/settings.xml` as an index, read back across a full restart, and
