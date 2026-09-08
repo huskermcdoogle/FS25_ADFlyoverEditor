@@ -23,6 +23,10 @@ W.MOD_NAME = "ADFlyoverEditor"
 -- is present this falls through to the real thing and the fake is dead weight.
 W.testActive = false
 
+-- Whether something else is drawing the waypoint network right now. Until the proxy exists
+-- (stage 4) the answer is no, and that decides whether wrapper 2 may fire at all - see below.
+W.proxyOwnsNetwork = false
+
 W.counts = {
     mouseSuppressed = 0,
     onDrawUIInfo = 0,   -- the open question: does this still raise once GuiTopDownCamera is active?
@@ -69,16 +73,24 @@ function W.install(AD)
         return originalMouseEvent(selfArg, ...)
     end
 
-    -- 2. The vehicle HUD. Suppress the HUD half only - the network rendering that follows it in the
-    -- same function is what the editor uses instead of drawing its own, and must not be skipped.
+    -- 2. The vehicle-centred draw. This one is NOT the HUD wrapper, despite appearances, and
+    -- getting that wrong cost a test cycle: onDrawUIInfo draws the HUD *and then* calls
+    -- self:onDrawEditorMode(), which is the waypoint network. Returning early from it suppresses
+    -- both. The fork skipped only the Hud:drawHud line inside the function and let the rest run;
+    -- from outside a function cannot be half-suppressed, so wrapper 2b does the HUD surgically and
+    -- this one exists purely to stop the network being drawn TWICE.
     --
-    -- Whether this fires at all once GuiTopDownCamera is active has never been measured. AutoDrive
-    -- itself works around exactly that for the construction screen, so it may well stop raising. If
-    -- it does, this wrapper simply never runs, which costs the HUD suppression and nothing else -
-    -- wrapper 2b covers that, and the network proxy rides AutoDrive.draw rather than this.
+    -- So it may only fire once something else is drawing the network - the proxy, from stage 4.
+    -- Before that, suppressing here leaves nothing drawing it at all, and the editor shows an empty
+    -- world. (Construction mode still worked in that state, because constructionScreenDraw calls
+    -- onDrawEditorMode directly and never comes through here - which is what identified the bug.)
+    --
+    -- Whether this raises at all once GuiTopDownCamera is active is still unmeasured; AutoDrive
+    -- works around exactly that for its construction screen. If it stops, the proxy still draws and
+    -- 2b still hides the HUD, so nothing load-bearing is lost either way.
     local originalOnDrawUIInfo = AD.onDrawUIInfo
     AD.onDrawUIInfo = function(vehicle, ...)
-        if editorActive() then
+        if editorActive() and W.proxyOwnsNetwork then
             W.counts.onDrawUIInfo = W.counts.onDrawUIInfo + 1
             return
         end
@@ -139,8 +151,8 @@ end
 
 function W.describe()
     return string.format(
-        "installed=%s hudWrapped=%s active=%s | mouse %d, onDrawUIInfo %d, drawHud %d, editorShow %d, wheel %d",
-        tostring(W.installed), tostring(W.hudWrapped), tostring(editorActive()),
+        "installed=%s hudWrapped=%s active=%s proxyOwnsNetwork=%s | mouse %d, onDrawUIInfo %d, drawHud %d, editorShow %d, wheel %d",
+        tostring(W.installed), tostring(W.hudWrapped), tostring(editorActive()), tostring(W.proxyOwnsNetwork),
         W.counts.mouseSuppressed, W.counts.onDrawUIInfo, W.counts.drawHud,
         W.counts.editorShowForced, W.counts.wheelOffered)
 end
