@@ -37,6 +37,7 @@ X.cursorX = nil
 X.cursorZ = nil
 X.cursorNode = nil
 X.draws = 0
+X.drewThisFrame = false
 X.lastError = nil
 X.showMarker = true
 
@@ -73,6 +74,7 @@ end
 
 function X.clear()
     X.enabled = false
+    X.drewThisFrame = false
     ADFlyoverWrappers.proxyOwnsNetwork = false
 end
 
@@ -103,10 +105,26 @@ end
 
 --- Called from inside the wrapper on AutoDrive's own draw(), so whatever this queues is flushed by
 --- AutoDrive on the very next line.
+--- The editor owns the cursor once it is open; the manual cursor is only for testing before it
+--- exists. This is the job the fork did by editing onDrawEditorMode to read ADFlyoverEditor.cursorX
+--- directly - a companion cannot edit that function, so it feeds the position in through the
+--- stand-in instead.
+local function activeCursor()
+    if ADFlyoverEditor ~= nil and ADFlyoverEditor.active and ADFlyoverEditor.cursorX ~= nil then
+        return ADFlyoverEditor.cursorX, ADFlyoverEditor.cursorZ
+    end
+    return X.cursorX, X.cursorZ
+end
+
 function X.run()
-    if not X.enabled or X.cursorX == nil then
+    local cx, cz = activeCursor()
+    if cz == nil then
         return
     end
+    if not X.enabled and (ADFlyoverEditor == nil or not ADFlyoverEditor.active) then
+        return
+    end
+    X.cursorX, X.cursorZ = cx, cz
 
     local vehicle = findHostVehicle()
     if vehicle == nil then
@@ -123,6 +141,8 @@ function X.run()
         ADFlyoverArming.autoDrive.onDrawEditorMode(buildStandIn(vehicle))
     end)
     X.draws = X.draws + 1
+    -- The editor's own fallback renderer keys off this: it draws only when we did not.
+    X.drewThisFrame = ok
 
     if not ok then
         X.lastError = tostring(err)

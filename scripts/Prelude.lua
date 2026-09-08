@@ -47,7 +47,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.5.0.0"
+P.BUILD = "0.6.0.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -68,18 +68,16 @@ end
 -- Give AutoDrive a generous window to appear, then stop trying and say so. Roughly 300 frames.
 P.MAX_ATTEMPTS = 300
 
--- Sourced in dependency order once arming succeeds; the order is the same one AutoDrive's own
--- register.lua uses. Stage 2 enables the two pure-geometry files, which are copied VERBATIM from
--- the fork - that is the premise being tested.
+-- Sourced in dependency order once arming succeeds - the same order AutoDrive's own register.lua
+-- uses. NONE of these may go in modDesc's <extraSourceFiles>: they write into AutoDrive's table at
+-- source time, and AutoDrive is unresolvable then.
 P.EDITOR_FILES = {
     "scripts/editor/PolygonUtils.lua",
     "scripts/editor/OffsetGeometry.lua",
     "scripts/editor/FieldLoopGenerator.lua",
     "scripts/editor/EditorHistory.lua",
-    -- "scripts/editor/FieldLoopGenerator.lua",
-    -- "scripts/editor/FlyoverHud.lua",
-    -- "scripts/editor/EditorHistory.lua",
-    -- "scripts/editor/FlyoverEditor.lua",
+    "scripts/editor/FlyoverHud.lua",
+    "scripts/editor/FlyoverEditor.lua",
 }
 
 P.state = "waiting" -- waiting | armed | gave-up | disabled
@@ -145,6 +143,13 @@ local function sourceEditorFiles()
 end
 
 function P:update(dt)
+    -- Cleared once per frame, before AutoDrive.draw gets a chance to set it. The editor's fallback
+    -- renderer draws only when the proxy did not, so a stale true would blank the network on any
+    -- frame the proxy declined.
+    if ADFlyoverProxy ~= nil then
+        ADFlyoverProxy.drewThisFrame = false
+    end
+
     if P.state ~= "waiting" then
         return
     end
@@ -385,6 +390,29 @@ function P:consoleHistoryTest()
     return result
 end
 
+--- Stage 5b: the editor itself. The fork registers this from AutoDrive's DevFuncs, which a
+--- companion cannot add to, so we register our own.
+function P:consoleEditor()
+    if ADFlyoverEditor == nil then
+        return "FlyoverEditor.lua did not source - check the log."
+    end
+    ADFlyoverEditor:toggle()
+    return string.format("editor active=%s. Esc to leave. If WASD is dead afterwards, "
+        .. "FlyoverResetInput.", tostring(ADFlyoverEditor.active))
+end
+
+function P:consoleResetInput()
+    if ADFlyoverEditor == nil then
+        return "Editor not loaded."
+    end
+    if ADFlyoverEditor.resetInput ~= nil then
+        return tostring(ADFlyoverEditor:resetInput())
+    end
+    return "This build of the editor has no resetInput."
+end
+
+addConsoleCommand("FlyoverEditor", "Stage 5b: toggle the flyover editor", "consoleEditor", P)
+addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
 addConsoleCommand("FlyoverFieldLoop", "Stage 5a: generate a field loop at the vehicle (additive)", "consoleFieldLoop", P)
 addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check the copy (no restore)", "consoleHistoryTest", P)
 addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)
