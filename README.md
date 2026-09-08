@@ -76,6 +76,34 @@ It is also the sharpest test of the copy itself. With the fork disabled `ADPolyg
 does not exist in AutoDrive's environment, so a wrong source order fails loudly with
 `ADPolygonUtils is nil` instead of silently borrowing the fork's copy.
 
+## Stage 3 — the wrappers, still no editor
+
+Five functions inside AutoDrive's own source files were edited by the fork. A guest cannot edit
+them, so they become wrappers on AutoDrive's shared table, installed **last** — after resolution and
+after the editor files are sourced, because `getfenv` on an already-wrapped function returns *our*
+environment.
+
+Same mod config. Sit in an AutoDrive vehicle with its HUD visible, then:
+
+```
+FlyoverFakeActive
+```
+
+Four things should change, and all four should revert when you toggle it off again:
+
+| | Expected while ON |
+|---|---|
+| AutoDrive vehicle HUD | gone |
+| Waypoint network | drawn, **even with EditorMode off** |
+| Clicking where the HUD was | does nothing |
+| Mouse wheel | still zooms (the editor gets first refusal, not ownership — and there is no editor yet) |
+
+Then `FlyoverStatus` for the counters. The interesting pair is `onDrawUIInfo` versus `drawHud`:
+**if `onDrawUIInfo` stays at 0 while `drawHud` climbs**, then `onDrawUIInfo` does not raise in this
+situation and the second wrapper is carrying the HUD suppression alone. Either answer is fine —
+nothing load-bearing depends on it — but it is the one open question from the build plan, and this
+is where it gets answered.
+
 ## Layout
 
 | File | |
@@ -83,6 +111,7 @@ does not exist in AutoDrive's environment, so a wrong source order fails loudly 
 | `scripts/Prelude.lua` | the only `<extraSourceFiles>` entry; orders everything |
 | `scripts/Arming.lua` | listener scan → `getfenv` → republish |
 | `scripts/EnvProbe.lua` | one line, answers the environment question |
+| `scripts/Wrappers.lua` | the five fork edits as runtime wrappers |
 | `scripts/Settings.lua` | six companion-owned settings; never touches `AutoDrive.settings` |
 | `tools/make_icon.py` | regenerates `icon.dds` |
 

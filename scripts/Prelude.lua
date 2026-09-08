@@ -29,6 +29,7 @@ local P = ADFlyoverPrelude
 
 source(Utils.getFilename("scripts/Arming.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Settings.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/Wrappers.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -156,6 +157,11 @@ function P:update(dt)
 
     ADFlyoverSettings.load()
 
+    -- Wrappers go in LAST, after everything is resolved and sourced. getfenv() on a function we
+    -- have already wrapped returns OUR environment rather than AutoDrive's, so installing these
+    -- any earlier would break resolution for anything that still needed it.
+    ADFlyoverWrappers.install(ADFlyoverArming.autoDrive)
+
     P.state = "armed"
     log("ARMED. %d editor file(s) sourced. Settings: %s", #P.sourcedFiles, ADFlyoverSettings.describe())
 end
@@ -174,6 +180,7 @@ function P:consoleStatus()
         ADFlyoverArming.describe(),
         string.format("sourced files land in: %s", tostring(P.sourceEnvName)),
         string.format("editor files sourced: %d", #P.sourcedFiles),
+        ADFlyoverWrappers.describe(),
         ADFlyoverSettings.describe(),
     }
     for _, line in ipairs(lines) do
@@ -234,6 +241,21 @@ function P:consoleGeomTest()
 end
 
 addConsoleCommand("FlyoverGeomTest", "Run the copied geometry on a known-hard ring", "consoleGeomTest", P)
+--- Stage 3 stand-in for the editor's own on/off state, so the wrappers can be exercised before
+--- there is an editor to turn on. Goes away once FlyoverEditor.lua is present.
+function P:consoleFakeActive()
+    ADFlyoverWrappers.testActive = not ADFlyoverWrappers.testActive
+    if ADFlyoverWrappers.testActive then
+        log("fake editor-active ON")
+        return "Fake active ON. In an AD vehicle you should now see: the AutoDrive HUD gone, the "
+            .. "waypoint network drawn even with EditorMode off, clicks in the HUD area doing "
+            .. "nothing, and the wheel still zooming. FlyoverStatus for the counters."
+    end
+    log("fake editor-active OFF")
+    return "Fake active OFF. All four should come back. " .. ADFlyoverWrappers.describe()
+end
+
+addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 
 addModEventListener(P)
