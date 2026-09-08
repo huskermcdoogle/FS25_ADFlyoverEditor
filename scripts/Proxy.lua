@@ -138,7 +138,16 @@ function X.run()
 
     local ok, err = pcall(function()
         X.setCursor(X.cursorX, X.cursorZ)
-        ADFlyoverArming.autoDrive.onDrawEditorMode(buildStandIn(vehicle))
+        local standIn = buildStandIn(vehicle)
+        local AD = ADFlyoverArming.autoDrive
+        AD.onDrawEditorMode(standIn)
+        -- AutoDrive draws these as a PAIR - onDrawUIInfo calls onDrawEditorMode and then
+        -- onDrawPreviews, under the same condition. Suppressing onDrawUIInfo takes both away, so
+        -- calling only the first left the spline tool placing curves that were never drawn, and a
+        -- curvature wheel with nothing on screen to show its effect. Same stand-in, same reason.
+        if type(AD.onDrawPreviews) == "function" then
+            AD.onDrawPreviews(standIn)
+        end
     end)
     X.draws = X.draws + 1
     -- The editor's own fallback renderer keys off this: it draws only when we did not.
