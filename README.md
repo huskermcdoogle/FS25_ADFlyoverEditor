@@ -57,7 +57,7 @@ report it.
 Then **disable AutoDrive and reload**: it must give up after 300 attempts, say so once, and leave
 the game otherwise normal.
 
-## Stage 2 — the copied geometry
+## Stage 2 — the copied geometry ✅ passed 2026-09-08
 
 `PolygonUtils.lua` and `OffsetGeometry.lua` are copied **verbatim** from the fork into
 `scripts/editor/` and sourced by the prelude after arming. Same mod config as stage 1, then:
@@ -76,7 +76,7 @@ It is also the sharpest test of the copy itself. With the fork disabled `ADPolyg
 does not exist in AutoDrive's environment, so a wrong source order fails loudly with
 `ADPolygonUtils is nil` instead of silently borrowing the fork's copy.
 
-## Stage 3 — the wrappers, still no editor
+## Stage 3 — the wrappers ✅ passed 2026-09-08
 
 Five functions inside AutoDrive's own source files were edited by the fork. A guest cannot edit
 them, so they become wrappers on AutoDrive's shared table, installed **last** — after resolution and
@@ -104,7 +104,14 @@ situation and the second wrapper is carrying the HUD suppression alone. Either a
 nothing load-bearing depends on it — but it is the one open question from the build plan, and this
 is where it gets answered.
 
-## Stage 4 — the proxy
+## Stage 4 — the proxy ✅ passed 2026-09-08
+
+`draws=2874`, zero errors, network drawn at a cursor 200m from the vehicle. Counters:
+`onDrawUIInfo 28730, drawHud 1, mouse 1732, editorShow 4543, wheel 0`.
+
+So wrapper 2 does the HUD suppression in the in-vehicle case and 2b is a fallback that fires once —
+on the first frame, before `proxyOwnsNetwork` flips. `wheel 0` with zoom still working confirms the
+wheel falls through when no editor claims it.
 
 The network gets re-centred on a cursor instead of the vehicle, by handing
 `AutoDrive:onDrawEditorMode` a stand-in `self` whose `components[1].node` sits at the cursor and
