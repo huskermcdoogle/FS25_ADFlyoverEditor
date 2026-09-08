@@ -1,6 +1,27 @@
 # FS25_ADFlyoverEditor
 
-**Working as of 2026-09-08 (build 0.6.3.0).** Running beside stock AutoDrive 3.0.0.8 with the fork
+## Tested (2026-09-08, build 0.7.1.0, stock AutoDrive 3.0.0.8, fork disabled)
+
+| Tool | |
+|---|---|
+| divide | ✅ incl. the fork/direction fixes |
+| spline | ✅ preview, wheel, place |
+| name | ✅ names the clicked waypoint |
+| delete | ✅ |
+| merge | ✅ |
+| field loop | ✅ via console |
+| place, move, connect, smooth, convert | untested |
+
+Also untested: settings persistence (`ADFlyoverSettings.save()` has never run), undo beyond a single
+field-loop undo, and the lifecycle cases (two activations in one session, quitting with the editor
+open, AutoDrive absent).
+
+`name`, `delete` and `merge` were the three worth doing first — each is the only exerciser of one
+piece of the port. `name` is the sole user of the republished `ADEnterTargetNameGui`; `delete` is the
+only thing that hits waypoint-id renumbering; `merge` is the only tool depending on
+`splineInterpolation` surviving mouse events, which is what wrapper 1 exists for.
+
+**Working as of 2026-09-08 (build 0.7.1.0).** Running beside stock AutoDrive 3.0.0.8 with the fork
 disabled: camera flies, panel draws, network follows the cursor, divide and spline tools place, the
 wheel adjusts curvature and span, Escape exits and returns the input system as it found it. Zero
 engine Lua errors across the session.
