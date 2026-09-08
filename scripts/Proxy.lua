@@ -135,10 +135,11 @@ end
 
 function X.run()
     local cx, cz = activeCursor()
-    if cz == nil then
-        return
-    end
-    if not X.enabled and (ADFlyoverEditor == nil or not ADFlyoverEditor.active) then
+    local wanted = X.enabled or (ADFlyoverEditor ~= nil and ADFlyoverEditor.active)
+    if not wanted or cz == nil then
+        -- Hand the network back on the way out. Leaving proxyOwnsNetwork true after the editor
+        -- closes is stale state that reads as a fault in the next diagnosis.
+        ADFlyoverWrappers.proxyOwnsNetwork = false
         return
     end
     X.cursorX, X.cursorZ = cx, cz

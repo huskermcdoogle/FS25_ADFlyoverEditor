@@ -651,10 +651,36 @@ function ADFlyoverEditor:disable()
     -- Anything different between those two lines is what this cycle leaked or destroyed. If they
     -- match and movement is still dead, the damage is not in the input binding at all and the next
     -- suspect is the camera or the cursor object rather than the context.
-    if self.inputStateOnEnter ~= nil and after ~= self.inputStateOnEnter then
-        Logging.warning("[FlyoverEditor]: the input system did not come back as it was found.")
-        Logging.warning("[AD]   before: %s", tostring(self.inputStateOnEnter))
-        Logging.warning("[AD]   after:  %s", after)
+    -- Compare only the fields that can indicate DAMAGE, not the whole string. Measured across three
+    -- sessions, a clean exit still differs in two harmless ways, and warning about them made the
+    -- check cry wolf - which is worse than no check, because a real occurrence would be lost in it:
+    --
+    --   contexts  grows, because input contexts are created and never destroyed. Ours is created
+    --             once (see contextCreated) but the count still only goes up over a session.
+    --   cursor    ends up wherever AutoDrive's showHUD wants it, which the exit deliberately sets
+    --             and is the correct behaviour, not a leak.
+    --
+    -- events and nameActions are the ones that matter. Every one of the four input-context bugs
+    -- destroyed action events; none of them changed the context count.
+    if self.inputStateOnEnter ~= nil then
+        local function field(state, name)
+            return tostring(state):match(name .. "=([^%s]+)")
+        end
+        local damaged = false
+        for _, name in ipairs({ "events", "nameActions", "context", "stackDepth" }) do
+            if field(self.inputStateOnEnter, name) ~= field(after, name) then
+                damaged = true
+            end
+        end
+        if damaged then
+            Logging.warning("[FlyoverEditor]: the input system did not come back as it was found - "
+                .. "action events or the context were lost. THIS is the one that strands movement keys.")
+            Logging.warning("[FlyoverEditor]   before: %s", tostring(self.inputStateOnEnter))
+            Logging.warning("[FlyoverEditor]   after:  %s", after)
+        elseif after ~= self.inputStateOnEnter then
+            Logging.info("[FlyoverEditor]: input restored; context count and cursor differ, which is "
+                .. "expected. before: %s | after: %s", tostring(self.inputStateOnEnter), after)
+        end
     end
 end
 
@@ -3224,6 +3250,13 @@ function ADFlyoverEditor:handleWheel(offset)
     if self.tool == self.TOOL.MOVE and self.dragId ~= nil then
         self:setFalloffRadius(self.falloffRadius + step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
         return true
+    end
+
+    -- The wheel reaches here (measured: 211 offers in one session) but declines while the move tool
+    -- is up, so say which half of the guard failed rather than needing another session to find out.
+    if self.tool == self.TOOL.MOVE then
+        Logging.info("[FlyoverEditor]: wheel declined in move - dragId=%s. The falloff wheel only "
+            .. "claims the wheel while a drag is actually in progress.", tostring(self.dragId))
     end
 
     if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then
