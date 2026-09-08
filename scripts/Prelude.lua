@@ -35,15 +35,34 @@ source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
 
---- Which build is actually running. Worth the six lines: a stale copy in the mods folder looks
---- exactly like a code change that did not work, and we have already lost a test cycle to that.
---- Version scheme is 0.<stage>.0.0 while this is being built in stages.
-P.VERSION = "unknown"
+--- Which build is actually running, and it takes TWO numbers to answer that honestly.
+---
+--- P.BUILD lives in this file, which FS25 re-sources every time a savegame loads - so it always
+--- describes the Lua that is actually executing.
+---
+--- modDesc's version is read by the mod manager at GAME STARTUP only. Returning to the main menu
+--- and reloading a savegame picks up new Lua but not a new modDesc, so on that path the mod-manager
+--- version is stale while the code is current.
+---
+--- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
+--- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
+--- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
+P.BUILD = "0.4.0.0"
+P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
     if ok and mod ~= nil and mod.version ~= nil then
-        P.VERSION = tostring(mod.version)
+        P.MODDESC_VERSION = tostring(mod.version)
     end
+end
+
+--- "0.4.0.0" when both agree, or "0.4.0.0 (modDesc says 0.3.0.0 - stale, restart to refresh it)".
+function P.versionString()
+    if P.MODDESC_VERSION == P.BUILD then
+        return P.BUILD
+    end
+    return string.format("%s (modDesc says %s - stale, full restart to refresh it)",
+        P.BUILD, P.MODDESC_VERSION)
 end
 
 -- Give AutoDrive a generous window to appear, then stop trying and say so. Roughly 300 frames.
@@ -175,8 +194,8 @@ function P:update(dt)
     ADFlyoverWrappers.install(ADFlyoverArming.autoDrive)
 
     P.state = "armed"
-    log("ARMED (version %s). %d editor file(s) sourced. Settings: %s",
-        P.VERSION, #P.sourcedFiles, ADFlyoverSettings.describe())
+    log("ARMED (build %s). %d editor file(s) sourced. Settings: %s",
+        P.versionString(), #P.sourcedFiles, ADFlyoverSettings.describe())
 end
 
 function P:draw()
@@ -195,7 +214,7 @@ end
 
 function P:consoleStatus()
     local lines = {
-        string.format("version=%s state=%s", P.VERSION, P.state),
+        string.format("build=%s state=%s", P.versionString(), P.state),
         ADFlyoverArming.describe(),
         string.format("sourced files land in: %s", tostring(P.sourceEnvName)),
         string.format("editor files sourced: %d", #P.sourcedFiles),
@@ -306,6 +325,6 @@ addConsoleCommand("FlyoverProxyOff", "Stage 4: turn the proxy and the fake gate 
 addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 
-Logging.info("[%s] version %s loaded", P.MOD_NAME, P.VERSION)
+Logging.info("[%s] build %s loaded", P.MOD_NAME, P.versionString())
 
 addModEventListener(P)

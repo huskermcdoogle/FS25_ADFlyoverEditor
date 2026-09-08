@@ -135,13 +135,22 @@ survives the camera — that is genuinely stage 5. What it settles is the stand-
 
 ## Versioning
 
-`modDesc.xml` carries `0.<stage>.0.0` and it is bumped with every build that gets installed. The
-version is read from the mod manager at load and printed three ways — a `version N loaded` line at
-source time, the `ARMED (version N)` line, and `FlyoverStatus`.
+Two numbers, because one cannot answer the question honestly.
 
-That is not bookkeeping for its own sake: a stale copy in the mods folder looks exactly like a code
-change that did not work, and this project has already lost a test cycle to that confusion. Check the
-version line first whenever a result is surprising.
+`P.BUILD` in `Prelude.lua` is re-sourced every time a savegame loads, so it always describes the Lua
+actually executing. `modDesc`'s version is read by the mod manager at **game startup only**. Both are
+printed at source time, on the `ARMED` line, and by `FlyoverStatus`.
+
+**So: reloading a savegame from the main menu is enough for Lua changes.** A full restart is only
+needed when `modDesc.xml` itself changes. On the main-menu path the modDesc version goes stale while
+the code is current, and the version line says so explicitly rather than misreporting:
+
+```
+build 0.4.0.0 (modDesc says 0.3.0.0 - stale, full restart to refresh it)
+```
+
+That mismatch is informational, not a fault. It matters only when a change touches modDesc — a new
+`<sourceFile>` entry, say — which will not take effect until a real restart.
 
 ## Layout
 
