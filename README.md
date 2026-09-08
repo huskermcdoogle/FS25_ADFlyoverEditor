@@ -133,6 +133,16 @@ Then `FlyoverStatus`. Two counters matter:
 Note this stage still has no `GuiTopDownCamera`, so it does **not** settle whether `onDrawUIInfo`
 survives the camera — that is genuinely stage 5. What it settles is the stand-in.
 
+## Versioning
+
+`modDesc.xml` carries `0.<stage>.0.0` and it is bumped with every build that gets installed. The
+version is read from the mod manager at load and printed three ways — a `version N loaded` line at
+source time, the `ARMED (version N)` line, and `FlyoverStatus`.
+
+That is not bookkeeping for its own sake: a stale copy in the mods folder looks exactly like a code
+change that did not work, and this project has already lost a test cycle to that confusion. Check the
+version line first whenever a result is surprising.
+
 ## Layout
 
 | File | |

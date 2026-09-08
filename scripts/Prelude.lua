@@ -35,6 +35,17 @@ source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
 
+--- Which build is actually running. Worth the six lines: a stale copy in the mods folder looks
+--- exactly like a code change that did not work, and we have already lost a test cycle to that.
+--- Version scheme is 0.<stage>.0.0 while this is being built in stages.
+P.VERSION = "unknown"
+do
+    local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
+    if ok and mod ~= nil and mod.version ~= nil then
+        P.VERSION = tostring(mod.version)
+    end
+end
+
 -- Give AutoDrive a generous window to appear, then stop trying and say so. Roughly 300 frames.
 P.MAX_ATTEMPTS = 300
 
@@ -164,7 +175,8 @@ function P:update(dt)
     ADFlyoverWrappers.install(ADFlyoverArming.autoDrive)
 
     P.state = "armed"
-    log("ARMED. %d editor file(s) sourced. Settings: %s", #P.sourcedFiles, ADFlyoverSettings.describe())
+    log("ARMED (version %s). %d editor file(s) sourced. Settings: %s",
+        P.VERSION, #P.sourcedFiles, ADFlyoverSettings.describe())
 end
 
 function P:draw()
@@ -183,7 +195,7 @@ end
 
 function P:consoleStatus()
     local lines = {
-        string.format("state=%s", P.state),
+        string.format("version=%s state=%s", P.VERSION, P.state),
         ADFlyoverArming.describe(),
         string.format("sourced files land in: %s", tostring(P.sourceEnvName)),
         string.format("editor files sourced: %d", #P.sourcedFiles),
@@ -293,5 +305,7 @@ addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of
 addConsoleCommand("FlyoverProxyOff", "Stage 4: turn the proxy and the fake gate off", "consoleProxyOff", P)
 addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
+
+Logging.info("[%s] version %s loaded", P.MOD_NAME, P.VERSION)
 
 addModEventListener(P)
