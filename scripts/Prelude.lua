@@ -27,6 +27,14 @@ ADFlyoverPrelude = {}
 
 local P = ADFlyoverPrelude
 
+--- Declared HERE, above every function that calls it. A `local function` is only visible to code
+--- compiled after it; declaring this further down made every call site resolve it as a global
+--- instead, i.e. nil, and P:update threw once per frame so arming never happened. luac -p does not
+--- catch that - it is scope, not syntax.
+local function editorLoaded()
+    return ADFlyoverEditor ~= nil
+end
+
 source(Utils.getFilename("scripts/Arming.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Settings.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Wrappers.lua", g_currentModDirectory))
@@ -47,7 +55,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.6.1.0"
+P.BUILD = "0.6.2.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -219,10 +227,6 @@ end
 -- successfully registerActionEvents ran. This is the seventh upstream edit; the port inventory
 -- counted the six edited FILES and missed it.
 -- ---------------------------------------------------------------------------------------------
-
-local function editorLoaded()
-    return ADFlyoverEditor ~= nil
-end
 
 function P:keyEvent(unicode, sym, modifier, isDown)
     if editorLoaded() then
