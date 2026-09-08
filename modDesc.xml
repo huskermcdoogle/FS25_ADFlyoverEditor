@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<modDesc descVersion="107">
+	<author>Gibbs</author>
+	<title>
+		<en>Flyover Editor for AutoDrive</en>
+	</title>
+	<description>
+		<en>
+<![CDATA[A vehicle-free flyover camera for editing AutoDrive route networks.
+
+Requires FS25_AutoDrive to be installed and active. This mod does not modify AutoDrive; it attaches to it at runtime and refuses to load if it cannot.
+
+STAGE 1 - infrastructure only. It attaches to AutoDrive and reports what it found. There is no editor yet.
+
+Console: FlyoverStatus.
+]]>
+		</en>
+	</description>
+	<version>0.1.0.0</version>
+	<multiplayer supported="false" />
+	<iconFilename>icon.dds</iconFilename>
+	<extraSourceFiles>
+		<sourceFile filename="scripts/Prelude.lua" />
+	</extraSourceFiles>
+</modDesc>
