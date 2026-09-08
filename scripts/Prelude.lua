@@ -55,7 +55,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.6.3.0"
+P.BUILD = "0.7.0.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -151,13 +151,6 @@ local function sourceEditorFiles()
 end
 
 function P:update(dt)
-    -- Cleared once per frame, before AutoDrive.draw gets a chance to set it. The editor's fallback
-    -- renderer draws only when the proxy did not, so a stale true would blank the network on any
-    -- frame the proxy declined.
-    if ADFlyoverProxy ~= nil then
-        ADFlyoverProxy.drewThisFrame = false
-    end
-
     if editorLoaded() then
         ADFlyoverEditor:update(dt)
     end

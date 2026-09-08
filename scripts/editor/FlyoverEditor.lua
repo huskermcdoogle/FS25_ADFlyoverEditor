@@ -1056,7 +1056,12 @@ function ADFlyoverEditor:drawNetwork()
     -- whenever the player is on foot. The old test was right only while the fork's own re-centring
     -- inside AutoDrive's Specialization.lua existed; here the proxy is the thing that may or may
     -- not have run, and it declines when there is no vehicle with AutoDrive state to borrow.
-    if ADFlyoverProxy == nil or not ADFlyoverProxy.drewThisFrame then
+    -- Draw our own network ONLY when AutoDrive's cannot be used - i.e. there is no vehicle with
+    -- AutoDrive state for the proxy to borrow. Whenever the proxy can draw, we draw nothing and the
+    -- network on screen is AutoDrive's own, in AutoDrive's own colours. That is the whole point of
+    -- the proxy: one renderer, theirs, so the editor cannot drift from what the rest of the mod
+    -- shows.
+    if ADFlyoverProxy == nil or not ADFlyoverProxy.willDraw() then
         self:drawNetworkFallback()
     end
 
@@ -2626,7 +2631,49 @@ end
 
 --- Delete the interior of a chain and lay down newPoints in its place, keeping the two endpoints
 --- where they are so the span stays attached to the rest of the network.
+--- Which way the span's first connection actually runs. runPathBetween returns a traversal order,
+--- which is not necessarily the direction the connection was drawn in - and rebuilding always lays
+--- connections in that order, so a span traversed against its own direction came back reversed.
+local function spanRunsForward(chainIds)
+    local a = ADGraphManager:getWayPointById(chainIds[1])
+    local b = ADGraphManager:getWayPointById(chainIds[2])
+    if a == nil or b == nil then
+        return true
+    end
+    if table.contains(a.out, b.id) then
+        return true -- forward, or dual, in which case either answer rebuilds correctly
+    end
+    if table.contains(b.out, a.id) then
+        return false -- one-way, against the traversal
+    end
+    return true
+end
+
+--- Drop any direct connection between the two ends, in either direction.
+local function severEnds(aId, bId)
+    local a = ADGraphManager:getWayPointById(aId)
+    local b = ADGraphManager:getWayPointById(bId)
+    if a == nil or b == nil then
+        return
+    end
+    if table.contains(a.out, b.id) then
+        ADGraphManager:toggleConnectionBetween(a, b, false, false, false)
+    end
+    if table.contains(b.out, a.id) then
+        ADGraphManager:toggleConnectionBetween(b, a, false, false, false)
+    end
+end
+
 function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
+    -- Rebuild in the direction the span actually ran, not the direction it happened to be walked
+    -- in. Reversing both arrays together keeps newPoints aligned with chainIds.
+    if not spanRunsForward(chainIds) then
+        local rc, rp = {}, {}
+        for i = #chainIds, 1, -1 do rc[#rc + 1] = chainIds[i] end
+        for i = #newPoints, 1, -1 do rp[#rp + 1] = newPoints[i] end
+        chainIds, newPoints = rc, rp
+    end
+
     local startId, endId = chainIds[1], chainIds[#chainIds]
 
     local doomed = {}
@@ -2652,6 +2699,14 @@ function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
         return id - shift
     end
     local newStartId, newEndId = shifted(startId), shifted(endId)
+
+    -- A span with no interior has nothing to delete, so its ends are still directly connected - and
+    -- the rebuild below would then add a SECOND path between them, leaving the original connection
+    -- running alongside the new subdivided one. That is the fork reported as "divide connects the
+    -- ends". Sever it first, so the new chain REPLACES the connection instead of joining it.
+    if #chainIds == 2 then
+        severEnds(newStartId, newEndId)
+    end
 
     -- newPoints carries both endpoints; only the interior gets created.
     local previousId = newStartId

@@ -116,6 +116,23 @@ local function activeCursor()
     return X.cursorX, X.cursorZ
 end
 
+--- Will the proxy draw AutoDrive's network this frame?
+---
+--- A PREDICATE, deliberately, not a "did it happen" flag. Our mod's listener is registered before
+--- AutoDrive's - measured from the load order - so our draw() runs BEFORE AutoDrive.draw, which is
+--- where the proxy runs. Anything asking "has the proxy drawn yet" is therefore always told no, and
+--- the editor's fallback renderer drew its own network every frame on top of AutoDrive's. Two
+--- networks, ours above theirs. A predicate has no ordering to get wrong.
+function X.willDraw()
+    if ADFlyoverEditor ~= nil and ADFlyoverEditor.active and ADFlyoverEditor.cursorX ~= nil then
+        return findHostVehicle() ~= nil
+    end
+    if X.enabled and X.cursorX ~= nil then
+        return findHostVehicle() ~= nil
+    end
+    return false
+end
+
 function X.run()
     local cx, cz = activeCursor()
     if cz == nil then
