@@ -1,5 +1,10 @@
 # FS25_ADFlyoverEditor
 
+**Working as of 2026-09-08 (build 0.6.3.0).** Running beside stock AutoDrive 3.0.0.8 with the fork
+disabled: camera flies, panel draws, network follows the cursor, divide and spline tools place, the
+wheel adjusts curvature and span, Escape exits and returns the input system as it found it. Zero
+engine Lua errors across the session.
+
 The flyover route editor as a **companion mod**: it runs beside *stock* `FS25_AutoDrive` and does
 not modify it. Attaches at runtime, or refuses to load and says why.
 
