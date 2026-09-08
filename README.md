@@ -4,19 +4,23 @@
 
 | Tool | |
 |---|---|
-| divide | ✅ incl. the fork/direction fixes |
-| spline | ✅ preview, wheel, place |
-| name | ✅ names the clicked waypoint |
-| delete | ✅ |
-| merge | ✅ |
+| place | ✅ |
 | move | ✅ incl. falloff by wheel and by `,`/`.` |
+| connect | ✅ |
+| delete | ✅ |
 | smooth | ✅ both modes |
+| name | ✅ names the clicked waypoint |
+| spline | ✅ preview, wheel, place |
+| merge | ✅ |
 | field loop | ✅ via console |
-| place, connect, convert | untested |
+| divide | ✅ incl. the fork/direction fixes |
+| **convert** | **not confirmed** — selected, but no completed conversion in any log |
 
-Also untested: settings persistence (`ADFlyoverSettings.save()` has never run), undo beyond a single
-field-loop undo, and the lifecycle cases (two activations in one session, quitting with the editor
-open, AutoDrive absent).
+Also verified: **settings persistence** end to end — a changed value written to
+`modSettings/FS25_ADFlyoverEditor/settings.xml` as an index, read back across a full restart, and
+resolved to the right value; and **zero** of our keys present in any savegame's
+`AutoDrive_config.xml`, which is the half that matters, since one injected key breaks a stock
+client's settings sync. Undo/redo and two open-close cycles in one session also pass.
 
 `name`, `delete` and `merge` were the three worth doing first — each is the only exerciser of one
 piece of the port. `name` is the sole user of the republished `ADEnterTargetNameGui`; `delete` is the
