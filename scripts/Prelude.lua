@@ -36,11 +36,12 @@ P.MOD_DIRECTORY = g_currentModDirectory
 -- Give AutoDrive a generous window to appear, then stop trying and say so. Roughly 300 frames.
 P.MAX_ATTEMPTS = 300
 
--- Stage 1 ships no editor files. Sourced in dependency order once arming succeeds; the order is
--- the same one AutoDrive's own register.lua uses.
+-- Sourced in dependency order once arming succeeds; the order is the same one AutoDrive's own
+-- register.lua uses. Stage 2 enables the two pure-geometry files, which are copied VERBATIM from
+-- the fork - that is the premise being tested.
 P.EDITOR_FILES = {
-    -- "scripts/editor/PolygonUtils.lua",
-    -- "scripts/editor/OffsetGeometry.lua",
+    "scripts/editor/PolygonUtils.lua",
+    "scripts/editor/OffsetGeometry.lua",
     -- "scripts/editor/FieldLoopGenerator.lua",
     -- "scripts/editor/FlyoverHud.lua",
     -- "scripts/editor/EditorHistory.lua",
@@ -181,6 +182,58 @@ function P:consoleStatus()
     return table.concat(lines, " | ")
 end
 
+--- Stage 2: prove the copied geometry actually runs here, with real code rather than a log line.
+---
+--- The ring is the narrow-inlet case - a field with a 4m slit cut into one side, offset OUTWARD by
+--- 6m, which is the direction the field loop uses. It is the shape that used to produce a waypoint
+--- 188m outside the field and a 180-degree doubling-back, so a sane answer here exercises the miter
+--- limit, the validity pass and cusp removal, not just "the file loaded".
+---
+--- It is also the sharpest test of the copy: with the fork disabled, ADPolygonUtils genuinely does
+--- not exist in AutoDrive's environment, so a wrong source order fails loudly here instead of
+--- silently borrowing the fork's copy.
+function P:consoleGeomTest()
+    if ADPolygonUtils == nil then
+        return "ADPolygonUtils is nil - PolygonUtils.lua did not publish where this file can see it."
+    end
+    if ADOffsetGeometry == nil then
+        return "ADOffsetGeometry is nil - OffsetGeometry.lua did not publish where this file can see it."
+    end
+
+    local ring = {}
+    for _, c in ipairs({ {0,0}, {200,0}, {200,120}, {104,122}, {200,124}, {200,240}, {0,240} }) do
+        ring[#ring + 1] = { x = c[1], z = c[2] }
+    end
+    local sourceArea = ADPolygonUtils.getSignedArea(ring)
+
+    local offset, err = ADOffsetGeometry.generateOffset(ring, -6, 8, 0.02)
+    if offset == nil then
+        return "generateOffset refused: " .. tostring(err)
+    end
+
+    local worstTurn = 0
+    local n = #offset
+    for i = 1, n do
+        local a, b, c = offset[((i - 2) % n) + 1], offset[i], offset[(i % n) + 1]
+        local h1 = math.atan2(b.z - a.z, b.x - a.x)
+        local h2 = math.atan2(c.z - b.z, c.x - b.x)
+        local d = h2 - h1
+        while d > math.pi do d = d - 2 * math.pi end
+        while d <= -math.pi do d = d + 2 * math.pi end
+        worstTurn = math.max(worstTurn, math.abs(math.deg(d)))
+    end
+
+    local outArea = math.abs(ADPolygonUtils.getSignedArea(offset))
+    local verdict = (worstTurn < 175 and outArea < math.abs(sourceArea) * 1.25)
+        and "PASS - the inlet was swallowed and the loop does not double back"
+        or  "FAIL - check the offset geometry"
+    local result = string.format("%d points, max turn %.1f deg, area %.0f (source %.0f) | %s",
+        n, worstTurn, outArea, math.abs(sourceArea), verdict)
+    log("geometry test: %s", result)
+    return result
+end
+
+addConsoleCommand("FlyoverGeomTest", "Run the copied geometry on a known-hard ring", "consoleGeomTest", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 
 addModEventListener(P)

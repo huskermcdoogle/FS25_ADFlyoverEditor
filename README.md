@@ -6,7 +6,13 @@ not modify it. Attaches at runtime, or refuses to load and says why.
 Build plan and the evidence behind it: `docs/companion-build-plan.md` and
 `docs/companion-mod-investigation.md` in the AutoDrive fork.
 
-## Stage 1 — infrastructure only
+## Stage 1 — infrastructure only ✅ passed 2026-09-08
+
+Both halves verified against stock AutoDrive 3.0.0.8. With AutoDrive present: resolved on attempt 1,
+all four names republished, **sourced files land in our own mod environment** (the build plan's
+number-one risk, now closed), zero errors. With AutoDrive absent: gave up after 300 attempts, said so
+once, game otherwise normal.
+
 
 No editor yet. This stage exists to answer the plan's number-one risk: **which Lua environment a
 runtime `source()` call lands in.** Every later stage depends on that, and nothing in the codebase
@@ -50,6 +56,25 @@ report it.
 
 Then **disable AutoDrive and reload**: it must give up after 300 attempts, say so once, and leave
 the game otherwise normal.
+
+## Stage 2 — the copied geometry
+
+`PolygonUtils.lua` and `OffsetGeometry.lua` are copied **verbatim** from the fork into
+`scripts/editor/` and sourced by the prelude after arming. Same mod config as stage 1, then:
+
+```
+FlyoverGeomTest
+```
+
+Expected: `5 points, max turn 90.0 deg, area 53424 (source 47808) | PASS`
+
+The ring is a field with a 4m inlet cut into one side, offset outward by 6m - the case that used to
+produce a waypoint 188m outside the field and a 180-degree doubling-back. So a sane answer exercises
+the miter limit, the validity pass and cusp removal, not merely "the file loaded".
+
+It is also the sharpest test of the copy itself. With the fork disabled `ADPolygonUtils` genuinely
+does not exist in AutoDrive's environment, so a wrong source order fails loudly with
+`ADPolygonUtils is nil` instead of silently borrowing the fork's copy.
 
 ## Layout
 
