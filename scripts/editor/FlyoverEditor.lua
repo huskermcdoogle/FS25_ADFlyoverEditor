@@ -1232,6 +1232,26 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
         return
     end
 
+    -- The wheel, while a drag is in progress.
+    --
+    -- Normally the wheel reaches us as a camera ZOOM ACTION EVENT, which AutoDrive hooks and hands
+    -- to handleWheel. That action does not fire while a mouse button is held down - measured: a
+    -- four-second drag produced no wheel events at all, while scrolling with nothing held produced
+    -- six in as many seconds. So the one path the falloff wheel depended on is precisely the one
+    -- that is dead for the whole time it is wanted.
+    --
+    -- Mouse events still arrive during a drag - that is how dragging works - so take the wheel from
+    -- here instead. Restricted to a live drag on purpose: outside one the action path works and
+    -- handles it, and claiming it in both places would apply every notch twice.
+    if isDown and self.dragId ~= nil then
+        local wheelUp = Input.MOUSE_BUTTON_WHEEL_UP ~= nil and button == Input.MOUSE_BUTTON_WHEEL_UP
+        local wheelDown = Input.MOUSE_BUTTON_WHEEL_DOWN ~= nil and button == Input.MOUSE_BUTTON_WHEEL_DOWN
+        if wheelUp or wheelDown then
+            self:handleWheel(wheelUp and 1 or -1)
+            return
+        end
+    end
+
     tryCall("camera:mouseEvent", function() self.camera:mouseEvent(posX, posY, isDown, isUp, button) end)
 
     -- Track the press ourselves and act only on a genuine down->up transition. Acting on isUp
@@ -3255,8 +3275,8 @@ function ADFlyoverEditor:handleWheel(offset)
     -- The wheel reaches here (measured: 211 offers in one session) but declines while the move tool
     -- is up, so say which half of the guard failed rather than needing another session to find out.
     if self.tool == self.TOOL.MOVE then
-        Logging.info("[FlyoverEditor]: wheel declined in move - dragId=%s. The falloff wheel only "
-            .. "claims the wheel while a drag is actually in progress.", tostring(self.dragId))
+        Logging.info("[FlyoverEditor]: wheel declined in move - dragId=%s (no drag in progress, so "
+            .. "the wheel stays with the camera zoom).", tostring(self.dragId))
     end
 
     if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then
