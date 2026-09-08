@@ -9,8 +9,10 @@
 | name | ✅ names the clicked waypoint |
 | delete | ✅ |
 | merge | ✅ |
+| move | ✅ incl. falloff by wheel and by `,`/`.` |
+| smooth | ✅ both modes |
 | field loop | ✅ via console |
-| place, move, connect, smooth, convert | untested |
+| place, connect, convert | untested |
 
 Also untested: settings persistence (`ADFlyoverSettings.save()` has never run), undo beyond a single
 field-loop undo, and the lifecycle cases (two activations in one session, quitting with the editor
@@ -21,7 +23,7 @@ piece of the port. `name` is the sole user of the republished `ADEnterTargetName
 only thing that hits waypoint-id renumbering; `merge` is the only tool depending on
 `splineInterpolation` surviving mouse events, which is what wrapper 1 exists for.
 
-**Working as of 2026-09-08 (build 0.7.1.0).** Running beside stock AutoDrive 3.0.0.8 with the fork
+**Working as of 2026-09-08 (build 0.7.3.0).** Running beside stock AutoDrive 3.0.0.8 with the fork
 disabled: camera flies, panel draws, network follows the cursor, divide and spline tools place, the
 wheel adjusts curvature and span, Escape exits and returns the input system as it found it. Zero
 engine Lua errors across the session.
