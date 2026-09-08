@@ -2748,7 +2748,14 @@ function ADFlyoverEditor:nameAtCursor()
     -- waypoint instead; the dialog clears it again on close.
     ADEnterTargetNameGui.overrideWayPointId = self.hoverId
     ADEditorHistory:snapshot("name waypoint")
-    g_gui:showDialog("ADEnterTargetNameGui")
+    -- showDialog returns falsy rather than throwing when the screen is not registered, so check
+    -- it: an unreported failure here looks exactly like "the dialog opened and did nothing".
+    local shown = g_gui:showDialog("ADEnterTargetNameGui")
+    if not shown then
+        Logging.error("[FlyoverEditor]: the name dialog would not open - g_gui has no screen "
+            .. "registered as 'ADEnterTargetNameGui'. Is AutoDrive fully loaded?")
+        return
+    end
     Logging.info("[FlyoverEditor]: opened the name dialog for waypoint id=%s.", tostring(self.hoverId))
 end
 

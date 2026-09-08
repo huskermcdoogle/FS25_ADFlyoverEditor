@@ -37,6 +37,7 @@ W.counts = {
 }
 
 W.hudWrapped = false
+W.dialogWrapped = false
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, W.MOD_NAME, ...)
@@ -155,9 +156,85 @@ function W.install(AD)
         return originalDraw(selfArg, ...)
     end
 
+    -- 7. The name dialog. The fork made this work by EDITING AutoDrive's own EnterTargetNameGUI.lua
+    -- so that onOpen and onClickOk honour an overrideWayPointId set from outside. Stock AutoDrive
+    -- has no such code, so setting that field does nothing and the dialog silently falls back to
+    -- "the waypoint nearest the controlled vehicle" - or, with the flyover camera detached from any
+    -- vehicle, to nothing at all.
+    --
+    -- Reproduced here as wrappers on the dialog class. GUI methods are reached through the
+    -- instance's metatable, so replacing them on the class intercepts, the same as everywhere else.
+    local Dialog = ADEnterTargetNameGui
+    if Dialog ~= nil and type(Dialog.onOpen) == "function" and type(Dialog.onClickOk) == "function" then
+        local originalOnOpen = Dialog.onOpen
+        Dialog.onOpen = function(dialogSelf, ...)
+            local result = originalOnOpen(dialogSelf, ...)
+            local overrideId = Dialog.overrideWayPointId
+            if overrideId ~= nil then
+                -- Same two cases stock has, just sourced from the click instead of the vehicle:
+                -- edit the marker already on that waypoint, or create a new one there.
+                dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = nil, nil, false
+                for i, marker in pairs(ADGraphManager:getMapMarkers()) do
+                    if marker.id == overrideId then
+                        dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = i, marker.name, true
+                        break
+                    end
+                end
+                -- onOpen already set the title, text and button rows from ITS answer; redo them now
+                -- that ours has replaced it.
+                if dialogSelf.titleElement ~= nil then
+                    dialogSelf.titleElement:setText(g_i18n:getText(dialogSelf.edit
+                        and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"))
+                end
+                if dialogSelf.textInputElement ~= nil then
+                    dialogSelf.textInputElement:setText(dialogSelf.edit and dialogSelf.editName or "")
+                end
+                if dialogSelf.buttonsCreateElement ~= nil then
+                    dialogSelf.buttonsCreateElement:setVisible(not dialogSelf.edit)
+                end
+                if dialogSelf.buttonsEditElement ~= nil then
+                    dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
+                end
+            end
+            return result
+        end
+
+        local originalOnClickOk = Dialog.onClickOk
+        Dialog.onClickOk = function(dialogSelf, ...)
+            local overrideId = Dialog.overrideWayPointId
+            if overrideId ~= nil and not dialogSelf.edit then
+                -- Stock would call createMapMarkerOnClosest, which needs a controlled vehicle and
+                -- would put the marker somewhere other than where the user clicked.
+                local text = dialogSelf.textInputElement ~= nil and dialogSelf.textInputElement.text or ""
+                ADGraphManager:createMapMarker(overrideId, text)
+                Dialog.overrideWayPointId = nil
+                if dialogSelf.superClass ~= nil then
+                    return dialogSelf:onClickBack()
+                end
+                return
+            end
+            Dialog.overrideWayPointId = nil
+            return originalOnClickOk(dialogSelf, ...)
+        end
+
+        -- However the dialog is dismissed, drop the override, so a later open from a vehicle is not
+        -- still aimed at a waypoint clicked minutes ago.
+        local originalOnClose = Dialog.onClose
+        Dialog.onClose = function(dialogSelf, ...)
+            Dialog.overrideWayPointId = nil
+            if originalOnClose ~= nil then
+                return originalOnClose(dialogSelf, ...)
+            end
+        end
+        W.dialogWrapped = true
+    else
+        Logging.warning("[%s] the name dialog could not be wrapped - the NAME tool will name the "
+            .. "wrong waypoint, or nothing at all.", W.MOD_NAME)
+    end
+
     W.installed = true
-    log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature, draw",
-        W.hudWrapped and "Hud.drawHud, " or "")
+    log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature, draw%s",
+        W.hudWrapped and "Hud.drawHud, " or "", W.dialogWrapped and ", EnterTargetNameGui" or "")
     return true
 end
 
