@@ -158,6 +158,31 @@ function X.run()
         X.setCursor(X.cursorX, X.cursorZ)
         local standIn = buildStandIn(vehicle)
         local AD = ADFlyoverArming.autoDrive
+
+        -- Re-point the borrowed vehicle's in-range list at the CURSOR, every frame.
+        --
+        -- AutoDrive:getWayPointsInRange caches its result on vehicle.ad.wayPointsInRange and only
+        -- rebuilds when that field is nil. The one thing that clears it is updateWayPointsDistance,
+        -- called from the vehicle's own update - so a vehicle nobody is driving never clears it.
+        --
+        -- That is what made waypoints laid on foot invisible: the write was fine, but the borrowed
+        -- vehicle's cache was built before them and never rebuilt, so the draw walked a list the new
+        -- points were not in. Established network drew; anything new did not; getting into the truck
+        -- updated that vehicle and everything appeared at once.
+        --
+        -- Passing the cursor position does double duty - it clears the stale cache AND builds the
+        -- new one around what is being looked at rather than around a vehicle that may be a
+        -- kilometre away, which is the same re-centring the stand-in does for the draw itself.
+        if type(vehicle.updateWayPointsDistance) == "function" then
+            vehicle:updateWayPointsDistance(X.cursorX, X.cursorZ)
+        else
+            -- No such function on this build: at least drop the cache so it is rebuilt, even if it
+            -- is rebuilt around the vehicle.
+            if vehicle.ad ~= nil then
+                vehicle.ad.wayPointsInRange = nil
+            end
+        end
+
         AD.onDrawEditorMode(standIn)
         -- AutoDrive draws these as a PAIR - onDrawUIInfo calls onDrawEditorMode and then
         -- onDrawPreviews, under the same condition. Suppressing onDrawUIInfo takes both away, so
