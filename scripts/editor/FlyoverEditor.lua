@@ -96,6 +96,11 @@ ADFlyoverEditor = {
     offsetBlockedBy = nil,
     offsetDistance = 5.0,
     offsetScope = 1,
+    -- Which side the new track goes. Seeded from the cursor when the span or anchor is first
+    -- picked, then owned by the panel's flip button. Deriving it from the cursor every frame read
+    -- well while selecting and badly afterwards: once anchored the cursor is usually sitting ON the
+    -- line, where the cross product is nearly zero and the side simply never changed.
+    offsetSide = 1,
     sidingAnchorId = nil,
     sidingPreview = nil,
     sidingBlockedBy = nil,
@@ -1930,6 +1935,12 @@ end
 ADFlyoverEditor.OFFSET_SCOPE = { SPAN = 1, RUN = 2 }
 ADFlyoverEditor.OFFSET_SCOPE_NAMES = { "picked span", "whole run" }
 
+function ADFlyoverEditor:flipOffsetSide()
+    self.offsetSide = -(self.offsetSide or 1)
+    self.offsetCache = nil
+    Logging.info("[FlyoverEditor]: offset side -> %s.", self.offsetSide >= 0 and "left" or "right")
+end
+
 function ADFlyoverEditor:cycleOffsetScope()
     self.offsetScope = (self.offsetScope % #self.OFFSET_SCOPE_NAMES) + 1
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
@@ -3041,8 +3052,10 @@ function ADFlyoverEditor:getNextStepLines()
             return { "Will not fit here.", "See the log for why." }
         end
         if self.sidingAnchorId ~= nil then
-            return { string.format("Wheel sets length (%.0fm).", ADFlyoverSettings.get("sidingLength") or 30),
-                     "Side follows the cursor. Right-click applies." }
+            return { string.format("Wheel sets length (%.0fm, %s side).",
+                        ADFlyoverSettings.get("sidingLength") or 30,
+                        (self.offsetSide or 1) >= 0 and "left" or "right"),
+                     "Flip the side on the panel. Right-click applies." }
         end
         return { "Click where the siding should", "sit - the click is its centre." }
     elseif self.tool == t.PARALLEL then
@@ -3050,8 +3063,9 @@ function ADFlyoverEditor:getNextStepLines()
             if self.offsetBlockedBy ~= nil then
                 return { "Too tight to offset that far.", "Wheel it back, or swap sides." }
             end
-            return { string.format("Wheel sets offset (%.1fm).", self.offsetDistance),
-                     "Side follows the cursor. Right-click applies." }
+            return { string.format("Wheel sets offset (%.1fm %s).", self.offsetDistance,
+                        (self.offsetSide or 1) >= 0 and "left" or "right"),
+                     "Flip the side on the panel. Right-click applies." }
         end
         if self.offsetFromId ~= nil then
             return { "Click the far end of the span." }
@@ -3522,7 +3536,7 @@ function ADFlyoverEditor:sidingPlan()
     local dDistance = centre + needed / 2
     local parallel = subChainByDistance(pts, cumulative, aDistance + merge, dDistance - merge)
 
-    local side = self:offsetSideFromCursor(pts)
+    local side = self.offsetSide or 1
     local track, err = ADOffsetGeometry.offsetOpenChain(parallel, offset * side)
     if track == nil then
         return nil, err
@@ -3585,6 +3599,10 @@ function ADFlyoverEditor:sidingClick()
     end
     self.sidingAnchorId = self.hoverId
     self.sidingPreview = nil
+    local seedPts = self:orderedRunThrough(self.sidingAnchorId)
+    if seedPts ~= nil then
+        self.offsetSide = self:offsetSideFromCursor(seedPts)
+    end
     local plan, err = self:sidingPlan()
     if plan == nil then
         Logging.warning("[FlyoverEditor]: %s", tostring(err))
@@ -3703,6 +3721,10 @@ function ADFlyoverEditor:offsetClick()
         end
         self.offsetFromId, self.offsetToId = ends[1], ends[2]
         self.offsetPreview, self.offsetCache = nil, nil
+        local seedPts = self:offsetSpanPoints()
+        if seedPts ~= nil then
+            self.offsetSide = self:offsetSideFromCursor(seedPts)
+        end
         Logging.info("[FlyoverEditor]: whole run of %d waypoint(s), id=%s to id=%s. Wheel sets the "
             .. "offset (%.1fm); the side follows the cursor. Right-click applies.",
             count, tostring(self.offsetFromId), tostring(self.offsetToId), self.offsetDistance)
@@ -3729,6 +3751,10 @@ function ADFlyoverEditor:offsetClick()
 
     self.offsetToId = self.hoverId
     self.offsetPreview, self.offsetCache = nil, nil
+    local seedPts = self:offsetSpanPoints()
+    if seedPts ~= nil then
+        self.offsetSide = self:offsetSideFromCursor(seedPts)
+    end
     Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
         .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
 end
@@ -3794,8 +3820,7 @@ function ADFlyoverEditor:updateOffsetPreview()
         return
     end
 
-    local side = self:offsetSideFromCursor(pts)
-    local signed = self.offsetDistance * side
+    local signed = self.offsetDistance * (self.offsetSide or 1)
 
     -- The offset is O(n^2) in the fold removal, and this runs every frame while a preview is up.
     -- On a long run that is thousands of segment-pair tests per frame for a result that only
@@ -3910,7 +3935,7 @@ function ADFlyoverEditor:commitOffset()
 
     Logging.info("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
         siding and "siding" or "parallel track", #laying, self.offsetDistance,
-        (self.offsetSignedDistance or 1) >= 0 and "left" or "right",
+        (self.offsetSide or 1) >= 0 and "left" or "right",
         siding and ", splined in at both ends" or (dual and ", two-way" or ", running opposite"))
 
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil

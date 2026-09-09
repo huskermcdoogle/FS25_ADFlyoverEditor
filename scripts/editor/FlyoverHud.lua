@@ -119,6 +119,11 @@ function ADFlyoverHud:buildRows(editor)
     add("gap")
     add("section", "THIS TOOL")
 
+    if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
+        add("toggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", false,
+            function() editor:flipOffsetSide() end)
+    end
+
     if editor.tool == editor.TOOL.PARALLEL then
         add("toggle", "covers", editor.OFFSET_SCOPE_NAMES[editor.offsetScope], false,
             function() editor:cycleOffsetScope() end)
