@@ -122,8 +122,8 @@ ADFlyoverEditor = {
 -- Ordered by how often each is actually reached for, because position IS the key binding: the
 -- tool at 10 answers to 0, the most awkward reach, and so belongs to the one used least.
 -- Order set from how the editor is really used, not from how the tools group conceptually.
-ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, SPLINE = 4, NAME = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, MERGE = 9, FIELDLOOP = 10 }
-ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "spline", "name", "divide", "smooth", "convert", "merge", "field loop" }
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, MERGE = 9, FIELDLOOP = 10 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "merge", "field loop" }
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
