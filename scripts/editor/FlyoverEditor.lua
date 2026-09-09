@@ -3409,7 +3409,12 @@ AutoDrive.FLYOVER_DIVIDE_MAX = 200
 function ADFlyoverEditor:runEnds(seedId)
     local run, count = self:collectRunBetweenJunctions(seedId)
     if run == nil or count == nil or count < 2 then
-        return nil, nil, 0
+        -- Almost always because the waypoint clicked IS a junction: the run stops at junctions, so
+        -- seeding on one collects little or nothing. Worth saying, rather than reporting it as an
+        -- unspecified failure to order the run - which is what sent this to the log four times.
+        return nil, nil, 0, string.format(
+            "id=%s gives a run of %s waypoint(s) - it is probably a junction itself. Click somewhere "
+            .. "along a run instead.", tostring(seedId), tostring(count or 0))
     end
     local ends = {}
     for id in pairs(run) do
@@ -3430,27 +3435,32 @@ function ADFlyoverEditor:runEnds(seedId)
         end
     end
     if #ends ~= 2 then
-        return nil, nil, #ends
+        return nil, nil, #ends, string.format(
+            "the run through id=%s has %d clear end(s), not 2 - it branches or closes on itself.",
+            tostring(seedId), #ends)
     end
-    return ends[1], ends[2], 2
+    return ends[1], ends[2], 2, nil
 end
 
 --- The run through `seedId` as an ordered point list, with cumulative distance and the seed's index.
 function ADFlyoverEditor:orderedRunThrough(seedId)
-    local a, b, found = self:runEnds(seedId)
+    local a, b, found, why = self:runEnds(seedId)
     if a == nil then
-        return nil, nil, nil, found
+        return nil, nil, nil, why
     end
+
     local ids = self:runPathBetween(a, b)
     if ids == nil or #ids < 2 then
-        return nil, nil, nil, 0
+        return nil, nil, nil, string.format(
+            "found the run's ends (id=%s and id=%s) but could not path between them.",
+            tostring(a), tostring(b))
     end
 
     local pts, seedIndex = {}, nil
     for i, id in ipairs(ids) do
         local wp = ADGraphManager:getWayPointById(id)
         if wp == nil then
-            return nil, nil, nil, 0
+            return nil, nil, nil, string.format("waypoint id=%s vanished while ordering the run.", tostring(id))
         end
         pts[i] = { x = wp.x, y = wp.y, z = wp.z, id = id }
         if id == seedId then
@@ -3458,7 +3468,9 @@ function ADFlyoverEditor:orderedRunThrough(seedId)
         end
     end
     if seedIndex == nil then
-        return nil, nil, nil, 0
+        return nil, nil, nil, string.format(
+            "the path between the run's ends (%d waypoints) does not pass through id=%s - the run "
+            .. "loops, so there is more than one way round it.", #ids, tostring(seedId))
     end
 
     local cumulative = { 0 }
@@ -3466,7 +3478,7 @@ function ADFlyoverEditor:orderedRunThrough(seedId)
         cumulative[i] = cumulative[i - 1]
             + MathUtil.vector2Length(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
     end
-    return pts, cumulative, seedIndex, 2
+    return pts, cumulative, seedIndex, nil
 end
 
 --- Position at `distance` along the ordered run, plus the segment it falls in.
@@ -3511,10 +3523,9 @@ function ADFlyoverEditor:sidingPlan()
     if self.sidingAnchorId == nil then
         return nil, nil
     end
-    local pts, cumulative, seedIndex, ends = self:orderedRunThrough(self.sidingAnchorId)
+    local pts, cumulative, seedIndex, why = self:orderedRunThrough(self.sidingAnchorId)
     if pts == nil then
-        return nil, ends == 0 and "could not order the run through that waypoint."
-            or string.format("that run has %d clear end(s), not 2 - sidings need a plain run.", ends)
+        return nil, why or "could not order the run through that waypoint."
     end
 
     local offset = ADFlyoverSettings.get("sidingOffset") or 5
@@ -3745,9 +3756,8 @@ function ADFlyoverEditor:offsetClick()
         end
 
         if #ends ~= 2 then
-            Logging.warning("[FlyoverEditor]: could not find two clear ends for the run through "
-                .. "id=%s (found %d). Use the picked-span scope and click both ends yourself.",
-                tostring(self.hoverId), #ends)
+            Logging.warning("[FlyoverEditor]: the run through id=%s has %d clear end(s), not 2. Use "
+                .. "the picked-span scope and click both ends yourself.", tostring(self.hoverId), #ends)
             return
         end
         self.offsetFromId, self.offsetToId = ends[1], ends[2]
