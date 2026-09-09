@@ -3443,13 +3443,78 @@ function ADFlyoverEditor:runEnds(seedId)
 end
 
 --- The run through `seedId` as an ordered point list, with cumulative distance and the seed's index.
-function ADFlyoverEditor:orderedRunThrough(seedId)
-    local a, b, found, why = self:runEnds(seedId)
-    if a == nil then
-        return nil, nil, nil, why
+--- Walk a closed run all the way round from the seed, then rotate so the seed sits in the middle.
+---
+--- A field loop is a CYCLE - every waypoint has two neighbours, so nothing looks like an end, which
+--- is what "0 clear ends" meant. It is also exactly where a siding belongs: a passing place on a
+--- field loop is the obvious use. So the loop is cut at the point furthest from the seed and handed
+--- on as an ordinary open chain, which leaves the maximum room either side of where you clicked.
+local function orderClosedRun(run, seedId)
+    local ordered = { seedId }
+    local visited = { [seedId] = true }
+    local previous, current = nil, seedId
+
+    while true do
+        local wp = ADGraphManager:getWayPointById(current)
+        if wp == nil then
+            break
+        end
+        local nextId = nil
+        for _, listName in ipairs({ "out", "incoming" }) do
+            for _, other in pairs(wp[listName] or {}) do
+                if run[other] and other ~= previous and not visited[other] then
+                    nextId = other
+                    break
+                end
+            end
+            if nextId ~= nil then
+                break
+            end
+        end
+        if nextId == nil then
+            break
+        end
+        visited[nextId] = true
+        ordered[#ordered + 1] = nextId
+        previous, current = current, nextId
     end
 
-    local ids = self:runPathBetween(a, b)
+    -- Rotate the far half to the front, so the seed lands in the middle rather than at the cut.
+    local n = #ordered
+    if n < 3 then
+        return ordered
+    end
+    local half = math.floor(n / 2)
+    local rotated = {}
+    for i = n - half + 1, n do rotated[#rotated + 1] = ordered[i] end
+    for i = 1, n - half do rotated[#rotated + 1] = ordered[i] end
+    return rotated
+end
+
+function ADFlyoverEditor:orderedRunThrough(seedId)
+    local a, b, found, why = self:runEnds(seedId)
+
+    local ids
+    if a == nil and found == 0 then
+        -- No ends at all: a closed loop, not a failure. Cut it opposite the seed and carry on.
+        local run, count = self:collectRunBetweenJunctions(seedId)
+        if run ~= nil and count ~= nil and count >= 3 then
+            ids = orderClosedRun(run, seedId)
+            if ids ~= nil and #ids >= 3 then
+                Logging.info("[FlyoverEditor]: that run is a closed loop of %d waypoint(s); using it "
+                    .. "cut opposite id=%s.", #ids, tostring(seedId))
+            else
+                ids = nil
+            end
+        end
+        if ids == nil then
+            return nil, nil, nil, why
+        end
+    elseif a == nil then
+        return nil, nil, nil, why
+    else
+        ids = self:runPathBetween(a, b)
+    end
     if ids == nil or #ids < 2 then
         return nil, nil, nil, string.format(
             "found the run's ends (id=%s and id=%s) but could not path between them.",
