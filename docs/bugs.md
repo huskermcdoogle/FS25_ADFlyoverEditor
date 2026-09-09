@@ -104,7 +104,33 @@ If it turns out to be real, the symptom to watch for is WASD dead after Escape, 
 
 </details>
 
-## Editing requires being in a vehicle
+## New waypoints are not drawn while on foot
+
+Reported 2026-09-09. **Corrected from "editing requires a vehicle".** Editing on foot WORKS - a
+siding laid on foot previewed, committed, and was found intact after getting into a truck. What
+fails is only the drawing: the new waypoints do not appear until a vehicle is entered. The existing
+network draws on foot perfectly well.
+
+So there is no write bug. The graph is correct the whole time; it is the render of the newly added
+part that is missing, which is why it read as a silent failure.
+
+Ruled out so far:
+
+- `ADGraphManager:getWayPointsInRange` is a live scan over `self.wayPoints`, not a cache, so new
+  points cannot be stale in it.
+- `AutoDrive.isEditorShowEnabled` is already forced true by wrapper 3 while the editor is active.
+- `Proxy.findHostVehicle` falls back to any vehicle carrying `ad.stateModule`, so a stand-in `self`
+  is available with the player on foot.
+- `onDrawEditorMode` centres on `self.components[1].node`, which the stand-in overrides with the
+  cursor node - so the draw is cursor-centred, not vehicle-centred, and distance culling from a
+  far-away vehicle is not the explanation either.
+
+Still to check: whether `AutoDrive.draw` (the mod event listener the proxy rides, wrapper 6) is
+raised at all with no vehicle entered, and whether the part of the draw that renders newly created
+waypoints goes through a different path from the one that renders the established network - the
+split between "network" and "previews" in `Proxy.run` is the obvious place for that to hide.
+
+## Editing requires being in a vehicle - SUPERSEDED, see above
 
 Reported 2026-09-09. Routes cannot be written unless the player is seated in a vehicle.
 
