@@ -3563,11 +3563,21 @@ function ADFlyoverEditor:insertOnSegment(aId, bId, position, dual, flags)
         return nil
     end
     -- Sever first, or the new point runs alongside the original connection rather than replacing it.
+    local severed = false
     if table.contains(a.out, b.id) then
         ADGraphManager:toggleConnectionBetween(a, b, false, false, false)
+        severed = true
     end
     if table.contains(b.out, a.id) then
         ADGraphManager:toggleConnectionBetween(b, a, false, false, false)
+        severed = true
+    end
+    if not severed then
+        -- These two are not actually connected any more, so inserting between them would fork the
+        -- line rather than split it. Refusing is right: silently forking is the bug this guards.
+        Logging.warning("[FlyoverEditor]: id=%s and id=%s are no longer connected, so nothing was "
+            .. "inserted between them.", tostring(aId), tostring(bId))
+        return nil
     end
     local y = self:resolveHeightAt(position.x, position.z, position.y)
     local wp = ADGraphManager:recordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false)
@@ -3639,10 +3649,31 @@ function ADFlyoverEditor:commitSiding()
 
     ADEditorHistory:snapshot("siding")
 
-    -- The far attachment first. Inserting at A would otherwise shift nothing by id, but it does
-    -- change the run's shape, and the D distance was measured on the run as it was.
+    -- Insert the far attachment, then RE-DERIVE the run before inserting the near one.
+    --
+    -- Doing both from the same snapshot is wrong whenever they land on the same segment, which a
+    -- sparse run makes easy - a 30m siding with 8m merges spans 46m, so one long segment is enough.
+    -- The first insertion severs a->b and leaves a->new->b; the second then looks for a->b, does not
+    -- find it, severs nothing, and adds a SECOND path between the same two waypoints. That is the
+    -- double connection.
+    --
+    -- Re-deriving is safe and cheap: inserting a waypoint on the line adds a vertex without moving
+    -- anything, so every distance along the run is unchanged and aDistance still means what it did.
     local dId = self:waypointAtDistance(plan.points, plan.cumulative, plan.dDistance, dual, flags)
-    local aId = self:waypointAtDistance(plan.points, plan.cumulative, plan.aDistance, dual, flags)
+    if dId == nil then
+        Logging.error("[FlyoverEditor]: could not place the siding's far attachment point.")
+        self:cancelSiding()
+        return
+    end
+
+    local freshPoints, freshCumulative = self:orderedRunThrough(self.sidingAnchorId)
+    if freshPoints == nil then
+        Logging.error("[FlyoverEditor]: lost the run after inserting the far attachment point.")
+        self:cancelSiding()
+        return
+    end
+
+    local aId = self:waypointAtDistance(freshPoints, freshCumulative, plan.aDistance, dual, flags)
     if aId == nil or dId == nil then
         Logging.error("[FlyoverEditor]: could not place the siding's attachment points.")
         self:cancelSiding()
