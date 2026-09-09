@@ -102,6 +102,20 @@ local function rdpOpenChain(chain, epsilon)
     end
 end
 
+--- Ramer-Douglas-Peucker over an open chain, exposed for the straighten tool.
+---
+--- Keeps the point of greatest perpendicular deviation whenever that deviation exceeds `epsilon`,
+--- and discards everything within tolerance. That is exactly "flatten the noise but keep a genuine
+--- bend": a span that is mostly straight with one real deviation collapses to its endpoints plus
+--- that deviation, by construction rather than by any special case. Raise epsilon past the bend's
+--- own depth and it flattens too, which is the natural way to say "straighten that as well".
+function ADPolygonUtils.simplifyOpenChainRDP(points, epsilon)
+    if points == nil or #points < 3 or epsilon == nil or epsilon <= 0 then
+        return points
+    end
+    return rdpOpenChain(points, epsilon)
+end
+
 -- Builds the forward, wrap-around sub-chain of a closed ring from fromIndex to toIndex inclusive.
 local function ringSlice(points, fromIndex, toIndex)
     local n = #points

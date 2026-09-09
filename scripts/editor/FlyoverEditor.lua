@@ -88,6 +88,10 @@ ADFlyoverEditor = {
     snapToTerrain = false,
     convertScope = 2,
     convertOp = 1,
+    straightenFromId = nil,
+    straightenToId = nil,
+    straightenPreview = nil,
+    straightenTolerance = 1.0,
     divideFromId = nil,
     divideToId = nil,
     divideCount = 4,
@@ -122,8 +126,8 @@ ADFlyoverEditor = {
 -- Ordered by how often each is actually reached for, because position IS the key binding: the
 -- tool at 10 answers to 0, the most awkward reach, and so belongs to the one used least.
 -- Order set from how the editor is really used, not from how the tools group conceptually.
-ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, MERGE = 9, FIELDLOOP = 10 }
-ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "merge", "field loop" }
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge" }
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
@@ -134,6 +138,13 @@ AutoDrive.FLYOVER_PICK_RADIUS = 4
 -- the world-space one above is only the fallback if project is unavailable.
 AutoDrive.FLYOVER_PICK_SCREEN_RADIUS = 0.025
 -- Proportional-move falloff radius: 0 means "move only the grabbed point". Adjusted with , and .
+-- Straighten: how far a waypoint may sit from the straight line through its neighbours before it
+-- counts as a deliberate bend rather than noise. The wheel dials this while the preview shows which
+-- points survive, which is the only sensible way to pick it - the number alone means nothing.
+AutoDrive.FLYOVER_STRAIGHTEN_MIN = 0
+AutoDrive.FLYOVER_STRAIGHTEN_MAX = 25
+AutoDrive.FLYOVER_STRAIGHTEN_STEP = 0.25
+
 AutoDrive.FLYOVER_FALLOFF_STEP = 2.5
 -- Finer than the key step: the wheel is for dialling a value in while watching it, the keys for
 -- getting somewhere in a hurry.
@@ -830,6 +841,8 @@ function ADFlyoverEditor:update(dt)
         self:updateMergePreview()
     elseif self.tool == self.TOOL.DIVIDE then
         self:updateDividePreview()
+    elseif self.tool == self.TOOL.STRAIGHTEN then
+        self:updateStraightenPreview()
     elseif self.tool == self.TOOL.SMOOTH then
         self:updateSmoothPreview()
     end
@@ -1038,6 +1051,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.mergeToId = nil
     self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
+    self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.smoothToId, self.smoothPreview, self.smoothPinned = nil, nil, nil
     self.dragId = nil
     self.lastWaypointId = nil
@@ -1135,6 +1149,18 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    if self.tool == self.TOOL.STRAIGHTEN and self.straightenPreview ~= nil then
+        for i = 1, #self.straightenPreview do
+            local p = self.straightenPreview[i]
+            local py = (p.y or 0) + 0.6
+            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.4, 1, 0.4, 0.6)
+            if i > 1 then
+                local q = self.straightenPreview[i - 1]
+                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, 1, 0.4, 1, 0.4)
+            end
+        end
+    end
+
     if self.tool == self.TOOL.DIVIDE and self.dividePreview ~= nil then
         local cursorGroundY = AutoDrive:getTerrainHeightAtWorldPos(self.cursorX, self.cursorZ)
         for i = 1, #self.dividePreview do
@@ -1167,7 +1193,9 @@ function ADFlyoverEditor:drawNetwork()
     -- visible rather than something you only discover after clicking. The connect tool gets the
     -- same treatment from its first-picked waypoint.
     local anchorId = self.lastWaypointId
-    if self.tool == self.TOOL.SMOOTH then
+    if self.tool == self.TOOL.STRAIGHTEN then
+        anchorId = self.straightenFromId
+    elseif self.tool == self.TOOL.SMOOTH then
         anchorId = self.smoothFromId
     elseif self.tool == self.TOOL.SPLINE then
         anchorId = self.splineFromId
@@ -1352,6 +1380,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:generateFieldLoopAtCursor()
     elseif self.tool == self.TOOL.CONVERT then
         self:convertAtCursor()
+    elseif self.tool == self.TOOL.STRAIGHTEN then
+        self:straightenClick()
     elseif self.tool == self.TOOL.DIVIDE then
         self:divideClick()
     end
@@ -1416,6 +1446,14 @@ function ADFlyoverEditor:stopCurrentAction()
     if tool == self.TOOL.DRAW then
         if self.lastWaypointId ~= nil then
             self:endRun()
+            return true
+        end
+    elseif tool == self.TOOL.STRAIGHTEN then
+        if self.straightenToId ~= nil then
+            self:commitStraighten()
+            return true
+        elseif self.straightenFromId ~= nil then
+            self:cancelStraighten()
             return true
         end
     elseif tool == self.TOOL.SMOOTH then
@@ -2908,6 +2946,15 @@ function ADFlyoverEditor:getNextStepLines()
         return { "Click the waypoint to curve from." }
     elseif self.tool == t.FIELDLOOP then
         return { "Click inside a field to ring it.", "Uses the field loop settings." }
+    elseif self.tool == t.STRAIGHTEN then
+        if self.straightenToId ~= nil then
+            return { string.format("Wheel sets tolerance (%.2fm).", self.straightenTolerance),
+                     "Right-click straightens the span." }
+        end
+        if self.straightenFromId ~= nil then
+            return { "Click the far end of the span." }
+        end
+        return { "Click one end of a span to", "straighten it." }
     elseif self.tool == t.DIVIDE then
         if self.divideToId ~= nil then
             return { string.format("Wheel sets the count (%d).", self.divideCount), "Right-click applies it." }
@@ -3202,6 +3249,155 @@ end
 
 AutoDrive.FLYOVER_DIVIDE_MAX = 200
 
+--- Straighten a span: drop the waypoints that are only noise, keep the ones that are a real bend.
+---
+--- The tolerance is what separates the two, and the preview is what makes it choosable - dial the
+--- wheel and watch a bend survive or flatten. The point COUNT is preserved: the span keeps as many
+--- waypoints as it had, respread evenly along the simplified shape, so straightening never leaves a
+--- three-point run that has to be divided back out afterwards.
+function ADFlyoverEditor:straightenClick()
+    if self.hoverId == nil then
+        return
+    end
+
+    if self.straightenFromId == nil then
+        self.straightenFromId = self.hoverId
+        Logging.info("[FlyoverEditor]: straightening from id=%s; click the far end of the span.",
+            tostring(self.straightenFromId))
+        return
+    end
+
+    if self.hoverId == self.straightenFromId then
+        return
+    end
+
+    local span = self:runPathBetween(self.straightenFromId, self.hoverId)
+    if span == nil then
+        Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
+            tostring(self.hoverId), tostring(self.straightenFromId))
+        return
+    end
+
+    self.straightenToId = self.hoverId
+    self.straightenPreview = nil
+    Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the tolerance (%.2fm), right-click applies.",
+        #span, self.straightenTolerance)
+end
+
+--- Points of the current span, or nil.
+function ADFlyoverEditor:straightenSpanPoints()
+    if self.straightenFromId == nil or self.straightenToId == nil then
+        return nil, nil
+    end
+    local span = self:runPathBetween(self.straightenFromId, self.straightenToId)
+    if span == nil or #span < 3 then
+        return nil, span
+    end
+    local pts = {}
+    for _, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
+        end
+    end
+    if #pts < 3 then
+        return nil, span
+    end
+    return pts, span
+end
+
+--- `count` interior points spread evenly by arc length along `pts`, endpoints included.
+local function respreadAlong(pts, count)
+    local cumulative = { 0 }
+    for i = 2, #pts do
+        cumulative[i] = cumulative[i - 1]
+            + MathUtil.vector2Length(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+    end
+    local total = cumulative[#pts]
+    if total <= 0 then
+        return nil
+    end
+
+    local function pointAt(distance)
+        for i = 2, #pts do
+            if cumulative[i] >= distance then
+                local segLen = cumulative[i] - cumulative[i - 1]
+                local f = segLen > 0 and (distance - cumulative[i - 1]) / segLen or 0
+                return {
+                    x = pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f,
+                    z = pts[i - 1].z + (pts[i].z - pts[i - 1].z) * f,
+                }
+            end
+        end
+        return { x = pts[#pts].x, z = pts[#pts].z }
+    end
+
+    local out = { { x = pts[1].x, y = pts[1].y, z = pts[1].z } }
+    for i = 1, count do
+        out[#out + 1] = pointAt(total * i / (count + 1))
+    end
+    out[#out + 1] = { x = pts[#pts].x, y = pts[#pts].y, z = pts[#pts].z }
+    return out
+end
+
+function ADFlyoverEditor:updateStraightenPreview()
+    local pts, span = self:straightenSpanPoints()
+    if pts == nil then
+        self.straightenPreview = nil
+        return
+    end
+
+    local simplified = ADPolygonUtils.simplifyOpenChainRDP(pts, self.straightenTolerance)
+    if simplified == nil or #simplified < 2 then
+        self.straightenPreview = nil
+        return
+    end
+
+    -- Same interior count as the span had, respread along the simplified shape.
+    local result = respreadAlong(simplified, #pts - 2)
+    if result == nil then
+        self.straightenPreview = nil
+        return
+    end
+    for i = 2, #result - 1 do
+        result[i].y = self:resolveHeightAt(result[i].x, result[i].z, heightAlongChain(pts, result[i].x, result[i].z))
+    end
+
+    self.straightenPreview = result
+    self.straightenKept = #simplified
+end
+
+function ADFlyoverEditor:commitStraighten()
+    local pts, span = self:straightenSpanPoints()
+    local newPoints = self.straightenPreview
+    if pts == nil or span == nil or newPoints == nil then
+        self:cancelStraighten()
+        return
+    end
+
+    local first = ADGraphManager:getWayPointById(span[1])
+    local second = ADGraphManager:getWayPointById(span[2])
+    local dual = ADGraphManager:isDualRoad(first, second)
+    local flags = second.flags or AutoDrive.FLAG_NONE
+
+    ADEditorHistory:snapshot("straighten span")
+    self:replaceChainInterior(span, newPoints, dual, flags)
+
+    Logging.info("[FlyoverEditor]: straightened a %d-point span at %.2fm tolerance (%d point(s) were a real bend).",
+        #pts, self.straightenTolerance, math.max(0, (self.straightenKept or 2) - 2))
+
+    self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+end
+
+function ADFlyoverEditor:cancelStraighten()
+    if self.straightenFromId ~= nil or self.straightenToId ~= nil then
+        Logging.info("[FlyoverEditor]: cancelled the straighten span.")
+    end
+    self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
+end
+
 function ADFlyoverEditor:divideClick()
     if self.hoverId == nil then
         return
@@ -3261,6 +3457,13 @@ function ADFlyoverEditor:handleWheel(offset)
         return false
     end
     local step = offset > 0 and 1 or -1
+
+    if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then
+        self.straightenTolerance = math.max(AutoDrive.FLYOVER_STRAIGHTEN_MIN,
+            math.min(AutoDrive.FLYOVER_STRAIGHTEN_MAX,
+                self.straightenTolerance + step * AutoDrive.FLYOVER_STRAIGHTEN_STEP))
+        return true
+    end
 
     if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then
         self.divideCount = math.max(0, math.min(AutoDrive.FLYOVER_DIVIDE_MAX, self.divideCount + step))
