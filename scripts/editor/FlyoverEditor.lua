@@ -4100,6 +4100,7 @@ function ADFlyoverEditor:splineConnectIds(startId, endId, dual, flags)
     if not built or interpolation == nil or not interpolation.valid
         or interpolation.waypoints == nil or #interpolation.waypoints <= 2 then
         ADGraphManager:toggleConnectionBetween(a, b, false, dual, false)
+        clearSplineState()
         return true
     end
 
@@ -4116,6 +4117,14 @@ function ADFlyoverEditor:splineConnectIds(startId, endId, dual, flags)
             ADGraphManager:setWayPointFlags(id, flags, false)
         end
     end
+    -- Built here, so cleared here. This is a one-shot connection, not a live preview: it borrows
+    -- AutoDrive's interpolation state to shape the curve and is finished with it immediately.
+    --
+    -- Leaving it set costs the camera zoom. AutoDrive:handleSplineCurvature suppresses zooming for
+    -- as long as an interpolation is valid, so a stale one silently owns the mouse wheel from then
+    -- on - and it does not show up while a tool that claims the wheel itself is selected, only
+    -- afterwards, which is a long way from the siding that actually caused it.
+    clearSplineState()
     return true
 end
 
