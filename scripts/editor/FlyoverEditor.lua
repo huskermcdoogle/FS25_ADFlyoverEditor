@@ -3443,16 +3443,19 @@ function ADFlyoverEditor:runEnds(seedId)
 end
 
 --- The run through `seedId` as an ordered point list, with cumulative distance and the seed's index.
---- Walk a closed run all the way round from the seed, then rotate so the seed sits in the middle.
+--- Order a collected run by WALKING it from `startId`, staying inside the set.
 ---
---- A field loop is a CYCLE - every waypoint has two neighbours, so nothing looks like an end, which
---- is what "0 clear ends" meant. It is also exactly where a siding belongs: a passing place on a
---- field loop is the obvious use. So the loop is cut at the point furthest from the seed and handed
---- on as an ordinary open chain, which leaves the maximum room either side of where you clicked.
-local function orderClosedRun(run, seedId)
-    local ordered = { seedId }
-    local visited = { [seedId] = true }
-    local previous, current = nil, seedId
+--- This deliberately does not use a path finder. Once a siding has been laid on a loop, the loop
+--- carries two junctions, so the run between them is bounded correctly - but the path finder is
+--- free to take the OTHER way round, through the siding, and hand back a seven-waypoint shortcut
+--- that never touches the waypoint that was clicked. Walking the set cannot do that: every step is
+--- a neighbour already inside the run, so the result is the run itself, in order.
+---
+--- Returns nil when the walk does not cover the whole set, which means the run branches.
+local function walkRunFrom(run, count, startId)
+    local ordered = { startId }
+    local visited = { [startId] = true }
+    local previous, current = nil, startId
 
     while true do
         local wp = ADGraphManager:getWayPointById(current)
@@ -3479,8 +3482,19 @@ local function orderClosedRun(run, seedId)
         previous, current = current, nextId
     end
 
-    -- Rotate the far half to the front, so the seed lands in the middle rather than at the cut.
-    local n = #ordered
+    if count ~= nil and #ordered < count then
+        return nil
+    end
+    return ordered
+end
+
+--- A closed run has no ends, so it is cut opposite the seed: walk it right round, then rotate so
+--- the seed sits mid-chain. A field loop is exactly where a siding belongs - a passing place on the
+--- loop - so this is the common case, not an oddity. Cutting opposite the click leaves the most
+--- room either side of it for the merge tapers.
+local function orderClosedRun(run, count, seedId)
+    local ordered = walkRunFrom(run, count, seedId)
+    local n = ordered ~= nil and #ordered or 0
     if n < 3 then
         return ordered
     end
@@ -3494,31 +3508,36 @@ end
 function ADFlyoverEditor:orderedRunThrough(seedId)
     local a, b, found, why = self:runEnds(seedId)
 
+    local run, count = self:collectRunBetweenJunctions(seedId)
+    if run == nil or count == nil or count < 2 then
+        return nil, nil, nil, why or string.format(
+            "id=%s gives a run of %s waypoint(s).", tostring(seedId), tostring(count or 0))
+    end
+
     local ids
     if a == nil and found == 0 then
         -- No ends at all: a closed loop, not a failure. Cut it opposite the seed and carry on.
-        local run, count = self:collectRunBetweenJunctions(seedId)
-        if run ~= nil and count ~= nil and count >= 3 then
-            ids = orderClosedRun(run, seedId)
-            if ids ~= nil and #ids >= 3 then
-                Logging.info("[FlyoverEditor]: that run is a closed loop of %d waypoint(s); using it "
-                    .. "cut opposite id=%s.", #ids, tostring(seedId))
-            else
-                ids = nil
-            end
-        end
-        if ids == nil then
+        ids = count >= 3 and orderClosedRun(run, count, seedId) or nil
+        if ids ~= nil and #ids >= 3 then
+            Logging.info("[FlyoverEditor]: that run is a closed loop of %d waypoint(s); using it "
+                .. "cut opposite id=%s.", #ids, tostring(seedId))
+        else
             return nil, nil, nil, why
         end
     elseif a == nil then
         return nil, nil, nil, why
     else
-        ids = self:runPathBetween(a, b)
+        ids = walkRunFrom(run, count, a)
+        if ids == nil then
+            return nil, nil, nil, string.format(
+                "the run through id=%s branches - walking it from id=%s did not reach all %d "
+                .. "waypoint(s). Pick a run that does not fork.",
+                tostring(seedId), tostring(a), count)
+        end
     end
-    if ids == nil or #ids < 2 then
+    if #ids < 2 then
         return nil, nil, nil, string.format(
-            "found the run's ends (id=%s and id=%s) but could not path between them.",
-            tostring(a), tostring(b))
+            "the run through id=%s ordered to %d waypoint(s).", tostring(seedId), #ids)
     end
 
     local pts, seedIndex = {}, nil
