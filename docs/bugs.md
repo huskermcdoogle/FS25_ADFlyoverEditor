@@ -103,3 +103,21 @@ If it turns out to be real, the symptom to watch for is WASD dead after Escape, 
 `FlyoverResetInput`.
 
 </details>
+
+## Editing requires being in a vehicle
+
+Reported 2026-09-09. Routes cannot be written unless the player is seated in a vehicle.
+
+What has been ruled out: `Proxy.findHostVehicle` already falls back to any vehicle carrying
+`ad.stateModule`, not only the controlled one, so the stand-in `self` should be available with the
+player on foot. The remaining `AutoDrive.getControlledVehicle()` calls on our side are a diagnostic
+string (`describeInputState`), the camera's opening position (which falls back to `g_localPlayer`),
+and two console commands - none of them gate waypoint creation.
+
+So the requirement most likely lives inside AutoDrive: the graph-writing path, its network events, or
+whatever decides the editor may run at all. Worth confirming which, because the answer decides
+whether this is fixable from a companion or is a limit of editing someone else's mod from outside.
+
+Related: the `name` tool had the same shape of problem and turned out to be `ADEnterTargetNameGui`
+acting on the vehicle's nearest waypoint - fixed with a wrapper. A second wrapper may well be the
+answer here too.
