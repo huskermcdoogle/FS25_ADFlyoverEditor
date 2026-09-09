@@ -88,6 +88,13 @@ ADFlyoverEditor = {
     snapToTerrain = false,
     convertScope = 2,
     convertOp = 1,
+    -- parallel and siding share this: they are the same span-select, the same wheel and the same
+    -- preview, and differ only in what happens on commit. They are mutually exclusive anyway.
+    offsetFromId = nil,
+    offsetToId = nil,
+    offsetPreview = nil,
+    offsetBlockedBy = nil,
+    offsetDistance = 5.0,
     straightenFromId = nil,
     straightenToId = nil,
     straightenPreview = nil,
@@ -126,8 +133,8 @@ ADFlyoverEditor = {
 -- Ordered by how often each is actually reached for, because position IS the key binding: the
 -- tool at 10 answers to 0, the most awkward reach, and so belongs to the one used least.
 -- Order set from how the editor is really used, not from how the tools group conceptually.
-ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11 }
-ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge" }
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11, PARALLEL = 12, SIDING = 13 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge", "parallel", "siding" }
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
@@ -141,6 +148,12 @@ AutoDrive.FLYOVER_PICK_SCREEN_RADIUS = 0.025
 -- Straighten: how far a waypoint may sit from the straight line through its neighbours before it
 -- counts as a deliberate bend rather than noise. The wheel dials this while the preview shows which
 -- points survive, which is the only sensible way to pick it - the number alone means nothing.
+-- Parallel and siding: how far to the side the new track runs. SIGNED, and the wheel runs it
+-- through zero - which is how the side gets flipped, without a separate control for it.
+AutoDrive.FLYOVER_OFFSET_MIN = -30
+AutoDrive.FLYOVER_OFFSET_MAX = 30
+AutoDrive.FLYOVER_OFFSET_STEP = 0.5
+
 AutoDrive.FLYOVER_STRAIGHTEN_MIN = 0
 AutoDrive.FLYOVER_STRAIGHTEN_MAX = 25
 AutoDrive.FLYOVER_STRAIGHTEN_STEP = 0.25
@@ -841,6 +854,8 @@ function ADFlyoverEditor:update(dt)
         self:updateMergePreview()
     elseif self.tool == self.TOOL.DIVIDE then
         self:updateDividePreview()
+    elseif self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING then
+        self:updateOffsetPreview()
     elseif self.tool == self.TOOL.STRAIGHTEN then
         self:updateStraightenPreview()
     elseif self.tool == self.TOOL.SMOOTH then
@@ -1052,6 +1067,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
+    self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
     self.smoothToId, self.smoothPreview, self.smoothPinned = nil, nil, nil
     self.dragId = nil
     self.lastWaypointId = nil
@@ -1149,6 +1165,18 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    if (self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING) and self.offsetPreview ~= nil then
+        for i = 1, #self.offsetPreview do
+            local p = self.offsetPreview[i]
+            local py = (p.y or 0) + 0.6
+            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 1, 0.6, 0.1, 0.6)
+            if i > 1 then
+                local q = self.offsetPreview[i - 1]
+                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, 1, 1, 0.6, 0.1)
+            end
+        end
+    end
+
     if self.tool == self.TOOL.STRAIGHTEN and self.straightenPreview ~= nil then
         for i = 1, #self.straightenPreview do
             local p = self.straightenPreview[i]
@@ -1193,7 +1221,9 @@ function ADFlyoverEditor:drawNetwork()
     -- visible rather than something you only discover after clicking. The connect tool gets the
     -- same treatment from its first-picked waypoint.
     local anchorId = self.lastWaypointId
-    if self.tool == self.TOOL.STRAIGHTEN then
+    if self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING then
+        anchorId = self.offsetFromId
+    elseif self.tool == self.TOOL.STRAIGHTEN then
         anchorId = self.straightenFromId
     elseif self.tool == self.TOOL.SMOOTH then
         anchorId = self.smoothFromId
@@ -1380,6 +1410,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:generateFieldLoopAtCursor()
     elseif self.tool == self.TOOL.CONVERT then
         self:convertAtCursor()
+    elseif self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING then
+        self:offsetClick()
     elseif self.tool == self.TOOL.STRAIGHTEN then
         self:straightenClick()
     elseif self.tool == self.TOOL.DIVIDE then
@@ -1446,6 +1478,14 @@ function ADFlyoverEditor:stopCurrentAction()
     if tool == self.TOOL.DRAW then
         if self.lastWaypointId ~= nil then
             self:endRun()
+            return true
+        end
+    elseif tool == self.TOOL.PARALLEL or tool == self.TOOL.SIDING then
+        if self.offsetToId ~= nil then
+            self:commitOffset()
+            return true
+        elseif self.offsetFromId ~= nil then
+            self:cancelOffset()
             return true
         end
     elseif tool == self.TOOL.STRAIGHTEN then
@@ -2946,6 +2986,19 @@ function ADFlyoverEditor:getNextStepLines()
         return { "Click the waypoint to curve from." }
     elseif self.tool == t.FIELDLOOP then
         return { "Click inside a field to ring it.", "Uses the field loop settings." }
+    elseif self.tool == t.PARALLEL or self.tool == t.SIDING then
+        if self.offsetToId ~= nil then
+            if self.offsetBlockedBy ~= nil then
+                return { "Too tight to offset that far.", "Wheel it back, or swap sides." }
+            end
+            return { string.format("Wheel sets offset (%.1fm %s).",
+                        math.abs(self.offsetDistance), self.offsetDistance >= 0 and "left" or "right"),
+                     "Through zero swaps sides. Right-click applies." }
+        end
+        if self.offsetFromId ~= nil then
+            return { "Click the far end of the span." }
+        end
+        return { "Click one end of a span to run", "a track alongside it." }
     elseif self.tool == t.STRAIGHTEN then
         if self.straightenToId ~= nil then
             return { string.format("Wheel sets tolerance (%.2fm).", self.straightenTolerance),
@@ -3255,6 +3308,182 @@ AutoDrive.FLYOVER_DIVIDE_MAX = 200
 --- wheel and watch a bend survive or flatten. The point COUNT is preserved: the span keeps as many
 --- waypoints as it had, respread evenly along the simplified shape, so straightening never leaves a
 --- three-point run that has to be divided back out afterwards.
+--- Span select for parallel and siding. Identical to straighten's; only the commit differs.
+function ADFlyoverEditor:offsetClick()
+    if self.hoverId == nil then
+        return
+    end
+
+    if self.offsetFromId == nil then
+        self.offsetFromId = self.hoverId
+        Logging.info("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
+            self.TOOL_NAMES[self.tool] or "offset", tostring(self.offsetFromId))
+        return
+    end
+
+    if self.hoverId == self.offsetFromId then
+        return
+    end
+
+    local span = self:runPathBetween(self.offsetFromId, self.hoverId)
+    if span == nil then
+        Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
+            tostring(self.hoverId), tostring(self.offsetFromId))
+        return
+    end
+
+    self.offsetToId = self.hoverId
+    self.offsetPreview = nil
+    Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm, %s); "
+        .. "wheel it through zero to swap sides. Right-click applies.",
+        #span, math.abs(self.offsetDistance), self.offsetDistance >= 0 and "left" or "right")
+end
+
+--- Points of the selected span, and the span itself.
+function ADFlyoverEditor:offsetSpanPoints()
+    if self.offsetFromId == nil or self.offsetToId == nil then
+        return nil, nil
+    end
+    local span = self:runPathBetween(self.offsetFromId, self.offsetToId)
+    if span == nil or #span < 2 then
+        return nil, span
+    end
+    local pts = {}
+    for _, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
+        end
+    end
+    if #pts < 2 then
+        return nil, span
+    end
+    return pts, span
+end
+
+function ADFlyoverEditor:updateOffsetPreview()
+    local pts = self:offsetSpanPoints()
+    if pts == nil or math.abs(self.offsetDistance) < 0.25 then
+        self.offsetPreview, self.offsetBlockedBy = nil, nil
+        return
+    end
+    local offset, err = ADOffsetGeometry.offsetOpenChain(pts, self.offsetDistance)
+    self.offsetPreview = offset
+    self.offsetBlockedBy = err
+end
+
+--- Lay a chain of new waypoints down, joined in order. Returns the first and last new ids.
+function ADFlyoverEditor:createRunFrom(points, dual, flags)
+    local firstId, previousId = nil, nil
+    for _, p in ipairs(points) do
+        local y = self:resolveHeightAt(p.x, p.z, p.y)
+        local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, previousId ~= nil, dual, false,
+            previousId or 0, flags, false)
+        previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
+        firstId = firstId or previousId
+    end
+    return firstId, previousId
+end
+
+--- A spline between two existing waypoints, falling back to a straight connection when the mod
+--- declines to interpolate - which it does for short or already-connected pairs, and which is an
+--- ordinary outcome rather than a failure.
+function ADFlyoverEditor:splineConnectIds(startId, endId, dual, flags)
+    local a = ADGraphManager:getWayPointById(startId)
+    local b = ADGraphManager:getWayPointById(endId)
+    if a == nil or b == nil then
+        return false
+    end
+    if type(AutoDrive.splineInterpolationUserCurvature) ~= "number" then
+        AutoDrive.splineInterpolationUserCurvature = AutoDrive.FLYOVER_DEFAULT_CURVATURE
+    end
+
+    local built = pcall(function() self:buildSplineInterpolation(a, b) end)
+    local interpolation = AutoDrive.splineInterpolation
+    if not built or interpolation == nil or not interpolation.valid
+        or interpolation.waypoints == nil or #interpolation.waypoints <= 2 then
+        ADGraphManager:toggleConnectionBetween(a, b, false, dual, false)
+        return true
+    end
+
+    local middle = {}
+    for i, wp in ipairs(interpolation.waypoints) do
+        if i ~= 1 and i < #interpolation.waypoints then
+            middle[#middle + 1] = { x = wp.x, y = wp.y, z = wp.z }
+        end
+    end
+    ADGraphManager:createSplineConnection(startId, middle, endId, dual, false)
+    if flags ~= nil and flags ~= AutoDrive.FLAG_NONE then
+        local total = ADGraphManager:getWayPointsCount()
+        for id = total - #middle + 1, total do
+            ADGraphManager:setWayPointFlags(id, flags, false)
+        end
+    end
+    return true
+end
+
+--- Commit for both parallel and siding.
+---
+--- Direction: the new run mirrors the source. A two-way span gives a two-way track, because
+--- "opposite" means nothing there. A one-way span gives a track running the OTHER way, which is the
+--- point of laying one - a return lane rather than a second lane going the same way - and it is
+--- done simply by laying the points down back to front.
+---
+--- Siding additionally splines both ends into the span it came from, giving a genuine alternative
+--- route: from one end you can take the main line or the siding, rejoining at the other. No
+--- dividing is needed, because the attachment points are the span's own endpoints, which already
+--- exist - that is what selecting a span rather than a length buys.
+function ADFlyoverEditor:commitOffset()
+    local pts, span = self:offsetSpanPoints()
+    local newPoints = self.offsetPreview
+    if pts == nil or span == nil or newPoints == nil or #newPoints < 2 then
+        if self.offsetBlockedBy ~= nil then
+            Logging.warning("[FlyoverEditor]: %s", self.offsetBlockedBy)
+        end
+        self:cancelOffset()
+        return
+    end
+
+    local first = ADGraphManager:getWayPointById(span[1])
+    local second = ADGraphManager:getWayPointById(span[2])
+    local dual = ADGraphManager:isDualRoad(first, second)
+    local flags = second.flags or AutoDrive.FLAG_NONE
+    local siding = self.tool == self.TOOL.SIDING
+
+    local laying = newPoints
+    if not dual and not siding then
+        local flipped = {}
+        for i = #newPoints, 1, -1 do
+            flipped[#flipped + 1] = newPoints[i]
+        end
+        laying = flipped
+    end
+
+    ADEditorHistory:snapshot(siding and "siding" or "parallel track")
+    local firstNewId, lastNewId = self:createRunFrom(laying, dual, flags)
+
+    if siding and firstNewId ~= nil and lastNewId ~= nil then
+        self:splineConnectIds(span[1], firstNewId, dual, flags)
+        self:splineConnectIds(lastNewId, span[#span], dual, flags)
+    end
+
+    Logging.info("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
+        siding and "siding" or "parallel track", #laying, math.abs(self.offsetDistance),
+        self.offsetDistance >= 0 and "left" or "right",
+        siding and ", splined in at both ends" or (dual and ", two-way" or ", running opposite"))
+
+    self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+end
+
+function ADFlyoverEditor:cancelOffset()
+    if self.offsetFromId ~= nil or self.offsetToId ~= nil then
+        Logging.info("[FlyoverEditor]: cancelled the span.")
+    end
+    self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
+end
+
 function ADFlyoverEditor:straightenClick()
     if self.hoverId == nil then
         return
@@ -3457,6 +3686,13 @@ function ADFlyoverEditor:handleWheel(offset)
         return false
     end
     local step = offset > 0 and 1 or -1
+
+    if (self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING) and self.offsetToId ~= nil then
+        self.offsetDistance = math.max(AutoDrive.FLYOVER_OFFSET_MIN,
+            math.min(AutoDrive.FLYOVER_OFFSET_MAX,
+                self.offsetDistance + step * AutoDrive.FLYOVER_OFFSET_STEP))
+        return true
+    end
 
     if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then
         self.straightenTolerance = math.max(AutoDrive.FLYOVER_STRAIGHTEN_MIN,

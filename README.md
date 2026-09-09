@@ -16,6 +16,9 @@
 | field loop | ✅ via console |
 | divide | ✅ incl. the fork/direction fixes |
 | convert | ✅ all four operations |
+| straighten | RDP by tolerance, keeps real bends — **untested** |
+| parallel | track alongside a span — **untested** |
+| siding | parallel, splined in at both ends — **untested** |
 
 Also verified: **settings persistence** end to end — a changed value written to
 `modSettings/FS25_ADFlyoverEditor/settings.xml` as an index, read back across a full restart, and

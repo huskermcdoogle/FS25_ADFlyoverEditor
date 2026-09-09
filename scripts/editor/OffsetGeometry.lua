@@ -468,6 +468,186 @@ function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, max
 end
 
 -- ---------------------------------------------------------------------------------------------
+-- Offsetting an OPEN chain
+--
+-- The ring version above cannot be used for a span: it closes the loop, and it decides which way is
+-- "inward" from the winding, which an open chain does not have. Here the side is simply the sign of
+-- the distance - positive is to the left of travel, negative to the right - which is what lets a
+-- parallel-track tool flip sides by wheeling the offset through zero.
+--
+-- The construction is the same otherwise: shift every segment along its normal, intersect
+-- consecutive shifted lines, bevel a corner whose miter would run away, and clean up afterwards.
+-- Cleanup matters more here than it looks: offsetting the inside of a bend tighter than the offset
+-- distance folds the chain over itself, and that fold has to come out or the track crosses itself.
+-- ---------------------------------------------------------------------------------------------
+
+--- Cusps in an open chain. Endpoints are never removed - they are where the span attaches to the
+--- rest of the network, so losing one would detach it.
+local function removeOpenCusps(points)
+    for _ = 1, 64 do
+        local n = #points
+        if n < 3 then
+            return points
+        end
+        local worstTurn, worstAt = 0, nil
+        for i = 2, n - 1 do
+            if distanceBetween(points[i - 1], points[i]) > EPS
+                and distanceBetween(points[i], points[i + 1]) > EPS then
+                local turn = math.abs(math.deg(turnAngle(points[i - 1], points[i], points[i + 1])))
+                if turn > worstTurn then
+                    worstTurn, worstAt = turn, i
+                end
+            end
+        end
+        if worstAt == nil or worstTurn < CUSP_ANGLE_DEG then
+            return points
+        end
+        table.remove(points, worstAt)
+    end
+    return points
+end
+
+--- Folds in an open chain: where segment i crosses segment j, everything between them doubled back,
+--- so replace it with the crossing point. The two endpoints always survive.
+local function removeOpenFolds(points)
+    for _ = 1, 64 do
+        local n = #points
+        if n < 4 then
+            return points
+        end
+        local repaired = nil
+        for i = 1, n - 3 do
+            for j = i + 2, n - 1 do
+                local hit = properIntersection(points[i], points[i + 1], points[j], points[j + 1])
+                if hit ~= nil then
+                    local rebuilt = {}
+                    for k = 1, i do rebuilt[#rebuilt + 1] = points[k] end
+                    hit.y = points[i].y
+                    rebuilt[#rebuilt + 1] = hit
+                    for k = j + 1, n do rebuilt[#rebuilt + 1] = points[k] end
+                    repaired = rebuilt
+                    break
+                end
+            end
+            if repaired ~= nil then
+                break
+            end
+        end
+        if repaired == nil then
+            return points
+        end
+        points = repaired
+    end
+    return points
+end
+
+--- Offset an open chain sideways by `distance`: positive to the LEFT of travel, negative to the
+--- right. Heights are carried across from the source point each offset point came from, so the new
+--- track follows the old one's profile rather than sitting flat.
+---@return table|nil offsetPoints, string|nil errorMessage
+function ADOffsetGeometry.offsetOpenChain(points, distance)
+    local n = points ~= nil and #points or 0
+    if n < 2 then
+        return nil, "A span needs at least two points to offset."
+    end
+    if math.abs(distance) < 1e-6 then
+        return copyPoints(points), nil
+    end
+
+    local lines = {}
+    for i = 1, n - 1 do
+        local a, b = points[i], points[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local length = MathUtil.vector2Length(dx, dz)
+        if length > EPS then
+            local ux, uz = dx / length, dz / length
+            lines[#lines + 1] = {
+                px = a.x - uz * distance,
+                pz = a.z + ux * distance,
+                ux = ux,
+                uz = uz,
+                nx = -uz,
+                nz = ux,
+                from = a,
+                to = b,
+            }
+        end
+    end
+    if #lines == 0 then
+        return nil, "The span has no length to offset."
+    end
+
+    local out = {}
+    local first = lines[1]
+    out[1] = {
+        x = first.from.x + first.nx * distance,
+        z = first.from.z + first.nz * distance,
+        y = first.from.y,
+    }
+
+    local miterCap = math.abs(distance) * MITER_LIMIT
+    for i = 1, #lines - 1 do
+        local current, following = lines[i], lines[i + 1]
+        local corner = current.to
+        local mitered = intersectLines(current, following)
+        if mitered ~= nil and distanceBetween(mitered, corner) <= miterCap then
+            mitered.y = corner.y
+            out[#out + 1] = mitered
+        else
+            out[#out + 1] = { x = corner.x + current.nx * distance, z = corner.z + current.nz * distance, y = corner.y }
+            out[#out + 1] = { x = corner.x + following.nx * distance, z = corner.z + following.nz * distance, y = corner.y }
+        end
+    end
+
+    local last = lines[#lines]
+    out[#out + 1] = {
+        x = last.to.x + last.nx * distance,
+        z = last.to.z + last.nz * distance,
+        y = last.to.y,
+    }
+
+    -- Drop coincident points before looking for folds, so a zero-length segment cannot masquerade
+    -- as one. The ring version's dropDuplicates also closes the loop, which would be wrong here.
+    local tidied = {}
+    for i = 1, #out do
+        local prev = tidied[#tidied]
+        if prev == nil or distanceBetween(prev, out[i]) > 1e-6 then
+            tidied[#tidied + 1] = out[i]
+        end
+    end
+
+    local folded = removeOpenCusps(removeOpenFolds(tidied))
+
+    -- A bend tighter than the offset distance cannot BE offset into: the two arms would have to
+    -- pass through each other. Removing folds is not enough to catch that, because the arms can end
+    -- up merely too close without ever crossing - which produced a track 2m from a span when 6m was
+    -- asked for, and that looks like a bug rather than a refusal. So measure: every legitimate
+    -- offset point is about `distance` from the source, and anything much nearer is the collapse.
+    local minimumClearance = math.abs(distance) * 0.85
+    local result = {}
+    for i = 1, #folded do
+        local p = folded[i]
+        local nearest = math.huge
+        for j = 1, n - 1 do
+            local d = distanceToSegment(p, points[j], points[j + 1])
+            if d < nearest then
+                nearest = d
+            end
+        end
+        if nearest >= minimumClearance then
+            result[#result + 1] = p
+        end
+    end
+
+    if #result < 2 then
+        return nil, string.format(
+            "cannot offset this span by %.1fm - it bends tighter than that, so the new track would "
+            .. "cross itself. Try a smaller distance or the other side.", math.abs(distance))
+    end
+    return result, nil
+end
+
+-- ---------------------------------------------------------------------------------------------
 -- Corner rounding
 -- ---------------------------------------------------------------------------------------------
 

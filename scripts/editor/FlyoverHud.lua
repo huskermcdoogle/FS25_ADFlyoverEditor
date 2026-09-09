@@ -279,11 +279,15 @@ function ADFlyoverHud:draw(editor)
         elseif row.kind == "section" then
             label(textX, textY, fontSize * 0.86, row.text, 0.55, 0.75, 1, 1)
         elseif row.kind == "tool" then
+            -- Every tool gets a plate, not just the selected one, so the list reads as a row of
+            -- buttons rather than as text with one line highlighted. The selected one keeps the
+            -- bright fill; the rest get a dim plate that still says "this is clickable".
             if row.active then
                 drawQuad(self.rowOverlay, x, y, width, h, 0.15, 0.55, 0.95, 0.85)
                 label(textX, textY, fontSize, row.text, 1, 1, 1, 1)
             else
-                label(textX, textY, fontSize, row.text, 0.78, 0.78, 0.78, 1)
+                drawQuad(self.rowOverlay, x, y, width, h, 0.20, 0.21, 0.24, 0.55)
+                label(textX, textY, fontSize, row.text, 0.82, 0.82, 0.82, 1)
             end
         elseif row.kind == "number" then
             if row.active then
