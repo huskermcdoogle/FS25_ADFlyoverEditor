@@ -1419,6 +1419,17 @@ function ADFlyoverEditor:drawNetwork()
 end
 
 function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
+    -- Logged BEFORE the guard, and only for real button presses, so a click that is being thrown
+    -- away still leaves a trace. A siding previewed on foot and then did nothing, with no log line
+    -- at all - which means the code never reached the commit, and there was no way to tell whether
+    -- the click arrived and was rejected or never arrived. This says which.
+    if isDown and button ~= nil
+        and button ~= Input.MOUSE_BUTTON_WHEEL_UP and button ~= Input.MOUSE_BUTTON_WHEEL_DOWN then
+        Logging.info("[FlyoverEditor]: click button=%s active=%s camera=%s cursor=%s guiBlocking=%s",
+            tostring(button), tostring(self.active), tostring(self.camera ~= nil),
+            tostring(self.cursor ~= nil), tostring(self:isGuiBlocking()))
+    end
+
     if not self.active or self.camera == nil or self.cursor == nil or self:isGuiBlocking() then
         return
     end
@@ -4268,6 +4279,10 @@ end
 --- dividing is needed, because the attachment points are the span's own endpoints, which already
 --- exist - that is what selecting a span rather than a length buys.
 function ADFlyoverEditor:commitOffset()
+    Logging.info("[FlyoverEditor]: commit %s: from=%s to=%s anchor=%s preview=%s",
+        self.tool == self.TOOL.SIDING and "siding" or "parallel",
+        tostring(self.offsetFromId), tostring(self.offsetToId), tostring(self.sidingAnchorId),
+        self.offsetPreview ~= nil and tostring(#self.offsetPreview) or "nil")
     local pts, span = self:offsetSpanPoints()
     local newPoints = self.offsetPreview
     if pts == nil or span == nil or newPoints == nil or #newPoints < 2 then
