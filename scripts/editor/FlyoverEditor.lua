@@ -119,8 +119,13 @@ ADFlyoverEditor = {
 -- stops a click on an existing waypoint stacking a second waypoint on top of it, and brings the
 -- count to ten, which is exactly what the 1-0 key bindings can address: the binding is
 -- (tool == 10) and "KEY_0" or ("KEY_" .. tool), so the eleventh tool previously had no key.
-ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, SMOOTH = 4, NAME = 5, SPLINE = 6, MERGE = 7, FIELDLOOP = 8, CONVERT = 9, DIVIDE = 10 }
-ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "smooth", "name", "spline", "merge", "field loop", "convert", "divide" }
+-- Ordered by how often each is actually reached for, because position IS the key binding:
+-- the tool at 10 answers to 0, which is the most awkward reach and so belongs to the tool
+-- used least. draw, move, delete and spline are the constant four and sit on 1-4; smooth and
+-- divide are cleanup; convert and merge are structural passes; name and field loop are
+-- one-off jobs done once per marker or once per field.
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, SPLINE = 4, SMOOTH = 5, DIVIDE = 6, CONVERT = 7, MERGE = 8, NAME = 9, FIELDLOOP = 10 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "spline", "smooth", "divide", "convert", "merge", "name", "field loop" }
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
