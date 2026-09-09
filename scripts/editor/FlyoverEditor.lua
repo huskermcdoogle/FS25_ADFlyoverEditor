@@ -96,6 +96,9 @@ ADFlyoverEditor = {
     offsetBlockedBy = nil,
     offsetDistance = 5.0,
     offsetScope = 1,
+    sidingAnchorId = nil,
+    sidingPreview = nil,
+    sidingBlockedBy = nil,
     offsetCache = nil,
     straightenFromId = nil,
     straightenToId = nil,
@@ -152,6 +155,11 @@ AutoDrive.FLYOVER_PICK_SCREEN_RADIUS = 0.025
 -- points survive, which is the only sensible way to pick it - the number alone means nothing.
 -- Parallel and siding: how far to the side the new track runs. SIGNED, and the wheel runs it
 -- through zero - which is how the side gets flipped, without a separate control for it.
+-- A siding merges back into the main line over this many times its own offset. Deriving it
+-- rather than setting it keeps the TAPER ANGLE constant: 5m out over 20m is about 14 degrees, and
+-- it stays 14 degrees at any offset, which is what a vehicle following it actually cares about.
+AutoDrive.FLYOVER_SIDING_MERGE_RATIO = 4
+
 AutoDrive.FLYOVER_OFFSET_MIN = 0.1
 AutoDrive.FLYOVER_OFFSET_MAX = 30
 AutoDrive.FLYOVER_OFFSET_STEP = 0.1
@@ -856,7 +864,9 @@ function ADFlyoverEditor:update(dt)
         self:updateMergePreview()
     elseif self.tool == self.TOOL.DIVIDE then
         self:updateDividePreview()
-    elseif self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING then
+    elseif self.tool == self.TOOL.SIDING then
+        self:updateSidingPreview()
+    elseif self.tool == self.TOOL.PARALLEL then
         self:updateOffsetPreview()
     elseif self.tool == self.TOOL.STRAIGHTEN then
         self:updateStraightenPreview()
@@ -1070,6 +1080,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
+    self.sidingAnchorId, self.sidingPreview = nil, nil
     self.smoothToId, self.smoothPreview, self.smoothPinned = nil, nil, nil
     self.dragId = nil
     self.lastWaypointId = nil
@@ -1167,7 +1178,19 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
-    if (self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING) and self.offsetPreview ~= nil then
+    if self.tool == self.TOOL.SIDING and self.sidingPreview ~= nil then
+        for i = 1, #self.sidingPreview do
+            local p = self.sidingPreview[i]
+            local py = (p.y or 0) + 0.6
+            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.2, 0.8, 1, 0.6)
+            if i > 1 then
+                local q = self.sidingPreview[i - 1]
+                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, 1, 0.2, 0.8, 1)
+            end
+        end
+    end
+
+    if self.tool == self.TOOL.PARALLEL and self.offsetPreview ~= nil then
         for i = 1, #self.offsetPreview do
             local p = self.offsetPreview[i]
             local py = (p.y or 0) + 0.6
@@ -1412,7 +1435,9 @@ function ADFlyoverEditor:onLeftRelease()
         self:generateFieldLoopAtCursor()
     elseif self.tool == self.TOOL.CONVERT then
         self:convertAtCursor()
-    elseif self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING then
+    elseif self.tool == self.TOOL.SIDING then
+        self:sidingClick()
+    elseif self.tool == self.TOOL.PARALLEL then
         self:offsetClick()
     elseif self.tool == self.TOOL.STRAIGHTEN then
         self:straightenClick()
@@ -1482,7 +1507,12 @@ function ADFlyoverEditor:stopCurrentAction()
             self:endRun()
             return true
         end
-    elseif tool == self.TOOL.PARALLEL or tool == self.TOOL.SIDING then
+    elseif tool == self.TOOL.SIDING then
+        if self.sidingAnchorId ~= nil then
+            self:commitSiding()
+            return true
+        end
+    elseif tool == self.TOOL.PARALLEL then
         if self.offsetToId ~= nil then
             self:commitOffset()
             return true
@@ -1929,6 +1959,15 @@ function ADFlyoverEditor:getEditableNumbers()
             unit = unit or "m",
             get = function() return ADFlyoverSettings.get(name) end,
             apply = function(value) return editor:applySettingValue(name, value) end
+        }
+    end
+
+    if self.tool == self.TOOL.SIDING then
+        -- Both persist, so a siding shape settled on once stays settled. The wheel drives the
+        -- length because that is what changes per site; the offset is typed here.
+        return {
+            settingEntry("offset", "sidingOffset"),
+            settingEntry("length", "sidingLength")
         }
     end
 
@@ -2997,7 +3036,16 @@ function ADFlyoverEditor:getNextStepLines()
         return { "Click the waypoint to curve from." }
     elseif self.tool == t.FIELDLOOP then
         return { "Click inside a field to ring it.", "Uses the field loop settings." }
-    elseif self.tool == t.PARALLEL or self.tool == t.SIDING then
+    elseif self.tool == t.SIDING then
+        if self.sidingBlockedBy ~= nil then
+            return { "Will not fit here.", "See the log for why." }
+        end
+        if self.sidingAnchorId ~= nil then
+            return { string.format("Wheel sets length (%.0fm).", ADFlyoverSettings.get("sidingLength") or 30),
+                     "Side follows the cursor. Right-click applies." }
+        end
+        return { "Click where the siding should", "sit - the click is its centre." }
+    elseif self.tool == t.PARALLEL then
         if self.offsetToId ~= nil then
             if self.offsetBlockedBy ~= nil then
                 return { "Too tight to offset that far.", "Wheel it back, or swap sides." }
@@ -3322,6 +3370,294 @@ AutoDrive.FLYOVER_DIVIDE_MAX = 200
 --- waypoints as it had, respread evenly along the simplified shape, so straightening never leaves a
 --- three-point run that has to be divided back out afterwards.
 --- Span select for parallel and siding. Identical to straighten's; only the commit differs.
+-- ---------------------------------------------------------------------------------------------
+-- Siding
+--
+-- A siding has a shape you want repeatedly rather than one dialled in each time, so its offset and
+-- length are persistent settings and the click just says WHERE. The click is the CENTRE, because
+-- you point at the place a vehicle needs to pull over, not at where the taper should begin.
+--
+-- Four positions along the main line, not two:
+--
+--     ...A########B===========C########D...        A..B and C..D are the merges
+--          \                      /               B..C is the parallel section
+--           \____________________/
+--
+-- Only A and D need to be real waypoints - they are where the splines attach - and they almost
+-- never land on an existing one, so the main line gets a waypoint inserted at each. That is the
+-- divide this needs and the span-selected version did not.
+-- ---------------------------------------------------------------------------------------------
+
+--- The two ends of the run through `seedId`, or nil when it does not have exactly two.
+--- collectRunBetweenJunctions returns a SET, so the ends have to be found rather than indexed:
+--- they are the members with only one neighbour still inside the run. Neighbours are counted
+--- uniquely, because a two-way connection appears in both `out` and `incoming`.
+function ADFlyoverEditor:runEnds(seedId)
+    local run, count = self:collectRunBetweenJunctions(seedId)
+    if run == nil or count == nil or count < 2 then
+        return nil, nil, 0
+    end
+    local ends = {}
+    for id in pairs(run) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            local seen, inside = {}, 0
+            for _, listName in ipairs({ "out", "incoming" }) do
+                for _, other in pairs(wp[listName] or {}) do
+                    if run[other] and not seen[other] then
+                        seen[other] = true
+                        inside = inside + 1
+                    end
+                end
+            end
+            if inside <= 1 then
+                ends[#ends + 1] = id
+            end
+        end
+    end
+    if #ends ~= 2 then
+        return nil, nil, #ends
+    end
+    return ends[1], ends[2], 2
+end
+
+--- The run through `seedId` as an ordered point list, with cumulative distance and the seed's index.
+function ADFlyoverEditor:orderedRunThrough(seedId)
+    local a, b, found = self:runEnds(seedId)
+    if a == nil then
+        return nil, nil, nil, found
+    end
+    local ids = self:runPathBetween(a, b)
+    if ids == nil or #ids < 2 then
+        return nil, nil, nil, 0
+    end
+
+    local pts, seedIndex = {}, nil
+    for i, id in ipairs(ids) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp == nil then
+            return nil, nil, nil, 0
+        end
+        pts[i] = { x = wp.x, y = wp.y, z = wp.z, id = id }
+        if id == seedId then
+            seedIndex = i
+        end
+    end
+    if seedIndex == nil then
+        return nil, nil, nil, 0
+    end
+
+    local cumulative = { 0 }
+    for i = 2, #pts do
+        cumulative[i] = cumulative[i - 1]
+            + MathUtil.vector2Length(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+    end
+    return pts, cumulative, seedIndex, 2
+end
+
+--- Position at `distance` along the ordered run, plus the segment it falls in.
+local function pointAtDistance(pts, cumulative, distance)
+    if distance <= 0 then
+        return { x = pts[1].x, y = pts[1].y, z = pts[1].z }, 1, 0
+    end
+    local total = cumulative[#pts]
+    if distance >= total then
+        return { x = pts[#pts].x, y = pts[#pts].y, z = pts[#pts].z }, #pts - 1, 1
+    end
+    for i = 2, #pts do
+        if cumulative[i] >= distance then
+            local segLen = cumulative[i] - cumulative[i - 1]
+            local t = segLen > 0 and (distance - cumulative[i - 1]) / segLen or 0
+            return {
+                x = pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+                y = (pts[i - 1].y or 0) + ((pts[i].y or 0) - (pts[i - 1].y or 0)) * t,
+                z = pts[i - 1].z + (pts[i].z - pts[i - 1].z) * t,
+            }, i - 1, t
+        end
+    end
+    return { x = pts[#pts].x, y = pts[#pts].y, z = pts[#pts].z }, #pts - 1, 1
+end
+
+--- The stretch of the run between two distances, with its ends interpolated exactly.
+local function subChainByDistance(pts, cumulative, from, to)
+    local out = {}
+    local head = pointAtDistance(pts, cumulative, from)
+    out[1] = head
+    for i = 1, #pts do
+        if cumulative[i] > from and cumulative[i] < to then
+            out[#out + 1] = { x = pts[i].x, y = pts[i].y, z = pts[i].z }
+        end
+    end
+    out[#out + 1] = pointAtDistance(pts, cumulative, to)
+    return out
+end
+
+--- Everything the preview and the commit both need, so they cannot disagree about the shape.
+function ADFlyoverEditor:sidingPlan()
+    if self.sidingAnchorId == nil then
+        return nil, nil
+    end
+    local pts, cumulative, seedIndex, ends = self:orderedRunThrough(self.sidingAnchorId)
+    if pts == nil then
+        return nil, ends == 0 and "could not order the run through that waypoint."
+            or string.format("that run has %d clear end(s), not 2 - sidings need a plain run.", ends)
+    end
+
+    local offset = ADFlyoverSettings.get("sidingOffset") or 5
+    local length = ADFlyoverSettings.get("sidingLength") or 30
+    local merge = offset * AutoDrive.FLYOVER_SIDING_MERGE_RATIO
+    local needed = length + 2 * merge
+    local total = cumulative[#pts]
+    if total < needed then
+        return nil, string.format(
+            "this run is %.0fm long; a %.0fm siding at %.1fm offset needs %.0fm including its merges.",
+            total, length, offset, needed)
+    end
+
+    -- Centre the siding on the click, then slide it along if it would run off either end.
+    local centre = cumulative[seedIndex]
+    centre = math.max(needed / 2, math.min(total - needed / 2, centre))
+
+    local aDistance = centre - needed / 2
+    local dDistance = centre + needed / 2
+    local parallel = subChainByDistance(pts, cumulative, aDistance + merge, dDistance - merge)
+
+    local side = self:offsetSideFromCursor(pts)
+    local track, err = ADOffsetGeometry.offsetOpenChain(parallel, offset * side)
+    if track == nil then
+        return nil, err
+    end
+
+    return {
+        points = pts,
+        cumulative = cumulative,
+        aDistance = aDistance,
+        dDistance = dDistance,
+        track = track,
+        offset = offset,
+        length = length,
+        merge = merge,
+        side = side,
+    }
+end
+
+--- Insert a waypoint partway along an existing connection, keeping the connection intact through it.
+function ADFlyoverEditor:insertOnSegment(aId, bId, position, dual, flags)
+    local a = ADGraphManager:getWayPointById(aId)
+    local b = ADGraphManager:getWayPointById(bId)
+    if a == nil or b == nil then
+        return nil
+    end
+    -- Sever first, or the new point runs alongside the original connection rather than replacing it.
+    if table.contains(a.out, b.id) then
+        ADGraphManager:toggleConnectionBetween(a, b, false, false, false)
+    end
+    if table.contains(b.out, a.id) then
+        ADGraphManager:toggleConnectionBetween(b, a, false, false, false)
+    end
+    local y = self:resolveHeightAt(position.x, position.z, position.y)
+    local wp = ADGraphManager:recordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false)
+    local newId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
+    local newNode = ADGraphManager:getWayPointById(newId)
+    local bNode = ADGraphManager:getWayPointById(bId)
+    if newNode ~= nil and bNode ~= nil then
+        ADGraphManager:toggleConnectionBetween(newNode, bNode, false, dual, false)
+    end
+    return newId
+end
+
+--- A waypoint at `distance` along the run: the existing one when it is close enough, otherwise a
+--- new one inserted into the connection there.
+function ADFlyoverEditor:waypointAtDistance(pts, cumulative, distance, dual, flags)
+    local position, segment, t = pointAtDistance(pts, cumulative, distance)
+    if t <= 0.02 then
+        return pts[segment].id
+    end
+    if t >= 0.98 then
+        return pts[segment + 1].id
+    end
+    return self:insertOnSegment(pts[segment].id, pts[segment + 1].id, position, dual, flags)
+end
+
+function ADFlyoverEditor:sidingClick()
+    if self.hoverId == nil then
+        return
+    end
+    self.sidingAnchorId = self.hoverId
+    self.sidingPreview = nil
+    local plan, err = self:sidingPlan()
+    if plan == nil then
+        Logging.warning("[FlyoverEditor]: %s", tostring(err))
+        return
+    end
+    Logging.info("[FlyoverEditor]: siding centred on id=%s - %.0fm long, %.1fm to the %s, merging "
+        .. "over %.0fm at each end. Wheel changes the length, right-click applies.",
+        tostring(self.sidingAnchorId), plan.length, plan.offset,
+        plan.side >= 0 and "left" or "right", plan.merge)
+end
+
+function ADFlyoverEditor:updateSidingPreview()
+    if self.sidingAnchorId == nil then
+        self.sidingPreview, self.sidingBlockedBy = nil, nil
+        return
+    end
+    local plan, err = self:sidingPlan()
+    self.sidingPreview = plan ~= nil and plan.track or nil
+    self.sidingBlockedBy = err
+end
+
+function ADFlyoverEditor:commitSiding()
+    local plan, err = self:sidingPlan()
+    if plan == nil then
+        Logging.warning("[FlyoverEditor]: %s", tostring(err))
+        self:cancelSiding()
+        return
+    end
+
+    local first = ADGraphManager:getWayPointById(plan.points[1].id)
+    local second = ADGraphManager:getWayPointById(plan.points[2].id)
+    local dual = ADGraphManager:isDualRoad(first, second)
+    local flags = second.flags or AutoDrive.FLAG_NONE
+
+    ADEditorHistory:snapshot("siding")
+
+    -- The far attachment first. Inserting at A would otherwise shift nothing by id, but it does
+    -- change the run's shape, and the D distance was measured on the run as it was.
+    local dId = self:waypointAtDistance(plan.points, plan.cumulative, plan.dDistance, dual, flags)
+    local aId = self:waypointAtDistance(plan.points, plan.cumulative, plan.aDistance, dual, flags)
+    if aId == nil or dId == nil then
+        Logging.error("[FlyoverEditor]: could not place the siding's attachment points.")
+        self:cancelSiding()
+        return
+    end
+
+    local firstNewId, lastNewId = self:createRunFrom(plan.track, dual, flags)
+    if firstNewId == nil or lastNewId == nil then
+        Logging.error("[FlyoverEditor]: the siding track could not be created.")
+        self:cancelSiding()
+        return
+    end
+
+    self:splineConnectIds(aId, firstNewId, dual, flags)
+    self:splineConnectIds(lastNewId, dId, dual, flags)
+
+    Logging.info("[FlyoverEditor]: laid a %.0fm siding %.1fm to the %s with %.0fm merges, %d track "
+        .. "waypoint(s), attached at id=%s and id=%s.",
+        plan.length, plan.offset, plan.side >= 0 and "left" or "right", plan.merge,
+        #plan.track, tostring(aId), tostring(dId))
+
+    self.sidingAnchorId, self.sidingPreview = nil, nil
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+end
+
+function ADFlyoverEditor:cancelSiding()
+    if self.sidingAnchorId ~= nil then
+        Logging.info("[FlyoverEditor]: cancelled the siding.")
+    end
+    self.sidingAnchorId, self.sidingPreview, self.sidingBlockedBy = nil, nil, nil
+end
+
 function ADFlyoverEditor:offsetClick()
     if self.hoverId == nil then
         return
@@ -3792,7 +4128,20 @@ function ADFlyoverEditor:handleWheel(offset)
     end
     local step = offset > 0 and 1 or -1
 
-    if (self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING) and self.offsetToId ~= nil then
+    -- Siding: the wheel is the LENGTH, because that is the dimension that changes per site. The
+    -- offset is a shape you settle on once, so it lives in the panel's number field instead.
+    if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then
+        local setting = ADFlyoverSettings.settings.sidingLength
+        if setting ~= nil then
+            local nextIndex = math.max(1, math.min(#setting.values, setting.current + step))
+            if nextIndex ~= setting.current then
+                ADFlyoverSettings.setIndex("sidingLength", nextIndex)
+            end
+        end
+        return true
+    end
+
+    if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then
         self.offsetDistance = math.max(AutoDrive.FLYOVER_OFFSET_MIN,
             math.min(AutoDrive.FLYOVER_OFFSET_MAX,
                 self.offsetDistance + step * AutoDrive.FLYOVER_OFFSET_STEP))

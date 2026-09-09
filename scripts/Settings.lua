@@ -32,6 +32,8 @@ S.settings.fieldLoopTreeClearance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75
 S.settings.fieldLoopVehicleHeight = { values = { 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0 }, default = 4, current = 4 }
 S.settings.fieldLoopTurningRadius = { values = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 6, current = 6 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
+S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
+S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
 S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 6, current = 6 }
 
 local function log(fmt, ...)
@@ -136,7 +138,7 @@ end
 
 function S.describe()
     local parts = {}
-    for _, name in ipairs({ "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
+    for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
     end
