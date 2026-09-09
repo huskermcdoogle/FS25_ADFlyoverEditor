@@ -36,8 +36,17 @@ engine Lua errors across the session.
 The flyover route editor as a **companion mod**: it runs beside *stock* `FS25_AutoDrive` and does
 not modify it. Attaches at runtime, or refuses to load and says why.
 
-Build plan and the evidence behind it: `docs/companion-build-plan.md` and
-`docs/companion-mod-investigation.md` in the AutoDrive fork.
+## Docs
+
+| | |
+|---|---|
+| [`docs/bugs.md`](docs/bugs.md) | known bugs, and closed ones with their causes |
+| [`docs/flyover-input-context.md`](docs/flyover-input-context.md) | the four input-context bugs. **Read before touching input contexts or the camera** |
+| [`docs/companion-build-plan.md`](docs/companion-build-plan.md) | how this mod is put together, stage by stage |
+| [`docs/probe-results.md`](docs/probe-results.md) | the raw in-game measurements the rest cite |
+
+`companion-mod-investigation.md` stays in the AutoDrive fork repo — it is the record of how the
+decision to build this was made, which is that repo's history rather than this one's.
 
 ## Stage 1 — infrastructure only ✅ passed 2026-09-08
 
