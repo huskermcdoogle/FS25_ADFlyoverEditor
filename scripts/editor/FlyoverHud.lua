@@ -100,6 +100,29 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:setTool(i) end)
     end
 
+    add("gap")
+    add("section", "ACTIONS")
+    add("action", "undo", "Q", ADEditorHistory:canUndo(), function()
+        if ADEditorHistory:undo() ~= nil then
+            editor:invalidateIdReferences()
+        end
+    end)
+    add("action", "redo", "E", ADEditorHistory:canRedo(), function()
+        if ADEditorHistory:redo() ~= nil then
+            editor:invalidateIdReferences()
+        end
+    end)
+
+    add("gap")
+    add("status", string.format("selected %d   undo %d   placed %d",
+        editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
+
+    -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
+    -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
+    -- matter what is selected, which is what makes them clickable without looking - a button that
+    -- moves when the panel above it grows is a button you have to re-find every time. The per-tool
+    -- controls are the things that are meant to come and go, so they are the ones that shift.
+
     -- Only for the tools that actually CREATE connections. Showing it everywhere put 'direction:
     -- two-way' next to the convert tool's own 'make it: two-way', two controls reading the same
     -- but meaning different things - one describing connections not yet made, the other about to
@@ -208,23 +231,6 @@ function ADFlyoverHud:buildRows(editor)
         add("toggle", "merge distance",
             string.format("%.1f m", ADFlyoverSettings.get("flyoverMergeDistance") or AutoDrive.FLYOVER_MERGE_DISTANCE))
     end
-
-    add("gap")
-    add("section", "ACTIONS")
-    add("action", "undo", "Q", ADEditorHistory:canUndo(), function()
-        if ADEditorHistory:undo() ~= nil then
-            editor:invalidateIdReferences()
-        end
-    end)
-    add("action", "redo", "E", ADEditorHistory:canRedo(), function()
-        if ADEditorHistory:redo() ~= nil then
-            editor:invalidateIdReferences()
-        end
-    end)
-
-    add("gap")
-    add("status", string.format("selected %d   undo %d   placed %d",
-        editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
 
     add("gap")
     add("section", "NEXT")
