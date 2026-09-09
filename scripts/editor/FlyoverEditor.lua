@@ -228,6 +228,51 @@ local function clearSplineState()
     AutoDrive.splineInterpolationUserCurvature = nil
 end
 
+--- The game's key-binding help sits in the TOP-LEFT corner, which is where the editor panel is
+--- anchored, and it draws after us - so its text came through our background. Hiding it for as long
+--- as the editor is open is the honest trade: the panel lists its own keys, and the bindings the
+--- help box describes are mostly suspended while editing anyway.
+---
+--- The previous visibility is remembered rather than assumed, so a player who had already turned
+--- the help off does not get it handed back on exit. Everything is pcall'd and nil-checked: this is
+--- base-game HUD internals, and failing to hide a help box must never take the editor down with it.
+function ADFlyoverEditor:setInputHelpVisible(visible)
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local help = hud ~= nil and hud.inputHelp or nil
+    if help == nil or type(help.setIsVisible) ~= "function" then
+        return false
+    end
+    local ok = pcall(function() help:setIsVisible(visible) end)
+    return ok
+end
+
+function ADFlyoverEditor:hideInputHelp()
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local help = hud ~= nil and hud.inputHelp or nil
+    if help == nil then
+        self.inputHelpWasVisible = nil
+        Logging.info("[FlyoverEditor]: no input-help display found to hide.")
+        return
+    end
+    -- Read the flag directly: there is no getter, and guessing "it was on" would switch it on for
+    -- someone who had deliberately turned it off.
+    self.inputHelpWasVisible = help.isVisible
+    if self:setInputHelpVisible(false) then
+        Logging.info("[FlyoverEditor]: hid the key-binding help (was %s).",
+            tostring(self.inputHelpWasVisible))
+    end
+end
+
+function ADFlyoverEditor:restoreInputHelp()
+    if self.inputHelpWasVisible == nil then
+        return
+    end
+    self:setInputHelpVisible(self.inputHelpWasVisible ~= false)
+    Logging.info("[FlyoverEditor]: restored the key-binding help to %s.",
+        tostring(self.inputHelpWasVisible))
+    self.inputHelpWasVisible = nil
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Track-to-track geometry.
 --
@@ -561,6 +606,8 @@ function ADFlyoverEditor:enable()
     -- Free the mouse so it picks in the world; the camera keeps its own hold-middle/wheel bindings.
     tryCall("g_inputBinding:setShowMouseCursor(true)", function() g_inputBinding:setShowMouseCursor(true) end)
 
+    self:hideInputHelp()
+
     self.active = true
     self.lastWaypointId = nil
     self.placedCount = 0
@@ -686,6 +733,8 @@ function ADFlyoverEditor:disable()
             Logging.info("[FlyoverEditor]: input context reverted.")
         end
     end
+
+    self:restoreInputHelp()
 
     self.camera, self.cursor = nil, nil
     self.active = false
