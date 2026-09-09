@@ -95,6 +95,8 @@ ADFlyoverEditor = {
     offsetPreview = nil,
     offsetBlockedBy = nil,
     offsetDistance = 5.0,
+    offsetScope = 1,
+    offsetCache = nil,
     straightenFromId = nil,
     straightenToId = nil,
     straightenPreview = nil,
@@ -150,9 +152,9 @@ AutoDrive.FLYOVER_PICK_SCREEN_RADIUS = 0.025
 -- points survive, which is the only sensible way to pick it - the number alone means nothing.
 -- Parallel and siding: how far to the side the new track runs. SIGNED, and the wheel runs it
 -- through zero - which is how the side gets flipped, without a separate control for it.
-AutoDrive.FLYOVER_OFFSET_MIN = -30
+AutoDrive.FLYOVER_OFFSET_MIN = 0.1
 AutoDrive.FLYOVER_OFFSET_MAX = 30
-AutoDrive.FLYOVER_OFFSET_STEP = 0.5
+AutoDrive.FLYOVER_OFFSET_STEP = 0.1
 
 AutoDrive.FLYOVER_STRAIGHTEN_MIN = 0
 AutoDrive.FLYOVER_STRAIGHTEN_MAX = 25
@@ -1895,6 +1897,15 @@ end
 -- Delete.
 -- ---------------------------------------------------------------------------------------------
 
+ADFlyoverEditor.OFFSET_SCOPE = { SPAN = 1, RUN = 2 }
+ADFlyoverEditor.OFFSET_SCOPE_NAMES = { "picked span", "whole run" }
+
+function ADFlyoverEditor:cycleOffsetScope()
+    self.offsetScope = (self.offsetScope % #self.OFFSET_SCOPE_NAMES) + 1
+    self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
+    Logging.info("[FlyoverEditor]: offset covers the %s.", self.OFFSET_SCOPE_NAMES[self.offsetScope])
+end
+
 ADFlyoverEditor.DELETE_SCOPE = { POINT = 1, RUN = 2 }
 ADFlyoverEditor.DELETE_SCOPE_NAMES = { "one waypoint", "whole run" }
 
@@ -2991,12 +3002,14 @@ function ADFlyoverEditor:getNextStepLines()
             if self.offsetBlockedBy ~= nil then
                 return { "Too tight to offset that far.", "Wheel it back, or swap sides." }
             end
-            return { string.format("Wheel sets offset (%.1fm %s).",
-                        math.abs(self.offsetDistance), self.offsetDistance >= 0 and "left" or "right"),
-                     "Through zero swaps sides. Right-click applies." }
+            return { string.format("Wheel sets offset (%.1fm).", self.offsetDistance),
+                     "Side follows the cursor. Right-click applies." }
         end
         if self.offsetFromId ~= nil then
             return { "Click the far end of the span." }
+        end
+        if self.offsetScope == self.OFFSET_SCOPE.RUN then
+            return { "Click a run to offset the whole", "thing, junction to junction." }
         end
         return { "Click one end of a span to run", "a track alongside it." }
     elseif self.tool == t.STRAIGHTEN then
@@ -3314,6 +3327,52 @@ function ADFlyoverEditor:offsetClick()
         return
     end
 
+    -- Whole-run scope needs one click, not two: the ends are wherever the run meets a junction,
+    -- or where it simply stops. collectRunBetweenJunctions is what delete's run scope already uses.
+    if self.offsetScope == self.OFFSET_SCOPE.RUN then
+        local run, count = self:collectRunBetweenJunctions(self.hoverId)
+        if run == nil or count == nil or count < 2 then
+            Logging.warning("[FlyoverEditor]: no run found through id=%s.", tostring(self.hoverId))
+            return
+        end
+
+        -- collectRunBetweenJunctions returns a SET, not an ordered list, so the two ends have to be
+        -- found rather than indexed: they are the members with only one neighbour still inside the
+        -- run. Neighbours are counted uniquely, because a two-way connection appears in both `out`
+        -- and `incoming` and would otherwise count twice and hide every end.
+        local ends = {}
+        for id in pairs(run) do
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                local seen, inside = {}, 0
+                for _, listName in ipairs({ "out", "incoming" }) do
+                    for _, other in pairs(wp[listName] or {}) do
+                        if run[other] and not seen[other] then
+                            seen[other] = true
+                            inside = inside + 1
+                        end
+                    end
+                end
+                if inside <= 1 then
+                    ends[#ends + 1] = id
+                end
+            end
+        end
+
+        if #ends ~= 2 then
+            Logging.warning("[FlyoverEditor]: could not find two clear ends for the run through "
+                .. "id=%s (found %d). Use the picked-span scope and click both ends yourself.",
+                tostring(self.hoverId), #ends)
+            return
+        end
+        self.offsetFromId, self.offsetToId = ends[1], ends[2]
+        self.offsetPreview, self.offsetCache = nil, nil
+        Logging.info("[FlyoverEditor]: whole run of %d waypoint(s), id=%s to id=%s. Wheel sets the "
+            .. "offset (%.1fm); the side follows the cursor. Right-click applies.",
+            count, tostring(self.offsetFromId), tostring(self.offsetToId), self.offsetDistance)
+        return
+    end
+
     if self.offsetFromId == nil then
         self.offsetFromId = self.hoverId
         Logging.info("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
@@ -3333,10 +3392,9 @@ function ADFlyoverEditor:offsetClick()
     end
 
     self.offsetToId = self.hoverId
-    self.offsetPreview = nil
-    Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm, %s); "
-        .. "wheel it through zero to swap sides. Right-click applies.",
-        #span, math.abs(self.offsetDistance), self.offsetDistance >= 0 and "left" or "right")
+    self.offsetPreview, self.offsetCache = nil, nil
+    Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
+        .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
 end
 
 --- Points of the selected span, and the span itself.
@@ -3361,15 +3419,62 @@ function ADFlyoverEditor:offsetSpanPoints()
     return pts, span
 end
 
+--- Which side of the span the cursor is on: +1 left of travel, -1 right.
+---
+--- The side deliberately does NOT come from click order. Picking the far end first would otherwise
+--- mirror the whole result, which is invisible until it is too late and impossible to reason about.
+--- Taking it from the cursor makes it obvious instead: point at the side you want and the preview
+--- is there, whichever end you happened to click first.
+function ADFlyoverEditor:offsetSideFromCursor(pts)
+    local cx, cz = self.cursorX, self.cursorZ
+    if cx == nil or cz == nil then
+        return 1
+    end
+
+    local bestIndex, bestDistance = 1, math.huge
+    for i = 1, #pts - 1 do
+        local a, b = pts[i], pts[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local lengthSquared = dx * dx + dz * dz
+        local t = 0
+        if lengthSquared > 1e-9 then
+            t = math.max(0, math.min(1, ((cx - a.x) * dx + (cz - a.z) * dz) / lengthSquared))
+        end
+        local d = MathUtil.vector2Length(cx - (a.x + t * dx), cz - (a.z + t * dz))
+        if d < bestDistance then
+            bestIndex, bestDistance = i, d
+        end
+    end
+
+    local a, b = pts[bestIndex], pts[bestIndex + 1]
+    local cross = (b.x - a.x) * (cz - a.z) - (b.z - a.z) * (cx - a.x)
+    return cross >= 0 and 1 or -1
+end
+
 function ADFlyoverEditor:updateOffsetPreview()
     local pts = self:offsetSpanPoints()
-    if pts == nil or math.abs(self.offsetDistance) < 0.25 then
-        self.offsetPreview, self.offsetBlockedBy = nil, nil
+    if pts == nil or self.offsetDistance < 0.1 then
+        self.offsetPreview, self.offsetBlockedBy, self.offsetCache = nil, nil, nil
         return
     end
-    local offset, err = ADOffsetGeometry.offsetOpenChain(pts, self.offsetDistance)
-    self.offsetPreview = offset
-    self.offsetBlockedBy = err
+
+    local side = self:offsetSideFromCursor(pts)
+    local signed = self.offsetDistance * side
+
+    -- The offset is O(n^2) in the fold removal, and this runs every frame while a preview is up.
+    -- On a long run that is thousands of segment-pair tests per frame for a result that only
+    -- changes when the span, the distance or the side does - so only recompute when one of them has.
+    local key = string.format("%s:%s:%.2f:%d:%d",
+        tostring(self.offsetFromId), tostring(self.offsetToId), signed, #pts, self.offsetScope)
+    if self.offsetCache ~= nil and self.offsetCache.key == key then
+        self.offsetPreview, self.offsetBlockedBy = self.offsetCache.points, self.offsetCache.err
+        return
+    end
+
+    local offset, err = ADOffsetGeometry.offsetOpenChain(pts, signed)
+    self.offsetPreview, self.offsetBlockedBy = offset, err
+    self.offsetSignedDistance = signed
+    self.offsetCache = { key = key, points = offset, err = err }
 end
 
 --- Lay a chain of new waypoints down, joined in order. Returns the first and last new ids.
@@ -3468,11 +3573,11 @@ function ADFlyoverEditor:commitOffset()
     end
 
     Logging.info("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
-        siding and "siding" or "parallel track", #laying, math.abs(self.offsetDistance),
-        self.offsetDistance >= 0 and "left" or "right",
+        siding and "siding" or "parallel track", #laying, self.offsetDistance,
+        (self.offsetSignedDistance or 1) >= 0 and "left" or "right",
         siding and ", splined in at both ends" or (dual and ", two-way" or ", running opposite"))
 
-    self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
+    self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
 end
@@ -3481,7 +3586,7 @@ function ADFlyoverEditor:cancelOffset()
     if self.offsetFromId ~= nil or self.offsetToId ~= nil then
         Logging.info("[FlyoverEditor]: cancelled the span.")
     end
-    self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
+    self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
 end
 
 function ADFlyoverEditor:straightenClick()
@@ -3691,6 +3796,7 @@ function ADFlyoverEditor:handleWheel(offset)
         self.offsetDistance = math.max(AutoDrive.FLYOVER_OFFSET_MIN,
             math.min(AutoDrive.FLYOVER_OFFSET_MAX,
                 self.offsetDistance + step * AutoDrive.FLYOVER_OFFSET_STEP))
+        self.offsetCache = nil
         return true
     end
 

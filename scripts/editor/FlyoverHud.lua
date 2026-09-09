@@ -119,6 +119,11 @@ function ADFlyoverHud:buildRows(editor)
     add("gap")
     add("section", "THIS TOOL")
 
+    if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
+        add("toggle", "covers", editor.OFFSET_SCOPE_NAMES[editor.offsetScope], false,
+            function() editor:cycleOffsetScope() end)
+    end
+
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
             function() editor:toggleSnapToTerrain() end)
