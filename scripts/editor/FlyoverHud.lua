@@ -20,7 +20,7 @@ ADFlyoverHud = {
     -- their own rows - anchoring at the top meant it grew down into that space, while anchoring at
     -- the bottom keeps it clear and keeps the header in the same place whatever the height.
     posX = 0.012,
-    bottomY = 0.035,
+    topY = 0.965,
     width = 0.215,
     rowHeight = 0.023,
     padding = 0.006,
@@ -264,10 +264,13 @@ function ADFlyoverHud:draw(editor)
 
     local x = self.posX
     local width = self.width * uiScale
-    -- Anchored at the bottom and grown upward, so adding a row pushes the panel up rather than
-    -- down over whatever is below it.
-    local bottom = self.bottomY
-    local top = bottom + totalHeight
+    -- Anchored at the TOP and grown downward. Growing upward from a fixed bottom edge meant every
+    -- row was measured from a top that moved whenever the panel's height changed - so selecting a
+    -- tool with more controls than the last one shifted the header and the whole button list under
+    -- the cursor. The rows that must not move are all at the top, so the top is what gets pinned;
+    -- the panel now lengthens into empty space below instead of shoving itself up the screen.
+    local top = self.topY
+    local bottom = top - totalHeight
 
     self.frameX, self.frameY, self.frameW, self.frameH = x, bottom, width, totalHeight
 
@@ -356,7 +359,7 @@ function ADFlyoverHud:handleDrag(mouseX, mouseY, isDown, isUp, button)
         -- Remember the grab point within the panel so it does not jump to align a corner with
         -- the cursor on the first frame.
         self.dragOffsetX = mouseX - self.posX
-        self.dragOffsetY = mouseY - self.bottomY
+        self.dragOffsetY = mouseY - self.topY
         return true
     end
 
@@ -366,14 +369,15 @@ function ADFlyoverHud:handleDrag(mouseX, mouseY, isDown, isUp, button)
             return true
         end
         self.posX = mouseX - self.dragOffsetX
-        self.bottomY = mouseY - self.dragOffsetY
+        self.topY = mouseY - self.dragOffsetY
         -- Keep the panel entirely on screen. Leaving only a sliver visible is not enough: the
         -- drag handle is the header at the TOP of the panel, so a panel pushed off the bottom
         -- would still be visible but no longer grabbable, and could not be recovered.
         local maxX = 1 - self.frameW
-        local maxY = 1 - self.frameH
         self.posX = math.max(0, math.min(math.max(0, maxX), self.posX))
-        self.bottomY = math.max(0, math.min(math.max(0, maxY), self.bottomY))
+        -- The top edge is what is stored now, so the limits are the other way round: it may not go
+        -- above the screen, and may not sit so low that the panel hangs off the bottom.
+        self.topY = math.max(math.min(self.frameH, 1), math.min(1, self.topY))
         return true
     end
 
