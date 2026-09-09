@@ -6,7 +6,7 @@
 
 | Tool | |
 |---|---|
-| draw | place + connect, merged — retest |
+| draw | ✅ place, start-from-existing, connect, directional toggle, end run |
 | move | ✅ incl. falloff by wheel and by `,`/`.` |
 | delete | ✅ |
 | smooth | ✅ both modes |
