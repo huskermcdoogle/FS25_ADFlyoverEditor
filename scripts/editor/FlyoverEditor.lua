@@ -3961,7 +3961,34 @@ function ADFlyoverEditor:offsetClick()
                 .. "the picked-span scope and click both ends yourself.", tostring(self.hoverId), #ends)
             return
         end
-        self.offsetFromId, self.offsetToId = ends[1], ends[2]
+        -- Reach one waypoint further at each end, onto the junction itself.
+        --
+        -- collectRunBetweenJunctions stops BEFORE a junction - the run is what lies between them -
+        -- so its ends are the last plain waypoints, and a track offset from those falls a segment
+        -- short of the intersection at both ends. "Whole run" should mean junction to junction,
+        -- which is where a parallel track wants to start and finish.
+        --
+        -- Only when the end has exactly one neighbour outside the run: that is unambiguously the
+        -- junction it stopped at. A run that simply ends in open space has none, and is left alone.
+        local function reachToJunction(endId)
+            local wp = ADGraphManager:getWayPointById(endId)
+            if wp == nil then
+                return endId
+            end
+            local seen, outside, found = {}, 0, nil
+            for _, listName in ipairs({ "out", "incoming" }) do
+                for _, other in pairs(wp[listName] or {}) do
+                    if not run[other] and not seen[other] then
+                        seen[other] = true
+                        outside = outside + 1
+                        found = other
+                    end
+                end
+            end
+            return outside == 1 and found or endId
+        end
+
+        self.offsetFromId, self.offsetToId = reachToJunction(ends[1]), reachToJunction(ends[2])
         self.offsetPreview, self.offsetCache = nil, nil
         local seedPts = self:offsetSpanPoints()
         if seedPts ~= nil then
