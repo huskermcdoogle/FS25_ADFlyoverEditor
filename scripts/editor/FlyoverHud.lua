@@ -104,8 +104,7 @@ function ADFlyoverHud:buildRows(editor)
     -- two-way' next to the convert tool's own 'make it: two-way', two controls reading the same
     -- but meaning different things - one describing connections not yet made, the other about to
     -- rewrite the ones already there.
-    local makesConnections = editor.tool == editor.TOOL.PLACE
-        or editor.tool == editor.TOOL.CONNECT
+    local makesConnections = editor.tool == editor.TOOL.DRAW
         or editor.tool == editor.TOOL.SPLINE
 
     if makesConnections then
@@ -120,7 +119,7 @@ function ADFlyoverHud:buildRows(editor)
     add("gap")
     add("section", "THIS TOOL")
 
-    if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.PLACE then
+    if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
             function() editor:toggleSnapToTerrain() end)
     end

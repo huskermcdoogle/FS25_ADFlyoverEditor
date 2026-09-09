@@ -62,7 +62,6 @@ ADFlyoverEditor = {
     hoverId = nil,
     selection = {},
     selectionCount = 0,
-    connectFromId = nil,
     -- Move-tool drag state. dragStart is where the grab began, so the delta (and therefore the
     -- falloff applied to the neighbours) is measured from the grab point rather than accumulating
     -- frame to frame.
@@ -114,8 +113,14 @@ ADFlyoverEditor = {
 
 -- NONE is a real state, not an absence: with no tool selected a click does nothing at all, which
 -- is what makes the editor safe to leave sitting open while looking around.
-ADFlyoverEditor.TOOL = { NONE = 0, PLACE = 1, MOVE = 2, CONNECT = 3, DELETE = 4, SMOOTH = 5, NAME = 6, SPLINE = 7, MERGE = 8, FIELDLOOP = 9, CONVERT = 10, DIVIDE = 11 }
-ADFlyoverEditor.TOOL_NAMES = { "place", "move", "connect", "delete", "smooth", "name", "spline", "merge", "field loop", "convert", "divide" }
+-- PLACE and CONNECT used to be separate tools. They are one now, because laying a route needs
+-- both constantly - place a run, then join it to something that already exists - and switching
+-- tools mid-gesture discarded lastWaypointId, so the run had to be started again. Merging also
+-- stops a click on an existing waypoint stacking a second waypoint on top of it, and brings the
+-- count to ten, which is exactly what the 1-0 key bindings can address: the binding is
+-- (tool == 10) and "KEY_0" or ("KEY_" .. tool), so the eleventh tool previously had no key.
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, SMOOTH = 4, NAME = 5, SPLINE = 6, MERGE = 7, FIELDLOOP = 8, CONVERT = 9, DIVIDE = 10 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "smooth", "name", "spline", "merge", "field loop", "convert", "divide" }
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
@@ -937,7 +942,6 @@ function ADFlyoverEditor:setTool(tool)
     if self.editing ~= nil then
         self:cancelEditNumber()
     end
-    self.connectFromId = nil
     -- Both ends, and the preview with them. Clearing only the start left a stale end behind, so
     -- the next first click fell through to the "re-pick the far end" branch instead of starting a
     -- fresh span - silently, which reads exactly like being unable to select the second point.
@@ -1024,7 +1028,6 @@ end
 function ADFlyoverEditor:invalidateIdReferences()
     self:clearSelection()
     self.hoverId = nil
-    self.connectFromId = nil
     self.smoothFromId, self.smoothToId = nil, nil
     self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
     self.splineFromId = nil
@@ -1106,7 +1109,6 @@ function ADFlyoverEditor:drawNetwork()
     for id in pairs(self.selection) do
         accent(id, 0, 1, 0.2, 3.5)
     end
-    accent(self.connectFromId, 0, 0.6, 1, 4)
     accent(self.smoothFromId, 0, 0.6, 1, 4)
     accent(self.splineFromId, 0, 0.6, 1, 4)
     accent(self.mergeFromId, 1, 0.4, 0.9, 4)
@@ -1162,9 +1164,7 @@ function ADFlyoverEditor:drawNetwork()
     -- visible rather than something you only discover after clicking. The connect tool gets the
     -- same treatment from its first-picked waypoint.
     local anchorId = self.lastWaypointId
-    if self.tool == self.TOOL.CONNECT then
-        anchorId = self.connectFromId
-    elseif self.tool == self.TOOL.SMOOTH then
+    if self.tool == self.TOOL.SMOOTH then
         anchorId = self.smoothFromId
     elseif self.tool == self.TOOL.SPLINE then
         anchorId = self.splineFromId
@@ -1331,12 +1331,10 @@ function ADFlyoverEditor:onLeftRelease()
         return
     end
 
-    if self.tool == self.TOOL.PLACE then
-        self:placeWaypointAtCursor()
+    if self.tool == self.TOOL.DRAW then
+        self:drawClick()
     elseif self.tool == self.TOOL.MOVE then
         self:finishDrag()
-    elseif self.tool == self.TOOL.CONNECT then
-        self:connectClick()
     elseif self.tool == self.TOOL.DELETE then
         self:deleteAtCursor()
     elseif self.tool == self.TOOL.SMOOTH then
@@ -1412,15 +1410,9 @@ end
 function ADFlyoverEditor:stopCurrentAction()
     local tool = self.tool
 
-    if tool == self.TOOL.PLACE then
+    if tool == self.TOOL.DRAW then
         if self.lastWaypointId ~= nil then
             self:endRun()
-            return true
-        end
-    elseif tool == self.TOOL.CONNECT then
-        if self.connectFromId ~= nil then
-            Logging.info("[FlyoverEditor]: cancelled the pending connection from id=%s.", tostring(self.connectFromId))
-            self.connectFromId = nil
             return true
         end
     elseif tool == self.TOOL.SMOOTH then
@@ -1768,39 +1760,54 @@ end
 -- Connect / disconnect two existing waypoints.
 -- ---------------------------------------------------------------------------------------------
 
-function ADFlyoverEditor:connectClick()
+--- The draw tool. One click, and what it does depends on what is under the cursor:
+---
+---   empty ground           create a waypoint, joined to the open end of the run
+---   a waypoint, no run     start the run there, creating nothing
+---   a waypoint, run open   toggle the connection between the run and it, then carry on from there
+---
+--- The toggle is AutoDrive own, and its DIRECTIONAL semantics are why this needs no separate
+--- disconnect mode. Given an existing A->B, clicking A then B removes it, while clicking B then A
+--- adds B->A and so makes the pair two-way. That is the rule stock AutoDrive editor already
+--- follows, so it should be familiar rather than something new to learn here.
+function ADFlyoverEditor:drawClick()
+    -- Nothing under the cursor: this is a placement.
     if self.hoverId == nil then
+        self:placeWaypointAtCursor()
         return
     end
 
-    if self.connectFromId == nil then
-        self.connectFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: connecting from id=%s; click the second waypoint.", tostring(self.connectFromId))
+    -- A waypoint, and no run open: start from it rather than stacking a duplicate on top of it.
+    if self.lastWaypointId == nil then
+        self.lastWaypointId = self.hoverId
+        Logging.info("[FlyoverEditor]: run starts at existing waypoint id=%s; click on to draw from it.",
+            tostring(self.lastWaypointId))
         return
     end
 
-    if self.connectFromId == self.hoverId then
+    if self.lastWaypointId == self.hoverId then
         Logging.info("[FlyoverEditor]: cannot connect a waypoint to itself.")
         return
     end
 
-    local startNode = ADGraphManager:getWayPointById(self.connectFromId)
+    local startNode = ADGraphManager:getWayPointById(self.lastWaypointId)
     local endNode = ADGraphManager:getWayPointById(self.hoverId)
     if startNode == nil or endNode == nil then
-        self.connectFromId = nil
+        self.lastWaypointId = nil
         return
     end
 
-    -- toggleConnectionBetween removes an existing connection and creates one where there is none,
-    -- so this single tool covers both connect and disconnect.
     local reverseDirection, dualConnection = self:getConnectionOptions()
 
     ADEditorHistory:snapshot("toggle connection")
     ADGraphManager:toggleConnectionBetween(startNode, endNode, reverseDirection, dualConnection, false)
 
     Logging.info("[FlyoverEditor]: toggled the connection %s -> %s (dual=%s reverse=%s).",
-        tostring(self.connectFromId), tostring(self.hoverId), tostring(dualConnection), tostring(reverseDirection))
-    self.connectFromId = nil
+        tostring(self.lastWaypointId), tostring(self.hoverId), tostring(dualConnection), tostring(reverseDirection))
+
+    -- Carry the run on from the waypoint just clicked, so a route can be drawn straight through an
+    -- existing junction without stopping to re-anchor it.
+    self.lastWaypointId = self.hoverId
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -2851,11 +2858,11 @@ function ADFlyoverEditor:getNextStepLines()
         return { "No tool selected.", "Pick one above, or press 1-9 / 0." }
     end
 
-    if self.tool == t.PLACE then
+    if self.tool == t.DRAW then
         if self.lastWaypointId ~= nil then
-            return { "Click to extend the run.", "Right-click to end it." }
+            return { "Click ground to extend, or a", "waypoint to link. Right-click ends." }
         end
-        return { "Click to start a new run." }
+        return { "Click to start a run, or a", "waypoint to draw on from it." }
     elseif self.tool == t.MOVE then
         if self.dragId ~= nil then
             return { string.format("Wheel changes falloff (%.1fm),", self.falloffRadius), "live. Release to drop." }
@@ -2864,11 +2871,6 @@ function ADFlyoverEditor:getNextStepLines()
             return { "Drag the highlighted waypoint." }
         end
         return { "Point at a waypoint, then drag it." }
-    elseif self.tool == t.CONNECT then
-        if self.connectFromId ~= nil then
-            return { "Click the second waypoint.", "Clicking an existing link removes it." }
-        end
-        return { "Click the first waypoint." }
     elseif self.tool == t.DELETE then
         if self.selectionCount > 0 then
             return { string.format("Click to delete %d selected.", self.selectionCount) }

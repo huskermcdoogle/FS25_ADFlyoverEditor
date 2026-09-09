@@ -6,9 +6,8 @@
 
 | Tool | |
 |---|---|
-| place | ✅ |
+| draw | place + connect, merged — retest |
 | move | ✅ incl. falloff by wheel and by `,`/`.` |
-| connect | ✅ |
 | delete | ✅ |
 | smooth | ✅ both modes |
 | name | ✅ names the clicked waypoint |
