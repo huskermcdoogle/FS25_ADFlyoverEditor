@@ -3988,6 +3988,16 @@ function ADFlyoverEditor:offsetClick()
     end
     Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
         .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
+    -- The actual route, not just its length. runPathBetween is a path FINDER: asked to get from a
+    -- siding back to the main line it can leave along one merge taper and return along the other,
+    -- which is a legitimate shortest path and a span that doubles back. The offset then copies that
+    -- shape faithfully, so the track looks wrong while the offset itself was right. Printing the
+    -- ids is what tells those two apart without another screenshot to guess from.
+    local ids = {}
+    for i, id in ipairs(span) do
+        ids[i] = tostring(id)
+    end
+    Logging.info("[FlyoverEditor]: span route: %s", table.concat(ids, " -> "))
 end
 
 --- Points of the selected span, and the span itself.
