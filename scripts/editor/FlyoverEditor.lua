@@ -1191,6 +1191,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
+    self.offsetSpanIds = nil
     self.sidingAnchorId, self.sidingPreview = nil, nil
     self.smoothToId, self.smoothPreview, self.smoothPinned = nil, nil, nil
     self.dragId = nil
@@ -2061,6 +2062,7 @@ end
 function ADFlyoverEditor:cycleOffsetScope()
     self.offsetScope = (self.offsetScope % #self.OFFSET_SCOPE_NAMES) + 1
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
+    self.offsetSpanIds = nil
     Logging.info("[FlyoverEditor]: offset covers the %s.", self.OFFSET_SCOPE_NAMES[self.offsetScope])
 end
 
@@ -3989,6 +3991,31 @@ function ADFlyoverEditor:offsetClick()
         end
 
         self.offsetFromId, self.offsetToId = reachToJunction(ends[1]), reachToJunction(ends[2])
+
+        -- Keep the run itself, in order - do NOT hand its two ends back to the path finder.
+        --
+        -- Once the ends are the junctions, the shortest route between them is the MAIN LINE: a
+        -- siding is by construction the longer way round. So clicking a siding collected the siding
+        -- correctly and then offset the main line instead. Nothing looked wrong on the way through,
+        -- because the main line does not double back and the straight-route fallback only triggers
+        -- on a reversal.
+        --
+        -- The run set is the answer already. Walking it from one end keeps every step inside the
+        -- run, so the branch that was clicked is the branch that gets offset.
+        local ordered = walkRunFrom(run, count, ends[1])
+        if ordered ~= nil then
+            local ids = { self.offsetFromId }
+            for _, id in ipairs(ordered) do
+                ids[#ids + 1] = id
+            end
+            if self.offsetToId ~= ends[2] then
+                ids[#ids + 1] = self.offsetToId
+            end
+            self.offsetSpanIds = ids
+        else
+            self.offsetSpanIds = nil
+        end
+
         self.offsetPreview, self.offsetCache = nil, nil
         local seedPts = self:offsetSpanPoints()
         if seedPts ~= nil then
@@ -4002,6 +4029,7 @@ function ADFlyoverEditor:offsetClick()
 
     if self.offsetFromId == nil then
         self.offsetFromId = self.hoverId
+        self.offsetSpanIds = nil
         Logging.info("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
             self.TOOL_NAMES[self.tool] or "offset", tostring(self.offsetFromId))
         return
@@ -4141,7 +4169,10 @@ function ADFlyoverEditor:offsetSpanPoints()
     if self.offsetFromId == nil or self.offsetToId == nil then
         return nil, nil
     end
-    local span = self:runPathBetween(self.offsetFromId, self.offsetToId)
+    -- Whole-run scope has already decided the route by walking the collected run, and that decision
+    -- has to survive: re-deriving it here would put the path finder back in charge and send a
+    -- siding's offset down the main line.
+    local span = self.offsetSpanIds or self:runPathBetween(self.offsetFromId, self.offsetToId)
 
     -- Only when the shortest path doubles back. On a plain span the path finder is right and
     -- cheaper, so it keeps the job; the straight walk is the answer to intersections specifically.
@@ -4349,6 +4380,7 @@ function ADFlyoverEditor:commitOffset()
         siding and ", splined in at both ends" or (dual and ", two-way" or ", running opposite"))
 
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
+    self.offsetSpanIds = nil
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
 end
@@ -4358,6 +4390,7 @@ function ADFlyoverEditor:cancelOffset()
         Logging.info("[FlyoverEditor]: cancelled the span.")
     end
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
+    self.offsetSpanIds = nil
 end
 
 function ADFlyoverEditor:straightenClick()
