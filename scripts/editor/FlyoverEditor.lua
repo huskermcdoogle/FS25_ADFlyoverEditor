@@ -4000,12 +4000,130 @@ function ADFlyoverEditor:offsetClick()
     Logging.info("[FlyoverEditor]: span route: %s", table.concat(ids, " -> "))
 end
 
+--- Where a chain turns back on itself, or nil when it does not.
+---
+--- "Alongside" is defined relative to the direction of travel, so one side - left, say - lands on
+--- opposite sides of the world before and after a reversal. The offset track appears to leap across
+--- the line it was following, which is exactly what a doubled-back span produces.
+local function reversalIn(pts)
+    for i = 2, #pts - 1 do
+        local ax, az = pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z
+        local bx, bz = pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z
+        local la = MathUtil.vector2Length(ax, az)
+        local lb = MathUtil.vector2Length(bx, bz)
+        if la > 0.01 and lb > 0.01 then
+            -- cos of the turn between consecutive segments: -1 is an about-turn, +1 straight on.
+            local cosTurn = (ax * bx + az * bz) / (la * lb)
+            if cosTurn < -0.86 then  -- sharper than about 150 degrees
+                return pts[i].id or i
+            end
+        end
+    end
+    return nil
+end
+
+--- A route from `fromId` to `toId` that never turns back on itself.
+---
+--- runPathBetween is a path FINDER, and its answer is the shortest way through the graph. Where the
+--- line carries a siding, the shortest way between two points on the main line can leave along one
+--- merge taper and return along the other: fewer waypoints than staying on the line, and a route
+--- that doubles back through the intersections. Correct as a path, useless as something to run a
+--- track beside.
+---
+--- So this walks the graph instead, and at every junction takes the neighbour that best CONTINUES
+--- the current heading, refusing any step that turns back. That is what "keep going straight on
+--- through the intersection" means as an instruction to a graph, and it is what picks the main line
+--- over the taper without needing to know which is which.
+function ADFlyoverEditor:straightRouteBetween(fromId, toId)
+    local first = ADGraphManager:getWayPointById(fromId)
+    local target = ADGraphManager:getWayPointById(toId)
+    if first == nil or target == nil then
+        return nil
+    end
+
+    local route = { fromId }
+    local visited = { [fromId] = true }
+    local current = first
+    -- No heading yet on the first step: aim at the destination, so the walk sets off the right way
+    -- out of a junction rather than down whichever neighbour happens to be listed first.
+    local hx, hz = target.x - first.x, target.z - first.z
+    local hl = MathUtil.vector2Length(hx, hz)
+    if hl < 0.01 then
+        return nil
+    end
+    hx, hz = hx / hl, hz / hl
+
+    for _ = 1, 4096 do
+        local seen, best, bestScore = {}, nil, nil
+        for _, listName in ipairs({ "out", "incoming" }) do
+            for _, otherId in pairs(current[listName] or {}) do
+                if not seen[otherId] and not visited[otherId] then
+                    seen[otherId] = true
+                    local wp = ADGraphManager:getWayPointById(otherId)
+                    if wp ~= nil then
+                        local dx, dz = wp.x - current.x, wp.z - current.z
+                        local d = MathUtil.vector2Length(dx, dz)
+                        if d > 0.01 then
+                            -- How well this step continues the heading. Reaching the destination
+                            -- wins outright, so a final short hop is never passed over for a
+                            -- straighter step going somewhere else.
+                            local score = (dx / d) * hx + (dz / d) * hz
+                            if otherId == toId then
+                                score = math.huge
+                            end
+                            if score > -0.86 and (bestScore == nil or score > bestScore) then
+                                best, bestScore = otherId, score
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if best == nil then
+            return nil  -- ran into a dead end without reaching the far point
+        end
+
+        route[#route + 1] = best
+        visited[best] = true
+        if best == toId then
+            return route
+        end
+
+        local wp = ADGraphManager:getWayPointById(best)
+        local dx, dz = wp.x - current.x, wp.z - current.z
+        local d = MathUtil.vector2Length(dx, dz)
+        hx, hz = dx / d, dz / d
+        current = wp
+    end
+    return nil
+end
+
 --- Points of the selected span, and the span itself.
 function ADFlyoverEditor:offsetSpanPoints()
     if self.offsetFromId == nil or self.offsetToId == nil then
         return nil, nil
     end
     local span = self:runPathBetween(self.offsetFromId, self.offsetToId)
+
+    -- Only when the shortest path doubles back. On a plain span the path finder is right and
+    -- cheaper, so it keeps the job; the straight walk is the answer to intersections specifically.
+    if span ~= nil and #span >= 3 then
+        local check = {}
+        for i, id in ipairs(span) do
+            local wp = ADGraphManager:getWayPointById(id)
+            check[i] = wp ~= nil and { x = wp.x, z = wp.z, id = id } or nil
+        end
+        if #check == #span and reversalIn(check) ~= nil then
+            local straight = self:straightRouteBetween(self.offsetFromId, self.offsetToId)
+            if straight ~= nil and #straight >= 2 then
+                Logging.info("[FlyoverEditor]: the shortest path doubled back through an "
+                    .. "intersection; took the straight run instead (%d waypoint(s), was %d).",
+                    #straight, #span)
+                span = straight
+            end
+        end
+    end
+
     if span == nil or #span < 2 then
         return nil, span
     end
