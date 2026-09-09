@@ -236,21 +236,37 @@ end
 --- The previous visibility is remembered rather than assumed, so a player who had already turned
 --- the help off does not get it handed back on exit. Everything is pcall'd and nil-checked: this is
 --- base-game HUD internals, and failing to hide a help box must never take the editor down with it.
+--- Show or hide the game's key-binding help box.
+---
+--- It sits in the TOP-LEFT corner - where the editor panel is anchored - and draws after us, so its
+--- text came through a background that is otherwise opaque.
+---
+--- The probe settled how to reach it: g_currentMission.hud.inputHelp exists and carries a plain
+--- `isVisible` field, but has NO setIsVisible method - that API was my invention, and asking for it
+--- failed silently every frame. So the field is written directly. Writing base-game HUD state from
+--- a companion mod is blunt, but this box has no setter to ask nicely with.
+---
+--- Written every frame while the editor is open rather than once on entry, because the HUD sets the
+--- flag from its own update and a single write on activation is overwritten straight after.
 function ADFlyoverEditor:setInputHelpVisible(visible)
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
     local help = hud ~= nil and hud.inputHelp or nil
-    if help == nil or type(help.setIsVisible) ~= "function" then
-        return false, "no inputHelp:setIsVisible"
+    if help == nil then
+        return false, "no hud.inputHelp"
     end
-    local ok, err = pcall(function() help:setIsVisible(visible) end)
+    -- Prefer a real setter if some other version of the game does provide one; fall back to the
+    -- field, which is what this one has.
+    if type(help.setIsVisible) == "function" then
+        local ok, err = pcall(function() help:setIsVisible(visible) end)
+        return ok, ok and nil or tostring(err)
+    end
+    local ok, err = pcall(function() help.isVisible = visible end)
     return ok, ok and nil or tostring(err)
 end
 
---- One-shot probe of what is actually drawing the help box, logged on the first activation only.
---- The first attempt hid g_currentMission.hud.inputHelp and the box stayed on screen with no log
---- line either way, which means the guess was wrong somewhere I could not see. So rather than try
---- another handle blind, this reports what is really there - the same approach that found
---- AutoDrive's environment instead of assuming a name for it.
+--- One-shot probe of the help box, logged on the first activation only. It is what identified the
+--- missing setter, and it is kept so a future game version that moves this can be diagnosed from a
+--- log rather than from another round of guesses.
 function ADFlyoverEditor:probeInputHelp()
     if self.probedInputHelp then
         return
@@ -258,33 +274,27 @@ function ADFlyoverEditor:probeInputHelp()
     self.probedInputHelp = true
 
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
-    Logging.info("[FlyoverEditor]: PROBE g_currentMission.hud = %s", tostring(hud))
     if hud == nil then
+        Logging.info("[FlyoverEditor]: PROBE no g_currentMission.hud")
         return
     end
 
-    -- Anything on the HUD whose name hints at help or input, with whether it looks hideable.
-    for key, value in pairs(hud) do
-        local name = tostring(key):lower()
-        if name:find("help") or name:find("input") or name:find("control") then
-            local kind = type(value)
-            local visible, hideable = "?", "no"
-            if kind == "table" then
-                visible = tostring(rawget(value, "isVisible"))
-                hideable = type(value.setIsVisible) == "function" and "yes" or "no"
-            end
-            Logging.info("[FlyoverEditor]: PROBE hud.%s (%s) isVisible=%s setIsVisible=%s",
-                tostring(key), kind, visible, hideable)
-        end
-    end
+    local help = hud.inputHelp
+    Logging.info("[FlyoverEditor]: PROBE hud.inputHelp = %s isVisible=%s",
+        tostring(help), help ~= nil and tostring(rawget(help, "isVisible")) or "-")
 
-    -- The settings the base game drives that box from. If the HUD re-shows it every frame from one
-    -- of these, hiding the element once can never stick and the setting is the real handle.
-    for _, setting in ipairs({ "showHelpMenu", "showInputHelp", "inputHelpMode", "helpMenuState" }) do
-        local ok, value = pcall(function() return g_gameSettings:getValue(setting) end)
-        if ok and value ~= nil then
-            Logging.info("[FlyoverEditor]: PROBE g_gameSettings.%s = %s", setting, tostring(value))
+    -- What can actually be called on it. "setIsVisible" was assumed last time and does not exist;
+    -- listing the real names means the next attempt starts from fact.
+    if type(help) == "table" then
+        local names = {}
+        for key, value in pairs(help) do
+            if type(value) == "function" then
+                names[#names + 1] = tostring(key)
+            end
         end
+        table.sort(names)
+        Logging.info("[FlyoverEditor]: PROBE inputHelp methods: %s",
+            #names > 0 and table.concat(names, ", ") or "(none directly on the table)")
     end
 end
 
@@ -298,11 +308,11 @@ function ADFlyoverEditor:hideInputHelp()
         Logging.info("[FlyoverEditor]: no input-help display found to hide.")
         return
     end
-    -- Read the flag directly: there is no getter, and guessing "it was on" would switch it on for
-    -- someone who had deliberately turned it off.
+    -- Read the flag rather than assume it was on: someone who had already turned the help off must
+    -- not have it handed back to them on exit.
     self.inputHelpWasVisible = rawget(help, "isVisible")
     local ok, err = self:setInputHelpVisible(false)
-    -- Logged either way. Reporting only success is what left the last attempt unexplained.
+    -- Logged either way. Reporting only success is what left the first attempt unexplained.
     Logging.info("[FlyoverEditor]: hide key-binding help: ok=%s was=%s%s",
         tostring(ok), tostring(self.inputHelpWasVisible), err ~= nil and (" err=" .. err) or "")
 end
