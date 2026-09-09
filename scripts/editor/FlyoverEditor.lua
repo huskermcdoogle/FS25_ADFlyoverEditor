@@ -240,13 +240,57 @@ function ADFlyoverEditor:setInputHelpVisible(visible)
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
     local help = hud ~= nil and hud.inputHelp or nil
     if help == nil or type(help.setIsVisible) ~= "function" then
-        return false
+        return false, "no inputHelp:setIsVisible"
     end
-    local ok = pcall(function() help:setIsVisible(visible) end)
-    return ok
+    local ok, err = pcall(function() help:setIsVisible(visible) end)
+    return ok, ok and nil or tostring(err)
+end
+
+--- One-shot probe of what is actually drawing the help box, logged on the first activation only.
+--- The first attempt hid g_currentMission.hud.inputHelp and the box stayed on screen with no log
+--- line either way, which means the guess was wrong somewhere I could not see. So rather than try
+--- another handle blind, this reports what is really there - the same approach that found
+--- AutoDrive's environment instead of assuming a name for it.
+function ADFlyoverEditor:probeInputHelp()
+    if self.probedInputHelp then
+        return
+    end
+    self.probedInputHelp = true
+
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    Logging.info("[FlyoverEditor]: PROBE g_currentMission.hud = %s", tostring(hud))
+    if hud == nil then
+        return
+    end
+
+    -- Anything on the HUD whose name hints at help or input, with whether it looks hideable.
+    for key, value in pairs(hud) do
+        local name = tostring(key):lower()
+        if name:find("help") or name:find("input") or name:find("control") then
+            local kind = type(value)
+            local visible, hideable = "?", "no"
+            if kind == "table" then
+                visible = tostring(rawget(value, "isVisible"))
+                hideable = type(value.setIsVisible) == "function" and "yes" or "no"
+            end
+            Logging.info("[FlyoverEditor]: PROBE hud.%s (%s) isVisible=%s setIsVisible=%s",
+                tostring(key), kind, visible, hideable)
+        end
+    end
+
+    -- The settings the base game drives that box from. If the HUD re-shows it every frame from one
+    -- of these, hiding the element once can never stick and the setting is the real handle.
+    for _, setting in ipairs({ "showHelpMenu", "showInputHelp", "inputHelpMode", "helpMenuState" }) do
+        local ok, value = pcall(function() return g_gameSettings:getValue(setting) end)
+        if ok and value ~= nil then
+            Logging.info("[FlyoverEditor]: PROBE g_gameSettings.%s = %s", setting, tostring(value))
+        end
+    end
 end
 
 function ADFlyoverEditor:hideInputHelp()
+    self:probeInputHelp()
+
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
     local help = hud ~= nil and hud.inputHelp or nil
     if help == nil then
@@ -256,11 +300,11 @@ function ADFlyoverEditor:hideInputHelp()
     end
     -- Read the flag directly: there is no getter, and guessing "it was on" would switch it on for
     -- someone who had deliberately turned it off.
-    self.inputHelpWasVisible = help.isVisible
-    if self:setInputHelpVisible(false) then
-        Logging.info("[FlyoverEditor]: hid the key-binding help (was %s).",
-            tostring(self.inputHelpWasVisible))
-    end
+    self.inputHelpWasVisible = rawget(help, "isVisible")
+    local ok, err = self:setInputHelpVisible(false)
+    -- Logged either way. Reporting only success is what left the last attempt unexplained.
+    Logging.info("[FlyoverEditor]: hide key-binding help: ok=%s was=%s%s",
+        tostring(ok), tostring(self.inputHelpWasVisible), err ~= nil and (" err=" .. err) or "")
 end
 
 function ADFlyoverEditor:restoreInputHelp()
@@ -268,8 +312,6 @@ function ADFlyoverEditor:restoreInputHelp()
         return
     end
     self:setInputHelpVisible(self.inputHelpWasVisible ~= false)
-    Logging.info("[FlyoverEditor]: restored the key-binding help to %s.",
-        tostring(self.inputHelpWasVisible))
     self.inputHelpWasVisible = nil
 end
 
@@ -887,6 +929,11 @@ function ADFlyoverEditor:update(dt)
     if not self.active or self.camera == nil or self.cursor == nil then
         return
     end
+
+    -- Asked for every frame, not once at activation. The base game re-shows its help box from its
+    -- own update, so a single hide on entry is overwritten immediately - which is the likeliest
+    -- reason the first attempt changed nothing on screen.
+    self:setInputHelpVisible(false)
 
     -- The editor's own clock. Advanced before the GUI check below, so time still passes while a
     -- dialog is open and a pause is not silently frozen.
