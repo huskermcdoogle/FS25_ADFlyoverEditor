@@ -4267,16 +4267,45 @@ function ADFlyoverEditor:updateOffsetPreview()
 end
 
 --- Lay a chain of new waypoints down, joined in order. Returns the first and last new ids.
+---
+--- `dual` may be a boolean for the whole chain, or a function(index) returning the mode for the
+--- connection arriving at point `index`. A span is not necessarily uniform - a route can run one-way
+--- along a stretch and two-way around a bend - and sampling it once turned every mixed span into a
+--- track that was entirely one thing or entirely the other, silently.
 function ADFlyoverEditor:createRunFrom(points, dual, flags)
+    local perSegment = type(dual) == "function"
     local firstId, previousId = nil, nil
-    for _, p in ipairs(points) do
+    for index, p in ipairs(points) do
         local y = self:resolveHeightAt(p.x, p.z, p.y)
-        local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, previousId ~= nil, dual, false,
+        local segmentDual = perSegment and dual(index) or dual
+        local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, previousId ~= nil, segmentDual, false,
             previousId or 0, flags, false)
         previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
         firstId = firstId or previousId
     end
     return firstId, previousId
+end
+
+--- Ask the SOURCE span which mode applies at a point on the offset track.
+---
+--- The two chains are not the same length - offsetting the inside of a bend drops points that fold,
+--- so a fifteen-point span can become an eight-point track - and there is no index that maps one to
+--- the other. Nearest source segment by midpoint is the honest way across: the offset point came
+--- from somewhere along the original, and that is the segment whose direction it should inherit.
+function ADFlyoverEditor:sourceDualAt(span, x, z)
+    local best, bestDistance = nil, math.huge
+    for i = 1, #span - 1 do
+        local a = ADGraphManager:getWayPointById(span[i])
+        local b = ADGraphManager:getWayPointById(span[i + 1])
+        if a ~= nil and b ~= nil then
+            local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
+            local d = MathUtil.vector2Length(x - mx, z - mz)
+            if d < bestDistance then
+                best, bestDistance = ADGraphManager:isDualRoad(a, b), d
+            end
+        end
+    end
+    return best
 end
 
 --- A spline between two existing waypoints, falling back to a straight connection when the mod
@@ -4357,8 +4386,31 @@ function ADFlyoverEditor:commitOffset()
     local flags = second.flags or AutoDrive.FLAG_NONE
     local siding = self.tool == self.TOOL.SIDING
 
+    -- Survey the WHOLE span, not just its first pair. A route is not necessarily uniform: it can
+    -- run one-way along a stretch and two-way around a bend, and sampling one segment turned every
+    -- such span into a track that was entirely one thing - silently, with the log confidently
+    -- reporting the mode it had guessed.
+    local dualCount, oneWayCount = 0, 0
+    for i = 1, #span - 1 do
+        local a = ADGraphManager:getWayPointById(span[i])
+        local b = ADGraphManager:getWayPointById(span[i + 1])
+        if a ~= nil and b ~= nil then
+            if ADGraphManager:isDualRoad(a, b) then
+                dualCount = dualCount + 1
+            else
+                oneWayCount = oneWayCount + 1
+            end
+        end
+    end
+    local mixed = dualCount > 0 and oneWayCount > 0
+
+    -- Whether to lay the track back to front is necessarily a decision for the whole run - a chain
+    -- has one direction. Any one-way part is what settles it: those want a return lane, and the
+    -- two-way parts are indifferent, so following the one-way parts costs the two-way ones nothing.
+    local layReversed = oneWayCount > 0
+
     local laying = newPoints
-    if not dual and not siding then
+    if layReversed and not siding then
         local flipped = {}
         for i = #newPoints, 1, -1 do
             flipped[#flipped + 1] = newPoints[i]
@@ -4367,7 +4419,21 @@ function ADFlyoverEditor:commitOffset()
     end
 
     ADEditorHistory:snapshot(siding and "siding" or "parallel track")
-    local firstNewId, lastNewId = self:createRunFrom(laying, dual, flags)
+    -- Each connection takes the mode of the source segment nearest to it. On a uniform span that is
+    -- the same answer everywhere, so nothing changes there; on a mixed one the track now inherits
+    -- the pattern instead of flattening it.
+    local layingDual = dual
+    if mixed and not siding then
+        layingDual = function(index)
+            local p = laying[index]
+            local at = p ~= nil and self:sourceDualAt(span, p.x, p.z) or nil
+            if at == nil then
+                return dual
+            end
+            return at
+        end
+    end
+    local firstNewId, lastNewId = self:createRunFrom(laying, layingDual, flags)
 
     if siding and firstNewId ~= nil and lastNewId ~= nil then
         self:splineConnectIds(span[1], firstNewId, dual, flags)
@@ -4377,7 +4443,10 @@ function ADFlyoverEditor:commitOffset()
     Logging.info("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
         siding and "siding" or "parallel track", #laying, self.offsetDistance,
         (self.offsetSide or 1) >= 0 and "left" or "right",
-        siding and ", splined in at both ends" or (dual and ", two-way" or ", running opposite"))
+        siding and ", splined in at both ends"
+            or (mixed and string.format(", mixed (%d two-way, %d one-way segment(s)), running opposite",
+                    dualCount, oneWayCount)
+                or (dual and ", two-way" or ", running opposite")))
 
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
     self.offsetSpanIds = nil
