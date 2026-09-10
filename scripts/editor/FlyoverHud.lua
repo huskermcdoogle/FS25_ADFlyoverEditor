@@ -215,6 +215,14 @@ function ADFlyoverHud:buildRows(editor)
         else
             add("toggle", "strength (wheel)", tostring(editor.smoothStrength))
         end
+    elseif editor.tool == editor.TOOL.GROUND then
+        add("toggle", "tolerance (wheel)", string.format("%.1f m", editor.groundTolerance))
+        add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
+            function() editor:toggleSnapToTerrain() end)
+        if editor.groundPreview ~= nil then
+            add("toggle", "off the ground", string.format("%d of %d",
+                #editor.groundPreview, editor.groundChecked or 0))
+        end
     elseif editor.tool == editor.TOOL.DIVIDE then
         add("toggle", "points (wheel)", tostring(editor.divideCount))
     elseif editor.tool == editor.TOOL.CONVERT then

@@ -108,6 +108,10 @@ ADFlyoverEditor = {
     straightenFromId = nil,
     straightenToId = nil,
     straightenPreview = nil,
+    groundFromId = nil,
+    groundToId = nil,
+    groundPreview = nil,
+    groundTolerance = 0.5,
     straightenTolerance = 1.0,
     divideFromId = nil,
     divideToId = nil,
@@ -143,8 +147,16 @@ ADFlyoverEditor = {
 -- Ordered by how often each is actually reached for, because position IS the key binding: the
 -- tool at 10 answers to 0, the most awkward reach, and so belongs to the one used least.
 -- Order set from how the editor is really used, not from how the tools group conceptually.
-ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11, PARALLEL = 12, SIDING = 13 }
-ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge", "parallel", "siding" }
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11, PARALLEL = 12, SIDING = 13, GROUND = 14 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge", "parallel", "siding", "ground" }
+
+-- How far a waypoint may sit off the ground before the ground tool calls it out, in meters. The
+-- band starts well below a hand's width because the point of the tool is finding drift you cannot
+-- see, and reaches high enough to ignore a genuine bridge or gantry rather than dragging it down.
+AutoDrive.FLYOVER_GROUND_MIN = 0.1
+AutoDrive.FLYOVER_GROUND_MAX = 10.0
+AutoDrive.FLYOVER_GROUND_STEP = 0.1
+AutoDrive.FLYOVER_GROUND_DEFAULT = 0.5
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
@@ -979,6 +991,8 @@ function ADFlyoverEditor:update(dt)
         self:updateSidingPreview()
     elseif self.tool == self.TOOL.PARALLEL then
         self:updateOffsetPreview()
+    elseif self.tool == self.TOOL.GROUND then
+        self:updateGroundPreview()
     elseif self.tool == self.TOOL.STRAIGHTEN then
         self:updateStraightenPreview()
     elseif self.tool == self.TOOL.SMOOTH then
@@ -1190,6 +1204,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
+    self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
     self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
     self.spanIds = nil
     self.sidingAnchorId, self.sidingPreview = nil, nil
@@ -1314,6 +1329,22 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    -- Each offender gets a marker where it is, a marker where it would land, and a line between
+    -- them, so the SIZE of the error reads at a glance. Red for a point above the ground, blue for
+    -- one buried below it - the two want different explanations and are worth telling apart.
+    if self.tool == self.TOOL.GROUND and self.groundPreview ~= nil then
+        for _, p in ipairs(self.groundPreview) do
+            local above = p.delta > 0
+            local r, g, b = 1, 0.3, 0.2
+            if not above then
+                r, g, b = 0.3, 0.6, 1
+            end
+            ADDrawingManager:addSphereTask(p.x, p.y + 0.4, p.z, 3, r, g, b, 0.8)
+            ADDrawingManager:addSphereTask(p.x, p.targetY + 0.4, p.z, 2, r, g, b, 0.4)
+            ADDrawingManager:addLineTask(p.x, p.y + 0.4, p.z, p.x, p.targetY + 0.4, p.z, 1, r, g, b)
+        end
+    end
+
     if self.tool == self.TOOL.STRAIGHTEN and self.straightenPreview ~= nil then
         for i = 1, #self.straightenPreview do
             local p = self.straightenPreview[i]
@@ -1360,6 +1391,8 @@ function ADFlyoverEditor:drawNetwork()
     local anchorId = self.lastWaypointId
     if self.tool == self.TOOL.PARALLEL or self.tool == self.TOOL.SIDING then
         anchorId = self.offsetFromId
+    elseif self.tool == self.TOOL.GROUND then
+        anchorId = self.groundFromId
     elseif self.tool == self.TOOL.STRAIGHTEN then
         anchorId = self.straightenFromId
     elseif self.tool == self.TOOL.SMOOTH then
@@ -1562,6 +1595,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:sidingClick()
     elseif self.tool == self.TOOL.PARALLEL then
         self:offsetClick()
+    elseif self.tool == self.TOOL.GROUND then
+        self:groundClick()
     elseif self.tool == self.TOOL.STRAIGHTEN then
         self:straightenClick()
     elseif self.tool == self.TOOL.DIVIDE then
@@ -1641,6 +1676,14 @@ function ADFlyoverEditor:stopCurrentAction()
             return true
         elseif self.offsetFromId ~= nil then
             self:cancelOffset()
+            return true
+        end
+    elseif tool == self.TOOL.GROUND then
+        if self.groundToId ~= nil then
+            self:commitGround()
+            return true
+        elseif self.groundFromId ~= nil then
+            self:cancelGround()
             return true
         end
     elseif tool == self.TOOL.STRAIGHTEN then
@@ -2057,6 +2100,7 @@ function ADFlyoverEditor:toolTakesSpanScope()
         or self.tool == self.TOOL.SMOOTH
         or self.tool == self.TOOL.DIVIDE
         or self.tool == self.TOOL.STRAIGHTEN
+        or self.tool == self.TOOL.GROUND
 end
 
 --- One click instead of two, when the scope says whole run. Returns true when it handled the click.
@@ -3229,6 +3273,23 @@ function ADFlyoverEditor:getNextStepLines()
             return { "Click a run to offset the whole", "thing, junction to junction." }
         end
         return { "Click one end of a span to run", "a track alongside it." }
+    elseif self.tool == t.GROUND then
+        if self.groundToId ~= nil then
+            local n = self.groundPreview ~= nil and #self.groundPreview or 0
+            if n == 0 then
+                return { string.format("Nothing over %.1fm off the ground.", self.groundTolerance),
+                         "Wheel the tolerance down to see more." }
+            end
+            return { string.format("%d of %d waypoint(s) off the ground.", n, self.groundChecked or 0),
+                     "Right-click re-seats them." }
+        end
+        if self.groundFromId ~= nil then
+            return { "Click the far end of the span." }
+        end
+        if self.offsetScope == self.OFFSET_SCOPE.RUN then
+            return { "Click a run to check the whole", "thing for waypoints off the ground." }
+        end
+        return { "Click one end of a span to find", "waypoints off the ground." }
     elseif self.tool == t.STRAIGHTEN then
         if self.straightenToId ~= nil then
             return { string.format("Wheel sets tolerance (%.2fm).", self.straightenTolerance),
@@ -4498,6 +4559,132 @@ function ADFlyoverEditor:cancelOffset()
     self.spanIds = nil
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- GROUND
+--
+-- Waypoints drift off the ground. A spline interpolates heights between its ends, an offset carries
+-- the source point's height sideways onto terrain that is not at the same level, a field loop
+-- follows a boundary across a ditch - each is locally reasonable and each can leave a point hanging
+-- in the air or buried under a slope. None of it is visible from above, which is the whole problem:
+-- the network looks perfect in flyover and a vehicle drives into a hillside.
+--
+-- So the tool shows before it fixes. The preview marks every waypoint further from the ground than
+-- the tolerance and draws a line from where it is to where it would land, and only then does
+-- right-click move anything. A tool that silently re-seated a whole run would be the fastest way to
+-- flatten a deliberately raised bridge.
+-- ---------------------------------------------------------------------------------------------
+
+--- Every waypoint in the span that sits further off the ground than the tolerance.
+function ADFlyoverEditor:updateGroundPreview()
+    if self.groundFromId == nil or self.groundToId == nil then
+        self.groundPreview = nil
+        return
+    end
+
+    local span = self:spanBetween(self.groundFromId, self.groundToId)
+    if span == nil or #span < 1 then
+        self.groundPreview, self.groundBlockedBy = nil, "those two points are not two ends of one span."
+        return
+    end
+
+    local offenders, checked = {}, 0
+    for _, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            checked = checked + 1
+            -- resolveHeightAt is what every other tool uses to put a point on the ground, so the
+            -- target here is exactly where those tools would have placed it - including its refusal
+            -- to pull down anything sitting on a structure, which is what keeps bridges intact.
+            local targetY = self:resolveHeightAt(wp.x, wp.z, wp.y)
+            if targetY ~= nil then
+                local delta = wp.y - targetY
+                if math.abs(delta) > self.groundTolerance then
+                    offenders[#offenders + 1] =
+                        { id = id, x = wp.x, y = wp.y, z = wp.z, targetY = targetY, delta = delta }
+                end
+            end
+        end
+    end
+
+    self.groundChecked = checked
+    self.groundPreview = #offenders > 0 and offenders or nil
+    self.groundBlockedBy = nil
+end
+
+function ADFlyoverEditor:groundClick()
+    if self.hoverId == nil then
+        return
+    end
+
+    if self.groundFromId == nil and self:claimWholeRunClick(function(a, b)
+            self.groundFromId, self.groundToId = a, b
+            self.groundPreview = nil
+        end) then
+        return
+    end
+
+    if self.groundFromId == nil then
+        self.spanIds = nil
+        self.groundFromId = self.hoverId
+        Logging.info("[FlyoverEditor]: grounding from id=%s; click the far end of the span.",
+            tostring(self.groundFromId))
+        return
+    end
+
+    if self.hoverId == self.groundFromId then
+        return
+    end
+
+    self.groundToId = self.hoverId
+    self.groundPreview = nil
+    Logging.info("[FlyoverEditor]: ground span set, id=%s to id=%s. Wheel sets the tolerance "
+        .. "(%.1fm). Right-click re-seats what is marked.",
+        tostring(self.groundFromId), tostring(self.groundToId), self.groundTolerance)
+end
+
+function ADFlyoverEditor:commitGround()
+    if self.groundPreview == nil or #self.groundPreview == 0 then
+        Logging.info("[FlyoverEditor]: nothing is further than %.1fm off the ground in that span "
+            .. "(%d waypoint(s) checked).", self.groundTolerance, self.groundChecked or 0)
+        self:cancelGround()
+        return
+    end
+
+    ADEditorHistory:snapshot("ground")
+
+    local moved, raised, lowered = 0, 0, 0
+    for _, p in ipairs(self.groundPreview) do
+        local wp = ADGraphManager:getWayPointById(p.id)
+        -- Re-read rather than trusting the preview: it was built on an earlier frame, and an id can
+        -- mean a different waypoint after any edit that removed one.
+        if wp ~= nil and math.abs(wp.x - p.x) < 0.01 and math.abs(wp.z - p.z) < 0.01 then
+            ADGraphManager:moveWayPoint(p.id, p.x, p.targetY, p.z, wp.flags, false)
+            moved = moved + 1
+            if p.delta > 0 then
+                lowered = lowered + 1
+            else
+                raised = raised + 1
+            end
+        end
+    end
+
+    Logging.info("[FlyoverEditor]: re-seated %d waypoint(s) on the ground - %d lowered, %d raised "
+        .. "(tolerance %.1fm).", moved, lowered, raised, self.groundTolerance)
+
+    self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
+    self.spanIds = nil
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+end
+
+function ADFlyoverEditor:cancelGround()
+    self.spanIds = nil
+    if self.groundFromId ~= nil or self.groundToId ~= nil then
+        Logging.info("[FlyoverEditor]: cancelled the ground span.")
+    end
+    self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
+end
+
 function ADFlyoverEditor:straightenClick()
     if self.hoverId == nil then
         return
@@ -4736,6 +4923,13 @@ function ADFlyoverEditor:handleWheel(offset)
             math.min(AutoDrive.FLYOVER_OFFSET_MAX,
                 self.offsetDistance + step * AutoDrive.FLYOVER_OFFSET_STEP))
         self.offsetCache = nil
+        return true
+    end
+
+    if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then
+        self.groundTolerance = math.max(AutoDrive.FLYOVER_GROUND_MIN,
+            math.min(AutoDrive.FLYOVER_GROUND_MAX,
+                self.groundTolerance + step * AutoDrive.FLYOVER_GROUND_STEP))
         return true
     end
 
