@@ -217,6 +217,8 @@ function ADFlyoverHud:buildRows(editor)
         end
     elseif editor.tool == editor.TOOL.GROUND then
         add("toggle", "tolerance (wheel)", string.format("%.1f m", editor.groundTolerance))
+        add("toggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], false,
+            function() editor:cycleGroundLevel() end)
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
             function() editor:toggleSnapToTerrain() end)
         if editor.groundPreview ~= nil then

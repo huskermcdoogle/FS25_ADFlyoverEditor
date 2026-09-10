@@ -112,6 +112,7 @@ ADFlyoverEditor = {
     groundToId = nil,
     groundPreview = nil,
     groundTolerance = 0.5,
+    groundLevel = 1,
     straightenTolerance = 1.0,
     divideFromId = nil,
     divideToId = nil,
@@ -157,6 +158,17 @@ AutoDrive.FLYOVER_GROUND_MIN = 0.1
 AutoDrive.FLYOVER_GROUND_MAX = 10.0
 AutoDrive.FLYOVER_GROUND_STEP = 0.1
 AutoDrive.FLYOVER_GROUND_DEFAULT = 0.5
+
+-- Which surface a point is grounded to when its column has more than one - a bridge deck over a road,
+-- say. "span line" follows the height the span's own ends imply; "top surface" takes the highest.
+ADFlyoverEditor.GROUND_LEVEL = { SPAN = 1, TOP = 2 }
+ADFlyoverEditor.GROUND_LEVEL_NAMES = { "span line", "top surface" }
+
+function ADFlyoverEditor:cycleGroundLevel()
+    self.groundLevel = (self.groundLevel % #self.GROUND_LEVEL_NAMES) + 1
+    self.groundPreview = nil
+    Logging.info("[FlyoverEditor]: ground level -> %s.", self.GROUND_LEVEL_NAMES[self.groundLevel])
+end
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
 AutoDrive.FLYOVER_DRAW_RADIUS = 200
@@ -4624,23 +4636,47 @@ local function surfaceBelow(x, z, fromY, length)
     return groundHit
 end
 
+--- Every surface in the column at (x, z), top down, from `topY` to the terrain.
+---
+--- Stepped with the one ray call already proven here: cast down, note the hit, cast again from just
+--- beneath it, until the terrain. That finds a bridge deck AND the road under it, where a single
+--- cast from anywhere finds only whichever it meets first - and which that is depends entirely on
+--- where the cast starts, which is exactly the decision that has to be made on purpose.
+local function columnSurfaces(x, z, topY, terrainY)
+    local hits = {}
+    local from = topY
+    for _ = 1, 8 do
+        local h = surfaceBelow(x, z, from, (from - terrainY) + 1)
+        if h == nil then
+            break
+        end
+        hits[#hits + 1] = h
+        if h <= terrainY + 0.05 then
+            break
+        end
+        from = h - 0.1
+    end
+    if #hits == 0 or hits[#hits] > terrainY + 0.05 then
+        hits[#hits + 1] = terrainY
+    end
+    return hits
+end
+
 --- Where a waypoint at (x, y, z) belongs, for the ground tool specifically.
 ---
---- NOT resolveHeightAt. That is the right call for placing a NEW point - draw and move use it - and in
---- surface mode it deliberately leaves anything more than half a metre above the terrain alone, on the
---- theory that it is standing on a bridge. For this tool that theory is the bug: a point floating three
---- metres in the air was judged to be on a structure, its target became its own height, and it was
---- never marked. The tool could only ever find buried points. AutoDrive's own lookup cannot rescue it
---- either - it casts from three metres above the point down only five, so it cannot see ground more
---- than two metres below.
+--- NOT resolveHeightAt, which is right for placing a new point and wrong here: in surface mode it
+--- leaves anything more than half a metre up alone, assuming a bridge, so floating points were
+--- never marked.
 ---
---- So this looks all the way down:
----   above the terrain - cast from just above the point to the terrain and land on the first surface.
----     On a bridge deck it finds the deck and stays; floating over the deck it drops onto it; on the
----     road UNDER a bridge the cast starts below the deck, so it finds the road, not the bridge.
----   below the terrain - it is buried; bring it up to whatever surface is there.
----   snap to terrain  - the bare terrain, ignoring everything standing on it.
-function ADFlyoverEditor:groundTargetAt(x, y, z)
+--- A point under a bridge and a point that belongs on it look identical by height alone. The span
+--- says which: a route over a bridge has its ends up on the approaches, a road under one has them
+--- down at road level. So `expectedY` - the height interpolated between the span's ends at this
+--- point - picks the surface in the column nearest the span's own line. Ends on the approaches put
+--- the line at deck height and the points go onto the deck; ends at road level keep them on the road.
+---
+--- "top surface" ignores the span and takes the highest surface, for a route drawn wholly at ground
+--- level under a bridge it should be on - the one case the span line cannot tell apart.
+function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY)
     local terrainY = nil
     if g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil then
         terrainY = getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, x, 1, z)
@@ -4651,11 +4687,25 @@ function ADFlyoverEditor:groundTargetAt(x, y, z)
     if self.snapToTerrain then
         return terrainY
     end
-    if y < terrainY then
-        return surfaceBelow(x, z, terrainY + 3, 6) or terrainY
+
+    local reference = expectedY or y
+    -- High enough to include a deck the span passes over, not so high that it reaches for the
+    -- canopy of a tree that happens to overhang the road.
+    local topY = math.max(y, reference, terrainY) + 15
+    local surfaces = columnSurfaces(x, z, topY, terrainY)
+
+    if self.groundLevel == self.GROUND_LEVEL.TOP then
+        return surfaces[1]
     end
-    local from = y + 0.5
-    return surfaceBelow(x, z, from, (from - terrainY) + 1) or terrainY
+
+    local best, bestGap = surfaces[#surfaces], math.huge
+    for _, h in ipairs(surfaces) do
+        local gap = math.abs(h - reference)
+        if gap < bestGap then
+            best, bestGap = h, gap
+        end
+    end
+    return best
 end
 
 --- Every waypoint in the span that sits further off the ground than the tolerance.
@@ -4671,14 +4721,36 @@ function ADFlyoverEditor:updateGroundPreview()
         return
     end
 
-    local offenders, checked = {}, 0
-    for _, id in ipairs(span) do
+    -- The span's own line: its two ends' heights, interpolated by distance along it. That is what
+    -- tells a route over a bridge from a road beneath one - see groundTargetAt.
+    local pts, along = {}, { 0 }
+    for i, id in ipairs(span) do
         local wp = ADGraphManager:getWayPointById(id)
+        pts[i] = wp
+        if i > 1 and wp ~= nil and pts[i - 1] ~= nil then
+            along[i] = along[i - 1] + MathUtil.vector2Length(wp.x - pts[i - 1].x, wp.z - pts[i - 1].z)
+        else
+            along[i] = along[i - 1] or 0
+        end
+    end
+    local firstWp, lastWp = pts[1], pts[#pts]
+    local total = along[#along] or 0
+    local function expectedAt(i)
+        if firstWp == nil or lastWp == nil or total < 0.01 then
+            return nil
+        end
+        local t = along[i] / total
+        return firstWp.y + (lastWp.y - firstWp.y) * t
+    end
+
+    local offenders, checked = {}, 0
+    for index, id in ipairs(span) do
+        local wp = pts[index]
         if wp ~= nil then
             checked = checked + 1
             -- Its own lookup rather than resolveHeightAt's - see groundTargetAt for why. Bridges are
             -- kept by the downward cast finding the deck, not by refusing to look.
-            local targetY = self:groundTargetAt(wp.x, wp.y, wp.z)
+            local targetY = self:groundTargetAt(wp.x, wp.y, wp.z, expectedAt(index))
             if targetY ~= nil then
                 local delta = wp.y - targetY
                 if math.abs(delta) > self.groundTolerance then
