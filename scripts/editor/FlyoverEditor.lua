@@ -973,12 +973,24 @@ function ADFlyoverEditor:update(dt)
     -- Cache where the cursor is looking; the network drawing below centres on it. The y matters
     -- too: the cursor picks against the actual world surface, so on a ramp or an upper floor it
     -- already knows the height that a terrain lookup cannot see.
-    local ok, x, y, z = pcall(function() return self.cursor:getPosition() end)
-    if ok and x ~= nil and z ~= nil then
-        self.cursorX, self.cursorZ, self.cursorY = x, z, y
+    --
+    -- Not while the mouse is over the panel. The cursor still casts its ray through the screen there,
+    -- and the panel sits at the top of the screen where that ray heads for the horizon - so it hit
+    -- terrain kilometres away, the network was drawn within 200m of THAT, and everything near the
+    -- camera vanished whenever the mouse crossed the upper part of the panel. The last position
+    -- pointed at in the world is kept instead: moving onto the panel to click a button should not
+    -- move what the world is drawn around.
+    local overPanel = self.mouseX ~= nil and ADFlyoverHud ~= nil
+        and ADFlyoverHud:isMouseOver(self.mouseX, self.mouseY)
+    if not overPanel then
+        local ok, x, y, z = pcall(function() return self.cursor:getPosition() end)
+        if ok and x ~= nil and z ~= nil then
+            self.cursorX, self.cursorZ, self.cursorY = x, z, y
+        end
     end
 
-    self.hoverId = self:findWayPointNearCursor()
+    -- Nothing in the world is under the mouse while it is on the panel, so nothing is highlighted.
+    self.hoverId = not overPanel and self:findWayPointNearCursor() or nil
     self:updateFieldUnderCursor()
 
     if self.tool == self.TOOL.SPLINE then
@@ -1453,6 +1465,9 @@ function ADFlyoverEditor:drawNetwork()
 end
 
 function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
+    -- Every event, moves included: update() needs to know whether the mouse is over the panel.
+    self.mouseX, self.mouseY = posX, posY
+
     -- Logged BEFORE the guard, and only for real button presses, so a click that is being thrown
     -- away still leaves a trace. A siding previewed on foot and then did nothing, with no log line
     -- at all - which means the code never reached the commit, and there was no way to tell whether
