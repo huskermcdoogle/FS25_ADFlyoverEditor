@@ -26,6 +26,16 @@ ADFlyoverMapMarker = {
 
 local K = ADFlyoverMapMarker
 
+--- Image overlays load asynchronously: rendering one before it is ready draws nothing and makes the
+--- engine log "renderOverlay called too soon". It asked, by name, for this check.
+local function overlayReady(overlay)
+    if getIsOverlayReady == nil then
+        return true
+    end
+    local ok, ready = pcall(getIsOverlayReady, overlay)
+    return not ok or ready
+end
+
 local function ensureOverlay()
     if K.overlay ~= nil then
         return K.overlay ~= false
@@ -264,6 +274,9 @@ function K.draw()
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
     -- 34px: at 24 it read as a speck on the large map, and the halo needs room to show.
     local w, h = getNormalizedScreenValues(34 * uiScale, 34 * uiScale)
+    if not overlayReady(K.overlay) then
+        return
+    end
     setOverlayRotation(K.overlay, angle, w * 0.5, h * 0.5)
     setOverlayColor(K.overlay, 1, 1, 1, 1)
     renderOverlay(K.overlay, sx - w * 0.5, sy - h * 0.5, w, h)

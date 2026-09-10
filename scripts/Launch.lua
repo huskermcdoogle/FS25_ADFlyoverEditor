@@ -38,6 +38,16 @@ ADFlyoverLaunch = {
 
 local L = ADFlyoverLaunch
 
+--- Image overlays load asynchronously: rendering one before it is ready draws nothing and makes the
+--- engine log "renderOverlay called too soon". It asked, by name, for this check.
+local function overlayReady(overlay)
+    if getIsOverlayReady == nil then
+        return true
+    end
+    local ok, ready = pcall(getIsOverlayReady, overlay)
+    return not ok or ready
+end
+
 local function nowMs()
     return (g_time ~= nil and g_time) or 0
 end
@@ -211,6 +221,9 @@ function L.drawHudButton(hud)
     local hovering = g_inputBinding ~= nil and g_inputBinding:getShowMouseCursor()
         and mouseOver(L.buttonRect, L.mouseX, L.mouseY)
     local alpha = hovering and 1 or 0.85
+    if not overlayReady(L.iconOverlay) then
+        return
+    end
     setOverlayColor(L.iconOverlay, 1, 1, 1, alpha)
     renderOverlay(L.iconOverlay, x, y, w, h)
 
