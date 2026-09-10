@@ -4405,7 +4405,15 @@ function ADFlyoverEditor:createRunFrom(points, dual, flags)
     local perSegment = type(dual) == "function"
     local firstId, previousId = nil, nil
     for index, p in ipairs(points) do
-        local y = self:resolveHeightAt(p.x, p.z, p.y)
+        -- The ground tool's targeting, with the source point's height as the expected line - not
+        -- resolveHeightAt. That one leaves anything more than half a metre above the terrain alone,
+        -- assuming a bridge, and an offset track lands beside its source on ground that may be well
+        -- below it: down an embankment the new points kept the source's height and hung in the air.
+        -- Nearest surface to the source height drops them onto the slope, and still keeps a track
+        -- that stays over a bridge deck on the deck.
+        local sourceY = p.y or AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z)
+        local y = self:groundTargetAt(p.x, sourceY, p.z, sourceY, true)
+            or self:resolveHeightAt(p.x, p.z, p.y)
         local segmentDual = perSegment and dual(index) or dual
         local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, previousId ~= nil, segmentDual, false,
             previousId or 0, flags, false)
@@ -4676,7 +4684,7 @@ end
 ---
 --- "top surface" ignores the span and takes the highest surface, for a route drawn wholly at ground
 --- level under a bridge it should be on - the one case the span line cannot tell apart.
-function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY)
+function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY, spanLineOnly)
     local terrainY = nil
     if g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil then
         terrainY = getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, x, 1, z)
@@ -4694,7 +4702,9 @@ function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY)
     local topY = math.max(y, reference, terrainY) + 15
     local surfaces = columnSurfaces(x, z, topY, terrainY)
 
-    if self.groundLevel == self.GROUND_LEVEL.TOP then
+    -- The level toggle belongs to the ground tool. Other callers laying new track want the surface
+    -- nearest the line they came from, whatever the ground tool happens to be set to.
+    if not spanLineOnly and self.groundLevel == self.GROUND_LEVEL.TOP then
         return surfaces[1]
     end
 
