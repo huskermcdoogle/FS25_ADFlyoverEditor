@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.18.1.0"
+P.BUILD = "0.19.0.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -161,6 +161,11 @@ function P:update(dt)
     -- first frame the player can press it, not only once everything else has settled.
     if ADFlyoverLaunch ~= nil then
         ADFlyoverLaunch.update()
+    end
+    -- Before the arming early-return too: the map has to let go of the camera on the frame the editor
+    -- closes, whatever state arming is in.
+    if ADFlyoverMapMarker ~= nil and ADFlyoverMapMarker.update ~= nil then
+        pcall(ADFlyoverMapMarker.update)
     end
 
     if P.state ~= "waiting" then

@@ -100,6 +100,132 @@ local function aimOf(camera)
     return nil
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Centring the small maps on the camera
+--
+-- The small maps scroll and rotate around "the player": the map computes
+-- normalizedPlayerPosX/Z and playerRotation each frame and lays itself out from them (measured:
+-- normalizedPlayerPosX = 0.7338 = (478.8 + 1024) / 2048 for a player at x = 478.8). While the editor
+-- is open those should describe the CAMERA, so the map turns around the airplane instead of the
+-- airplane crawling across a map centred somewhere else. The large map shows the whole world and does
+-- not scroll, so there the airplane moves - which needs nothing from this at all.
+--
+-- Listing the map's methods by reflection returned nothing in this engine, so which hook exists is
+-- found at runtime rather than assumed, and the log says which one was used.
+-- ---------------------------------------------------------------------------------------------
+
+K.followMode = nil       -- "shadow", "topdown" or "none", once decided
+K.followCalls = 0
+K.followActiveSince = nil
+K.loggedFollowSilent = false
+
+--- The camera's position and heading in the map's own terms, or nil.
+local function cameraForMap(map)
+    local editor = ADFlyoverEditor
+    if editor == nil or not editor.active or editor.camera == nil then
+        return nil
+    end
+    local cam = editor.camera
+    if cam.cameraX == nil or cam.cameraZ == nil then
+        return nil
+    end
+    local nx = (cam.cameraX + map.worldCenterOffsetX) / map.worldSizeX
+    local nz = (cam.cameraZ + map.worldCenterOffsetZ) / map.worldSizeZ
+    -- Heading as the rotating map wants it: zero facing north (world -Z), matching the marker's
+    -- own angle, so that turning the map by minus this brings the camera's heading to screen-up.
+    local dx, dz = aimOf(cam)
+    local heading = dx ~= nil and math.atan2(-dx, -dz) or K.lastAngle
+    return nx, nz, heading
+end
+
+--- Install the hook on this map instance, once. Idempotent across frames and across map reloads.
+local function ensureFollow(map)
+    if map.adFlyoverFollowHooked then
+        return
+    end
+    map.adFlyoverFollowHooked = true
+
+    -- 1. Shadow updatePlayerPosition on the INSTANCE. The game still computes the player's position
+    --    first, so nothing is lost when the editor is closed; while it is open the three fields are
+    --    rewritten afterwards, before the rest of the map's update lays itself out from them.
+    if type(map.updatePlayerPosition) == "function" then
+        local original = map.updatePlayerPosition
+        map.updatePlayerPosition = function(self, ...)
+            local result = original(self, ...)
+            local nx, nz, heading = cameraForMap(self)
+            if nx ~= nil then
+                self.normalizedPlayerPosX, self.normalizedPlayerPosZ = nx, nz
+                self.playerRotation = heading
+                K.followCalls = K.followCalls + 1
+            end
+            return result
+        end
+        K.followMode = "shadow"
+        Logging.info("[ADFlyoverEditor] small map will centre on the flyover camera "
+            .. "(updatePlayerPosition shadowed on the map instance).")
+        return
+    end
+
+    -- 2. The construction screen's route: hand the map a top-down camera. Only if the camera can
+    --    answer the question the map will ask of it - otherwise this would throw every frame.
+    if type(map.setTopDownCamera) == "function" then
+        K.followMode = "topdown"
+        Logging.info("[ADFlyoverEditor] small map will centre on the flyover camera "
+            .. "(setTopDownCamera).")
+        return
+    end
+
+    K.followMode = "none"
+    Logging.warning("[ADFlyoverEditor] the HUD map offers neither updatePlayerPosition nor "
+        .. "setTopDownCamera, so the small maps will stay centred on the player and the airplane "
+        .. "will move across them instead.")
+end
+
+--- Called every frame from the mod's update.
+function K.update()
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local map = hud ~= nil and hud.ingameMap or nil
+    if map == nil or map.worldSizeX == nil then
+        return
+    end
+    ensureFollow(map)
+
+    local active = ADFlyoverEditor ~= nil and ADFlyoverEditor.active and ADFlyoverEditor.camera ~= nil
+
+    if K.followMode == "topdown" then
+        local wanted = active and ADFlyoverEditor.camera or nil
+        if K.handedCamera ~= wanted then
+            local cam = wanted
+            local ok = cam == nil or type(cam.determineMapPosition) == "function"
+            if ok then
+                pcall(function() map:setTopDownCamera(cam) end)
+                K.handedCamera = wanted
+            elseif not K.loggedNoDetermine then
+                K.loggedNoDetermine = true
+                Logging.warning("[ADFlyoverEditor] setTopDownCamera exists but the flyover camera "
+                    .. "has no determineMapPosition, so it was not handed over.")
+            end
+        end
+    end
+
+    -- A hook that is installed but never called is indistinguishable, from the screen, from one
+    -- that works slowly. Say so once, after the editor has been open long enough to be sure.
+    if K.followMode == "shadow" then
+        if active then
+            local t = (g_time ~= nil and g_time) or 0
+            K.followActiveSince = K.followActiveSince or t
+            if not K.loggedFollowSilent and K.followCalls == 0 and t - K.followActiveSince > 3000 then
+                K.loggedFollowSilent = true
+                Logging.warning("[ADFlyoverEditor] updatePlayerPosition was shadowed but the map has "
+                    .. "not called it in 3s - it lays itself out some other way, so the small map "
+                    .. "is still following the player.")
+            end
+        else
+            K.followActiveSince = nil
+        end
+    end
+end
+
 function K.draw()
     local editor = ADFlyoverEditor
     if editor == nil or not editor.active or editor.camera == nil then
