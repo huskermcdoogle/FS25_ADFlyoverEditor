@@ -6,19 +6,34 @@
 	</title>
 	<description>
 		<en>
-<![CDATA[A vehicle-free flyover camera for editing AutoDrive route networks.
+<![CDATA[A top-down flyover editor for AutoDrive route networks - build and repair routes from above, on foot or in a vehicle, without driving every metre of them.
 
-Requires FS25_AutoDrive to be installed and active. This mod does not modify AutoDrive; it attaches to it at runtime and refuses to load if it cannot.
+Tools: draw, move, delete, name, spline, divide, smooth, convert, straighten, field loop, merge, parallel, siding and ground. Span tools work on a picked span or a whole run between junctions. Everything is undoable.
 
-STAGE 5b - the full editor. Console: FlyoverEditor to open it. There is no editor yet.
+Open it with Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD. Esc to leave.
 
-Console: FlyoverStatus, FlyoverGeomTest, FlyoverFakeActive, FlyoverProxyAt, FlyoverProxyOff.
+Requires FS25_AutoDrive to be installed and active. This mod does not modify AutoDrive's files; it attaches at runtime and refuses to load if it cannot. Do not run it alongside a modified AutoDrive build that includes its own flyover editor.
+
+Single player only.
 ]]>
 		</en>
 	</description>
-	<version>0.16.0.0</version>
+	<version>0.17.0.0</version>
 	<multiplayer supported="false" />
-	<iconFilename>icon.dds</iconFilename>
+	<iconFilename>modIcon.dds</iconFilename>
+	<actions>
+		<action name="AD_FLYOVER_TOGGLE" />
+	</actions>
+	<inputBinding>
+		<actionBinding action="AD_FLYOVER_TOGGLE">
+			<binding device="KB_MOUSE_DEFAULT" input="KEY_lalt KEY_f" />
+		</actionBinding>
+	</inputBinding>
+	<l10n>
+		<text name="input_AD_FLYOVER_TOGGLE">
+			<en>AutoDrive Flyover: open / close editor</en>
+		</text>
+	</l10n>
 	<extraSourceFiles>
 		<sourceFile filename="scripts/Prelude.lua" />
 	</extraSourceFiles>

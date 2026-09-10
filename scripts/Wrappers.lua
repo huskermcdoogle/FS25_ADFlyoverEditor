@@ -107,7 +107,14 @@ function W.install(AD)
                 W.counts.drawHud = W.counts.drawHud + 1
                 return
             end
-            return originalDrawHud(hudSelf, ...)
+            originalDrawHud(hudSelf, ...)
+            -- The launch button rides on this call because it is the one place that runs exactly
+            -- when AutoDrive's HUD is on screen, with the HUD instance in hand - so the button is
+            -- positioned from this frame's layout and vanishes whenever the HUD does. Guarded, so a
+            -- fault in our button can never cost the player AutoDrive's HUD.
+            if ADFlyoverLaunch ~= nil then
+                pcall(ADFlyoverLaunch.drawHudButton, hudSelf)
+            end
         end
         W.hudWrapped = true
     else

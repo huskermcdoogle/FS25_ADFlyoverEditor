@@ -39,6 +39,7 @@ source(Utils.getFilename("scripts/Arming.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Settings.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Wrappers.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/Launch.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -55,7 +56,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.16.0.0"
+P.BUILD = "0.17.0.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -154,6 +155,11 @@ function P:update(dt)
     if editorLoaded() then
         ADFlyoverEditor:update(dt)
     end
+    -- Before the arming early-return below: the launch key has to follow the input context from the
+    -- first frame the player can press it, not only once everything else has settled.
+    if ADFlyoverLaunch ~= nil then
+        ADFlyoverLaunch.update()
+    end
 
     if P.state ~= "waiting" then
         return
@@ -222,12 +228,22 @@ end
 -- ---------------------------------------------------------------------------------------------
 
 function P:keyEvent(unicode, sym, modifier, isDown)
+    if ADFlyoverLaunch ~= nil then
+        ADFlyoverLaunch.keyEvent(unicode, sym, modifier, isDown)
+    end
     if editorLoaded() then
         ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
     end
 end
 
 function P:mouseEvent(posX, posY, isDown, isUp, button)
+    -- The HUD button only exists while the editor is closed - the editor hides AutoDrive's HUD - so
+    -- it is offered the click first and only then, and a click it takes goes no further.
+    if ADFlyoverLaunch ~= nil and not (editorLoaded() and ADFlyoverEditor.active) then
+        if ADFlyoverLaunch.mouseEvent(posX, posY, isDown, isUp, button) then
+            return
+        end
+    end
     if editorLoaded() then
         ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     end
@@ -442,7 +458,7 @@ function P:consoleResetInput()
     return "This build of the editor has no resetInput."
 end
 
-addConsoleCommand("FlyoverEditor", "Stage 5b: toggle the flyover editor", "consoleEditor", P)
+addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
 addConsoleCommand("FlyoverFieldLoop", "Stage 5a: generate a field loop at the vehicle (additive)", "consoleFieldLoop", P)
 addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check the copy (no restore)", "consoleHistoryTest", P)
