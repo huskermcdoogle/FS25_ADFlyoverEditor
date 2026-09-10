@@ -41,6 +41,7 @@ source(Utils.getFilename("scripts/Wrappers.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Launch.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapProbe.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/MapMarker.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -57,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.17.1.0"
+P.BUILD = "0.18.0.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -256,6 +257,11 @@ function P:draw()
     end
     if ADFlyoverProxy ~= nil then
         ADFlyoverProxy.drawMarker()
+    end
+    -- Last, so it lands on top of the game's map. Guarded: a marker is a nicety, and a fault in it
+    -- must never take the editor's own drawing down.
+    if ADFlyoverMapMarker ~= nil then
+        pcall(ADFlyoverMapMarker.draw)
     end
 end
 

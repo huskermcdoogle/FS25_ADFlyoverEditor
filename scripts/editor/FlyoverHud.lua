@@ -256,45 +256,135 @@ function ADFlyoverHud:draw(editor)
     self.rows = rows
 
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
-    local rowH = self.rowHeight * uiScale
-    local fontSize = 0.0115 * uiScale
-
-    -- Spacers are separators, not rows, so they get a fraction of the height. With eight tools
-    -- plus sections the panel is tall enough that full-height gaps cost real screen space.
-    local function heightOf(row)
-        return row.kind == "gap" and rowH * 0.35 or rowH
-    end
-
-    local totalHeight = self.padding * 2
-    for _, row in ipairs(rows) do
-        totalHeight = totalHeight + heightOf(row)
-    end
-
-    local x = self.posX
+    local baseRowH = self.rowHeight * uiScale
     local width = self.width * uiScale
+    local pad = self.padding
+
+    -- Where the fixed block ends. Everything up to and including the status line is the part that
+    -- must hold still - tools, undo/redo, status - and everything after it is the per-tool context
+    -- that comes and goes. That split already exists for exactly that reason, and it is also the
+    -- natural place to fold the panel into two columns.
+    local split = #rows
+    for i, row in ipairs(rows) do
+        if row.kind == "status" then
+            split = i
+            break
+        end
+    end
+
+    -- Tools sit two to a row. Fourteen buttons one per line was half the panel's height on its own;
+    -- side by side they take seven, and the grid is as stable as the list was.
+    local function measure(first, last, rowH)
+        local h, leftTaken = 0, false
+        for i = first, last do
+            local kind = rows[i].kind
+            if kind == "tool" then
+                if leftTaken then
+                    leftTaken = false
+                else
+                    h = h + rowH
+                    leftTaken = true
+                end
+            else
+                leftTaken = false
+                h = h + (kind == "gap" and rowH * 0.35 or rowH)
+            end
+        end
+        return h
+    end
+
+    -- How far down the panel may reach: to just above the game's own map, if the map is showing and
+    -- sits under the panel. Measured from the map's live layout every frame, so it follows the map
+    -- through small, large and hidden rather than assuming one size.
+    local floorY = self:mapFloorFor(self.posX, width)
+    local available = self.topY - floorY
+
+    local fixedH = measure(1, split, baseRowH) + pad * 2
+    local contextH = split < #rows and (measure(split + 1, #rows, baseRowH) + pad * 2) or 0
+
+    -- One column if it fits. Otherwise the context moves beside the fixed block, which halves the
+    -- height without shrinking anything. Only if the taller of the two STILL does not fit does the
+    -- panel shrink, and never below three quarters: past that the text stops being readable, and a
+    -- panel nobody can read is worse than one that overlaps the corner of a map.
+    local columns, scale = 1, 1
+    if fixedH + contextH > available then
+        columns = 2
+        local tallest = math.max(fixedH, contextH)
+        if tallest > available then
+            scale = math.max(0.75, available / tallest)
+        end
+    end
+    self.layoutColumns, self.layoutScale = columns, scale
+
+    local rowH = baseRowH * scale
+    local fontSize = 0.0115 * uiScale * scale
+    local columnGap = 0.005
+    local toolGap = 0.002
+
+    -- Lay out rows[first..last] as one column from (x, top). Returns the column's height.
+    local function place(first, last, x, top)
+        local y = top - pad
+        local leftTaken = false
+        for i = first, last do
+            local row = rows[i]
+            if row.kind == "tool" then
+                if leftTaken then
+                    row.x, row.y, row.w, row.h = x + width * 0.5 + toolGap, y, width * 0.5 - toolGap, rowH
+                    leftTaken = false
+                else
+                    y = y - rowH
+                    row.x, row.y, row.w, row.h = x, y, width * 0.5 - toolGap, rowH
+                    leftTaken = true
+                end
+            else
+                leftTaken = false
+                local h = row.kind == "gap" and rowH * 0.35 or rowH
+                y = y - h
+                row.x, row.y, row.w, row.h = x, y, width, h
+            end
+        end
+        return (top - y) + pad
+    end
+
     -- Anchored at the TOP and grown downward. Growing upward from a fixed bottom edge meant every
     -- row was measured from a top that moved whenever the panel's height changed - so selecting a
     -- tool with more controls than the last one shifted the header and the whole button list under
-    -- the cursor. The rows that must not move are all at the top, so the top is what gets pinned;
-    -- the panel now lengthens into empty space below instead of shoving itself up the screen.
+    -- the cursor. The rows that must not move are all at the top, so the top is what gets pinned.
     local top = self.topY
-    local bottom = top - totalHeight
+    local frames = {}
+    if columns == 1 then
+        local h = place(1, #rows, self.posX, top)
+        frames[1] = { x = self.posX, y = top - h, w = width, h = h }
+    else
+        local hA = place(1, split, self.posX, top)
+        frames[1] = { x = self.posX, y = top - hA, w = width, h = hA }
+        if split < #rows then
+            local bx = self.posX + width + columnGap
+            local hB = place(split + 1, #rows, bx, top)
+            frames[2] = { x = bx, y = top - hB, w = width, h = hB }
+        end
+    end
 
-    self.frameX, self.frameY, self.frameW, self.frameH = x, bottom, width, totalHeight
+    -- The bounding box is what the drag clamp keeps on screen.
+    local minY, maxX = top, self.posX
+    for _, f in ipairs(frames) do
+        minY = math.min(minY, f.y)
+        maxX = math.max(maxX, f.x + f.w)
+    end
+    self.frameX, self.frameY, self.frameW, self.frameH = self.posX, minY, maxX - self.posX, top - minY
 
     -- Near-opaque. At 0.72 the world showed straight through the text, which made the panel hard
     -- to read over bright terrain - the one thing it exists to avoid. A thin lighter border sits
     -- behind it so the panel has a defined edge against any background.
     local edge = 0.0025
-    drawQuad(self.borderOverlay, x - edge, bottom - edge, width + edge * 2, totalHeight + edge * 2,
-        0.55, 0.55, 0.55, 0.9)
-    drawQuad(self.background, x, bottom, width, totalHeight, 0.04, 0.04, 0.05, 0.96)
+    for _, f in ipairs(frames) do
+        drawQuad(self.borderOverlay, f.x - edge, f.y - edge, f.w + edge * 2, f.h + edge * 2,
+            0.55, 0.55, 0.55, 0.9)
+        drawQuad(self.background, f.x, f.y, f.w, f.h, 0.04, 0.04, 0.05, 0.96)
+    end
 
-    local y = top - self.padding
     for _, row in ipairs(rows) do
-        local h = heightOf(row)
-        y = y - h
-        row.x, row.y, row.w, row.h = x, y, width, h
+        local x, y, width, h = row.x, row.y, row.w, row.h
         local textY = y + (h - fontSize) * 0.5
         local textX = x + self.padding * 2
 
@@ -346,6 +436,30 @@ function ADFlyoverHud:draw(editor)
             label(textX, textY, fontSize * 0.92, row.text, 0.6, 1, 0.6, 1)
         end
     end
+end
+
+--- The lowest the panel may reach without covering the game's HUD map, for a panel spanning x..x+w.
+---
+--- Read from hud.ingameMap's live layout (mapPosX/Y, mapSizeX/Y), which the base game swaps as the
+--- map cycles through its states - so this follows small, large and rotating without knowing which
+--- is which. State 1 is the map switched off. Measured in game: the large map reaches y = 0.51, the
+--- small ones about 0.20.
+function ADFlyoverHud:mapFloorFor(x, w)
+    local margin = 0.02
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local map = hud ~= nil and hud.ingameMap or nil
+    if map == nil or map.isVisible == false or map.state == 1 then
+        return margin
+    end
+    local l = map.layout
+    if l == nil or l.mapPosX == nil or l.mapSizeX == nil or l.mapPosY == nil or l.mapSizeY == nil then
+        return margin
+    end
+    -- A panel that has been dragged clear of the map sideways owes it nothing.
+    if x > l.mapPosX + l.mapSizeX or x + w < l.mapPosX then
+        return margin
+    end
+    return l.mapPosY + l.mapSizeY + 0.012
 end
 
 --- Is the mouse over the panel's header row? That is the drag handle.
