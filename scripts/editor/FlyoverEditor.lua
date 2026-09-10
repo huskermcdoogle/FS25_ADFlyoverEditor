@@ -3962,104 +3962,21 @@ function ADFlyoverEditor:offsetClick()
         return
     end
 
-    -- Whole-run scope needs one click, not two: the ends are wherever the run meets a junction,
-    -- or where it simply stops. collectRunBetweenJunctions is what delete's run scope already uses.
+    -- Whole-run scope needs one click, not two. The resolution is shared with smooth, divide and
+    -- straighten: the run's ends are extended onto the junctions it stopped before, and the route
+    -- between them is kept from walking the collected run rather than re-derived. This tool is
+    -- where all three of those lessons were learned, so it has no business keeping its own copy.
     if self.offsetScope == self.OFFSET_SCOPE.RUN then
-        local run, count = self:collectRunBetweenJunctions(self.hoverId)
-        if run == nil or count == nil or count < 2 then
-            Logging.warning("[FlyoverEditor]: no run found through id=%s.", tostring(self.hoverId))
-            return
-        end
-
-        -- collectRunBetweenJunctions returns a SET, not an ordered list, so the two ends have to be
-        -- found rather than indexed: they are the members with only one neighbour still inside the
-        -- run. Neighbours are counted uniquely, because a two-way connection appears in both `out`
-        -- and `incoming` and would otherwise count twice and hide every end.
-        local ends = {}
-        for id in pairs(run) do
-            local wp = ADGraphManager:getWayPointById(id)
-            if wp ~= nil then
-                local seen, inside = {}, 0
-                for _, listName in ipairs({ "out", "incoming" }) do
-                    for _, other in pairs(wp[listName] or {}) do
-                        if run[other] and not seen[other] then
-                            seen[other] = true
-                            inside = inside + 1
-                        end
-                    end
-                end
-                if inside <= 1 then
-                    ends[#ends + 1] = id
-                end
+        if self:claimWholeRunClick(function(a, b)
+                self.offsetFromId, self.offsetToId = a, b
+                self.offsetPreview, self.offsetCache = nil, nil
+            end) then
+            -- Seed the side from where the cursor is, exactly as the two-click path does.
+            local seedPts = self:offsetSpanPoints()
+            if seedPts ~= nil then
+                self.offsetSide = self:offsetSideFromCursor(seedPts)
             end
         end
-
-        if #ends ~= 2 then
-            Logging.warning("[FlyoverEditor]: the run through id=%s has %d clear end(s), not 2. Use "
-                .. "the picked-span scope and click both ends yourself.", tostring(self.hoverId), #ends)
-            return
-        end
-        -- Reach one waypoint further at each end, onto the junction itself.
-        --
-        -- collectRunBetweenJunctions stops BEFORE a junction - the run is what lies between them -
-        -- so its ends are the last plain waypoints, and a track offset from those falls a segment
-        -- short of the intersection at both ends. "Whole run" should mean junction to junction,
-        -- which is where a parallel track wants to start and finish.
-        --
-        -- Only when the end has exactly one neighbour outside the run: that is unambiguously the
-        -- junction it stopped at. A run that simply ends in open space has none, and is left alone.
-        local function reachToJunction(endId)
-            local wp = ADGraphManager:getWayPointById(endId)
-            if wp == nil then
-                return endId
-            end
-            local seen, outside, found = {}, 0, nil
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
-                    if not run[other] and not seen[other] then
-                        seen[other] = true
-                        outside = outside + 1
-                        found = other
-                    end
-                end
-            end
-            return outside == 1 and found or endId
-        end
-
-        self.offsetFromId, self.offsetToId = reachToJunction(ends[1]), reachToJunction(ends[2])
-
-        -- Keep the run itself, in order - do NOT hand its two ends back to the path finder.
-        --
-        -- Once the ends are the junctions, the shortest route between them is the MAIN LINE: a
-        -- siding is by construction the longer way round. So clicking a siding collected the siding
-        -- correctly and then offset the main line instead. Nothing looked wrong on the way through,
-        -- because the main line does not double back and the straight-route fallback only triggers
-        -- on a reversal.
-        --
-        -- The run set is the answer already. Walking it from one end keeps every step inside the
-        -- run, so the branch that was clicked is the branch that gets offset.
-        local ordered = walkRunFrom(run, count, ends[1])
-        if ordered ~= nil then
-            local ids = { self.offsetFromId }
-            for _, id in ipairs(ordered) do
-                ids[#ids + 1] = id
-            end
-            if self.offsetToId ~= ends[2] then
-                ids[#ids + 1] = self.offsetToId
-            end
-            self.spanIds = ids
-        else
-            self.spanIds = nil
-        end
-
-        self.offsetPreview, self.offsetCache = nil, nil
-        local seedPts = self:offsetSpanPoints()
-        if seedPts ~= nil then
-            self.offsetSide = self:offsetSideFromCursor(seedPts)
-        end
-        Logging.info("[FlyoverEditor]: whole run of %d waypoint(s), id=%s to id=%s. Wheel sets the "
-            .. "offset (%.1fm); the side follows the cursor. Right-click applies.",
-            count, tostring(self.offsetFromId), tostring(self.offsetToId), self.offsetDistance)
         return
     end
 
