@@ -19,9 +19,17 @@ import zlib
 SIZE = 64
 SAMPLES = 4          # 4x4 supersampling per pixel
 OUTLINE = 0.085      # outline thickness, in the same -1..1 units as the shape
+HALO_WIDTH = 0.07    # white halo beyond the outline
 
-FILL = (242, 170, 34)     # amber, the editor panel's header colour
-EDGE = (18, 20, 24)       # near-black, so it reads on bright fields and dark forest alike
+# Blue, not amber. The map is fields and forest - greens and browns - and amber sits on the same
+# red/green axis those collapse onto for the commonest colour blindness (deuteranopia and
+# protanopia), so an amber marker on a green map is close to invisible for about one man in twelve.
+# Blue lies on the axis those conditions keep, so it stands off the terrain for them and for
+# everyone else. A white halo outside the dark outline lifts it off dark forest as well as bright
+# stubble.
+FILL = (30, 144, 255)     # a strong sky blue
+EDGE = (10, 12, 20)       # near-black outline
+HALO = (255, 255, 255)    # white halo outside the outline
 
 
 def inside(x, y):
@@ -53,15 +61,19 @@ def inside(x, y):
     return False
 
 
-def near(x, y):
-    """Inside the shape grown by the outline thickness - the outline is this minus the shape."""
+def grown(x, y, r):
+    """Inside the shape grown by r - each band is one growth minus the one inside it."""
     if inside(x, y):
         return True
-    for k in range(12):
-        a = k * math.pi / 6
-        if inside(x + OUTLINE * math.cos(a), y + OUTLINE * math.sin(a)):
+    for k in range(16):
+        a = k * math.pi / 8
+        if inside(x + r * math.cos(a), y + r * math.sin(a)):
             return True
     return False
+
+
+def near(x, y):
+    return grown(x, y, OUTLINE)
 
 
 def render():
@@ -69,27 +81,28 @@ def render():
     for py in range(SIZE):
         row = []
         for px in range(SIZE):
-            fill = edge = 0
+            fill = edge = halo = 0
             for sy in range(SAMPLES):
                 for sx in range(SAMPLES):
-                    # Map the pixel into -1..1 with a small margin so the outline is not clipped.
-                    x = ((px + (sx + 0.5) / SAMPLES) / SIZE) * 2.2 - 1.1
-                    y = ((py + (sy + 0.5) / SAMPLES) / SIZE) * 2.2 - 1.1
+                    # Map the pixel into -1..1 with a margin so the halo is not clipped.
+                    x = ((px + (sx + 0.5) / SAMPLES) / SIZE) * 2.5 - 1.25
+                    y = ((py + (sy + 0.5) / SAMPLES) / SIZE) * 2.5 - 1.25
                     if inside(x, y):
                         fill += 1
                     elif near(x, y):
                         edge += 1
+                    elif grown(x, y, OUTLINE + HALO_WIDTH):
+                        halo += 1
             n = SAMPLES * SAMPLES
-            cover = (fill + edge) / n
-            if cover == 0:
+            covered = fill + edge + halo
+            if covered == 0:
                 row.append((0, 0, 0, 0))
                 continue
-            # Colour is the fill/edge mix among the covered samples; alpha is total coverage.
-            f = fill / (fill + edge)
-            r = round(FILL[0] * f + EDGE[0] * (1 - f))
-            g = round(FILL[1] * f + EDGE[1] * (1 - f))
-            b = round(FILL[2] * f + EDGE[2] * (1 - f))
-            row.append((r, g, b, round(255 * cover)))
+            # Colour is the mix of bands among the covered samples; alpha is total coverage.
+            r = round((FILL[0] * fill + EDGE[0] * edge + HALO[0] * halo) / covered)
+            g = round((FILL[1] * fill + EDGE[1] * edge + HALO[1] * halo) / covered)
+            b = round((FILL[2] * fill + EDGE[2] * edge + HALO[2] * halo) / covered)
+            row.append((r, g, b, round(255 * covered / n)))
         pixels.append(row)
     return pixels
 

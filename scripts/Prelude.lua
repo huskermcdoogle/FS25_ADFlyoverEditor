@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.18.0.0"
+P.BUILD = "0.18.1.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -455,6 +455,15 @@ function P:consoleEditor()
         .. "FlyoverResetInput.", tostring(ADFlyoverEditor.active))
 end
 
+function P:consoleProbeMapFns()
+    if ADFlyoverMapProbe == nil or ADFlyoverMapProbe.runFunctions == nil then
+        return "MapProbe.lua did not source."
+    end
+    local ok, result = pcall(ADFlyoverMapProbe.runFunctions)
+    return ok and "Function list written to the log - look for [FlyoverMapProbe]."
+        or ("probe failed: " .. tostring(result))
+end
+
 function P:consoleProbeMap()
     if ADFlyoverMapProbe == nil then
         return "MapProbe.lua did not source."
@@ -479,6 +488,7 @@ end
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
 addConsoleCommand("FlyoverProbeMap", "Report the HUD map and hotspot classes (run with the map small, then large)", "consoleProbeMap", P)
+addConsoleCommand("FlyoverProbeMapFns", "List the map's and camera's functions, untruncated (editor open)", "consoleProbeMapFns", P)
 addConsoleCommand("FlyoverFieldLoop", "Stage 5a: generate a field loop at the vehicle (additive)", "consoleFieldLoop", P)
 addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check the copy (no restore)", "consoleHistoryTest", P)
 addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)

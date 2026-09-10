@@ -136,7 +136,8 @@ function K.draw()
     local angle = K.lastAngle + mapRotation
 
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
-    local w, h = getNormalizedScreenValues(24 * uiScale, 24 * uiScale)
+    -- 34px: at 24 it read as a speck on the large map, and the halo needs room to show.
+    local w, h = getNormalizedScreenValues(34 * uiScale, 34 * uiScale)
     setOverlayRotation(K.overlay, angle, w * 0.5, h * 0.5)
     setOverlayColor(K.overlay, 1, 1, 1, 1)
     renderOverlay(K.overlay, sx - w * 0.5, sy - h * 0.5, w, h)

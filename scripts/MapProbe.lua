@@ -130,3 +130,63 @@ function M.run()
 
     return table.concat(out, "\n")
 end
+
+
+--- Every FUNCTION name on an object and its class chain - untruncated, since the first probe sorted
+--- names alphabetically and cut at 160, which dropped exactly the set/update methods being looked
+--- for. Chunked into short log lines so no single line gets clipped either.
+local function functionNames(obj)
+    local seen, names = {}, {}
+    local t, depth = obj, 0
+    while type(t) == "table" and depth < 8 do
+        for k, v in pairs(t) do
+            if type(v) == "function" and not seen[k] then
+                seen[k] = true
+                names[#names + 1] = tostring(k)
+            end
+        end
+        local mt = getmetatable(t)
+        t = mt ~= nil and type(mt.__index) == "table" and mt.__index or nil
+        depth = depth + 1
+    end
+    table.sort(names)
+    return names
+end
+
+local function logNames(label, names)
+    Logging.info("[FlyoverMapProbe] %s: %d function(s)", label, #names)
+    for i = 1, #names, 12 do
+        local chunk = {}
+        for j = i, math.min(i + 11, #names) do chunk[#chunk + 1] = names[j] end
+        Logging.info("[FlyoverMapProbe]   %s", table.concat(chunk, " "))
+    end
+end
+
+--- The second probe: how the game centres the small map, and whether it can be pointed at the
+--- flyover camera. The base game's construction screen centres the minimap on its top-down camera,
+--- which is the same camera class the editor uses - so the hook very likely already exists.
+function M.runFunctions()
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local map = hud ~= nil and hud.ingameMap or nil
+    if map == nil then
+        return "no hud.ingameMap"
+    end
+    logNames("ingameMap", functionNames(map))
+    if type(map.layout) == "table" then
+        logNames("ingameMap.layout", functionNames(map.layout))
+    end
+    logNames("hud", functionNames(hud))
+
+    for _, field in ipairs({ "topDownCamera", "normalizedPlayerPosX", "normalizedPlayerPosZ",
+        "playerRotation", "playerRot", "isRotating", "rotation", "mapCenterX", "mapCenterY" }) do
+        Logging.info("[FlyoverMapProbe] ingameMap.%s = %s", field, tostring(map[field]))
+    end
+
+    local cam = ADFlyoverEditor ~= nil and ADFlyoverEditor.camera or nil
+    if cam ~= nil then
+        logNames("camera", functionNames(cam))
+    else
+        Logging.info("[FlyoverMapProbe] camera: open the editor and run again to list its functions.")
+    end
+    return "done"
+end
