@@ -40,6 +40,7 @@ source(Utils.getFilename("scripts/Settings.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Wrappers.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Launch.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/MapProbe.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -56,7 +57,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.17.0.0"
+P.BUILD = "0.17.1.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -448,6 +449,17 @@ function P:consoleEditor()
         .. "FlyoverResetInput.", tostring(ADFlyoverEditor.active))
 end
 
+function P:consoleProbeMap()
+    if ADFlyoverMapProbe == nil then
+        return "MapProbe.lua did not source."
+    end
+    local ok, result = pcall(ADFlyoverMapProbe.run)
+    if not ok then
+        return "probe failed: " .. tostring(result)
+    end
+    return "Probe written to the log - look for [FlyoverMapProbe]."
+end
+
 function P:consoleResetInput()
     if ADFlyoverEditor == nil then
         return "Editor not loaded."
@@ -460,6 +472,7 @@ end
 
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
+addConsoleCommand("FlyoverProbeMap", "Report the HUD map and hotspot classes (run with the map small, then large)", "consoleProbeMap", P)
 addConsoleCommand("FlyoverFieldLoop", "Stage 5a: generate a field loop at the vehicle (additive)", "consoleFieldLoop", P)
 addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check the copy (no restore)", "consoleHistoryTest", P)
 addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)
