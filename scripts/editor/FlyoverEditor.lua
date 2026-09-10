@@ -2104,6 +2104,11 @@ function ADFlyoverEditor:toolTakesSpanScope()
 end
 
 --- One click instead of two, when the scope says whole run. Returns true when it handled the click.
+---
+--- In whole-run scope EVERY click resolves a run - including one made while a run is already
+--- selected. It used to fall through to the two-click path instead, which treated the click as
+--- re-picking the far end and quietly cut a 28-waypoint run down to 16. Whole run means the run
+--- you clicked; to pick an arbitrary sub-span, switch to the picked span.
 function ADFlyoverEditor:claimWholeRunClick(setEnds)
     if self.offsetScope ~= self.OFFSET_SCOPE.RUN or self.hoverId == nil then
         return false
@@ -2565,7 +2570,7 @@ function ADFlyoverEditor:smoothClick()
         return
     end
 
-    if self.smoothFromId == nil and self:claimWholeRunClick(function(a, b)
+    if self:claimWholeRunClick(function(a, b)
             self.smoothFromId, self.smoothToId = a, b
             self.smoothPreview, self.smoothPinned = nil, nil
         end) then
@@ -4574,6 +4579,70 @@ end
 -- flatten a deliberately raised bridge.
 -- ---------------------------------------------------------------------------------------------
 
+-- The same collision the mod's own height lookup uses, so "the ground" means to this tool what it
+-- means to AutoDrive when it drives the route.
+local GROUND_MASK = nil
+local groundHit = nil
+
+local function groundRayCallback(_, hitObjectId, x, y, z, distance)
+    if y ~= nil then
+        groundHit = y
+    end
+end
+local GroundRay = { callback = groundRayCallback }
+
+--- The highest surface directly beneath (x, fromY, z), searching `length` metres down. Nil if none.
+local function surfaceBelow(x, z, fromY, length)
+    if raycastClosest == nil then
+        return nil
+    end
+    if GROUND_MASK == nil then
+        GROUND_MASK = CollisionFlag.DEFAULT + CollisionFlag.ROAD + CollisionFlag.TERRAIN
+    end
+    groundHit = nil
+    -- raycastClosest calls back synchronously, which is what AutoDrive relies on as well.
+    local ok = pcall(raycastClosest, x, fromY, z, 0, -1, 0, math.max(length, 0.5),
+        "callback", GroundRay, GROUND_MASK)
+    if not ok then
+        return nil
+    end
+    return groundHit
+end
+
+--- Where a waypoint at (x, y, z) belongs, for the ground tool specifically.
+---
+--- NOT resolveHeightAt. That is the right call for placing a NEW point - draw and move use it - and in
+--- surface mode it deliberately leaves anything more than half a metre above the terrain alone, on the
+--- theory that it is standing on a bridge. For this tool that theory is the bug: a point floating three
+--- metres in the air was judged to be on a structure, its target became its own height, and it was
+--- never marked. The tool could only ever find buried points. AutoDrive's own lookup cannot rescue it
+--- either - it casts from three metres above the point down only five, so it cannot see ground more
+--- than two metres below.
+---
+--- So this looks all the way down:
+---   above the terrain - cast from just above the point to the terrain and land on the first surface.
+---     On a bridge deck it finds the deck and stays; floating over the deck it drops onto it; on the
+---     road UNDER a bridge the cast starts below the deck, so it finds the road, not the bridge.
+---   below the terrain - it is buried; bring it up to whatever surface is there.
+---   snap to terrain  - the bare terrain, ignoring everything standing on it.
+function ADFlyoverEditor:groundTargetAt(x, y, z)
+    local terrainY = nil
+    if g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil then
+        terrainY = getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, x, 1, z)
+    end
+    if terrainY == nil then
+        return nil
+    end
+    if self.snapToTerrain then
+        return terrainY
+    end
+    if y < terrainY then
+        return surfaceBelow(x, z, terrainY + 3, 6) or terrainY
+    end
+    local from = y + 0.5
+    return surfaceBelow(x, z, from, (from - terrainY) + 1) or terrainY
+end
+
 --- Every waypoint in the span that sits further off the ground than the tolerance.
 function ADFlyoverEditor:updateGroundPreview()
     if self.groundFromId == nil or self.groundToId == nil then
@@ -4592,10 +4661,9 @@ function ADFlyoverEditor:updateGroundPreview()
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             checked = checked + 1
-            -- resolveHeightAt is what every other tool uses to put a point on the ground, so the
-            -- target here is exactly where those tools would have placed it - including its refusal
-            -- to pull down anything sitting on a structure, which is what keeps bridges intact.
-            local targetY = self:resolveHeightAt(wp.x, wp.z, wp.y)
+            -- Its own lookup rather than resolveHeightAt's - see groundTargetAt for why. Bridges are
+            -- kept by the downward cast finding the deck, not by refusing to look.
+            local targetY = self:groundTargetAt(wp.x, wp.y, wp.z)
             if targetY ~= nil then
                 local delta = wp.y - targetY
                 if math.abs(delta) > self.groundTolerance then
@@ -4616,15 +4684,20 @@ function ADFlyoverEditor:groundClick()
         return
     end
 
-    if self.groundFromId == nil and self:claimWholeRunClick(function(a, b)
+    -- Each new inspection starts from the default tolerance. The wheel adjusts it while a span is
+    -- selected, and the wheel is also the zoom - so a value scrolled up by accident and carried over
+    -- hid points two and three metres off the ground behind a five-metre tolerance.
+    if self:claimWholeRunClick(function(a, b)
             self.groundFromId, self.groundToId = a, b
             self.groundPreview = nil
+            self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
         end) then
         return
     end
 
     if self.groundFromId == nil then
         self.spanIds = nil
+        self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
         self.groundFromId = self.hoverId
         Logging.info("[FlyoverEditor]: grounding from id=%s; click the far end of the span.",
             tostring(self.groundFromId))
@@ -4690,7 +4763,7 @@ function ADFlyoverEditor:straightenClick()
         return
     end
 
-    if self.straightenFromId == nil and self:claimWholeRunClick(function(a, b)
+    if self:claimWholeRunClick(function(a, b)
             self.straightenFromId, self.straightenToId = a, b
             self.straightenPreview = nil
         end) then
@@ -4842,7 +4915,7 @@ function ADFlyoverEditor:divideClick()
         return
     end
 
-    if self.divideFromId == nil and self:claimWholeRunClick(function(a, b)
+    if self:claimWholeRunClick(function(a, b)
             self.divideFromId, self.divideToId = a, b
             self.dividePreview = nil
         end) then
