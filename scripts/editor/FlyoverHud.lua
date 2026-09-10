@@ -147,7 +147,7 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:flipOffsetSide() end)
     end
 
-    if editor.tool == editor.TOOL.PARALLEL then
+    if editor:toolTakesSpanScope() then
         add("toggle", "covers", editor.OFFSET_SCOPE_NAMES[editor.offsetScope], false,
             function() editor:cycleOffsetScope() end)
     end

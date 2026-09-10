@@ -1191,7 +1191,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.offsetFromId, self.offsetToId, self.offsetPreview = nil, nil, nil
-    self.offsetSpanIds = nil
+    self.spanIds = nil
     self.sidingAnchorId, self.sidingPreview = nil, nil
     self.smoothToId, self.smoothPreview, self.smoothPinned = nil, nil, nil
     self.dragId = nil
@@ -2050,6 +2050,33 @@ end
 -- Delete.
 -- ---------------------------------------------------------------------------------------------
 
+--- Which tools offer the picked-span / whole-run choice: everything that works on a span between
+--- two points. Delete and convert have their own point-vs-run scope, which means something else.
+function ADFlyoverEditor:toolTakesSpanScope()
+    return self.tool == self.TOOL.PARALLEL
+        or self.tool == self.TOOL.SMOOTH
+        or self.tool == self.TOOL.DIVIDE
+        or self.tool == self.TOOL.STRAIGHTEN
+end
+
+--- One click instead of two, when the scope says whole run. Returns true when it handled the click.
+function ADFlyoverEditor:claimWholeRunClick(setEnds)
+    if self.offsetScope ~= self.OFFSET_SCOPE.RUN or self.hoverId == nil then
+        return false
+    end
+    local fromId, toId, ids = self:resolveWholeRun(self.hoverId)
+    if fromId == nil then
+        Logging.warning("[FlyoverEditor]: no clear run through id=%s - it is a junction, or the run "
+            .. "closes on itself. Switch to the picked span and click both ends.", tostring(self.hoverId))
+        return true
+    end
+    self.spanIds = ids
+    setEnds(fromId, toId)
+    Logging.info("[FlyoverEditor]: %s covers the whole run: %d waypoint(s), id=%s to id=%s.",
+        self.TOOL_NAMES[self.tool] or "tool", #ids, tostring(fromId), tostring(toId))
+    return true
+end
+
 ADFlyoverEditor.OFFSET_SCOPE = { SPAN = 1, RUN = 2 }
 ADFlyoverEditor.OFFSET_SCOPE_NAMES = { "picked span", "whole run" }
 
@@ -2062,7 +2089,7 @@ end
 function ADFlyoverEditor:cycleOffsetScope()
     self.offsetScope = (self.offsetScope % #self.OFFSET_SCOPE_NAMES) + 1
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
-    self.offsetSpanIds = nil
+    self.spanIds = nil
     Logging.info("[FlyoverEditor]: offset covers the %s.", self.OFFSET_SCOPE_NAMES[self.offsetScope])
 end
 
@@ -2494,7 +2521,15 @@ function ADFlyoverEditor:smoothClick()
         return
     end
 
+    if self.smoothFromId == nil and self:claimWholeRunClick(function(a, b)
+            self.smoothFromId, self.smoothToId = a, b
+            self.smoothPreview, self.smoothPinned = nil, nil
+        end) then
+        return
+    end
+
     if self.smoothFromId == nil then
+        self.spanIds = nil
         self.smoothFromId = self.hoverId
         Logging.info("[FlyoverEditor]: smoothing from id=%s; click the far end of the span.", tostring(self.smoothFromId))
         return
@@ -2521,6 +2556,7 @@ function ADFlyoverEditor:smoothClick()
 end
 
 function ADFlyoverEditor:cancelSmooth()
+    self.spanIds = nil
     if self.smoothFromId ~= nil or self.smoothToId ~= nil then
         Logging.info("[FlyoverEditor]: smooth cancelled.")
     end
@@ -2547,7 +2583,7 @@ function ADFlyoverEditor:updateSmoothPreview()
     -- respects one-way, can route the long way round, and its result need not even begin at the
     -- waypoint that was clicked. That is what produced the nonsense refusal "id=8506 connects to
     -- id=8505 outside the span" when 8505 was the span's own start point.
-    local ids = self:runPathBetween(self.smoothFromId, self.smoothToId)
+    local ids = self:spanBetween(self.smoothFromId, self.smoothToId)
     if ids == nil or #ids < 3 then
         self.smoothPreview = nil
         self.smoothBlockedBy = nil
@@ -4011,9 +4047,9 @@ function ADFlyoverEditor:offsetClick()
             if self.offsetToId ~= ends[2] then
                 ids[#ids + 1] = self.offsetToId
             end
-            self.offsetSpanIds = ids
+            self.spanIds = ids
         else
-            self.offsetSpanIds = nil
+            self.spanIds = nil
         end
 
         self.offsetPreview, self.offsetCache = nil, nil
@@ -4029,7 +4065,7 @@ function ADFlyoverEditor:offsetClick()
 
     if self.offsetFromId == nil then
         self.offsetFromId = self.hoverId
-        self.offsetSpanIds = nil
+        self.spanIds = nil
         Logging.info("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
             self.TOOL_NAMES[self.tool] or "offset", tostring(self.offsetFromId))
         return
@@ -4164,6 +4200,89 @@ function ADFlyoverEditor:straightRouteBetween(fromId, toId)
     return nil
 end
 
+--- The route between two ids, honouring a run that has already been resolved by walking.
+---
+--- Every span tool goes through here rather than calling runPathBetween directly. Whole-run scope
+--- resolves the route ONCE, by walking the collected run, and that decision has to survive: asking
+--- the path finder again between the same two ends sends the answer down whichever branch is
+--- shortest, which on a line carrying a siding is never the siding.
+function ADFlyoverEditor:spanBetween(fromId, toId)
+    local stored = self.spanIds
+    if stored ~= nil and stored[1] == fromId and stored[#stored] == toId then
+        return stored
+    end
+    return self:runPathBetween(fromId, toId)
+end
+
+--- Resolve the whole run through `seedId` in one click: its two ends, and the route between them.
+---
+--- Shared by every tool that works on a span, so "whole run" means the same thing everywhere and
+--- picks the branch that was clicked in each of them. Returns nil when the run does not have two
+--- clear ends - a junction, or a closed loop - and the caller falls back to asking for two clicks.
+function ADFlyoverEditor:resolveWholeRun(seedId)
+    local run, count = self:collectRunBetweenJunctions(seedId)
+    if run == nil or count == nil or count < 2 then
+        return nil
+    end
+
+    local ends = {}
+    for id in pairs(run) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            local seen, inside = {}, 0
+            for _, listName in ipairs({ "out", "incoming" }) do
+                for _, other in pairs(wp[listName] or {}) do
+                    if run[other] and not seen[other] then
+                        seen[other] = true
+                        inside = inside + 1
+                    end
+                end
+            end
+            if inside <= 1 then
+                ends[#ends + 1] = id
+            end
+        end
+    end
+    if #ends ~= 2 then
+        return nil
+    end
+
+    -- Reach one further at each end, onto the junction itself: the run is what lies BETWEEN
+    -- junctions, so its own ends stop a segment short of them.
+    local function reachToJunction(endId)
+        local wp = ADGraphManager:getWayPointById(endId)
+        if wp == nil then
+            return endId
+        end
+        local seen, outside, found = {}, 0, nil
+        for _, listName in ipairs({ "out", "incoming" }) do
+            for _, other in pairs(wp[listName] or {}) do
+                if not run[other] and not seen[other] then
+                    seen[other] = true
+                    outside = outside + 1
+                    found = other
+                end
+            end
+        end
+        return outside == 1 and found or endId
+    end
+
+    local fromId, toId = reachToJunction(ends[1]), reachToJunction(ends[2])
+    local ordered = walkRunFrom(run, count, ends[1])
+    if ordered == nil then
+        return nil
+    end
+
+    local ids = { fromId }
+    for _, id in ipairs(ordered) do
+        ids[#ids + 1] = id
+    end
+    if toId ~= ends[2] then
+        ids[#ids + 1] = toId
+    end
+    return fromId, toId, ids
+end
+
 --- Points of the selected span, and the span itself.
 function ADFlyoverEditor:offsetSpanPoints()
     if self.offsetFromId == nil or self.offsetToId == nil then
@@ -4172,7 +4291,7 @@ function ADFlyoverEditor:offsetSpanPoints()
     -- Whole-run scope has already decided the route by walking the collected run, and that decision
     -- has to survive: re-deriving it here would put the path finder back in charge and send a
     -- siding's offset down the main line.
-    local span = self.offsetSpanIds or self:runPathBetween(self.offsetFromId, self.offsetToId)
+    local span = self.spanIds or self:runPathBetween(self.offsetFromId, self.offsetToId)
 
     -- Only when the shortest path doubles back. On a plain span the path finder is right and
     -- cheaper, so it keeps the job; the straight walk is the answer to intersections specifically.
@@ -4449,7 +4568,7 @@ function ADFlyoverEditor:commitOffset()
                 or (dual and ", two-way" or ", running opposite")))
 
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
-    self.offsetSpanIds = nil
+    self.spanIds = nil
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
 end
@@ -4459,7 +4578,7 @@ function ADFlyoverEditor:cancelOffset()
         Logging.info("[FlyoverEditor]: cancelled the span.")
     end
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
-    self.offsetSpanIds = nil
+    self.spanIds = nil
 end
 
 function ADFlyoverEditor:straightenClick()
@@ -4467,7 +4586,15 @@ function ADFlyoverEditor:straightenClick()
         return
     end
 
+    if self.straightenFromId == nil and self:claimWholeRunClick(function(a, b)
+            self.straightenFromId, self.straightenToId = a, b
+            self.straightenPreview = nil
+        end) then
+        return
+    end
+
     if self.straightenFromId == nil then
+        self.spanIds = nil
         self.straightenFromId = self.hoverId
         Logging.info("[FlyoverEditor]: straightening from id=%s; click the far end of the span.",
             tostring(self.straightenFromId))
@@ -4496,7 +4623,7 @@ function ADFlyoverEditor:straightenSpanPoints()
     if self.straightenFromId == nil or self.straightenToId == nil then
         return nil, nil
     end
-    local span = self:runPathBetween(self.straightenFromId, self.straightenToId)
+    local span = self:spanBetween(self.straightenFromId, self.straightenToId)
     if span == nil or #span < 3 then
         return nil, span
     end
@@ -4599,6 +4726,7 @@ function ADFlyoverEditor:commitStraighten()
 end
 
 function ADFlyoverEditor:cancelStraighten()
+    self.spanIds = nil
     if self.straightenFromId ~= nil or self.straightenToId ~= nil then
         Logging.info("[FlyoverEditor]: cancelled the straighten span.")
     end
@@ -4610,7 +4738,15 @@ function ADFlyoverEditor:divideClick()
         return
     end
 
+    if self.divideFromId == nil and self:claimWholeRunClick(function(a, b)
+            self.divideFromId, self.divideToId = a, b
+            self.dividePreview = nil
+        end) then
+        return
+    end
+
     if self.divideFromId == nil then
+        self.spanIds = nil
         self.divideFromId = self.hoverId
         Logging.info("[FlyoverEditor]: dividing from id=%s; click the far end of the span.", tostring(self.divideFromId))
         return
@@ -4739,7 +4875,7 @@ function ADFlyoverEditor:updateDividePreview()
         return
     end
 
-    local span = self:runPathBetween(self.divideFromId, self.divideToId)
+    local span = self:spanBetween(self.divideFromId, self.divideToId)
     if span == nil or #span < 2 then
         self.dividePreview = nil
         return
@@ -4797,6 +4933,7 @@ function ADFlyoverEditor:updateDividePreview()
 end
 
 function ADFlyoverEditor:cancelDivide()
+    self.spanIds = nil
     if self.divideFromId ~= nil or self.divideToId ~= nil then
         Logging.info("[FlyoverEditor]: divide cancelled.")
     end
@@ -4805,7 +4942,7 @@ function ADFlyoverEditor:cancelDivide()
 end
 
 function ADFlyoverEditor:commitDivide()
-    local span = self:runPathBetween(self.divideFromId, self.divideToId)
+    local span = self:spanBetween(self.divideFromId, self.divideToId)
     local newPoints = self.dividePreview
     if span == nil or newPoints == nil or #span < 2 then
         self:cancelDivide()
