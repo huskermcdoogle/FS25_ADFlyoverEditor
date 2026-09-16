@@ -101,7 +101,7 @@ No `<actions>` block. `docs/flyover-input-context.md:128-131` is wrong: `grep -i
 ```xml
 <?xml version="1.0" encoding="utf-8" standalone="no" ?>
 <modDesc descVersion="107">
-	<author>Gibbs</author>
+	<author>huskermcdoogle</author>
 	<title>
 		<en>Flyover Editor for AutoDrive</en>
 	</title>

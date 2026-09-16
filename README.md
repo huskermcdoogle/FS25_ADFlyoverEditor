@@ -103,7 +103,7 @@ table at source time, and AutoDrive is unresolvable then.
 
 ## Credits & acknowledgements
 
-By Gibbs. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive)
+By huskermcdoogle. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive)
 (MIT); not affiliated with or endorsed by the AutoDrive team.
 
 The field-loop feature was *inspired* by [Courseplay](https://github.com/Courseplay/Courseplay_FS25)'s
@@ -114,4 +114,4 @@ Courseplay's GPL-licensed code is used or derived from.
 
 ## License
 
-[MIT](LICENSE) © 2026 Nick Gibbs.
+[MIT](LICENSE) © 2026 huskermcdoogle.
