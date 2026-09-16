@@ -1297,6 +1297,32 @@ function ADFlyoverEditor:menuDeleteRun()
     self:closeMenu()
 end
 
+--- Arm a tool from a point menu: switch to it with the clicked point pre-loaded as the start, then
+--- let the tool's own interaction finish the job (a drag, a click, the wheel). setTool clears the
+--- menu and any stale tool state, so the pre-load is set AFTER it.
+function ADFlyoverEditor:menuArmMove()
+    local id = self:menuTarget()
+    if id == nil then return end
+    self:setTool(self.TOOL.MOVE)
+    Logging.info("[FlyoverEditor]: move armed; drag waypoint id=%s.", tostring(id))
+end
+
+function ADFlyoverEditor:menuArmDraw()
+    local id = self:menuTarget()
+    if id == nil then return end
+    self:setTool(self.TOOL.DRAW)
+    self.lastWaypointId = id
+    Logging.info("[FlyoverEditor]: draw armed from id=%s; click the next waypoint to connect.", tostring(id))
+end
+
+function ADFlyoverEditor:menuArmSpline()
+    local id = self:menuTarget()
+    if id == nil then return end
+    self:setTool(self.TOOL.SPLINE)
+    self.splineFromId = id
+    Logging.info("[FlyoverEditor]: spline armed from id=%s; click the waypoint to curve to.", tostring(id))
+end
+
 function ADFlyoverEditor:setTool(tool)
     if self.tool == tool then
         return
