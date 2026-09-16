@@ -1,7 +1,7 @@
 # Probe results — raw log evidence
 
 Captured from the FS25 `log.txt` of 2026-09-08, running stock AutoDrive 3.0.0.8 with
-FS25_AutoDrive_Gibbs disabled, savegame2 (Riverbend Springs, 17,174 waypoints).
+the editor-bundling AutoDrive fork disabled, savegame2 (Riverbend Springs, 17,174 waypoints).
 FS25 truncates its log on every launch, so this is the durable copy of the evidence cited by
 `companion-mod-investigation.md` and `companion-build-plan.md`.
 

@@ -28,7 +28,7 @@ A.MOD_NAME = "ADFlyoverEditor"
 -- The names the editor actually needs from AutoDrive. This is an allow-list rather than an
 -- __index fallthrough to AutoDrive's environment, deliberately:
 --
---   * If the player also has the Gibbs fork installed, that environment ALREADY contains
+--   * If the player also has the editor-bundling fork installed, that environment ALREADY contains
 --     ADFlyoverEditor, ADEditorHistory, ADFlyoverHud, ADOffsetGeometry, ADPolygonUtils and
 --     ADBuildInfo. A fallthrough would silently resolve those to the FORK's copies, and which won
 --     would depend on whether the republish ran before or after our own source() calls. An

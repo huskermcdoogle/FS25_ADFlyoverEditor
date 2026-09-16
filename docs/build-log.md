@@ -7,7 +7,7 @@ commands that proved it. Current status lives in the [README](../README.md) and 
 
 ## Tested — all eleven tools pass
 
-2026-09-08, build 0.7.3.0, against stock AutoDrive 3.0.0.8 with `FS25_AutoDrive_Gibbs` disabled.
+2026-09-08, build 0.7.3.0, against stock AutoDrive 3.0.0.8 with the editor-bundling AutoDrive fork disabled.
 
 | Tool | |
 |---|---|
@@ -66,7 +66,7 @@ What it does:
 
 ### Verifying stage 1
 
-Test against **stock AutoDrive with `FS25_AutoDrive_Gibbs` disabled**. The fork does all of this
+Test against **stock AutoDrive with the editor-bundling fork disabled**. The fork does all of this
 natively, so a pass with it enabled proves nothing.
 
 Load a savegame with AutoDrive active, then:

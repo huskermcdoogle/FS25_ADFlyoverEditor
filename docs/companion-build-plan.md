@@ -154,7 +154,7 @@ ADFlyoverEnvProbe = { env = getfenv(1) }
 
 **Use an explicit allow-list.** Three reasons, in order of weight:
 
-1. **It is the only thing that keeps the fork case honest.** If the player has `FS25_AutoDrive_Gibbs` installed, `getfenv(AD.getSetting)` returns an environment that already contains `ADFlyoverEditor`, `ADEditorHistory`, `ADFlyoverHud`, `ADOffsetGeometry`, `ADPolygonUtils` and `ADBuildInfo`. A fallthrough `__index` silently resolves those to the *fork's* copies for any name our own `source()` calls happen not to have defined yet — and which wins depends purely on whether the republish ran before or after the sources. An allow-list of four names cannot import them, and `ADBuildInfo` in particular then correctly reports *our* build rather than the host's, which is the whole point of `describeBuild` (`FlyoverEditor.lua:297-305`).
+1. **It is the only thing that keeps the fork case honest.** If the player has the editor-bundling AutoDrive fork installed, `getfenv(AD.getSetting)` returns an environment that already contains `ADFlyoverEditor`, `ADEditorHistory`, `ADFlyoverHud`, `ADOffsetGeometry`, `ADPolygonUtils` and `ADBuildInfo`. A fallthrough `__index` silently resolves those to the *fork's* copies for any name our own `source()` calls happen not to have defined yet — and which wins depends purely on whether the republish ran before or after the sources. An allow-list of four names cannot import them, and `ADBuildInfo` in particular then correctly reports *our* build rather than the host's, which is the whole point of `describeBuild` (`FlyoverEditor.lua:297-305`).
 2. **The typo argument.** With fallthrough, `ADGraphManger:getWayPointById(...)` resolves to nil-index-error at the *call*, one frame later, in a `pcall`-wrapped draw path — indistinguishable from a real geometry bug. With a plain table, an unknown global is nil, which is exactly the semantics the seven files were written and tested against.
 3. **The list is four names, not eight.** The spike's `PORT_NEEDS` (line 432-435) was the *probe's* checklist, not the editor's dependency set. Grepping the seven files: `ADGraphManager` 122 uses, `ADDrawingManager` 11, `ADEnterTargetNameGui` 3, `AutoDrive` throughout. `ADInputManager`, `ADMessagesManager`, `ADRoutesManager`, `ADStateModule` — **zero**. `ADCollSensor` appears once, in a comment at `FieldLoopGenerator.lua:92`; `AutoDriveHud` once, in a comment at `FlyoverEditor.lua:649`.
 
@@ -201,7 +201,7 @@ local A = ADFlyoverArming
 -- spike's eight-name PORT_NEEDS list was the probe's checklist, not the editor's.
 --
 -- Deliberately NOT here: ADBuildInfo, ADFlyoverEditor, ADEditorHistory, ADFlyoverHud,
--- ADOffsetGeometry, ADPolygonUtils. If the host is the Gibbs fork its environment contains all
+-- ADOffsetGeometry, ADPolygonUtils. If the host is the editor-bundling fork its environment contains all
 -- six, and importing them would shadow - or be shadowed by - our own copies depending on nothing
 -- more than source order. We refuse to arm against the fork anyway (see checkNotTheFork), but the
 -- list stays minimal so that refusal is a policy and not the only thing standing between us and a
@@ -267,7 +267,7 @@ end
 local function checkNotTheFork(env)
     if env.ADFlyoverEditor ~= nil then
         return false, "the installed AutoDrive already has the flyover editor built in "
-            .. "(this looks like FS25_AutoDrive_Gibbs). Disable one of the two."
+            .. "(this looks like a modified AutoDrive with the editor built in). Disable one of the two."
     end
     return true
 end
@@ -1035,7 +1035,7 @@ Plus the `g_server` refusal in `enable()` from §5.6 (a tenth edit), and the two
 
 ## 7. Staged build order
 
-Every stage ends with a mod that loads and a single thing to look at in the log or on screen. Test against **stock AutoDrive 3.0.0.8 with `FS25_AutoDrive_Gibbs` disabled** throughout — the fork does all of this natively and a pass with it enabled proves nothing.
+Every stage ends with a mod that loads and a single thing to look at in the log or on screen. Test against **stock AutoDrive 3.0.0.8 with the editor-bundling fork disabled** throughout — the fork does all of this natively and a pass with it enabled proves nothing.
 
 ### Stage 1 — the prelude alone. *Smallest thing that proves the mechanism.*
 Ship `modDesc.xml`, `icon.dds`, `Prelude.lua`, `Arming.lua`, `EnvProbe.lua`, `Settings.lua`. `EDITOR_FILES` is empty; `Wrappers.install` and `Proxy` are stubs. Register only `FlyoverStatus`.
@@ -1065,7 +1065,7 @@ Add `FieldLoopGenerator.lua`, `FlyoverHud.lua`, `EditorHistory.lua`, `FlyoverEdi
 ### Stage 6 — lifecycle, persistence, refusals.
 No new code except `tools/make_release.py`.
 
-**Verify, in one sitting:** (a) change merge distance, quit to menu, reload — the value persists, and `AutoDrive_config.xml` has *not* grown a `flyoverMergeDistance` key; (b) open the editor, quit to the main menu *with it still open*, load a different savegame — the AutoDrive HUD is present and normal, and `FlyoverEditor` opens cleanly rather than crashing on a missing input context (this is the `contextCreated` bug at `FlyoverEditor.lua:49/508`); (c) join a listen server as a client and run `FlyoverEditor` — it refuses with the server message; (d) enable the Gibbs fork alongside — the log says "refusing to load: the installed AutoDrive already has the flyover editor built in" and nothing else happens; (e) `describeBuild` in the log reports *this* mod's commit.
+**Verify, in one sitting:** (a) change merge distance, quit to menu, reload — the value persists, and `AutoDrive_config.xml` has *not* grown a `flyoverMergeDistance` key; (b) open the editor, quit to the main menu *with it still open*, load a different savegame — the AutoDrive HUD is present and normal, and `FlyoverEditor` opens cleanly rather than crashing on a missing input context (this is the `contextCreated` bug at `FlyoverEditor.lua:49/508`); (c) join a listen server as a client and run `FlyoverEditor` — it refuses with the server message; (d) enable the editor-bundling fork alongside — the log says "refusing to load: the installed AutoDrive already has the flyover editor built in" and nothing else happens; (e) `describeBuild` in the log reports *this* mod's commit.
 
 ---
 
