@@ -406,6 +406,7 @@ function ADFlyoverHud:draw(editor)
             0.0012, self.frameH - self.padding * 2, 0.30, 0.33, 0.37, 0.75)
     end
 
+    local mx, my = editor.mouseX, editor.mouseY
     for _, row in ipairs(rows) do
         local x, y, width, h = row.x, row.y, row.w, row.h
         local textY = y + (h - fontSize) * 0.5
@@ -428,9 +429,13 @@ function ADFlyoverHud:draw(editor)
             -- bright fill; the rest get a dim plate that still says "this is clickable". The number
             -- key sits as a dim cap on the right so the labels line up cleanly - inline "5  spline"
             -- ran scrambled, out-of-sequence digits down the middle of the list.
+            local hovered = mx ~= nil and mx >= x and mx <= x + width and my >= y and my <= y + h
             if row.active then
                 drawQuad(self.rowOverlay, x, y, width, h, 0.28, 0.52, 0.78, 0.95)
                 label(textX, textY, fontSize, row.text, 0.96, 0.98, 1, 1)
+            elseif hovered then
+                drawQuad(self.rowOverlay, x, y, width, h, 0.22, 0.24, 0.28, 0.95)
+                label(textX, textY, fontSize, row.text, 0.92, 0.94, 0.97, 1)
             else
                 drawQuad(self.rowOverlay, x, y, width, h, 0.16, 0.17, 0.195, 0.92)
                 label(textX, textY, fontSize, row.text, 0.78, 0.80, 0.83, 1)
@@ -471,14 +476,16 @@ function ADFlyoverHud:draw(editor)
         end
     end
 
-    self:drawPointMenu(editor)
+    self:drawContextMenu(editor)
 end
 
---- The Select-mode context menu: a small panel of actions anchored at the click, for the waypoint
---- the user clicked. Its rows are appended to self.rows so the panel's own click routing (isMouseOver
---- / onClick) consumes and dispatches them exactly like the main panel's buttons.
-function ADFlyoverHud:drawPointMenu(editor)
-    if editor.pointMenu == nil or editor.tool ~= editor.TOOL.NONE then
+--- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
+--- anchored just right of the click so the clicked point stays clear for a second/double click. Its
+--- rows are appended to self.rows so the panel's own click routing (isMouseOver / onClick) consumes
+--- and dispatches them exactly like the main panel's buttons, and they light up on hover.
+function ADFlyoverHud:drawContextMenu(editor)
+    local m = editor.ctxMenu
+    if m == nil or editor.tool ~= editor.TOOL.NONE then
         return
     end
     self:ensureOverlays()
@@ -486,33 +493,47 @@ function ADFlyoverHud:drawPointMenu(editor)
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
     local rowH = self.rowHeight * uiScale
     local pad = self.padding
-    local pw = 0.130 * uiScale
+    local pw = 0.135 * uiScale
     local fontSize = 0.0110 * uiScale
-    local id = editor.pointMenu.id
+    local OP = editor.CONVERT_OP
 
     local items = {}
     local function it(kind, text, action, danger)
         table.insert(items, { kind = kind, text = text, action = action, danger = danger })
     end
-    local OP = editor.CONVERT_OP
-    it("mhead", "point " .. tostring(id))
-    it("mitem", "name...", function() editor:menuName() end)
-    it("mitem", "make two-way", function() editor:menuConvert(OP.TWOWAY) end)
-    it("mitem", "make one-way", function() editor:menuConvert(OP.ONEWAY) end)
-    it("mitem", "reverse", function() editor:menuConvert(OP.REVERSE) end)
-    it("mitem", "primary", function() editor:menuConvert(OP.PRIMARY) end)
-    it("mitem", "secondary", function() editor:menuConvert(OP.SECONDARY) end)
-    it("mitem", "delete point", function() editor:menuDelete() end, true)
+    if m.kind == "point" then
+        it("mhead", "point " .. tostring(m.id))
+        it("mitem", "name...", function() editor:menuName() end)
+        it("mitem", "make two-way", function() editor:menuConvert(OP.TWOWAY) end)
+        it("mitem", "make one-way", function() editor:menuConvert(OP.ONEWAY) end)
+        it("mitem", "reverse", function() editor:menuConvert(OP.REVERSE) end)
+        it("mitem", "primary", function() editor:menuConvert(OP.PRIMARY) end)
+        it("mitem", "secondary", function() editor:menuConvert(OP.SECONDARY) end)
+        it("mitem", "delete point", function() editor:menuDelete() end, true)
+    elseif m.kind == "span" then
+        it("mhead", string.format("span  %d pts", m.ids ~= nil and #m.ids or 0))
+        it("mitem", "straighten", function() editor:menuStraighten() end)
+        it("mitem", "smooth", function() editor:menuSmooth() end)
+        it("mitem", "delete span", function() editor:menuDeleteSpan() end, true)
+    else
+        it("mhead", string.format("run  %s pts", tostring(m.count or "?")))
+        it("mitem", "make two-way", function() editor:menuConvertRun(OP.TWOWAY) end)
+        it("mitem", "make one-way", function() editor:menuConvertRun(OP.ONEWAY) end)
+        it("mitem", "reverse", function() editor:menuConvertRun(OP.REVERSE) end)
+        it("mitem", "delete run", function() editor:menuDeleteRun() end, true)
+    end
 
     local ph = #items * rowH + pad * 2
-    -- Anchor at the click, clamped so the whole menu stays on screen and grabbable.
-    local x = math.max(0, math.min(1 - pw, editor.pointMenu.sx or 0.5))
-    local top = math.max(ph, math.min(1, editor.pointMenu.sy or 0.5))
+    -- Offset right of the click so the clicked point stays uncovered - a second click on it makes a
+    -- span, a rapid second click makes a run, and both need the point still reachable.
+    local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + 0.006))
+    local top = math.max(ph, math.min(1, m.sy or 0.5))
+    local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
     drawQuad(self.borderOverlay, x - edge, top - ph - edge, pw + edge * 2, ph + edge * 2,
-        0.30, 0.33, 0.38, 0.98)
-    drawQuad(self.background, x, top - ph, pw, ph, 0.12, 0.13, 0.15, 0.985)
+        0.34, 0.52, 0.72, 0.98)
+    drawQuad(self.background, x, top - ph, pw, ph, 0.12, 0.13, 0.15, 0.99)
 
     local y = top - pad
     for _, item in ipairs(items) do
@@ -520,16 +541,19 @@ function ADFlyoverHud:drawPointMenu(editor)
         item.x, item.y, item.w, item.h = x, y, pw, rowH
         local textY = y + (rowH - fontSize) * 0.5
         local textX = x + pad * 2
+        local hovered = mx ~= nil and mx >= x and mx <= x + pw and my >= y and my <= y + rowH
         if item.kind == "mhead" then
-            drawQuad(self.headerOverlay, x, y, pw, rowH, 0.18, 0.19, 0.22, 1)
-            label(textX, textY, fontSize * 0.9, item.text, 0.60, 0.68, 0.80, 1)
+            drawQuad(self.headerOverlay, x, y, pw, rowH, 0.20, 0.30, 0.42, 1)
+            label(textX, textY, fontSize * 0.9, item.text, 0.72, 0.82, 0.95, 1)
+        elseif item.danger then
+            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.42 or 0.23,
+                hovered and 0.17 or 0.155, hovered and 0.16 or 0.15, hovered and 0.95 or 0.9)
+            label(textX, textY, fontSize, item.text, 0.94, 0.62, 0.56, 1)
         else
-            drawQuad(self.rowOverlay, x, y, pw, rowH, 0.17, 0.18, 0.205, 0.92)
-            if item.danger then
-                label(textX, textY, fontSize, item.text, 0.86, 0.46, 0.41, 1)
-            else
-                label(textX, textY, fontSize, item.text, 0.80, 0.82, 0.85, 1)
-            end
+            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.24 or 0.165,
+                hovered and 0.30 or 0.175, hovered and 0.40 or 0.205, 0.95)
+            label(textX, textY, fontSize, item.text, hovered and 0.96 or 0.82,
+                hovered and 0.98 or 0.84, hovered and 1 or 0.88, 1)
         end
         -- So the shared onClick/isMouseOver see it as one more clickable row.
         table.insert(self.rows, item)

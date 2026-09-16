@@ -1126,48 +1126,87 @@ function ADFlyoverEditor:findWayPointNearCursor()
 end
 
 -- ---------------------------------------------------------------------------------------------
--- Select mode (TOOL.NONE): click a waypoint to act on it directly, without picking a tool first.
+-- Select mode (TOOL.NONE): click waypoints to act on them directly, without picking a tool first.
 --
--- A left click on a waypoint opens a small context menu at the cursor. Its actions reuse the same
--- graph paths the tools do - the trick is to point hoverId at the clicked waypoint for the duration
--- of the call, so nameAtCursor / convertAtCursor operate on it exactly as if it were under the
--- cursor. Right-click, an empty click, or leaving Select mode closes the menu.
+--   single click a point   -> a menu for that point
+--   click a second point    -> a menu for the span between the two
+--   double-click a point    -> a menu for the whole run through it
+--
+-- Menu actions reuse the tools' own graph paths: point actions by pointing hoverId at the clicked
+-- waypoint; span actions by driving the span tool's from/to -> preview -> commit while that tool is
+-- otherwise idle; run actions by the run-scoped versions. Right-click, an empty click, or leaving
+-- Select mode closes the menu.
 -- ---------------------------------------------------------------------------------------------
 
-function ADFlyoverEditor:selectClick()
-    if self.hoverId ~= nil then
-        self.pointMenu = { id = self.hoverId, sx = g_lastMousePosX or 0.5, sy = g_lastMousePosY or 0.5 }
-        Logging.info("[FlyoverEditor]: point menu opened for waypoint id=%s.", tostring(self.hoverId))
-    else
-        self:closePointMenu()
-    end
+ADFlyoverEditor.DOUBLE_CLICK_MS = 350
+
+function ADFlyoverEditor:closeMenu()
+    self.ctxMenu = nil
 end
 
-function ADFlyoverEditor:closePointMenu()
-    self.pointMenu = nil
+function ADFlyoverEditor:openPointMenu(id, sx, sy)
+    self.ctxMenu = { kind = "point", id = id, sx = sx, sy = sy }
+end
+
+function ADFlyoverEditor:openSpanMenu(fromId, toId, sx, sy)
+    local ids = self:spanBetween(fromId, toId)
+    if ids == nil or #ids < 2 then
+        Logging.warning("[FlyoverEditor]: id=%s and id=%s are not two ends of one connected span.",
+            tostring(fromId), tostring(toId))
+        self.ctxMenu = { kind = "point", id = toId, sx = sx, sy = sy }
+        return
+    end
+    self.ctxMenu = { kind = "span", fromId = fromId, toId = toId, ids = ids, sx = sx, sy = sy }
+    Logging.info("[FlyoverEditor]: span menu for id=%s..id=%s (%d waypoints).",
+        tostring(fromId), tostring(toId), #ids)
+end
+
+function ADFlyoverEditor:openRunMenu(seedId, sx, sy)
+    local run, count = self:collectRunBetweenJunctions(seedId)
+    self.ctxMenu = { kind = "run", seedId = seedId, count = count or 0, runSet = run, sx = sx, sy = sy }
+    Logging.info("[FlyoverEditor]: run menu through id=%s (%d waypoints).", tostring(seedId), count or 0)
+end
+
+function ADFlyoverEditor:selectClick()
+    local id = self.hoverId
+    local sx, sy = g_lastMousePosX or 0.5, g_lastMousePosY or 0.5
+    local now = self:nowMs()
+    local isDouble = id ~= nil and self.lastSelectId == id
+        and (now - (self.lastSelectAt or -1e9)) < self.DOUBLE_CLICK_MS
+    self.lastSelectId, self.lastSelectAt = id, now
+
+    if id == nil then
+        self:closeMenu()
+        return
+    end
+    if isDouble then
+        self:openRunMenu(id, sx, sy)
+        return
+    end
+    -- A point menu already open on a DIFFERENT point means this second click closes a span.
+    if self.ctxMenu ~= nil and self.ctxMenu.kind == "point" and self.ctxMenu.id ~= id then
+        self:openSpanMenu(self.ctxMenu.id, id, sx, sy)
+        return
+    end
+    self:openPointMenu(id, sx, sy)
 end
 
 function ADFlyoverEditor:menuTarget()
-    return self.pointMenu ~= nil and self.pointMenu.id or nil
+    return self.ctxMenu ~= nil and self.ctxMenu.id or nil
 end
 
 function ADFlyoverEditor:menuName()
     local id = self:menuTarget()
-    if id == nil then
-        return
-    end
+    if id == nil then return end
     self.hoverId = id
     self:nameAtCursor()
-    self:closePointMenu()
+    self:closeMenu()
 end
 
---- Run convertAtCursor on a single clicked point without disturbing the Convert tool's own op and
---- scope - those are the user's sticky settings for that tool and the menu must not overwrite them.
+--- Run convertAtCursor on the clicked point without disturbing the Convert tool's own sticky op/scope.
 function ADFlyoverEditor:menuConvert(op)
     local id = self:menuTarget()
-    if id == nil then
-        return
-    end
+    if id == nil then return end
     local savedOp, savedScope = self.convertOp, self.convertScope
     self.hoverId = id
     self.convertScope = self.DELETE_SCOPE.POINT
@@ -1176,13 +1215,10 @@ function ADFlyoverEditor:menuConvert(op)
     self.convertOp, self.convertScope = savedOp, savedScope
 end
 
---- Delete the clicked point directly rather than via deleteAtCursor, so a stray box selection
---- cannot hijack the click into deleting something else.
+--- Delete the clicked point directly, so a stray box selection cannot hijack the click.
 function ADFlyoverEditor:menuDelete()
     local id = self:menuTarget()
-    if id == nil then
-        return
-    end
+    if id == nil then return end
     ADEditorHistory:snapshot("delete waypoint")
     local doomed = ADGraphManager:getWayPointById(id)
     local px, pz = doomed ~= nil and doomed.x or 0, doomed ~= nil and doomed.z or 0
@@ -1191,7 +1227,74 @@ function ADFlyoverEditor:menuDelete()
         tostring(id), px, pz, ADGraphManager:getWayPointsCount())
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
-    self:closePointMenu()
+    self:closeMenu()
+end
+
+--- Span actions borrow the matching span tool's from/to -> preview -> commit flow, then clear the
+--- borrowed state. Safe because in Select mode that tool is idle and holds no span of its own.
+function ADFlyoverEditor:menuStraighten()
+    local m = self.ctxMenu
+    if m == nil or m.kind ~= "span" then return end
+    self.spanIds = m.ids
+    self.straightenFromId, self.straightenToId, self.straightenPreview = m.fromId, m.toId, nil
+    self:updateStraightenPreview()
+    if self.straightenPreview ~= nil then
+        self:commitStraighten()
+    end
+    self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
+    self.spanIds = nil
+    self:closeMenu()
+end
+
+function ADFlyoverEditor:menuSmooth()
+    local m = self.ctxMenu
+    if m == nil or m.kind ~= "span" then return end
+    self.spanIds = m.ids
+    self.smoothFromId, self.smoothToId = m.fromId, m.toId
+    self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
+    self:updateSmoothPreview()
+    if self.smoothPreview ~= nil then
+        self:commitSmooth()
+    end
+    self.smoothFromId, self.smoothToId = nil, nil
+    self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
+    self.spanIds = nil
+    self:closeMenu()
+end
+
+function ADFlyoverEditor:menuDeleteSpan()
+    local m = self.ctxMenu
+    if m == nil or m.ids == nil then return end
+    ADEditorHistory:snapshot("delete span")
+    local ids = {}
+    for _, id in ipairs(m.ids) do ids[#ids + 1] = id end
+    -- Highest id first: removal renumbers everything above it.
+    table.sort(ids, function(a, b) return a > b end)
+    for _, id in ipairs(ids) do ADGraphManager:removeWayPoint(id, false) end
+    Logging.info("[FlyoverEditor]: deleted a span of %d waypoint(s).", #ids)
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+    self:closeMenu()
+end
+
+--- Run direction, via the run-scoped convert; kept open so directions can be tried in a row.
+function ADFlyoverEditor:menuConvertRun(op)
+    local m = self.ctxMenu
+    if m == nil or m.seedId == nil then return end
+    local savedOp, savedScope = self.convertOp, self.convertScope
+    self.hoverId = m.seedId
+    self.convertScope = self.DELETE_SCOPE.RUN
+    self.convertOp = op
+    self:convertAtCursor()
+    self.convertOp, self.convertScope = savedOp, savedScope
+end
+
+function ADFlyoverEditor:menuDeleteRun()
+    local m = self.ctxMenu
+    if m == nil or m.seedId == nil then return end
+    self.hoverId = m.seedId
+    self:deleteRunAtCursor()
+    self:closeMenu()
 end
 
 function ADFlyoverEditor:setTool(tool)
@@ -1216,7 +1319,7 @@ function ADFlyoverEditor:setTool(tool)
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.dragId = nil
     self.boxActive = false
-    self.pointMenu = nil
+    self.ctxMenu = nil
     Logging.info("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
 end
 
@@ -1380,6 +1483,43 @@ function ADFlyoverEditor:drawNetwork()
     accent(self.splineFromId, 0, 0.6, 1, 4)
     accent(self.mergeFromId, 1, 0.4, 0.9, 4)
     accent(self.mergeToId, 1, 0.4, 0.9, 4)
+
+    -- Show what the Select-mode context menu is about to act on, so its "N points" has a visible
+    -- referent in the world. Amber, distinct from the green selection and the blue span-from marker.
+    local menu = self.ctxMenu
+    if menu ~= nil then
+        local hr, hg, hb = 1, 0.82, 0.15
+        if menu.kind == "point" then
+            accent(menu.id, hr, hg, hb, 4.5)
+        elseif menu.kind == "span" and menu.ids ~= nil then
+            local prev = nil
+            for _, id in ipairs(menu.ids) do
+                accent(id, hr, hg, hb, 3.2)
+                local wp = ADGraphManager:getWayPointById(id)
+                if wp ~= nil then
+                    if prev ~= nil then
+                        ADDrawingManager:addLineTask(prev.x, prev.y + 0.7, prev.z, wp.x, wp.y + 0.7, wp.z, hr, hg, hb, 1)
+                    end
+                    prev = wp
+                end
+            end
+        elseif menu.kind == "run" and menu.runSet ~= nil then
+            for id in pairs(menu.runSet) do
+                accent(id, hr, hg, hb, 3.2)
+                local wp = ADGraphManager:getWayPointById(id)
+                if wp ~= nil then
+                    for _, other in pairs(wp.out or {}) do
+                        if menu.runSet[other] then
+                            local ow = ADGraphManager:getWayPointById(other)
+                            if ow ~= nil then
+                                ADDrawingManager:addLineTask(wp.x, wp.y + 0.7, wp.z, ow.x, ow.y + 0.7, ow.z, hr, hg, hb, 1)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     if self.tool == self.TOOL.SMOOTH and self.smoothPreview ~= nil then
         -- Never fall back to zero: a missing height there drew the whole preview underground
@@ -1714,9 +1854,9 @@ end
 --- lose your place. A deliberate "I am done here" is a separate press, not part of the same flurry.
 function ADFlyoverEditor:onRightRelease()
     -- A right-click first dismisses the Select-mode context menu, before any tool back-out logic.
-    if self.pointMenu ~= nil then
-        self:closePointMenu()
-        Logging.info("[FlyoverEditor]: point menu closed (right-click).")
+    if self.ctxMenu ~= nil then
+        self:closeMenu()
+        Logging.info("[FlyoverEditor]: context menu closed (right-click).")
         return
     end
 
