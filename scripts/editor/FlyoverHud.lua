@@ -131,6 +131,10 @@ function ADFlyoverHud:buildRows(editor)
     add("status", string.format("selected %d   undo %d   placed %d",
         editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
 
+    -- The per-tool context (below) becomes the floating tool card, and only exists while a tool is
+    -- active and no menu/armed popup is up (those carry their own controls). In Select mode the
+    -- point/span/run menus stand in for it, so there is no card then.
+    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil then
     -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
     -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
     -- matter what is selected, which is what makes them clickable without looking - a button that
@@ -164,6 +168,10 @@ function ADFlyoverHud:buildRows(editor)
     if editor:toolTakesSpanScope() then
         add("toggle", "covers", editor.OFFSET_SCOPE_NAMES[editor.offsetScope], false,
             function() editor:cycleOffsetScope() end)
+    end
+
+    if editor.tool == editor.TOOL.MOVE then
+        add("toggle", "falloff (wheel)", string.format("%.1f m", editor.falloffRadius or 0))
     end
 
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
@@ -261,6 +269,7 @@ function ADFlyoverHud:buildRows(editor)
     for _, line in ipairs(editor:getNextStepLines()) do
         add("hint", line)
     end
+    end
 
     return rows
 end
@@ -272,14 +281,15 @@ function ADFlyoverHud:draw(editor)
     self.rows = rows
 
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
-    local baseRowH = self.rowHeight * uiScale
+    local rowH = self.rowHeight * uiScale
     local width = self.width * uiScale
     local pad = self.padding
+    local fontSize = 0.0110 * uiScale
+    local toolGap = 0.002
 
-    -- Where the fixed block ends. Everything up to and including the status line is the part that
-    -- must hold still - tools, undo/redo, status - and everything after it is the per-tool context
-    -- that comes and goes. That split already exists for exactly that reason, and it is also the
-    -- natural place to fold the panel into two columns.
+    -- The fixed block (header .. status) stays in the corner. Everything after it is the per-tool
+    -- context, which now moves to a floating card near where you are working, so a tool's controls
+    -- come to the cursor instead of living in the far corner.
     local split = #rows
     for i, row in ipairs(rows) do
         if row.kind == "status" then
@@ -288,56 +298,7 @@ function ADFlyoverHud:draw(editor)
         end
     end
 
-    -- Tools sit two to a row. Fourteen buttons one per line was half the panel's height on its own;
-    -- side by side they take seven, and the grid is as stable as the list was.
-    local function measure(first, last, rowH)
-        local h, leftTaken = 0, false
-        for i = first, last do
-            local kind = rows[i].kind
-            if kind == "tool" then
-                if leftTaken then
-                    leftTaken = false
-                else
-                    h = h + rowH
-                    leftTaken = true
-                end
-            else
-                leftTaken = false
-                h = h + (kind == "gap" and rowH * 0.35 or rowH)
-            end
-        end
-        return h
-    end
-
-    -- How far down the panel may reach: to just above the game's own map, if the map is showing and
-    -- sits under the panel. Measured from the map's live layout every frame, so it follows the map
-    -- through small, large and hidden rather than assuming one size.
-    local floorY = self:mapFloorFor(self.posX, width)
-    local available = self.topY - floorY
-
-    local fixedH = measure(1, split, baseRowH) + pad * 2
-    local contextH = split < #rows and (measure(split + 1, #rows, baseRowH) + pad * 2) or 0
-
-    -- One column if it fits. Otherwise the context moves beside the fixed block, which halves the
-    -- height without shrinking anything. Only if the taller of the two STILL does not fit does the
-    -- panel shrink, and never below three quarters: past that the text stops being readable, and a
-    -- panel nobody can read is worse than one that overlaps the corner of a map.
-    local columns, scale = 1, 1
-    if fixedH + contextH > available then
-        columns = 2
-        local tallest = math.max(fixedH, contextH)
-        if tallest > available then
-            scale = math.max(0.75, available / tallest)
-        end
-    end
-    self.layoutColumns, self.layoutScale = columns, scale
-
-    local rowH = baseRowH * scale
-    local fontSize = 0.0110 * uiScale * scale
-    local columnGap = 0.005
-    local toolGap = 0.002
-
-    -- Lay out rows[first..last] as one column from (x, top). Returns the column's height.
+    -- Lay rows[first..last] as one column from (x, top); tools pair two to a row. Returns the height.
     local function place(first, last, x, top)
         local y = top - pad
         local leftTaken = false
@@ -362,48 +323,40 @@ function ADFlyoverHud:draw(editor)
         return (top - y) + pad
     end
 
-    -- Anchored at the TOP and grown downward. Growing upward from a fixed bottom edge meant every
-    -- row was measured from a top that moved whenever the panel's height changed - so selecting a
-    -- tool with more controls than the last one shifted the header and the whole button list under
-    -- the cursor. The rows that must not move are all at the top, so the top is what gets pinned.
+    -- Corner block, anchored top-left and grown down. Its frame is what the header drag clamps.
     local top = self.topY
-    local frames = {}
-    if columns == 1 then
-        local h = place(1, #rows, self.posX, top)
-        frames[1] = { x = self.posX, y = top - h, w = width, h = h }
-    else
-        local hA = place(1, split, self.posX, top)
-        frames[1] = { x = self.posX, y = top - hA, w = width, h = hA }
-        if split < #rows then
-            local bx = self.posX + width + columnGap
-            local hB = place(split + 1, #rows, bx, top)
-            frames[2] = { x = bx, y = top - hB, w = width, h = hB }
+    local fixedH = place(1, split, self.posX, top)
+    self.frameX, self.frameY, self.frameW, self.frameH = self.posX, top - fixedH, width, fixedH
+
+    -- The per-tool context, as a floating card near where you are working - the last world click, or
+    -- a default beside the toolbar - grown down, clamped fully on screen.
+    local hasContext = split < #rows
+    self.ctxFrameW = 0
+    if hasContext then
+        local ch = pad * 2
+        for i = split + 1, #rows do
+            ch = ch + (rows[i].kind == "gap" and rowH * 0.35 or rowH)
         end
+        local cardX = editor.toolCardX or (self.posX + width + 0.02)
+        local cardY = editor.toolCardY or top
+        cardX = math.max(0, math.min(1 - width, cardX))
+        cardY = math.max(ch, math.min(1, cardY))
+        local hC = place(split + 1, #rows, cardX, cardY)
+        self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
     end
 
-    -- The bounding box is what the drag clamp keeps on screen.
-    local minY, maxX = top, self.posX
-    for _, f in ipairs(frames) do
-        minY = math.min(minY, f.y)
-        maxX = math.max(maxX, f.x + f.w)
-    end
-    self.frameX, self.frameY, self.frameW, self.frameH = self.posX, minY, maxX - self.posX, top - minY
-
-    -- Near-opaque. At 0.72 the world showed straight through the text, which made the panel hard
-    -- to read over bright terrain - the one thing it exists to avoid. A thin lighter border sits
-    -- behind it so the panel has a defined edge against any background.
-    -- One panel behind everything. Drawing a separate bordered box per column made a folded panel
-    -- read as two disconnected windows sitting apart; a single background with a thin divider reads
-    -- as one window split into a controls column and an options column.
     local edge = 0.0025
+    -- Corner panel: near-opaque so the world does not read through the text, with a defined edge.
     drawQuad(self.borderOverlay, self.frameX - edge, self.frameY - edge,
         self.frameW + edge * 2, self.frameH + edge * 2, 0.28, 0.31, 0.35, 0.95)
     drawQuad(self.background, self.frameX, self.frameY, self.frameW, self.frameH,
         0.105, 0.11, 0.125, 0.97)
-    if columns == 2 then
-        local dividerX = self.posX + width + columnGap * 0.5
-        drawQuad(self.borderOverlay, dividerX - 0.0006, self.frameY + self.padding,
-            0.0012, self.frameH - self.padding * 2, 0.30, 0.33, 0.37, 0.75)
+    -- Floating tool card, blue-accented so it reads as the active tool's own controls.
+    if hasContext then
+        drawQuad(self.borderOverlay, self.ctxFrameX - edge, self.ctxFrameY - edge,
+            self.ctxFrameW + edge * 2, self.ctxFrameH + edge * 2, 0.34, 0.52, 0.72, 0.96)
+        drawQuad(self.background, self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH,
+            0.12, 0.13, 0.15, 0.99)
     end
 
     local mx, my = editor.mouseX, editor.mouseY
@@ -624,6 +577,16 @@ function ADFlyoverHud:drawContextMenu(editor)
         -- So the shared onClick/isMouseOver see it as one more clickable row.
         table.insert(self.rows, item)
     end
+end
+
+--- Is the mouse over the floating tool card? The wheel handler asks this so scrolling over the card
+--- adjusts the active tool's setting even with nothing selected yet (move's falloff, a tolerance).
+function ADFlyoverHud:isMouseOverToolCard(mx, my)
+    if mx == nil or self.ctxFrameW == nil or self.ctxFrameW <= 0 then
+        return false
+    end
+    return mx >= self.ctxFrameX and mx <= self.ctxFrameX + self.ctxFrameW
+        and my >= self.ctxFrameY and my <= self.ctxFrameY + self.ctxFrameH
 end
 
 --- The lowest the panel may reach without covering the game's HUD map, for a panel spanning x..x+w.

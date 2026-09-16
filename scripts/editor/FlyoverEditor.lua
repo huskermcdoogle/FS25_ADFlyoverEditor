@@ -1953,7 +1953,33 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     end
 end
 
+--- True while the active tool is mid-action - a span's first end picked, a run open, a drag armed.
+--- Used to keep the floating tool card anchored on the FIRST click of an action so it does not jump
+--- to the second point of a span.
+function ADFlyoverEditor:toolHasPendingStart()
+    local t = self.tool
+    if t == self.TOOL.STRAIGHTEN then return self.straightenFromId ~= nil
+    elseif t == self.TOOL.SMOOTH then return self.smoothFromId ~= nil
+    elseif t == self.TOOL.DIVIDE then return self.divideFromId ~= nil
+    elseif t == self.TOOL.GROUND then return self.groundFromId ~= nil
+    elseif t == self.TOOL.PARALLEL then return self.offsetFromId ~= nil
+    elseif t == self.TOOL.SIDING then return self.sidingAnchorId ~= nil
+    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil
+    elseif t == self.TOOL.MERGE then return self.mergeFromId ~= nil
+    elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
+    end
+    return false
+end
+
 function ADFlyoverEditor:onLeftPress()
+    -- Anchor the floating tool card at the FIRST click of an action and leave it there for the rest,
+    -- so picking the second point of a span does not make the card jump off the first. Panel clicks
+    -- do not reach here (the panel consumes them), so toggles and tool picks never move it either.
+    if not self:toolHasPendingStart() then
+        self.toolCardX = g_lastMousePosX or self.toolCardX
+        self.toolCardY = g_lastMousePosY or self.toolCardY
+    end
+
     -- Ctrl claims the drag for box selection, in every tool. It has to be decided here on the
     -- press, before the move tool can grab a waypoint, or a Ctrl+drag starting on top of one
     -- would move it instead of selecting.
@@ -5510,15 +5536,14 @@ function ADFlyoverEditor:currentInteriorCount(fromId, toId)
 end
 
 --- Wheel handler. Returns true when the wheel was consumed, which is what stops the camera zoom.
-function ADFlyoverEditor:handleWheel(offset)
-    if offset == nil or offset == 0 then
-        return false
-    end
-    local step = offset > 0 and 1 or -1
-
-    -- Siding: the wheel is the LENGTH, because that is the dimension that changes per site. The
-    -- offset is a shape you settle on once, so it lives in the panel's number field instead.
-    if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then
+--- Apply one wheel step to the active tool's key setting, ignoring the "has a pending action" gates.
+--- Shared by the gated handleWheel paths below and by wheeling directly over the tool card, where the
+--- whole point is to dial a value in (move's falloff, a tolerance) before anything is selected.
+--- Returns true if it changed a value.
+function ADFlyoverEditor:applyWheelToActiveTool(step)
+    local t = self.tool
+    if t == self.TOOL.SIDING then
+        -- Siding: the wheel is the LENGTH, the dimension that changes per site.
         local setting = ADFlyoverSettings.settings.sidingLength
         if setting ~= nil then
             local nextIndex = math.max(1, math.min(#setting.values, setting.current + step))
@@ -5527,56 +5552,30 @@ function ADFlyoverEditor:handleWheel(offset)
             end
         end
         return true
-    end
-
-    if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then
+    elseif t == self.TOOL.PARALLEL then
         self.offsetDistance = math.max(AutoDrive.FLYOVER_OFFSET_MIN,
             math.min(AutoDrive.FLYOVER_OFFSET_MAX,
                 self.offsetDistance + step * AutoDrive.FLYOVER_OFFSET_STEP))
         self.offsetCache = nil
         return true
-    end
-
-    if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then
+    elseif t == self.TOOL.GROUND then
         self.groundTolerance = math.max(AutoDrive.FLYOVER_GROUND_MIN,
             math.min(AutoDrive.FLYOVER_GROUND_MAX,
                 self.groundTolerance + step * AutoDrive.FLYOVER_GROUND_STEP))
         return true
-    end
-
-    if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then
+    elseif t == self.TOOL.STRAIGHTEN then
         self.straightenTolerance = math.max(AutoDrive.FLYOVER_STRAIGHTEN_MIN,
             math.min(AutoDrive.FLYOVER_STRAIGHTEN_MAX,
                 self.straightenTolerance + step * AutoDrive.FLYOVER_STRAIGHTEN_STEP))
         return true
-    end
-
-    if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then
+    elseif t == self.TOOL.DIVIDE then
         self.divideCount = math.max(0, math.min(AutoDrive.FLYOVER_DIVIDE_MAX, self.divideCount + step))
         return true
-    end
-
-    -- Only while a drag is actually in progress, NOT merely because the move tool is selected.
-    -- Claiming the wheel for the whole tool would take camera zoom away for as long as move was
-    -- active, which is most of the time. Holding the button is an unambiguous signal that the
-    -- wheel is wanted for the drag; let go and it is the zoom again. Same rule as divide and
-    -- smooth, which only claim it while a span is pending.
-    if self.tool == self.TOOL.MOVE and self.dragId ~= nil then
+    elseif t == self.TOOL.MOVE then
         self:setFalloffRadius(self.falloffRadius + step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
         return true
-    end
-
-    -- The wheel reaches here (measured: 211 offers in one session) but declines while the move tool
-    -- is up, so say which half of the guard failed rather than needing another session to find out.
-    if self.tool == self.TOOL.MOVE then
-        Logging.info("[FlyoverEditor]: wheel declined in move - dragId=%s (no drag in progress, so "
-            .. "the wheel stays with the camera zoom).", tostring(self.dragId))
-    end
-
-    if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then
-        -- Each mode gets the number it actually uses. Rebuild ignores strength entirely - its
-        -- pipeline is a fixed smooth/resample/smooth - so the wheel appeared dead there while
-        -- quietly changing a value nothing read.
+    elseif t == self.TOOL.SMOOTH then
+        -- Each mode gets the number it actually uses; rebuild ignores strength.
         if self.smoothMode == self.SMOOTH_MODE.REBUILD then
             self.smoothSpacing = math.max(AutoDrive.FLYOVER_SPACING_MIN,
                 math.min(AutoDrive.FLYOVER_SPACING_MAX,
@@ -5586,6 +5585,33 @@ function ADFlyoverEditor:handleWheel(offset)
         end
         return true
     end
+    return false
+end
+
+function ADFlyoverEditor:handleWheel(offset)
+    if offset == nil or offset == 0 then
+        return false
+    end
+    local step = offset > 0 and 1 or -1
+
+    -- Over the tool card's controls: adjust the setting even with nothing selected yet, so the card
+    -- is a place you can dial a value in before you start. This is what puts the wheel on move's
+    -- falloff without a point picked.
+    if ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOverToolCard(self.mouseX, self.mouseY) then
+        if self:applyWheelToActiveTool(step) then
+            return true
+        end
+    end
+
+    -- Otherwise a tool claims the wheel only while it has a pending action (a span picked, a drag in
+    -- progress), so the camera zoom keeps the wheel the rest of the time.
+    if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then return self:applyWheelToActiveTool(step) end
+    if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then return self:applyWheelToActiveTool(step) end
+    if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then return self:applyWheelToActiveTool(step) end
+    if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then return self:applyWheelToActiveTool(step) end
+    if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(step) end
+    if self.tool == self.TOOL.MOVE and self.dragId ~= nil then return self:applyWheelToActiveTool(step) end
+    if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(step) end
 
     return false
 end

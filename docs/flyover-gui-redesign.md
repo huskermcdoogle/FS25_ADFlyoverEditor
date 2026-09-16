@@ -88,8 +88,16 @@ Judge this model **in game**, not in the flat mockup — spacing and feel don't 
 
 - A **real FS25 settings page** (game GUI, like AutoDrive's own settings pages) — native, and it
   handles scaling and focus for free.
-- Holds **only rarely‑changed things**: default merge distance, theme/colours, keybindings.
-  Everything else stays live in the panel.
+- Holds the **rarely‑changed things** (default merge distance, theme/colours, keybindings) **and the
+  per‑tool defaults**. The live values stay in the tool card; the *starting* value each tool opens
+  with is a saved default here.
+- **Choose these defaults carefully — they decide whether a tool "just works" untouched.** The
+  floating card makes people actually reach these knobs, so a poor default is now a discoverable
+  annoyance rather than a hidden one. Concrete case: the **ground** tool defaults to a **0.5 m**
+  tolerance, which silently skips points buried shallower than that — it looks like "ground does
+  nothing" until you wheel it down. Revisit at least: ground tolerance, straighten tolerance,
+  parallel/siding distance, move falloff, smooth spacing/strength. (Values today are the
+  `AutoDrive.FLYOVER_*_DEFAULT` / initial fields near the top of `scripts/editor/FlyoverEditor.lua`.)
 - Persisted through the **companion mod's own settings** (`scripts/Settings.lua`) — never written
   into `AutoDrive_config.xml`, which is the rule that keeps a stock client's settings sync intact.
 
