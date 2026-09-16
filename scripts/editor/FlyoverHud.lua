@@ -485,7 +485,12 @@ end
 --- and dispatches them exactly like the main panel's buttons, and they light up on hover.
 function ADFlyoverHud:drawContextMenu(editor)
     local m = editor.ctxMenu
-    if m == nil or editor.tool ~= editor.TOOL.NONE then
+    if m == nil then
+        return
+    end
+    -- Selection menus (point/span/run) show only in Select mode; the armed popup shows while its
+    -- tool is active, replacing the action list with that tool's own controls.
+    if m.kind ~= "armed" and editor.tool ~= editor.TOOL.NONE then
         return
     end
     self:ensureOverlays()
@@ -493,13 +498,17 @@ function ADFlyoverHud:drawContextMenu(editor)
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
     local rowH = self.rowHeight * uiScale
     local pad = self.padding
-    local pw = 0.135 * uiScale
+    local pw = 0.150 * uiScale
     local fontSize = 0.0110 * uiScale
     local OP = editor.CONVERT_OP
 
     local items = {}
     local function it(kind, text, action, danger)
         table.insert(items, { kind = kind, text = text, action = action, danger = danger })
+    end
+    -- A row that also carries a right-aligned value: a toggle's state, or a wheel-driven number.
+    local function itv(kind, text, value, action)
+        table.insert(items, { kind = kind, text = text, value = value, action = action })
     end
     if m.kind == "point" then
         it("mhead", "point " .. tostring(m.id))
@@ -514,20 +523,52 @@ function ADFlyoverHud:drawContextMenu(editor)
         it("mitem", "delete point", function() editor:menuDelete() end, true)
     elseif m.kind == "span" then
         it("mhead", string.format("span  %d pts", m.ids ~= nil and #m.ids or 0))
-        it("mitem", "straighten", function() editor:menuStraighten() end)
-        it("mitem", "smooth", function() editor:menuSmooth() end)
+        it("mitem", "straighten", function() editor:menuArmStraighten() end)
+        it("mitem", "smooth", function() editor:menuArmSmooth() end)
+        it("mitem", "divide", function() editor:menuArmDivide() end)
+        it("mitem", "ground", function() editor:menuArmGround() end)
         it("mitem", "make two-way", function() editor:menuConvertSpan(OP.TWOWAY) end)
         it("mitem", "make one-way", function() editor:menuConvertSpan(OP.ONEWAY) end)
         it("mitem", "flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
         it("mitem", "delete span", function() editor:menuDeleteSpan() end, true)
-    else
+    elseif m.kind == "run" then
         it("mhead", string.format("run  %s pts", tostring(m.count or "?")))
-        it("mitem", "straighten", function() editor:menuStraighten() end)
-        it("mitem", "smooth", function() editor:menuSmooth() end)
+        it("mitem", "straighten", function() editor:menuArmStraighten() end)
+        it("mitem", "smooth", function() editor:menuArmSmooth() end)
+        it("mitem", "divide", function() editor:menuArmDivide() end)
+        it("mitem", "parallel", function() editor:menuArmParallel() end)
+        it("mitem", "ground", function() editor:menuArmGround() end)
         it("mitem", "make two-way", function() editor:menuConvertRun(OP.TWOWAY) end)
         it("mitem", "make one-way", function() editor:menuConvertRun(OP.ONEWAY) end)
         it("mitem", "flip direction", function() editor:menuConvertRun(OP.REVERSE) end)
         it("mitem", "delete run", function() editor:menuDeleteRun() end, true)
+    else
+        -- Armed: only the selected tool's own controls - its wheel value and any toggles - plus apply
+        -- and cancel. The values are read live each frame, so the wheel updates them in place.
+        local t = m.tool
+        it("mhead", (editor.TOOL_NAMES[t] or "tool") .. " - selected")
+        if t == editor.TOOL.SMOOTH then
+            itv("mtoggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], function() editor:cycleSmoothMode() end)
+            if editor.smoothMode == editor.SMOOTH_MODE.REBUILD then
+                itv("mwheel", "max spacing", string.format("%.1f m", editor.smoothSpacing))
+            else
+                itv("mwheel", "strength", tostring(editor.smoothStrength))
+            end
+        elseif t == editor.TOOL.STRAIGHTEN then
+            itv("mwheel", "tolerance", string.format("%.1f m", editor.straightenTolerance))
+        elseif t == editor.TOOL.DIVIDE then
+            itv("mwheel", "points", tostring(editor.divideCount))
+        elseif t == editor.TOOL.GROUND then
+            itv("mwheel", "tolerance", string.format("%.1f m", editor.groundTolerance))
+            itv("mtoggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], function() editor:cycleGroundLevel() end)
+            itv("mtoggle", "snap to", editor.snapToTerrain and "terrain" or "surface", function() editor:toggleSnapToTerrain() end)
+        elseif t == editor.TOOL.PARALLEL then
+            itv("mwheel", "distance", string.format("%.1f m", editor.offsetDistance))
+            itv("mtoggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", function() editor:flipOffsetSide() end)
+        end
+        it("mapply", "apply", function() editor:menuApplyArmed() end)
+        it("mitem", "cancel", function() editor:menuCancelArmed() end)
+        it("mnote", "scroll to adjust - right-click applies")
     end
 
     local ph = #items * rowH + pad * 2
@@ -548,10 +589,28 @@ function ADFlyoverHud:drawContextMenu(editor)
         item.x, item.y, item.w, item.h = x, y, pw, rowH
         local textY = y + (rowH - fontSize) * 0.5
         local textX = x + pad * 2
+        local rightX = x + pw - pad * 2
         local hovered = mx ~= nil and mx >= x and mx <= x + pw and my >= y and my <= y + rowH
         if item.kind == "mhead" then
             drawQuad(self.headerOverlay, x, y, pw, rowH, 0.20, 0.30, 0.42, 1)
             label(textX, textY, fontSize * 0.9, item.text, 0.72, 0.82, 0.95, 1)
+        elseif item.kind == "mnote" then
+            label(textX, textY, fontSize * 0.82, item.text, 0.5, 0.53, 0.57, 1)
+        elseif item.kind == "mwheel" then
+            -- Read-only: the mouse wheel drives this while the tool is armed (the note row says so).
+            drawQuad(self.rowOverlay, x, y, pw, rowH, 0.15, 0.17, 0.20, 0.9)
+            label(textX, textY, fontSize, item.text, 0.72, 0.75, 0.79, 1)
+            label(rightX, textY, fontSize, item.value or "-", 0.60, 0.78, 0.98, 1, RenderText.ALIGN_RIGHT)
+        elseif item.kind == "mtoggle" then
+            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.24 or 0.165,
+                hovered and 0.30 or 0.18, hovered and 0.40 or 0.205, 0.95)
+            label(textX, textY, fontSize, item.text, hovered and 0.94 or 0.78,
+                hovered and 0.96 or 0.80, hovered and 1 or 0.84, 1)
+            label(rightX, textY, fontSize, item.value or "-", 1, 0.85, 0.4, 1, RenderText.ALIGN_RIGHT)
+        elseif item.kind == "mapply" then
+            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.32 or 0.24,
+                hovered and 0.56 or 0.44, hovered and 0.82 or 0.66, 0.95)
+            label(textX, textY, fontSize, item.text, 0.96, 0.98, 1, 1)
         elseif item.danger then
             drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.42 or 0.23,
                 hovered and 0.17 or 0.155, hovered and 0.16 or 0.15, hovered and 0.95 or 0.9)

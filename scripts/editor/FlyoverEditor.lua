@@ -691,6 +691,8 @@ function ADFlyoverEditor:enable()
     -- Start clean: a selection or a half-dragged box left over from a previous session would be
     -- pointing at ids that may not mean the same thing any more.
     self:clearSelection()
+    -- Always open in Select mode, whatever tool (or armed popup) a previous session left behind.
+    self:setTool(self.TOOL.NONE)
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -1371,6 +1373,99 @@ function ADFlyoverEditor:menuArmSpline()
     Logging.info("[FlyoverEditor]: spline armed from id=%s; click the waypoint to curve to.", tostring(id))
 end
 
+--- Span/run arming for the adjustable span tools: switch to the tool with the span (or run)
+--- pre-loaded as its from/to, then keep a compact "armed" popup in place of the action list, so the
+--- tool's wheel setting and toggles are adjusted right there. Scroll changes the value; apply (or a
+--- right-click) commits and returns to Select. m.fromId/toId/ids are the ends and route (spans always
+--- have them; runs only when they have two clear ends).
+function ADFlyoverEditor:setArmedMenu(sx, sy)
+    self.ctxMenu = { kind = "armed", tool = self.tool, sx = sx or 0.5, sy = sy or 0.5 }
+end
+
+function ADFlyoverEditor:menuArmStraighten()
+    local m = self.ctxMenu
+    if m == nil or m.fromId == nil or m.toId == nil or m.ids == nil then return end
+    local from, to, ids, sx, sy = m.fromId, m.toId, m.ids, m.sx, m.sy
+    self:setTool(self.TOOL.STRAIGHTEN)
+    self.spanIds = ids
+    self.straightenFromId, self.straightenToId, self.straightenPreview = from, to, nil
+    self:setArmedMenu(sx, sy)
+    Logging.info("[FlyoverEditor]: straighten armed on a %d-point span.", #ids)
+end
+
+function ADFlyoverEditor:menuArmSmooth()
+    local m = self.ctxMenu
+    if m == nil or m.fromId == nil or m.toId == nil or m.ids == nil then return end
+    local from, to, ids, sx, sy = m.fromId, m.toId, m.ids, m.sx, m.sy
+    self:setTool(self.TOOL.SMOOTH)
+    self.spanIds = ids
+    self.smoothFromId, self.smoothToId = from, to
+    self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
+    self:setArmedMenu(sx, sy)
+    Logging.info("[FlyoverEditor]: smooth armed on a %d-point span.", #ids)
+end
+
+function ADFlyoverEditor:menuArmDivide()
+    local m = self.ctxMenu
+    if m == nil or m.fromId == nil or m.toId == nil or m.ids == nil then return end
+    local from, to, ids, sx, sy = m.fromId, m.toId, m.ids, m.sx, m.sy
+    self:setTool(self.TOOL.DIVIDE)
+    self.spanIds = ids
+    self.divideFromId, self.divideToId = from, to
+    self.dividePreview = nil
+    self.divideCount = math.max(0, #ids - 2)
+    self:setArmedMenu(sx, sy)
+    Logging.info("[FlyoverEditor]: divide armed on a %d-point span.", #ids)
+end
+
+function ADFlyoverEditor:menuArmGround()
+    local m = self.ctxMenu
+    if m == nil or m.fromId == nil or m.toId == nil or m.ids == nil then return end
+    local from, to, ids, isRun, sx, sy = m.fromId, m.toId, m.ids, (m.kind == "run"), m.sx, m.sy
+    self:setTool(self.TOOL.GROUND)
+    self.offsetScope = isRun and self.OFFSET_SCOPE.RUN or self.OFFSET_SCOPE.SPAN
+    self.spanIds = ids
+    self.groundFromId, self.groundToId = from, to
+    self.groundPreview = nil
+    self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
+    self:setArmedMenu(sx, sy)
+    Logging.info("[FlyoverEditor]: ground armed on a %d-point span.", #ids)
+end
+
+function ADFlyoverEditor:menuArmParallel()
+    local m = self.ctxMenu
+    if m == nil or m.fromId == nil or m.toId == nil or m.ids == nil then return end
+    local from, to, ids, isRun, sx, sy = m.fromId, m.toId, m.ids, (m.kind == "run"), m.sx, m.sy
+    self:setTool(self.TOOL.PARALLEL)
+    self.offsetScope = isRun and self.OFFSET_SCOPE.RUN or self.OFFSET_SCOPE.SPAN
+    self.spanIds = ids
+    self.offsetFromId, self.offsetToId = from, to
+    self.offsetPreview, self.offsetCache = nil, nil
+    local seedPts = self:offsetSpanPoints()
+    if seedPts ~= nil then
+        self.offsetSide = self:offsetSideFromCursor(seedPts)
+    end
+    self:setArmedMenu(sx, sy)
+    Logging.info("[FlyoverEditor]: parallel armed on a %d-point span.", #ids)
+end
+
+--- Apply the armed tool's pending action and return to Select mode. Same commit the tool's own
+--- right-click uses; the preview it needs is rebuilt every frame by update() while the tool is active.
+function ADFlyoverEditor:menuApplyArmed()
+    local t = self.tool
+    if t == self.TOOL.SMOOTH then self:commitSmooth()
+    elseif t == self.TOOL.STRAIGHTEN then self:commitStraighten()
+    elseif t == self.TOOL.DIVIDE then self:commitDivide()
+    elseif t == self.TOOL.GROUND then self:commitGround()
+    elseif t == self.TOOL.PARALLEL then self:commitOffset()
+    end
+    self:setTool(self.TOOL.NONE)
+end
+
+function ADFlyoverEditor:menuCancelArmed()
+    self:setTool(self.TOOL.NONE)
+end
+
 function ADFlyoverEditor:setTool(tool)
     if self.tool == tool then
         return
@@ -1876,6 +1971,15 @@ function ADFlyoverEditor:onLeftPress()
 end
 
 function ADFlyoverEditor:onLeftRelease()
+    -- An armed popup owns interaction: a left click anywhere but on the popup (which the panel has
+    -- already consumed) cancels back to Select, rather than letting the armed tool re-pick endpoints
+    -- from the world. Apply is a right-click or the popup's own apply row.
+    if self.ctxMenu ~= nil and self.ctxMenu.kind == "armed" then
+        self:menuCancelArmed()
+        Logging.info("[FlyoverEditor]: armed tool cancelled (clicked away).")
+        return
+    end
+
     -- Ctrl builds a selection, whatever the tool. Selection is a shared substrate rather than a
     -- tool of its own: the multi-point operations all need it, so building one should not mean
     -- leaving the tool you are working with.
@@ -1927,10 +2031,15 @@ end
 --- right-clicking again out of habit would drop the tool immediately, which is a surprising way to
 --- lose your place. A deliberate "I am done here" is a separate press, not part of the same flurry.
 function ADFlyoverEditor:onRightRelease()
-    -- A right-click first dismisses the Select-mode context menu, before any tool back-out logic.
+    -- A right-click finishes an armed tool (apply), or dismisses a selection menu.
     if self.ctxMenu ~= nil then
-        self:closeMenu()
-        Logging.info("[FlyoverEditor]: context menu closed (right-click).")
+        if self.ctxMenu.kind == "armed" then
+            self:menuApplyArmed()
+            Logging.info("[FlyoverEditor]: armed tool applied (right-click).")
+        else
+            self:closeMenu()
+            Logging.info("[FlyoverEditor]: context menu closed (right-click).")
+        end
         return
     end
 
