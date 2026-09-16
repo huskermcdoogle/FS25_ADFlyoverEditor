@@ -21,9 +21,9 @@ ADFlyoverHud = {
     -- the bottom keeps it clear and keeps the header in the same place whatever the height.
     posX = 0.012,
     topY = 0.965,
-    width = 0.215,
-    rowHeight = 0.023,
-    padding = 0.006,
+    width = 0.185,
+    rowHeight = 0.020,
+    padding = 0.005,
 
     -- Drag by the header. Screen real estate is personal and every HUD mod wants a different
     -- corner, so pinning it is the default rather than the rule.
@@ -83,21 +83,35 @@ function ADFlyoverHud:buildRows(editor)
         table.insert(rows, { kind = kind, text = text, value = value, active = active, action = action })
     end
 
-    add("header", "AUTODRIVE FLYOVER EDITOR")
-    add("note", "Standard AD editing is suspended")
+    add("header", "FLYOVER EDITOR", "Esc to exit")
+    add("note", "Standard AutoDrive editing suspended")
     -- What the cursor is over. Field numbers are how fields are referred to when working on them,
     -- and in flyover mode there is no vehicle sitting in one to tell you which is which.
     add("cursor", "under cursor", editor.fieldLabel or "-")
     add("gap")
 
-    add("section", editor.tool == editor.TOOL.NONE and "TOOL - none selected" or "TOOL")
-    for i = 1, #editor.TOOL_NAMES do
-        -- COMPANION EDIT: TOOL_NAMES has 11 entries but the key binding is
-        -- (tool == 10) and "KEY_0" or ("KEY_" .. tool), so tool 11 has no key at all. Printing
-        -- i % 10 labelled it "1", duplicating tool 1 and advertising a key that does something else.
-        local toolKey = (i <= 10) and tostring(i % 10) or " "
-        add("tool", string.format("%s  %s", toolKey, editor.TOOL_NAMES[i]), nil, editor.tool == i,
-            function() editor:setTool(i) end)
+    -- Tools grouped by job. Grouping and display order are cosmetic: the number key and the setTool
+    -- id are the tool's enum value, so regrouping never changes which key drives which tool. Select
+    -- is TOOL.NONE - the state that puts every tool away.
+    local T = editor.TOOL
+    local GROUPS = {
+        { "MODE", { T.NONE } },
+        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
+        { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
+        { "CONNECT", { T.CONVERT, T.MERGE } },
+        { "UTILITY", { T.NAME, T.DELETE } },
+    }
+    local function toolKeyLabel(id)
+        if id >= 1 and id <= 9 then return tostring(id) end
+        if id == 10 then return "0" end
+        return ""
+    end
+    for _, grp in ipairs(GROUPS) do
+        add("section", grp[1])
+        for _, id in ipairs(grp[2]) do
+            local name = (id == T.NONE) and "select" or editor.TOOL_NAMES[id]
+            add("tool", name, toolKeyLabel(id), editor.tool == id, function() editor:setTool(id) end)
+        end
     end
 
     add("gap")
@@ -319,7 +333,7 @@ function ADFlyoverHud:draw(editor)
     self.layoutColumns, self.layoutScale = columns, scale
 
     local rowH = baseRowH * scale
-    local fontSize = 0.0115 * uiScale * scale
+    local fontSize = 0.0110 * uiScale * scale
     local columnGap = 0.005
     local toolGap = 0.002
 
@@ -378,11 +392,18 @@ function ADFlyoverHud:draw(editor)
     -- Near-opaque. At 0.72 the world showed straight through the text, which made the panel hard
     -- to read over bright terrain - the one thing it exists to avoid. A thin lighter border sits
     -- behind it so the panel has a defined edge against any background.
+    -- One panel behind everything. Drawing a separate bordered box per column made a folded panel
+    -- read as two disconnected windows sitting apart; a single background with a thin divider reads
+    -- as one window split into a controls column and an options column.
     local edge = 0.0025
-    for _, f in ipairs(frames) do
-        drawQuad(self.borderOverlay, f.x - edge, f.y - edge, f.w + edge * 2, f.h + edge * 2,
-            0.55, 0.55, 0.55, 0.9)
-        drawQuad(self.background, f.x, f.y, f.w, f.h, 0.04, 0.04, 0.05, 0.96)
+    drawQuad(self.borderOverlay, self.frameX - edge, self.frameY - edge,
+        self.frameW + edge * 2, self.frameH + edge * 2, 0.28, 0.31, 0.35, 0.95)
+    drawQuad(self.background, self.frameX, self.frameY, self.frameW, self.frameH,
+        0.105, 0.11, 0.125, 0.97)
+    if columns == 2 then
+        local dividerX = self.posX + width + columnGap * 0.5
+        drawQuad(self.borderOverlay, dividerX - 0.0006, self.frameY + self.padding,
+            0.0012, self.frameH - self.padding * 2, 0.30, 0.33, 0.37, 0.75)
     end
 
     for _, row in ipairs(rows) do
@@ -391,52 +412,127 @@ function ADFlyoverHud:draw(editor)
         local textX = x + self.padding * 2
 
         if row.kind == "header" then
-            drawQuad(self.headerOverlay, x, y, width, h, 0.9, 0.62, 0, 0.95)
-            label(textX, textY, fontSize, row.text, 0, 0, 0, 1)
+            drawQuad(self.headerOverlay, x, y, width, h, 0.16, 0.17, 0.20, 1)
+            label(textX, textY, fontSize, row.text, 0.90, 0.91, 0.93, 1)
+            if row.value ~= nil then
+                label(x + width - self.padding * 2, textY, fontSize * 0.8, row.value,
+                    0.54, 0.57, 0.62, 1, RenderText.ALIGN_RIGHT)
+            end
         elseif row.kind == "note" then
-            label(textX, textY, fontSize * 0.92, row.text, 1, 0.75, 0.2, 1)
+            label(textX, textY, fontSize * 0.86, row.text, 0.50, 0.53, 0.57, 1)
         elseif row.kind == "section" then
-            label(textX, textY, fontSize * 0.86, row.text, 0.55, 0.75, 1, 1)
+            label(textX, textY, fontSize * 0.80, row.text, 0.52, 0.58, 0.66, 1)
         elseif row.kind == "tool" then
             -- Every tool gets a plate, not just the selected one, so the list reads as a row of
             -- buttons rather than as text with one line highlighted. The selected one keeps the
-            -- bright fill; the rest get a dim plate that still says "this is clickable".
+            -- bright fill; the rest get a dim plate that still says "this is clickable". The number
+            -- key sits as a dim cap on the right so the labels line up cleanly - inline "5  spline"
+            -- ran scrambled, out-of-sequence digits down the middle of the list.
             if row.active then
-                drawQuad(self.rowOverlay, x, y, width, h, 0.15, 0.55, 0.95, 0.85)
-                label(textX, textY, fontSize, row.text, 1, 1, 1, 1)
+                drawQuad(self.rowOverlay, x, y, width, h, 0.28, 0.52, 0.78, 0.95)
+                label(textX, textY, fontSize, row.text, 0.96, 0.98, 1, 1)
             else
-                drawQuad(self.rowOverlay, x, y, width, h, 0.20, 0.21, 0.24, 0.55)
-                label(textX, textY, fontSize, row.text, 0.82, 0.82, 0.82, 1)
+                drawQuad(self.rowOverlay, x, y, width, h, 0.16, 0.17, 0.195, 0.92)
+                label(textX, textY, fontSize, row.text, 0.78, 0.80, 0.83, 1)
+            end
+            if row.value ~= nil and row.value ~= "" then
+                label(x + width - self.padding * 1.5, textY, fontSize * 0.78, row.value,
+                    row.active and 0.86 or 0.48, row.active and 0.90 or 0.52, row.active and 0.98 or 0.58, 1,
+                    RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "number" then
             if row.active then
-                drawQuad(self.rowOverlay, x, y, width, h, 0.35, 0.28, 0.05, 0.95)
+                drawQuad(self.rowOverlay, x, y, width, h, 0.20, 0.28, 0.38, 0.95)
             end
-            label(textX, textY, fontSize, row.text, 0.78, 0.78, 0.78, 1)
+            label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
             label(x + width - self.padding * 2, textY, fontSize, row.value,
-                row.active and 1 or 1, row.active and 1 or 0.85, row.active and 1 or 0.3, 1,
+                row.active and 0.96 or 0.62, row.active and 0.98 or 0.72, row.active and 1 or 0.86, 1,
                 RenderText.ALIGN_RIGHT)
         elseif row.kind == "toggle" then
-            label(textX, textY, fontSize, row.text, 0.78, 0.78, 0.78, 1)
-            label(x + width - self.padding * 2, textY, fontSize, row.value, 1, 0.85, 0.3, 1,
+            label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
+            label(x + width - self.padding * 2, textY, fontSize, row.value, 0.58, 0.74, 0.92, 1,
                 RenderText.ALIGN_RIGHT)
         elseif row.kind == "action" then
             -- Dimmed when the action would currently do nothing, so the panel says what is
             -- available rather than only what exists.
             local bright = row.active
             label(textX, textY, fontSize, row.text,
-                bright and 1 or 0.55, bright and 0.95 or 0.55, bright and 0.7 or 0.55, 1)
+                bright and 0.82 or 0.45, bright and 0.85 or 0.47, bright and 0.90 or 0.50, 1)
             label(x + width - self.padding * 2, textY, fontSize * 0.85, row.value,
-                0.5, 0.5, 0.5, 1, RenderText.ALIGN_RIGHT)
+                0.48, 0.50, 0.54, 1, RenderText.ALIGN_RIGHT)
         elseif row.kind == "cursor" then
-            label(textX, textY, fontSize * 0.92, row.text, 0.6, 0.6, 0.6, 1)
-            label(x + width - self.padding * 2, textY, fontSize * 0.92, row.value, 0.6, 1, 0.9, 1,
+            label(textX, textY, fontSize * 0.90, row.text, 0.55, 0.57, 0.60, 1)
+            label(x + width - self.padding * 2, textY, fontSize * 0.90, row.value, 0.58, 0.74, 0.92, 1,
                 RenderText.ALIGN_RIGHT)
         elseif row.kind == "status" then
-            label(textX, textY, fontSize * 0.9, row.text, 0.65, 0.65, 0.65, 1)
+            label(textX, textY, fontSize * 0.9, row.text, 0.60, 0.62, 0.66, 1)
         elseif row.kind == "hint" then
-            label(textX, textY, fontSize * 0.92, row.text, 0.6, 1, 0.6, 1)
+            label(textX, textY, fontSize * 0.92, row.text, 0.72, 0.80, 0.88, 1)
         end
+    end
+
+    self:drawPointMenu(editor)
+end
+
+--- The Select-mode context menu: a small panel of actions anchored at the click, for the waypoint
+--- the user clicked. Its rows are appended to self.rows so the panel's own click routing (isMouseOver
+--- / onClick) consumes and dispatches them exactly like the main panel's buttons.
+function ADFlyoverHud:drawPointMenu(editor)
+    if editor.pointMenu == nil or editor.tool ~= editor.TOOL.NONE then
+        return
+    end
+    self:ensureOverlays()
+
+    local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
+    local rowH = self.rowHeight * uiScale
+    local pad = self.padding
+    local pw = 0.130 * uiScale
+    local fontSize = 0.0110 * uiScale
+    local id = editor.pointMenu.id
+
+    local items = {}
+    local function it(kind, text, action, danger)
+        table.insert(items, { kind = kind, text = text, action = action, danger = danger })
+    end
+    local OP = editor.CONVERT_OP
+    it("mhead", "point " .. tostring(id))
+    it("mitem", "name...", function() editor:menuName() end)
+    it("mitem", "make two-way", function() editor:menuConvert(OP.TWOWAY) end)
+    it("mitem", "make one-way", function() editor:menuConvert(OP.ONEWAY) end)
+    it("mitem", "reverse", function() editor:menuConvert(OP.REVERSE) end)
+    it("mitem", "primary", function() editor:menuConvert(OP.PRIMARY) end)
+    it("mitem", "secondary", function() editor:menuConvert(OP.SECONDARY) end)
+    it("mitem", "delete point", function() editor:menuDelete() end, true)
+
+    local ph = #items * rowH + pad * 2
+    -- Anchor at the click, clamped so the whole menu stays on screen and grabbable.
+    local x = math.max(0, math.min(1 - pw, editor.pointMenu.sx or 0.5))
+    local top = math.max(ph, math.min(1, editor.pointMenu.sy or 0.5))
+
+    local edge = 0.0025
+    drawQuad(self.borderOverlay, x - edge, top - ph - edge, pw + edge * 2, ph + edge * 2,
+        0.30, 0.33, 0.38, 0.98)
+    drawQuad(self.background, x, top - ph, pw, ph, 0.12, 0.13, 0.15, 0.985)
+
+    local y = top - pad
+    for _, item in ipairs(items) do
+        y = y - rowH
+        item.x, item.y, item.w, item.h = x, y, pw, rowH
+        local textY = y + (rowH - fontSize) * 0.5
+        local textX = x + pad * 2
+        if item.kind == "mhead" then
+            drawQuad(self.headerOverlay, x, y, pw, rowH, 0.18, 0.19, 0.22, 1)
+            label(textX, textY, fontSize * 0.9, item.text, 0.60, 0.68, 0.80, 1)
+        else
+            drawQuad(self.rowOverlay, x, y, pw, rowH, 0.17, 0.18, 0.205, 0.92)
+            if item.danger then
+                label(textX, textY, fontSize, item.text, 0.86, 0.46, 0.41, 1)
+            else
+                label(textX, textY, fontSize, item.text, 0.80, 0.82, 0.85, 1)
+            end
+        end
+        -- So the shared onClick/isMouseOver see it as one more clickable row.
+        table.insert(self.rows, item)
     end
 end
 

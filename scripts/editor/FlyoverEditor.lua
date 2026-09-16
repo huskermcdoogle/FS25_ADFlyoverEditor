@@ -1125,6 +1125,75 @@ function ADFlyoverEditor:findWayPointNearCursor()
     return bestId
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Select mode (TOOL.NONE): click a waypoint to act on it directly, without picking a tool first.
+--
+-- A left click on a waypoint opens a small context menu at the cursor. Its actions reuse the same
+-- graph paths the tools do - the trick is to point hoverId at the clicked waypoint for the duration
+-- of the call, so nameAtCursor / convertAtCursor operate on it exactly as if it were under the
+-- cursor. Right-click, an empty click, or leaving Select mode closes the menu.
+-- ---------------------------------------------------------------------------------------------
+
+function ADFlyoverEditor:selectClick()
+    if self.hoverId ~= nil then
+        self.pointMenu = { id = self.hoverId, sx = g_lastMousePosX or 0.5, sy = g_lastMousePosY or 0.5 }
+        Logging.info("[FlyoverEditor]: point menu opened for waypoint id=%s.", tostring(self.hoverId))
+    else
+        self:closePointMenu()
+    end
+end
+
+function ADFlyoverEditor:closePointMenu()
+    self.pointMenu = nil
+end
+
+function ADFlyoverEditor:menuTarget()
+    return self.pointMenu ~= nil and self.pointMenu.id or nil
+end
+
+function ADFlyoverEditor:menuName()
+    local id = self:menuTarget()
+    if id == nil then
+        return
+    end
+    self.hoverId = id
+    self:nameAtCursor()
+    self:closePointMenu()
+end
+
+--- Run convertAtCursor on a single clicked point without disturbing the Convert tool's own op and
+--- scope - those are the user's sticky settings for that tool and the menu must not overwrite them.
+function ADFlyoverEditor:menuConvert(op)
+    local id = self:menuTarget()
+    if id == nil then
+        return
+    end
+    local savedOp, savedScope = self.convertOp, self.convertScope
+    self.hoverId = id
+    self.convertScope = self.DELETE_SCOPE.POINT
+    self.convertOp = op
+    self:convertAtCursor()
+    self.convertOp, self.convertScope = savedOp, savedScope
+end
+
+--- Delete the clicked point directly rather than via deleteAtCursor, so a stray box selection
+--- cannot hijack the click into deleting something else.
+function ADFlyoverEditor:menuDelete()
+    local id = self:menuTarget()
+    if id == nil then
+        return
+    end
+    ADEditorHistory:snapshot("delete waypoint")
+    local doomed = ADGraphManager:getWayPointById(id)
+    local px, pz = doomed ~= nil and doomed.x or 0, doomed ~= nil and doomed.z or 0
+    ADGraphManager:removeWayPoint(id, false)
+    Logging.info("[FlyoverEditor]: (menu) deleted waypoint id=%s at x=%.1f z=%.1f (%d left).",
+        tostring(id), px, pz, ADGraphManager:getWayPointsCount())
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+    self:closePointMenu()
+end
+
 function ADFlyoverEditor:setTool(tool)
     if self.tool == tool then
         return
@@ -1147,6 +1216,7 @@ function ADFlyoverEditor:setTool(tool)
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.dragId = nil
     self.boxActive = false
+    self.pointMenu = nil
     Logging.info("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
 end
 
@@ -1628,6 +1698,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:straightenClick()
     elseif self.tool == self.TOOL.DIVIDE then
         self:divideClick()
+    elseif self.tool == self.TOOL.NONE then
+        self:selectClick()
     end
 end
 
@@ -1641,6 +1713,13 @@ end
 --- right-clicking again out of habit would drop the tool immediately, which is a surprising way to
 --- lose your place. A deliberate "I am done here" is a separate press, not part of the same flurry.
 function ADFlyoverEditor:onRightRelease()
+    -- A right-click first dismisses the Select-mode context menu, before any tool back-out logic.
+    if self.pointMenu ~= nil then
+        self:closePointMenu()
+        Logging.info("[FlyoverEditor]: point menu closed (right-click).")
+        return
+    end
+
     local now = self:nowMs()
     local sincePrevious = (self.lastRightPressAt ~= nil) and (now - self.lastRightPressAt) or nil
     self.lastRightPressAt = now
