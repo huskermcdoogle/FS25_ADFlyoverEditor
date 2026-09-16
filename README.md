@@ -1,220 +1,103 @@
-# FS25_ADFlyoverEditor
+# Flyover Editor for AutoDrive
 
-## Tested — all eleven tools pass
+A top-down flyover editor for [AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive) route
+networks in **Farming Simulator 25** — build and repair routes from above, on foot or in a vehicle,
+without driving every metre of them.
 
-2026-09-08, build 0.7.3.0, against stock AutoDrive 3.0.0.8 with `FS25_AutoDrive_Gibbs` disabled.
+It runs as a **companion mod** beside *stock* AutoDrive: it does not modify AutoDrive's files, it
+attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't there.
 
-| Tool | |
+> **Status:** build 0.29.4.0 · single player only · requires `FS25_AutoDrive`
+
+## Install
+
+1. Download **`FS25_ADFlyoverEditor.zip`** from the [latest release](../../releases/latest) — keep the
+   filename exactly.
+2. Drop it into your FS25 `mods` folder, e.g.
+   `…/Documents/My Games/FarmingSimulator2025/mods/`.
+3. In the in-game mod list, enable it alongside **FS25_AutoDrive**.
+
+Don't run it next to a modified AutoDrive build that already includes its own flyover editor (an
+AutoDrive fork, say) — both provide the editor, and whichever loads last wins.
+
+## Opening the editor
+
+- **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+- **Esc** to leave. Every edit is undoable — **Q** undo, **E** redo.
+
+## Tools
+
+Grouped by job on the panel. **Select** is the default mode: no tool held, click things to edit them.
+
+| Group | Tools |
 |---|---|
-| draw | ✅ place, start-from-existing, connect, directional toggle, end run |
-| move | ✅ incl. falloff by wheel and by `,`/`.` |
-| delete | ✅ |
-| smooth | ✅ both modes |
-| name | ✅ names the clicked waypoint |
-| spline | ✅ preview, wheel, place |
-| merge | ✅ |
-| field loop | ✅ via console |
-| divide | ✅ incl. the fork/direction fixes |
-| convert | ✅ all four operations |
-| straighten | RDP by tolerance, keeps real bends — **untested** |
-| parallel | track alongside a span — **untested** |
-| siding | parallel, splined in at both ends — **untested** |
+| **Create** | `draw` connect waypoints · `spline` curved connection · `field loop` headland loop around a field · `parallel` a track alongside a span · `siding` a spur splined in at both ends |
+| **Shape** | `move` drag a point, with falloff along the track · `smooth` · `straighten`, which keeps real bends · `divide` add evenly-spaced points · `ground` settle points onto the surface |
+| **Connect** | `convert` one-way / two-way and priority · `merge` join nearby nodes |
+| **Utility** | `name` label a waypoint · `delete` remove a point, span or run |
 
-Also verified: **settings persistence** end to end — a changed value written to
-`modSettings/FS25_ADFlyoverEditor/settings.xml` as an index, read back across a full restart, and
-resolved to the right value; and **zero** of our keys present in any savegame's
-`AutoDrive_config.xml`, which is the half that matters, since one injected key breaks a stock
-client's settings sync. Undo/redo and two open-close cycles in one session also pass.
+## Working with it
 
-`name`, `delete` and `merge` were the three worth doing first — each is the only exerciser of one
-piece of the port. `name` is the sole user of the republished `ADEnterTargetNameGui`; `delete` is the
-only thing that hits waypoint-id renumbering; `merge` is the only tool depending on
-`splineInterpolation` surviving mouse events, which is what wrapper 1 exists for.
+- **Select mode** — click a **point**, a **span** (a second click, or a double-click for the whole
+  span), or a whole **run** between junctions to get a context menu of edits for it, with the target
+  highlighted in the world.
+- **Floating tool card** — a tool's controls appear on a small card near the cursor instead of in a
+  far corner. Numeric settings can be **typed, scrolled, or nudged with − / + steppers**, and the
+  wheel adjusts whichever field you are hovering. **Middle-click** hides the card and lets a drag
+  pass through it.
+- **Span / run tools** (straighten, smooth, divide, ground, parallel) act on a picked span or a whole
+  run: arm the tool, dial its setting, right-click to apply.
 
-**Working as of 2026-09-08 (build 0.7.3.0).** Running beside stock AutoDrive 3.0.0.8 with the fork
-disabled: camera flies, panel draws, network follows the cursor, divide and spline tools place, the
-wheel adjusts curvature and span, Escape exits and returns the input system as it found it. Zero
-engine Lua errors across the session.
+## Compatibility & safety
 
-The flyover route editor as a **companion mod**: it runs beside *stock* `FS25_AutoDrive` and does
-not modify it. Attaches at runtime, or refuses to load and says why.
+- Reads and writes AutoDrive's route network only through AutoDrive's own API — **no changes to
+  AutoDrive's files**.
+- Its own settings live under `modSettings/FS25_ADFlyoverEditor/` and never touch AutoDrive's config
+  or your savegame's `AutoDrive_config.xml`.
+- Single player only.
 
-## Docs
+## Development & internals
 
-| | |
+The mod attaches to a stock, unmodified AutoDrive at runtime: it resolves AutoDrive's Lua
+environment, republishes the names it needs, re-centres the network draw on a cursor instead of the
+vehicle, and wraps the handful of functions an AutoDrive fork would otherwise have edited. The how
+and why:
+
+| Doc | |
 |---|---|
+| [`docs/companion-build-plan.md`](docs/companion-build-plan.md) | how the mod is put together, stage by stage |
+| [`docs/flyover-input-context.md`](docs/flyover-input-context.md) | the input-context and camera pitfalls — **read before touching those** |
+| [`docs/flyover-gui-redesign.md`](docs/flyover-gui-redesign.md) | the GUI redesign spec |
 | [`docs/bugs.md`](docs/bugs.md) | known bugs, and closed ones with their causes |
-| [`docs/flyover-input-context.md`](docs/flyover-input-context.md) | the four input-context bugs. **Read before touching input contexts or the camera** |
-| [`docs/companion-build-plan.md`](docs/companion-build-plan.md) | how this mod is put together, stage by stage |
 | [`docs/probe-results.md`](docs/probe-results.md) | the raw in-game measurements the rest cite |
+| [`docs/build-log.md`](docs/build-log.md) | the staged bring-up log and its in-game verification steps |
 
-`companion-mod-investigation.md` stays in the AutoDrive fork repo — it is the record of how the
-decision to build this was made, which is that repo's history rather than this one's.
+### Versioning
 
-## Stage 1 — infrastructure only ✅ passed 2026-09-08
+Two numbers, because one cannot answer the question honestly. `P.BUILD` in `Prelude.lua` is
+re-sourced every time a savegame loads, so it always describes the Lua actually running. `modDesc`'s
+version is read by the mod manager at **game startup only**. So reloading a savegame from the main
+menu is enough for Lua changes; a full restart is needed only when `modDesc.xml` itself changes. When
+the two disagree the version line says so — e.g.
+`build 0.29.4.0 (modDesc says 0.29.3.0 - stale, full restart to refresh it)` — which is
+informational, not a fault.
 
-Both halves verified against stock AutoDrive 3.0.0.8. With AutoDrive present: resolved on attempt 1,
-all four names republished, **sourced files land in our own mod environment** (the build plan's
-number-one risk, now closed), zero errors. With AutoDrive absent: gave up after 300 attempts, said so
-once, game otherwise normal.
+### Repository layout
 
-
-No editor yet. This stage exists to answer the plan's number-one risk: **which Lua environment a
-runtime `source()` call lands in.** Every later stage depends on that, and nothing in the codebase
-or the docs answers it.
-
-What it does:
-
-1. Finds AutoDrive's specialization table by scanning `g_vehicleTypeManager` for the `onDrawUIInfo`
-   listener — structural, so it needs no mod name.
-2. Takes `getfenv` of `AutoDrive.onDrawEditorMode` to get AutoDrive's whole environment.
-   *Before any hook is installed* — `getfenv` on a function we have already wrapped returns **our**
-   environment, which was measured the hard way.
-3. Sources a one-line probe and asks it, via the root table, which environment it landed in.
-4. Republishes four names (`AutoDrive`, `ADGraphManager`, `ADDrawingManager`,
-   `ADEnterTargetNameGui`) into that environment. An allow-list, not an `__index` fallthrough —
-   see the comment in `scripts/Arming.lua`.
-
-## Verifying stage 1
-
-Test against **stock AutoDrive with `FS25_AutoDrive_Gibbs` disabled**. The fork does all of this
-natively, so a pass with it enabled proves nothing.
-
-Load a savegame with AutoDrive active, then:
-
-```
-FlyoverStatus
-```
-
-The log should contain, in order:
-
-```
-resolved AutoDrive on attempt N via the g_vehicleTypeManager onDrawUIInfo listener scan
-republished: AutoDrive, ADGraphManager, ADDrawingManager, ADEnterTargetNameGui
-sourced files land in <X>
-ARMED. 0 editor file(s) sourced.
-```
-
-**The `sourced files land in` line is the finding.** Any of the three answers is workable — the code
-republishes into whatever the probe reports — but which one it is decides how stage 5 is written, so
-report it.
-
-Then **disable AutoDrive and reload**: it must give up after 300 attempts, say so once, and leave
-the game otherwise normal.
-
-## Stage 2 — the copied geometry ✅ passed 2026-09-08
-
-`PolygonUtils.lua` and `OffsetGeometry.lua` are copied **verbatim** from the fork into
-`scripts/editor/` and sourced by the prelude after arming. Same mod config as stage 1, then:
-
-```
-FlyoverGeomTest
-```
-
-Expected: `5 points, max turn 90.0 deg, area 53424 (source 47808) | PASS`
-
-The ring is a field with a 4m inlet cut into one side, offset outward by 6m - the case that used to
-produce a waypoint 188m outside the field and a 180-degree doubling-back. So a sane answer exercises
-the miter limit, the validity pass and cusp removal, not merely "the file loaded".
-
-It is also the sharpest test of the copy itself. With the fork disabled `ADPolygonUtils` genuinely
-does not exist in AutoDrive's environment, so a wrong source order fails loudly with
-`ADPolygonUtils is nil` instead of silently borrowing the fork's copy.
-
-## Stage 3 — the wrappers ✅ passed 2026-09-08
-
-Five functions inside AutoDrive's own source files were edited by the fork. A guest cannot edit
-them, so they become wrappers on AutoDrive's shared table, installed **last** — after resolution and
-after the editor files are sourced, because `getfenv` on an already-wrapped function returns *our*
-environment.
-
-Same mod config. Sit in an AutoDrive vehicle with its HUD visible, then:
-
-```
-FlyoverFakeActive
-```
-
-Four things should change, and all four should revert when you toggle it off again:
-
-| | Expected while ON |
-|---|---|
-| AutoDrive vehicle HUD | gone |
-| Waypoint network | drawn, **even with EditorMode off** |
-| Clicking where the HUD was | does nothing |
-| Mouse wheel | still zooms (the editor gets first refusal, not ownership — and there is no editor yet) |
-
-Then `FlyoverStatus` for the counters. The interesting pair is `onDrawUIInfo` versus `drawHud`:
-**if `onDrawUIInfo` stays at 0 while `drawHud` climbs**, then `onDrawUIInfo` does not raise in this
-situation and the second wrapper is carrying the HUD suppression alone. Either answer is fine —
-nothing load-bearing depends on it — but it is the one open question from the build plan, and this
-is where it gets answered.
-
-## Stage 4 — the proxy ✅ passed 2026-09-08
-
-`draws=2874`, zero errors, network drawn at a cursor 200m from the vehicle. Counters:
-`onDrawUIInfo 28730, drawHud 1, mouse 1732, editorShow 4543, wheel 0`.
-
-So wrapper 2 does the HUD suppression in the in-vehicle case and 2b is a fallback that fires once —
-on the first frame, before `proxyOwnsNetwork` flips. `wheel 0` with zoom still working confirms the
-wheel falls through when no editor claims it.
-
-The network gets re-centred on a cursor instead of the vehicle, by handing
-`AutoDrive:onDrawEditorMode` a stand-in `self` whose `components[1].node` sits at the cursor and
-whose `__index` sends everything else to the real vehicle. This is the mechanism the whole companion
-approach rests on, already measured once by the spike at 4,813 calls with zero errors.
-
-Sit in an AutoDrive vehicle, then:
-
-```
-FlyoverProxyAt
-```
-
-With no arguments it drops the cursor 200 m from you — a red vertical marker. **The network should
-draw around the marker, not around you.** `FlyoverProxyAt <x> <z>` aims it anywhere;
-`FlyoverProxyOff` ends it.
-
-Then `FlyoverStatus`. Two counters matter:
-
-- **`proxy draws`** climbing — the stand-in is being accepted frame after frame. If the stand-in were
-  wrong, `self.ad` or `self.components[1].node` would throw on the *first* frame and the proxy would
-  disable itself with the error in the log.
-- **`onDrawUIInfo`** climbing — this is now allowed to fire, because `proxyOwnsNetwork` is true and
-  something else is drawing. If it stays at 0 while the network still appears at the cursor, then
-  `onDrawUIInfo` is not raising and `Hud.drawHud` is doing the HUD suppression alone.
-
-Note this stage still has no `GuiTopDownCamera`, so it does **not** settle whether `onDrawUIInfo`
-survives the camera — that is genuinely stage 5. What it settles is the stand-in.
-
-## Versioning
-
-Two numbers, because one cannot answer the question honestly.
-
-`P.BUILD` in `Prelude.lua` is re-sourced every time a savegame loads, so it always describes the Lua
-actually executing. `modDesc`'s version is read by the mod manager at **game startup only**. Both are
-printed at source time, on the `ARMED` line, and by `FlyoverStatus`.
-
-**So: reloading a savegame from the main menu is enough for Lua changes.** A full restart is only
-needed when `modDesc.xml` itself changes. On the main-menu path the modDesc version goes stale while
-the code is current, and the version line says so explicitly rather than misreporting:
-
-```
-build 0.4.0.0 (modDesc says 0.3.0.0 - stale, full restart to refresh it)
-```
-
-That mismatch is informational, not a fault. It matters only when a change touches modDesc — a new
-`<sourceFile>` entry, say — which will not take effect until a real restart.
-
-## Layout
-
-| File | |
+| Path | |
 |---|---|
 | `scripts/Prelude.lua` | the only `<extraSourceFiles>` entry; orders everything |
-| `scripts/Arming.lua` | listener scan → `getfenv` → republish |
-| `scripts/EnvProbe.lua` | one line, answers the environment question |
-| `scripts/Proxy.lua` | the stand-in `self` that re-centres the network |
-| `scripts/Wrappers.lua` | the five fork edits as runtime wrappers |
-| `scripts/Settings.lua` | six companion-owned settings; never touches `AutoDrive.settings` |
-| `tools/make_icon.py` | regenerates `icon.dds` |
+| `scripts/Arming.lua` | resolves AutoDrive: listener scan → `getfenv` → republish |
+| `scripts/Proxy.lua` | the stand-in `self` that re-centres the network on the cursor |
+| `scripts/Wrappers.lua` | the fork's edits, re-expressed as runtime wrappers |
+| `scripts/Settings.lua` | companion-owned settings; never touches `AutoDrive.settings` |
+| `scripts/editor/` | the editor itself — tools, HUD, and geometry |
+| `tools/` | asset generators (`make_tool_icons.py`, `make_icon.py`), excluded from the packaged mod |
 
 Nothing but `Prelude.lua` may go in `<extraSourceFiles>`: the editor files write into AutoDrive's
 table at source time, and AutoDrive is unresolvable then.
+
+## Credits
+
+By Gibbs. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive);
+not affiliated with or endorsed by the AutoDrive team.
