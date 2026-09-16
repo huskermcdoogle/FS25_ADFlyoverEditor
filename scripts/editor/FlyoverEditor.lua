@@ -698,7 +698,19 @@ function ADFlyoverEditor:enable()
     self.lastRightPressAt = nil
     self.boxActive = false
     self.boxStartX, self.boxStartZ = nil, nil
-    ADEditorHistory:clear()
+    -- Keep the undo history across an accidental Esc and re-open, so you can jump back in and still
+    -- undo. Drop it only if the network changed while the editor was closed (a route recorded by
+    -- driving, say) - those snapshots would restore a graph that no longer matches. The history is
+    -- capped at 25 entries and reset on savegame reload, so it cannot grow without bound.
+    local wpCount = ADGraphManager:getWayPointsCount()
+    if self.historyGuardCount ~= nil and self.historyGuardCount ~= wpCount then
+        ADEditorHistory:clear()
+        Logging.info("[FlyoverEditor]: network changed while closed (%s -> %d waypoints); cleared the undo history.",
+            tostring(self.historyGuardCount), wpCount)
+    elseif ADEditorHistory:canUndo() or ADEditorHistory:canRedo() then
+        Logging.info("[FlyoverEditor]: kept the undo history from before (%d undo, %d redo).",
+            ADEditorHistory:depth(), ADEditorHistory:redoDepth())
+    end
     Logging.info("[FlyoverEditor]: ACTIVE - %s", self:describeBuild())
 end
 
@@ -707,6 +719,10 @@ function ADFlyoverEditor:disable()
         Logging.info("[FlyoverEditor]: not active.")
         return
     end
+
+    -- Remember the network size on the way out, so re-opening can tell whether it changed while the
+    -- editor was closed and the kept undo history is still safe to apply.
+    self.historyGuardCount = ADGraphManager:getWayPointsCount()
 
     -- FIRST, before touching the camera or the context. Tearing those down generates input events,
     -- and a stale spline makes those throw - which is exactly how teardown used to abort partway
@@ -1005,6 +1021,11 @@ function ADFlyoverEditor:update(dt)
 
     -- Nothing in the world is under the mouse while it is on the panel, so nothing is highlighted.
     self.hoverId = not overPanel and self:findWayPointNearCursor() or nil
+    -- Remember the last waypoint pointed at while the move tool is up, so the falloff preview keeps a
+    -- centre after the cursor moves onto the tool card to wheel the radius.
+    if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
+        self.moveFocusId = self.hoverId
+    end
     self:updateFieldUnderCursor()
 
     if self.tool == self.TOOL.SPLINE then
@@ -1489,6 +1510,7 @@ function ADFlyoverEditor:setTool(tool)
     self.dragId = nil
     self.boxActive = false
     self.ctxMenu = nil
+    self.moveFocusId = nil
     Logging.info("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
 end
 
@@ -1652,6 +1674,32 @@ function ADFlyoverEditor:drawNetwork()
     accent(self.splineFromId, 0, 0.6, 1, 4)
     accent(self.mergeFromId, 1, 0.4, 0.9, 4)
     accent(self.mergeToId, 1, 0.4, 0.9, 4)
+
+    -- Move falloff preview: the waypoints the falloff would carry, measured ALONG THE TRACK (not a
+    -- circle - the reach follows the run through junctions, so a ring would lie about it). The centre
+    -- is the point being dragged, or the last one pointed at, so wheeling the radius over the tool
+    -- card shows its reach live. Sized and brightened by how far each point would actually move.
+    if self.tool == self.TOOL.MOVE then
+        local centreId = self.dragId or self.moveFocusId
+        local radius = self.falloffRadius or 0
+        if centreId ~= nil and radius > 0 then
+            local c = ADGraphManager:getWayPointById(centreId)
+            if c ~= nil then
+                ADDrawingManager:addSphereTask(c.x, c.y + 0.7, c.z, 4.5, 1, 0.8, 0.15, 0.95)
+                local reached = self:collectAlongTrack(centreId, radius)
+                for otherId, d in pairs(reached) do
+                    if otherId ~= centreId then
+                        local wp = ADGraphManager:getWayPointById(otherId)
+                        if wp ~= nil then
+                            local w = 0.5 * (1 + math.cos(math.pi * math.min(d, radius) / radius))
+                            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z,
+                                2 + 3 * w, 1, 0.82, 0.2, 0.35 + 0.55 * w)
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     -- Show what the Select-mode context menu is about to act on, so its "N points" has a visible
     -- referent in the world. Amber, distinct from the green selection and the blue span-from marker.
