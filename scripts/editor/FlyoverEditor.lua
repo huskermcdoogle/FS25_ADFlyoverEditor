@@ -694,6 +694,7 @@ function ADFlyoverEditor:enable()
     -- Always open in Select mode, whatever tool (or armed popup) a previous session left behind.
     self:setTool(self.TOOL.NONE)
     self.cardHidden = false
+    self.settingsOpen = false
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -5705,18 +5706,20 @@ function ADFlyoverEditor:handleWheel(offset)
     end
     local step = offset > 0 and 1 or -1
 
-    -- Over the tool card's controls: adjust the setting even with nothing selected yet, so the card
-    -- is a place you can dial a value in before you start. This is what puts the wheel on move's
-    -- falloff without a point picked.
-    if ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOverToolCard(self.mouseX, self.mouseY) then
-        -- Prefer the specific field under the cursor, so scrolling a particular field adjusts THAT
-        -- field (the typed ones the active-tool wheel does not otherwise reach); fall back to the
-        -- tool's default wheel field when the cursor is over the card but not on a field.
+    -- Any numeric field under the cursor takes the wheel: the floating card's fields, the settings
+    -- fields in the corner block, and the armed popup. Only rows carrying a stepAction match, so a
+    -- scroll over a plain button or empty space still falls through to the camera zoom below.
+    if ADFlyoverHud ~= nil then
         local field = ADFlyoverHud:numberFieldAt(self.mouseX, self.mouseY)
         if field ~= nil and field.stepAction ~= nil then
             field.stepAction(step)
             return true
         end
+    end
+
+    -- Over the tool card but not on a specific field: adjust the active tool's setting anyway, so the
+    -- card is a place you can dial a value in before you start (move's falloff without a point picked).
+    if ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOverToolCard(self.mouseX, self.mouseY) then
         if self:applyWheelToActiveTool(step) then
             return true
         end
@@ -5733,6 +5736,41 @@ function ADFlyoverEditor:handleWheel(offset)
     if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(step) end
 
     return false
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Appearance: the in-editor SETTINGS controls drive ADFlyoverTheme (scale + palette) live. Each
+-- call just forwards to the theme module, which clamps, resolves and persists.
+-- ---------------------------------------------------------------------------------------------
+
+function ADFlyoverEditor:toggleSettings()
+    self.settingsOpen = not self.settingsOpen
+    if not self.settingsOpen then
+        -- Leaving the panel abandons a half-typed scale rather than stranding the number editor.
+        self:cancelEditNumber()
+    end
+end
+
+function ADFlyoverEditor:applyThemeScale(v)
+    if ADFlyoverTheme == nil then return nil end
+    return ADFlyoverTheme:setScale(v)
+end
+
+function ADFlyoverEditor:stepThemeScale(dir)
+    if ADFlyoverTheme == nil then return end
+    ADFlyoverTheme:setScale(ADFlyoverTheme.scale + dir * ADFlyoverTheme.SCALE_STEP)
+end
+
+function ADFlyoverEditor:cycleThemePreset(dir)
+    if ADFlyoverTheme ~= nil then ADFlyoverTheme:cyclePreset(dir) end
+end
+
+function ADFlyoverEditor:cycleThemeAccent(dir)
+    if ADFlyoverTheme ~= nil then ADFlyoverTheme:cycleAccent(dir) end
+end
+
+function ADFlyoverEditor:resetTheme()
+    if ADFlyoverTheme ~= nil then ADFlyoverTheme:resetDefault() end
 end
 
 --- Evenly spaced points along the span, by arc length.

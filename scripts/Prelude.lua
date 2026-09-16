@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.29.4.0"
+P.BUILD = "0.30.1.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -87,6 +87,7 @@ P.EDITOR_FILES = {
     "scripts/editor/OffsetGeometry.lua",
     "scripts/editor/FieldLoopGenerator.lua",
     "scripts/editor/EditorHistory.lua",
+    "scripts/editor/Theme.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
 }
@@ -212,6 +213,7 @@ function P:update(dt)
     end
 
     ADFlyoverSettings.load()
+    ADFlyoverTheme.load()
 
     -- Wrappers go in LAST, after everything is resolved and sourced. getfenv() on a function we
     -- have already wrapped returns OUR environment rather than AutoDrive's, so installing these

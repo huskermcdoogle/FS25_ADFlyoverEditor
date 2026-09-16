@@ -109,6 +109,19 @@ local function label(x, y, size, text, r, g, b, a, align)
     setTextColor(1, 1, 1, 1)
 end
 
+-- Fill a quad in a theme role's colour. Alpha stays per-call because the same role is drawn at
+-- different opacities in different places (a near-opaque panel, a lighter row plate).
+local function fillRole(ov, x, y, w, h, role, a)
+    local r, g, b = ADFlyoverTheme:rgb(role)
+    drawQuad(ov, x, y, w, h, r, g, b, a or 1)
+end
+
+-- Draw text in a theme role's colour.
+local function labelRole(x, y, size, text, role, a, align)
+    local r, g, b = ADFlyoverTheme:rgb(role)
+    label(x, y, size, text, r, g, b, a or 1, align)
+end
+
 --- Render one adjustable numeric field as "label ........ value (-)(+)" and register the two stepper
 --- buttons as their own clickable rows, so a click on either nudges row.stepAction while a click on
 --- the value still types (row.action). The buttons sit at the right; the value is right-aligned just
@@ -117,7 +130,7 @@ end
 ---
 --- Appends to self.rows, so the caller's render loop MUST freeze its length first (numeric for over
 --- a frozen count), or it will walk into the buttons it just added.
-function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelColor, valueColor)
+function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelRoleName, valueRoleName)
     local pad = self.padding
     local aspect = g_screenAspectRatio or (16 / 9)
     local bh = h * 0.80
@@ -127,15 +140,14 @@ function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelCo
     local minusX = plusX - bw - pad * 0.6
     local textY = y + (h - fontSize) * 0.5
 
-    label(x + pad * 2, textY, fontSize, row.text, labelColor[1], labelColor[2], labelColor[3], 1)
+    labelRole(x + pad * 2, textY, fontSize, row.text, labelRoleName or "bodyText")
 
     local be = 0.0014
     local function button(bx, glyph, dir)
         local hovered = mx ~= nil and mx >= bx and mx <= bx + bw and my >= by and my <= by + bh
-        drawQuad(self.borderOverlay, bx - be, by - be, bw + be * 2, bh + be * 2, 0.42, 0.50, 0.60, 0.55)
-        drawQuad(self.rowOverlay, bx, by, bw, bh,
-            hovered and 0.30 or 0.19, hovered and 0.40 or 0.23, hovered and 0.52 or 0.29, 0.98)
-        label(bx + bw * 0.5, textY, fontSize, glyph, hovered and 1 or 0.86, hovered and 1 or 0.88, 1, 1,
+        fillRole(self.borderOverlay, bx - be, by - be, bw + be * 2, bh + be * 2, "stepperBorder", 0.7)
+        fillRole(self.rowOverlay, bx, by, bw, bh, hovered and "hoverBg" or "stepperBg", 0.98)
+        labelRole(bx + bw * 0.5, textY, fontSize, glyph, "stepperText", hovered and 1 or 0.85,
             RenderText.ALIGN_CENTER)
         table.insert(self.rows, { x = bx, y = by, w = bw, h = bh,
             action = function() if row.stepAction ~= nil then row.stepAction(dir) end end })
@@ -143,8 +155,8 @@ function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelCo
     button(minusX, "-", -1)
     button(plusX, "+", 1)
 
-    label(minusX - pad * 0.8, textY, fontSize, row.value or "-",
-        valueColor[1], valueColor[2], valueColor[3], 1, RenderText.ALIGN_RIGHT)
+    labelRole(minusX - pad * 0.8, textY, fontSize, row.value or "-", valueRoleName or "valueText", 1,
+        RenderText.ALIGN_RIGHT)
 end
 
 --- Rebuild the row list for the current editor state. Rows are rebuilt every frame rather than
@@ -218,6 +230,37 @@ function ADFlyoverHud:buildRows(editor)
             editor:invalidateIdReferences()
         end
     end)
+    add("action", "settings", editor.settingsOpen and "open" or "", true,
+        function() editor:toggleSettings() end)
+
+    -- The look-and-feel controls. Kept in the fixed corner block (above the status line) rather than
+    -- the floating card so they stay put while you audition scales and colours, which all apply live.
+    if editor.settingsOpen then
+        add("gap")
+        add("section", "SETTINGS")
+
+        local scaleEntry = {
+            label = "ui scale", unit = "x",
+            get = function() return ADFlyoverTheme.scale end,
+            apply = function(v) return editor:applyThemeScale(v) end,
+            step = function(d) editor:stepThemeScale(d) end,
+        }
+        local scaleEditing = editor.editing ~= nil and editor.editing.label == "ui scale"
+        local scaleShown = scaleEditing and (editor.editing.buffer .. "_")
+            or string.format("%.2f x", ADFlyoverTheme.scale)
+        add("number", "ui scale", scaleShown, scaleEditing, function() editor:beginEditNumber(scaleEntry) end)
+        rows[#rows].stepAction = function(d) editor:stepThemeScale(d) end
+
+        add("toggle", "theme", ADFlyoverTheme.PRESET_NAMES[ADFlyoverTheme.preset] or ADFlyoverTheme.preset,
+            false, function() editor:cycleThemePreset(1) end)
+        rows[#rows].stepAction = function(d) editor:cycleThemePreset(d) end
+
+        add("toggle", "accent", ADFlyoverTheme:accentName(), false, function() editor:cycleThemeAccent(1) end)
+        rows[#rows].stepAction = function(d) editor:cycleThemeAccent(d) end
+
+        add("action", "reset to default", "", true, function() editor:resetTheme() end)
+        add("note", "click / scroll / +- to change - saved automatically")
+    end
 
     add("gap")
     add("status", string.format("selected %d   undo %d   placed %d",
@@ -371,7 +414,10 @@ function ADFlyoverHud:draw(editor)
     local rows = self:buildRows(editor)
     self.rows = rows
 
-    local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
+    -- The panel scales with the game's own UI scale, times the mod's own scale setting so the editor
+    -- can be enlarged for low vision or a high-res display without blowing up the rest of the HUD.
+    local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
+    local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
     local rowH = self.rowHeight * uiScale
     local width = self.width * uiScale
     local pad = self.padding
@@ -438,16 +484,15 @@ function ADFlyoverHud:draw(editor)
 
     local edge = 0.0025
     -- Corner panel: near-opaque so the world does not read through the text, with a defined edge.
-    drawQuad(self.borderOverlay, self.frameX - edge, self.frameY - edge,
-        self.frameW + edge * 2, self.frameH + edge * 2, 0.28, 0.31, 0.35, 0.95)
-    drawQuad(self.background, self.frameX, self.frameY, self.frameW, self.frameH,
-        0.105, 0.11, 0.125, 0.97)
-    -- Floating tool card, blue-accented so it reads as the active tool's own controls.
+    fillRole(self.borderOverlay, self.frameX - edge, self.frameY - edge,
+        self.frameW + edge * 2, self.frameH + edge * 2, "panelBorder", 0.95)
+    fillRole(self.background, self.frameX, self.frameY, self.frameW, self.frameH, "panelBg", 0.98)
+    -- Floating tool card, accent-tinted border so it reads as the active tool's own controls.
     if hasContext then
-        drawQuad(self.borderOverlay, self.ctxFrameX - edge, self.ctxFrameY - edge,
-            self.ctxFrameW + edge * 2, self.ctxFrameH + edge * 2, 0.34, 0.52, 0.72, 0.96)
-        drawQuad(self.background, self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH,
-            0.12, 0.13, 0.15, 0.99)
+        fillRole(self.borderOverlay, self.ctxFrameX - edge, self.ctxFrameY - edge,
+            self.ctxFrameW + edge * 2, self.ctxFrameH + edge * 2, "cardBorder", 0.96)
+        fillRole(self.background, self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH,
+            "cardBg", 0.99)
     end
 
     -- Normalised coords are square only on a 1:1 screen; on 16:9 a shape with equal w and h renders
@@ -463,32 +508,33 @@ function ADFlyoverHud:draw(editor)
         local textX = x + self.padding * 2
 
         if row.kind == "header" then
-            drawQuad(self.headerOverlay, x, y, width, h, 0.16, 0.17, 0.20, 1)
-            label(textX, textY, fontSize, row.text, 0.90, 0.91, 0.93, 1)
+            fillRole(self.headerOverlay, x, y, width, h, "headerBg", 1)
+            labelRole(textX, textY, fontSize, row.text, "headerText")
             if row.value ~= nil then
-                label(x + width - self.padding * 2, textY, fontSize * 0.8, row.value,
-                    0.54, 0.57, 0.62, 1, RenderText.ALIGN_RIGHT)
+                labelRole(x + width - self.padding * 2, textY, fontSize * 0.8, row.value,
+                    "mutedText", 1, RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "note" then
-            label(textX, textY, fontSize * 0.86, row.text, 0.50, 0.53, 0.57, 1)
+            labelRole(textX, textY, fontSize * 0.86, row.text, "mutedText")
         elseif row.kind == "section" then
-            label(textX, textY, fontSize * 0.80, row.text, 0.52, 0.58, 0.66, 1)
+            labelRole(textX, textY, fontSize * 0.80, row.text, "sectionText")
         elseif row.kind == "tool" then
             -- A plated, bordered button: a hairline outline behind the fill gives it a defined edge
             -- (the "button feel"), the glyph on the left carries the tool, the label names it, and the
             -- number key sits as a dim cap on the right so the labels line up.
             local hovered = mx ~= nil and mx >= x and mx <= x + width and my >= y and my <= y + h
-            local pr, pg, pb, pa, br, bg, bb, tr, tg, tb
+            local fillR, borderR, textR
             if row.active then
-                pr, pg, pb, pa, br, bg, bb, tr, tg, tb = 0.28, 0.52, 0.78, 0.96, 0.55, 0.78, 1.0, 0.98, 0.99, 1.0
+                fillR, borderR, textR = "accent", "accentBorder", "accentText"
             elseif hovered then
-                pr, pg, pb, pa, br, bg, bb, tr, tg, tb = 0.23, 0.26, 0.31, 0.96, 0.42, 0.48, 0.56, 0.93, 0.95, 0.98
+                fillR, borderR, textR = "hoverBg", "hoverBorder", "bodyText"
             else
-                pr, pg, pb, pa, br, bg, bb, tr, tg, tb = 0.155, 0.165, 0.19, 0.95, 0.30, 0.33, 0.38, 0.80, 0.82, 0.86
+                fillR, borderR, textR = "toolBg", "toolBorder", "bodyText"
             end
             local be = 0.0016
-            drawQuad(self.borderOverlay, x - be, y - be, width + be * 2, h + be * 2, br, bg, bb, 0.9)
-            drawQuad(self.rowOverlay, x, y, width, h, pr, pg, pb, pa)
+            fillRole(self.borderOverlay, x - be, y - be, width + be * 2, h + be * 2, borderR, 0.9)
+            fillRole(self.rowOverlay, x, y, width, h, fillR, row.active and 0.96 or 0.95)
+            local tr, tg, tb = ADFlyoverTheme:rgb(textR)
             local iconH = h * 0.72
             local iconW = iconH / aspect
             local labelX = textX
@@ -505,44 +551,44 @@ function ADFlyoverHud:draw(editor)
         elseif row.kind == "number" then
             if row.active then
                 -- Being typed into: show the buffer, no steppers (they would fight the half-typed value).
-                drawQuad(self.rowOverlay, x, y, width, h, 0.20, 0.28, 0.38, 0.95)
-                label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
-                label(x + width - self.padding * 2, textY, fontSize, row.value, 0.96, 0.98, 1, 1,
+                fillRole(self.rowOverlay, x, y, width, h, "editBg", 0.95)
+                labelRole(textX, textY, fontSize, row.text, "bodyText")
+                labelRole(x + width - self.padding * 2, textY, fontSize, row.value, "headerText", 1,
                     RenderText.ALIGN_RIGHT)
             elseif row.stepAction ~= nil then
-                self:drawNumberField(row, x, y, width, h, fontSize, mx, my,
-                    { 0.76, 0.78, 0.81 }, { 0.62, 0.72, 0.86 })
+                self:drawNumberField(row, x, y, width, h, fontSize, mx, my, "bodyText", "valueText")
             else
-                label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
-                label(x + width - self.padding * 2, textY, fontSize, row.value, 0.62, 0.72, 0.86, 1,
+                labelRole(textX, textY, fontSize, row.text, "bodyText")
+                labelRole(x + width - self.padding * 2, textY, fontSize, row.value, "valueText", 1,
                     RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "toggle" then
             if row.stepAction ~= nil then
                 -- A wheel-driven number dressed as a toggle: give it steppers and per-field wheel too.
-                self:drawNumberField(row, x, y, width, h, fontSize, mx, my,
-                    { 0.76, 0.78, 0.81 }, { 0.58, 0.74, 0.92 })
+                self:drawNumberField(row, x, y, width, h, fontSize, mx, my, "bodyText", "valueText")
             else
-                label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
-                label(x + width - self.padding * 2, textY, fontSize, row.value, 0.58, 0.74, 0.92, 1,
+                labelRole(textX, textY, fontSize, row.text, "bodyText")
+                labelRole(x + width - self.padding * 2, textY, fontSize, row.value, "valueText", 1,
                     RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "action" then
             -- Dimmed when the action would currently do nothing, so the panel says what is
             -- available rather than only what exists.
-            local bright = row.active
-            label(textX, textY, fontSize, row.text,
-                bright and 0.82 or 0.45, bright and 0.85 or 0.47, bright and 0.90 or 0.50, 1)
-            label(x + width - self.padding * 2, textY, fontSize * 0.85, row.value,
-                0.48, 0.50, 0.54, 1, RenderText.ALIGN_RIGHT)
+            if row.active then
+                labelRole(textX, textY, fontSize, row.text, "bodyText")
+            else
+                labelRole(textX, textY, fontSize, row.text, "mutedText", 0.7)
+            end
+            labelRole(x + width - self.padding * 2, textY, fontSize * 0.85, row.value, "mutedText", 0.85,
+                RenderText.ALIGN_RIGHT)
         elseif row.kind == "cursor" then
-            label(textX, textY, fontSize * 0.90, row.text, 0.55, 0.57, 0.60, 1)
-            label(x + width - self.padding * 2, textY, fontSize * 0.90, row.value, 0.58, 0.74, 0.92, 1,
+            labelRole(textX, textY, fontSize * 0.90, row.text, "mutedText")
+            labelRole(x + width - self.padding * 2, textY, fontSize * 0.90, row.value, "valueText", 1,
                 RenderText.ALIGN_RIGHT)
         elseif row.kind == "status" then
-            label(textX, textY, fontSize * 0.9, row.text, 0.60, 0.62, 0.66, 1)
+            labelRole(textX, textY, fontSize * 0.9, row.text, "mutedText")
         elseif row.kind == "hint" then
-            label(textX, textY, fontSize * 0.92, row.text, 0.72, 0.80, 0.88, 1)
+            labelRole(textX, textY, fontSize * 0.92, row.text, "hintText")
         end
     end
 
@@ -565,7 +611,8 @@ function ADFlyoverHud:drawContextMenu(editor)
     end
     self:ensureOverlays()
 
-    local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
+    local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
+    local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
     local rowH = self.rowHeight * uiScale
     local pad = self.padding
     local pw = 0.150 * uiScale
@@ -649,9 +696,9 @@ function ADFlyoverHud:drawContextMenu(editor)
     local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
-    drawQuad(self.borderOverlay, x - edge, top - ph - edge, pw + edge * 2, ph + edge * 2,
-        0.34, 0.52, 0.72, 0.98)
-    drawQuad(self.background, x, top - ph, pw, ph, 0.12, 0.13, 0.15, 0.99)
+    fillRole(self.borderOverlay, x - edge, top - ph - edge, pw + edge * 2, ph + edge * 2,
+        "cardBorder", 0.98)
+    fillRole(self.background, x, top - ph, pw, ph, "cardBg", 0.99)
 
     local y = top - pad
     for _, item in ipairs(items) do
@@ -665,35 +712,29 @@ function ADFlyoverHud:drawContextMenu(editor)
         local rightX = x + pw - pad * 2
         local hovered = mx ~= nil and mx >= x and mx <= x + pw and my >= y and my <= y + rowH
         if item.kind == "mhead" then
-            drawQuad(self.headerOverlay, x, y, pw, rowH, 0.20, 0.30, 0.42, 1)
-            label(textX, textY, fontSize * 0.9, item.text, 0.72, 0.82, 0.95, 1)
+            fillRole(self.headerOverlay, x, y, pw, rowH, "headerBg", 1)
+            labelRole(textX, textY, fontSize * 0.9, item.text, "headerText")
         elseif item.kind == "mnote" then
-            label(textX, textY, fontSize * 0.82, item.text, 0.5, 0.53, 0.57, 1)
+            labelRole(textX, textY, fontSize * 0.82, item.text, "mutedText")
         elseif item.kind == "mwheel" then
             -- The wheel drives this while armed; the - / + steppers and per-field wheel adjust it too.
-            drawQuad(self.rowOverlay, x, y, pw, rowH, 0.15, 0.17, 0.20, 0.9)
+            fillRole(self.rowOverlay, x, y, pw, rowH, "toolBg", 0.9)
             item.stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
-            self:drawNumberField(item, x, y, pw, rowH, fontSize, mx, my,
-                { 0.72, 0.75, 0.79 }, { 0.60, 0.78, 0.98 })
+            self:drawNumberField(item, x, y, pw, rowH, fontSize, mx, my, "bodyText", "valueText")
         elseif item.kind == "mtoggle" then
-            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.24 or 0.165,
-                hovered and 0.30 or 0.18, hovered and 0.40 or 0.205, 0.95)
-            label(textX, textY, fontSize, item.text, hovered and 0.94 or 0.78,
-                hovered and 0.96 or 0.80, hovered and 1 or 0.84, 1)
-            label(rightX, textY, fontSize, item.value or "-", 1, 0.85, 0.4, 1, RenderText.ALIGN_RIGHT)
+            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "hoverBg" or "toolBg", 0.95)
+            labelRole(textX, textY, fontSize, item.text, "bodyText")
+            labelRole(rightX, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
         elseif item.kind == "mapply" then
-            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.32 or 0.24,
-                hovered and 0.56 or 0.44, hovered and 0.82 or 0.66, 0.95)
-            label(textX, textY, fontSize, item.text, 0.96, 0.98, 1, 1)
+            fillRole(self.rowOverlay, x, y, pw, rowH, "accent", hovered and 0.98 or 0.9)
+            labelRole(textX, textY, fontSize, item.text, "accentText")
         elseif item.danger then
-            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.42 or 0.23,
-                hovered and 0.17 or 0.155, hovered and 0.16 or 0.15, hovered and 0.95 or 0.9)
-            label(textX, textY, fontSize, item.text, 0.94, 0.62, 0.56, 1)
+            -- A translucent red wash on hover keeps the "this deletes" cue without a dedicated role.
+            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "danger" or "toolBg", hovered and 0.30 or 0.9)
+            labelRole(textX, textY, fontSize, item.text, "danger")
         else
-            drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.24 or 0.165,
-                hovered and 0.30 or 0.175, hovered and 0.40 or 0.205, 0.95)
-            label(textX, textY, fontSize, item.text, hovered and 0.96 or 0.82,
-                hovered and 0.98 or 0.84, hovered and 1 or 0.88, 1)
+            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "hoverBg" or "toolBg", 0.95)
+            labelRole(textX, textY, fontSize, item.text, "bodyText")
         end
     end
 end
