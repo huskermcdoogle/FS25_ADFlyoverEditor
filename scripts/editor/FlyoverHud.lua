@@ -55,6 +55,42 @@ function ADFlyoverHud:ensureOverlays()
         self.rowOverlay = Overlay.new(g_baseUIFilename, 0, 0, 1, 1)
         self.rowOverlay:setUVs(g_colorBgUVs)
     end
+    -- The tool-glyph atlas: our own DXT1 texture, loaded once. If it cannot be loaded (or the UV
+    -- API differs), the toolbar simply stays label-only - the icons are an enhancement, not load-
+    -- bearing. iconTried stops it retrying a failed load every frame.
+    if self.iconOverlay == nil and not self.iconTried then
+        self.iconTried = true
+        local dir = ADFlyoverPrelude ~= nil and ADFlyoverPrelude.MOD_DIRECTORY or nil
+        if dir ~= nil and Overlay ~= nil then
+            local ok, ov = pcall(function()
+                return Overlay.new(Utils.getFilename("textures/tool_icons.dds", dir), 0, 0, 1, 1)
+            end)
+            if ok and ov ~= nil then
+                self.iconOverlay = ov
+            else
+                Logging.warning("[ADFlyoverHud]: could not load textures/tool_icons.dds; the toolbar stays label-only.")
+            end
+        end
+    end
+end
+
+--- Draw one tool glyph from the atlas: cell 0..14, row-major in a 4x4 grid of 128px cells, tinted to
+--- the button. Guarded so an unexpected UV/render API drops to label-only rather than erroring.
+function ADFlyoverHud:renderIcon(cell, x, y, w, h, r, g, b, a)
+    if self.iconOverlay == nil or GuiUtils == nil then
+        return
+    end
+    local col, row = cell % 4, math.floor(cell / 4)
+    local ok = pcall(function()
+        self.iconOverlay:setUVs(GuiUtils.getUVs({ col * 128, row * 128, 128, 128 }, { 512, 512 }))
+        self.iconOverlay:setColor(r, g, b, a)
+        self.iconOverlay:setPosition(x, y)
+        self.iconOverlay:setDimension(w, h)
+        self.iconOverlay:render()
+    end)
+    if not ok then
+        self.iconOverlay = nil
+    end
 end
 
 local function drawQuad(ov, x, y, w, h, r, g, b, a)
@@ -73,6 +109,44 @@ local function label(x, y, size, text, r, g, b, a, align)
     setTextColor(1, 1, 1, 1)
 end
 
+--- Render one adjustable numeric field as "label ........ value (-)(+)" and register the two stepper
+--- buttons as their own clickable rows, so a click on either nudges row.stepAction while a click on
+--- the value still types (row.action). The buttons sit at the right; the value is right-aligned just
+--- left of them. The buttons overlap the field's full-width box, so isMouseOver scans back-to-front:
+--- the buttons are appended after the field and therefore win the click that lands on them.
+---
+--- Appends to self.rows, so the caller's render loop MUST freeze its length first (numeric for over
+--- a frozen count), or it will walk into the buttons it just added.
+function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelColor, valueColor)
+    local pad = self.padding
+    local aspect = g_screenAspectRatio or (16 / 9)
+    local bh = h * 0.80
+    local by = y + (h - bh) * 0.5
+    local bw = math.max(bh / aspect, 0.011)   -- pixel-square, but never too narrow to click
+    local plusX  = x + w - pad - bw
+    local minusX = plusX - bw - pad * 0.6
+    local textY = y + (h - fontSize) * 0.5
+
+    label(x + pad * 2, textY, fontSize, row.text, labelColor[1], labelColor[2], labelColor[3], 1)
+
+    local be = 0.0014
+    local function button(bx, glyph, dir)
+        local hovered = mx ~= nil and mx >= bx and mx <= bx + bw and my >= by and my <= by + bh
+        drawQuad(self.borderOverlay, bx - be, by - be, bw + be * 2, bh + be * 2, 0.42, 0.50, 0.60, 0.55)
+        drawQuad(self.rowOverlay, bx, by, bw, bh,
+            hovered and 0.30 or 0.19, hovered and 0.40 or 0.23, hovered and 0.52 or 0.29, 0.98)
+        label(bx + bw * 0.5, textY, fontSize, glyph, hovered and 1 or 0.86, hovered and 1 or 0.88, 1, 1,
+            RenderText.ALIGN_CENTER)
+        table.insert(self.rows, { x = bx, y = by, w = bw, h = bh,
+            action = function() if row.stepAction ~= nil then row.stepAction(dir) end end })
+    end
+    button(minusX, "-", -1)
+    button(plusX, "+", 1)
+
+    label(minusX - pad * 0.8, textY, fontSize, row.value or "-",
+        valueColor[1], valueColor[2], valueColor[3], 1, RenderText.ALIGN_RIGHT)
+end
+
 --- Rebuild the row list for the current editor state. Rows are rebuilt every frame rather than
 --- cached because almost all of them change with the tool, the selection or the pending action -
 --- caching would mean invalidating on nearly every event anyway.
@@ -82,9 +156,19 @@ function ADFlyoverHud:buildRows(editor)
     local function add(kind, text, value, active, action)
         table.insert(rows, { kind = kind, text = text, value = value, active = active, action = action })
     end
+    -- A read-only numeric field the mouse wheel drives, now also carrying - / + steppers and per-field
+    -- wheel: stepAction nudges the ACTIVE tool's setting (there is one such field per tool), which is
+    -- exactly what applyWheelToActiveTool changes. The HUD renders the steppers and routes the wheel.
+    local function addWheelNumber(text, value)
+        add("toggle", text, value)
+        rows[#rows].stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
+    end
 
     add("header", "FLYOVER EDITOR", "Esc to exit")
     add("note", "Standard AutoDrive editing suspended")
+    if editor.cardHidden and editor.tool ~= editor.TOOL.NONE then
+        add("note", "tool options hidden - middle-click to show")
+    end
     -- What the cursor is over. Field numbers are how fields are referred to when working on them,
     -- and in flyover mode there is no vehicle sitting in one to tell you which is which.
     add("cursor", "under cursor", editor.fieldLabel or "-")
@@ -106,11 +190,19 @@ function ADFlyoverHud:buildRows(editor)
         if id == 10 then return "0" end
         return ""
     end
+    -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
+    local ICON_CELL = {
+        [T.NONE] = 0, [T.DRAW] = 1, [T.SPLINE] = 2, [T.FIELDLOOP] = 3,
+        [T.PARALLEL] = 4, [T.SIDING] = 5, [T.MOVE] = 6, [T.SMOOTH] = 7,
+        [T.STRAIGHTEN] = 8, [T.DIVIDE] = 9, [T.CONVERT] = 10, [T.MERGE] = 11,
+        [T.NAME] = 12, [T.DELETE] = 13, [T.GROUND] = 14,
+    }
     for _, grp in ipairs(GROUPS) do
         add("section", grp[1])
         for _, id in ipairs(grp[2]) do
             local name = (id == T.NONE) and "select" or editor.TOOL_NAMES[id]
             add("tool", name, toolKeyLabel(id), editor.tool == id, function() editor:setTool(id) end)
+            rows[#rows].iconCell = ICON_CELL[id]
         end
     end
 
@@ -132,9 +224,9 @@ function ADFlyoverHud:buildRows(editor)
         editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
 
     -- The per-tool context (below) becomes the floating tool card, and only exists while a tool is
-    -- active and no menu/armed popup is up (those carry their own controls). In Select mode the
-    -- point/span/run menus stand in for it, so there is no card then.
-    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil then
+    -- active, no menu/armed popup is up (those carry their own controls), and it has not been hidden
+    -- with middle-click. In Select mode the point/span/run menus stand in for it, so there is no card.
+    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil and not editor.cardHidden then
     -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
     -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
     -- matter what is selected, which is what makes them clickable without looking - a button that
@@ -170,16 +262,13 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:cycleOffsetScope() end)
     end
 
-    if editor.tool == editor.TOOL.MOVE then
-        add("toggle", "falloff (wheel)", string.format("%.1f m", editor.falloffRadius or 0))
-    end
-
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
             function() editor:toggleSnapToTerrain() end)
     end
 
-    -- Typed numbers for whatever the current tool exposes. Click one, type, Enter.
+    -- Typed numbers for whatever the current tool exposes. Click the value to type it, Enter to
+    -- apply; the - / + steppers and the wheel nudge it by the field's own step.
     for _, entry in ipairs(editor:getEditableNumbers()) do
         local editing = editor.editing ~= nil and editor.editing.label == entry.label
         local shown
@@ -190,6 +279,9 @@ function ADFlyoverHud:buildRows(editor)
             shown = type(v) == "number" and string.format("%.2f %s", v, entry.unit or "") or "-"
         end
         add("number", entry.label, shown, editing, function() editor:beginEditNumber(entry) end)
+        if entry.step ~= nil then
+            rows[#rows].stepAction = function(dir) entry.step(dir) end
+        end
     end
 
     if editor.tool == editor.TOOL.SPLINE then
@@ -232,13 +324,13 @@ function ADFlyoverHud:buildRows(editor)
     elseif editor.tool == editor.TOOL.SMOOTH then
         add("toggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], false,
             function() editor:cycleSmoothMode() end)
-        if editor.smoothMode == editor.SMOOTH_MODE.REBUILD then
-            add("toggle", "max spacing (wheel)", string.format("%.1f m", editor.smoothSpacing))
-        else
-            add("toggle", "strength (wheel)", tostring(editor.smoothStrength))
+        -- REBUILD's max spacing is the typed number field above (getEditableNumbers), which carries
+        -- its own steppers; MOVE_POINTS has strength instead, driven here.
+        if editor.smoothMode ~= editor.SMOOTH_MODE.REBUILD then
+            addWheelNumber("strength", tostring(editor.smoothStrength))
         end
     elseif editor.tool == editor.TOOL.GROUND then
-        add("toggle", "tolerance (wheel)", string.format("%.1f m", editor.groundTolerance))
+        addWheelNumber("tolerance", string.format("%.1f m", editor.groundTolerance))
         add("toggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], false,
             function() editor:cycleGroundLevel() end)
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
@@ -248,7 +340,9 @@ function ADFlyoverHud:buildRows(editor)
                 #editor.groundPreview, editor.groundChecked or 0))
         end
     elseif editor.tool == editor.TOOL.DIVIDE then
-        add("toggle", "points (wheel)", tostring(editor.divideCount))
+        addWheelNumber("points", tostring(editor.divideCount))
+    elseif editor.tool == editor.TOOL.PARALLEL then
+        addWheelNumber("distance", string.format("%.1f m", editor.offsetDistance))
     elseif editor.tool == editor.TOOL.CONVERT then
         add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
             function() editor:cycleConvertOp() end)
@@ -257,12 +351,9 @@ function ADFlyoverHud:buildRows(editor)
     elseif editor.tool == editor.TOOL.DELETE then
         add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
             function() editor:cycleDeleteScope() end)
-    elseif editor.tool == editor.TOOL.MERGE then
-        -- Read-only here: it is a saved setting, changed in AutoDrive's settings page, so showing
-        -- it on the panel is about knowing what will happen rather than another place to set it.
-        add("toggle", "merge distance",
-            string.format("%.1f m", ADFlyoverSettings.get("flyoverMergeDistance") or AutoDrive.FLYOVER_MERGE_DISTANCE))
     end
+    -- MERGE's distance and divergence are the typed number fields above (getEditableNumbers), each
+    -- with its own steppers, so there is no separate read-only row for them here any more.
 
     add("gap")
     add("section", "NEXT")
@@ -359,8 +450,14 @@ function ADFlyoverHud:draw(editor)
             0.12, 0.13, 0.15, 0.99)
     end
 
+    -- Normalised coords are square only on a 1:1 screen; on 16:9 a shape with equal w and h renders
+    -- wider than tall. Icons must be pixel-square, so their width is divided by the aspect ratio.
+    local aspect = g_screenAspectRatio or (16 / 9)
     local mx, my = editor.mouseX, editor.mouseY
-    for _, row in ipairs(rows) do
+    -- Numeric for over a frozen count: drawNumberField appends the stepper buttons to `rows` as it
+    -- draws, and this must not then iterate into the buttons it just added.
+    for ri = 1, #rows do
+        local row = rows[ri]
         local x, y, width, h = row.x, row.y, row.w, row.h
         local textY = y + (h - fontSize) * 0.5
         local textX = x + self.padding * 2
@@ -377,39 +474,59 @@ function ADFlyoverHud:draw(editor)
         elseif row.kind == "section" then
             label(textX, textY, fontSize * 0.80, row.text, 0.52, 0.58, 0.66, 1)
         elseif row.kind == "tool" then
-            -- Every tool gets a plate, not just the selected one, so the list reads as a row of
-            -- buttons rather than as text with one line highlighted. The selected one keeps the
-            -- bright fill; the rest get a dim plate that still says "this is clickable". The number
-            -- key sits as a dim cap on the right so the labels line up cleanly - inline "5  spline"
-            -- ran scrambled, out-of-sequence digits down the middle of the list.
+            -- A plated, bordered button: a hairline outline behind the fill gives it a defined edge
+            -- (the "button feel"), the glyph on the left carries the tool, the label names it, and the
+            -- number key sits as a dim cap on the right so the labels line up.
             local hovered = mx ~= nil and mx >= x and mx <= x + width and my >= y and my <= y + h
+            local pr, pg, pb, pa, br, bg, bb, tr, tg, tb
             if row.active then
-                drawQuad(self.rowOverlay, x, y, width, h, 0.28, 0.52, 0.78, 0.95)
-                label(textX, textY, fontSize, row.text, 0.96, 0.98, 1, 1)
+                pr, pg, pb, pa, br, bg, bb, tr, tg, tb = 0.28, 0.52, 0.78, 0.96, 0.55, 0.78, 1.0, 0.98, 0.99, 1.0
             elseif hovered then
-                drawQuad(self.rowOverlay, x, y, width, h, 0.22, 0.24, 0.28, 0.95)
-                label(textX, textY, fontSize, row.text, 0.92, 0.94, 0.97, 1)
+                pr, pg, pb, pa, br, bg, bb, tr, tg, tb = 0.23, 0.26, 0.31, 0.96, 0.42, 0.48, 0.56, 0.93, 0.95, 0.98
             else
-                drawQuad(self.rowOverlay, x, y, width, h, 0.16, 0.17, 0.195, 0.92)
-                label(textX, textY, fontSize, row.text, 0.78, 0.80, 0.83, 1)
+                pr, pg, pb, pa, br, bg, bb, tr, tg, tb = 0.155, 0.165, 0.19, 0.95, 0.30, 0.33, 0.38, 0.80, 0.82, 0.86
             end
+            local be = 0.0016
+            drawQuad(self.borderOverlay, x - be, y - be, width + be * 2, h + be * 2, br, bg, bb, 0.9)
+            drawQuad(self.rowOverlay, x, y, width, h, pr, pg, pb, pa)
+            local iconH = h * 0.72
+            local iconW = iconH / aspect
+            local labelX = textX
+            if row.iconCell ~= nil then
+                local iconX = x + self.padding * 1.2
+                self:renderIcon(row.iconCell, iconX, y + (h - iconH) * 0.5, iconW, iconH, tr, tg, tb, 1)
+                labelX = iconX + iconW + self.padding * 1.1
+            end
+            label(labelX, textY, fontSize, row.text, tr, tg, tb, 1)
             if row.value ~= nil and row.value ~= "" then
                 label(x + width - self.padding * 1.5, textY, fontSize * 0.78, row.value,
-                    row.active and 0.86 or 0.48, row.active and 0.90 or 0.52, row.active and 0.98 or 0.58, 1,
-                    RenderText.ALIGN_RIGHT)
+                    tr * 0.72, tg * 0.72, tb * 0.78, 1, RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "number" then
             if row.active then
+                -- Being typed into: show the buffer, no steppers (they would fight the half-typed value).
                 drawQuad(self.rowOverlay, x, y, width, h, 0.20, 0.28, 0.38, 0.95)
+                label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
+                label(x + width - self.padding * 2, textY, fontSize, row.value, 0.96, 0.98, 1, 1,
+                    RenderText.ALIGN_RIGHT)
+            elseif row.stepAction ~= nil then
+                self:drawNumberField(row, x, y, width, h, fontSize, mx, my,
+                    { 0.76, 0.78, 0.81 }, { 0.62, 0.72, 0.86 })
+            else
+                label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
+                label(x + width - self.padding * 2, textY, fontSize, row.value, 0.62, 0.72, 0.86, 1,
+                    RenderText.ALIGN_RIGHT)
             end
-            label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
-            label(x + width - self.padding * 2, textY, fontSize, row.value,
-                row.active and 0.96 or 0.62, row.active and 0.98 or 0.72, row.active and 1 or 0.86, 1,
-                RenderText.ALIGN_RIGHT)
         elseif row.kind == "toggle" then
-            label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
-            label(x + width - self.padding * 2, textY, fontSize, row.value, 0.58, 0.74, 0.92, 1,
-                RenderText.ALIGN_RIGHT)
+            if row.stepAction ~= nil then
+                -- A wheel-driven number dressed as a toggle: give it steppers and per-field wheel too.
+                self:drawNumberField(row, x, y, width, h, fontSize, mx, my,
+                    { 0.76, 0.78, 0.81 }, { 0.58, 0.74, 0.92 })
+            else
+                label(textX, textY, fontSize, row.text, 0.76, 0.78, 0.81, 1)
+                label(x + width - self.padding * 2, textY, fontSize, row.value, 0.58, 0.74, 0.92, 1,
+                    RenderText.ALIGN_RIGHT)
+            end
         elseif row.kind == "action" then
             -- Dimmed when the action would currently do nothing, so the panel says what is
             -- available rather than only what exists.
@@ -521,7 +638,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         end
         it("mapply", "apply", function() editor:menuApplyArmed() end)
         it("mitem", "cancel", function() editor:menuCancelArmed() end)
-        it("mnote", "scroll to adjust - right-click applies")
+        it("mnote", "scroll or +/- to adjust - right-click applies")
     end
 
     local ph = #items * rowH + pad * 2
@@ -540,6 +657,9 @@ function ADFlyoverHud:drawContextMenu(editor)
     for _, item in ipairs(items) do
         y = y - rowH
         item.x, item.y, item.w, item.h = x, y, pw, rowH
+        -- Register the row up front so any stepper buttons drawn for it land AFTER it in self.rows;
+        -- isMouseOver scans back-to-front, so the buttons on top then win the click over the row.
+        table.insert(self.rows, item)
         local textY = y + (rowH - fontSize) * 0.5
         local textX = x + pad * 2
         local rightX = x + pw - pad * 2
@@ -550,10 +670,11 @@ function ADFlyoverHud:drawContextMenu(editor)
         elseif item.kind == "mnote" then
             label(textX, textY, fontSize * 0.82, item.text, 0.5, 0.53, 0.57, 1)
         elseif item.kind == "mwheel" then
-            -- Read-only: the mouse wheel drives this while the tool is armed (the note row says so).
+            -- The wheel drives this while armed; the - / + steppers and per-field wheel adjust it too.
             drawQuad(self.rowOverlay, x, y, pw, rowH, 0.15, 0.17, 0.20, 0.9)
-            label(textX, textY, fontSize, item.text, 0.72, 0.75, 0.79, 1)
-            label(rightX, textY, fontSize, item.value or "-", 0.60, 0.78, 0.98, 1, RenderText.ALIGN_RIGHT)
+            item.stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
+            self:drawNumberField(item, x, y, pw, rowH, fontSize, mx, my,
+                { 0.72, 0.75, 0.79 }, { 0.60, 0.78, 0.98 })
         elseif item.kind == "mtoggle" then
             drawQuad(self.rowOverlay, x, y, pw, rowH, hovered and 0.24 or 0.165,
                 hovered and 0.30 or 0.18, hovered and 0.40 or 0.205, 0.95)
@@ -574,8 +695,6 @@ function ADFlyoverHud:drawContextMenu(editor)
             label(textX, textY, fontSize, item.text, hovered and 0.96 or 0.82,
                 hovered and 0.98 or 0.84, hovered and 1 or 0.88, 1)
         end
-        -- So the shared onClick/isMouseOver see it as one more clickable row.
-        table.insert(self.rows, item)
     end
 end
 
@@ -659,14 +778,38 @@ end
 
 --- True if the mouse is over the panel. The world tools have to know this so a click on a button
 --- does not also place a waypoint on the terrain underneath it.
+---
+--- Scanned back-to-front so the most recently drawn (topmost) row wins where rows overlap: the
+--- stepper buttons sit inside a numeric field's full-width box, and a menu can sit over the corner
+--- block. Later in the list means drawn on top, so it takes the click.
 function ADFlyoverHud:isMouseOver(mouseX, mouseY)
-    for _, row in ipairs(self.rows) do
+    for i = #self.rows, 1, -1 do
+        local row = self.rows[i]
         if row.x ~= nil and mouseX >= row.x and mouseX <= row.x + row.w
             and mouseY >= row.y and mouseY <= row.y + row.h then
             return true, row
         end
     end
     return false, nil
+end
+
+--- The numeric field (if any) under the cursor - the one the wheel should drive when scrolling over
+--- the card, so scrolling a specific field adjusts THAT field rather than only the tool's default.
+--- Uses each field's full-width box (steppers included); the button rows carry no stepAction, so the
+--- field row is what matches.
+function ADFlyoverHud:numberFieldAt(mouseX, mouseY)
+    if mouseX == nil then
+        return nil
+    end
+    for i = #self.rows, 1, -1 do
+        local row = self.rows[i]
+        if row.stepAction ~= nil and row.x ~= nil
+            and mouseX >= row.x and mouseX <= row.x + row.w
+            and mouseY >= row.y and mouseY <= row.y + row.h then
+            return row
+        end
+    end
+    return nil
 end
 
 --- Handle a click on the panel. Returns true if the panel consumed it.

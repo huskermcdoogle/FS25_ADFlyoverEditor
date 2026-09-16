@@ -693,6 +693,7 @@ function ADFlyoverEditor:enable()
     self:clearSelection()
     -- Always open in Select mode, whatever tool (or armed popup) a previous session left behind.
     self:setTool(self.TOOL.NONE)
+    self.cardHidden = false
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -1010,9 +1011,12 @@ function ADFlyoverEditor:update(dt)
     -- camera vanished whenever the mouse crossed the upper part of the panel. The last position
     -- pointed at in the world is kept instead: moving onto the panel to click a button should not
     -- move what the world is drawn around.
+    -- ...unless a drag is in progress: then the cursor MUST keep tracking the world even over the
+    -- card, or dragging a point through the card freezes it mid-move. The panel only pins the draw
+    -- centre so moving onto a button does not shift the world; a live drag already owns the cursor.
     local overPanel = self.mouseX ~= nil and ADFlyoverHud ~= nil
         and ADFlyoverHud:isMouseOver(self.mouseX, self.mouseY)
-    if not overPanel then
+    if not overPanel or self.dragId ~= nil then
         local ok, x, y, z = pcall(function() return self.cursor:getPosition() end)
         if ok and x ~= nil and z ~= nil then
             self.cursorX, self.cursorZ, self.cursorY = x, z, y
@@ -1511,6 +1515,9 @@ function ADFlyoverEditor:setTool(tool)
     self.boxActive = false
     self.ctxMenu = nil
     self.moveFocusId = nil
+    -- Picking a tool always brings its card back: middle-click hides the CURRENT tool's card to work
+    -- under it, but switching tools should not carry that hidden state onto the next one.
+    self.cardHidden = false
     Logging.info("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
 end
 
@@ -1919,6 +1926,14 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     end
 
     if not self.active or self.camera == nil or self.cursor == nil or self:isGuiBlocking() then
+        return
+    end
+
+    -- Middle-click toggles the floating tool card out of the way, for grabbing points that sit under
+    -- where it floats. Handled BEFORE camera:mouseEvent and consumed, so nothing pans on it.
+    if button == 2 and isDown then
+        self.cardHidden = not self.cardHidden
+        Logging.info("[FlyoverEditor]: tool card %s (middle-click).", self.cardHidden and "hidden" or "shown")
         return
     end
 
@@ -2479,6 +2494,22 @@ function ADFlyoverEditor:resolveHeightAt(x, z, referenceY, explicitY)
     return AutoDrive:getTerrainHeightAtWorldPos(x, z, referenceY)
 end
 
+--- Re-ground a moved point using the ground tool's surface resolver rather than the cursor's raw
+--- pick. The top-down cursor sees foliage - it lands a point in a tree canopy metres off the ground -
+--- while groundTargetAt uses the DEFAULT+ROAD+TERRAIN mask, so it takes the nearest REAL surface to
+--- the reference height: the ground under an overhang, or a ramp/bridge the point genuinely sits on.
+--- spanLineOnly = true keeps it off the ground tool's "top surface" toggle; snap-to-terrain still
+--- wins inside groundTargetAt.
+function ADFlyoverEditor:regroundTo(id, x, z, ref)
+    local wp = ADGraphManager:getWayPointById(id)
+    if wp == nil then
+        return
+    end
+    local r = ref or wp.y
+    local y = self:groundTargetAt(x, r, z, r, true) or wp.y
+    ADGraphManager:moveWayPoint(id, x, y, z, wp.flags, false)
+end
+
 --- Move one waypoint in the horizontal plane and put it back on the surface.
 ---
 --- `referenceY` says which surface: the cursor's own pick height for the waypoint being dragged,
@@ -2515,7 +2546,7 @@ function ADFlyoverEditor:finishDrag()
         local fromAbove = terrainY ~= nil
             and AutoDrive:getTerrainHeightAtWorldPos(dropped.x, dropped.z, terrainY + 30) or nil
 
-        self:moveTo(self.dragId, dropped.x, dropped.z, dropped.y, self.cursorY)
+        self:regroundTo(self.dragId, dropped.x, dropped.z, dropped.y)
 
         Logging.info("[FlyoverEditor]: heights at the drop point - cursor reports %s, plain terrain %s, ray from cursor %s, ray from 30m up %s, was %.2f, set to %.2f.",
             self.cursorY ~= nil and string.format("%.2f", self.cursorY) or "nil",
@@ -2527,7 +2558,7 @@ function ADFlyoverEditor:finishDrag()
     for _, n in ipairs(self.dragNeighbours or {}) do
         local wp = ADGraphManager:getWayPointById(n.id)
         if wp ~= nil then
-            self:moveTo(n.id, wp.x, wp.z, wp.y)
+            self:regroundTo(n.id, wp.x, wp.z, wp.y)
         end
     end
 
@@ -2667,7 +2698,18 @@ function ADFlyoverEditor:getEditableNumbers()
             label = label,
             unit = unit or "m",
             get = function() return ADFlyoverSettings.get(name) end,
-            apply = function(value) return editor:applySettingValue(name, value) end
+            apply = function(value) return editor:applySettingValue(name, value) end,
+            -- One click of a stepper (or one wheel notch over this field) moves to the next allowed
+            -- value of the setting, the same steps typing snaps to.
+            step = function(dir)
+                local setting = ADFlyoverSettings.settings[name]
+                if setting ~= nil and setting.values ~= nil then
+                    local nextIndex = math.max(1, math.min(#setting.values, setting.current + dir))
+                    if nextIndex ~= setting.current then
+                        ADFlyoverSettings.setIndex(name, nextIndex)
+                    end
+                end
+            end
         }
     end
 
@@ -2696,6 +2738,11 @@ function ADFlyoverEditor:getEditableNumbers()
                 editor.smoothSpacing = math.max(AutoDrive.FLYOVER_SPACING_MIN,
                     math.min(AutoDrive.FLYOVER_SPACING_MAX, value))
                 return editor.smoothSpacing
+            end,
+            step = function(dir)
+                editor.smoothSpacing = math.max(AutoDrive.FLYOVER_SPACING_MIN,
+                    math.min(AutoDrive.FLYOVER_SPACING_MAX,
+                        editor.smoothSpacing + dir * AutoDrive.FLYOVER_SPACING_STEP))
             end
         } }
     elseif self.tool == self.TOOL.MERGE then
@@ -2711,6 +2758,9 @@ function ADFlyoverEditor:getEditableNumbers()
             apply = function(value)
                 editor:setFalloffRadius(value)
                 return editor.falloffRadius
+            end,
+            step = function(dir)
+                editor:setFalloffRadius(editor.falloffRadius + dir * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
             end
         } }
     end
@@ -5160,7 +5210,7 @@ end
 ---
 --- "top surface" ignores the span and takes the highest surface, for a route drawn wholly at ground
 --- level under a bridge it should be on - the one case the span line cannot tell apart.
-function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY, spanLineOnly)
+function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY, spanLineOnly, keepTolerance)
     local terrainY = nil
     if g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil then
         terrainY = getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, x, 1, z)
@@ -5182,6 +5232,17 @@ function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY, spanLineOnly)
     -- nearest the line they came from, whatever the ground tool happens to be set to.
     if not spanLineOnly and self.groundLevel == self.GROUND_LEVEL.TOP then
         return surfaces[1]
+    end
+
+    -- Keep the point on the surface it already sits on, so grounding never pulls a point down off a
+    -- ramp or bridge deck it is correctly on; only points off EVERY surface fall through to the span
+    -- line below. This is what stops a route over a placed ramp being flattened onto the terrain.
+    if keepTolerance ~= nil then
+        for _, h in ipairs(surfaces) do
+            if math.abs(y - h) <= keepTolerance then
+                return h
+            end
+        end
     end
 
     local best, bestGap = surfaces[#surfaces], math.huge
@@ -5235,8 +5296,10 @@ function ADFlyoverEditor:updateGroundPreview()
         if wp ~= nil then
             checked = checked + 1
             -- Its own lookup rather than resolveHeightAt's - see groundTargetAt for why. Bridges are
-            -- kept by the downward cast finding the deck, not by refusing to look.
-            local targetY = self:groundTargetAt(wp.x, wp.y, wp.z, expectedAt(index))
+            -- kept by the downward cast finding the deck, not by refusing to look. keepTolerance =
+            -- groundTolerance so a point already sitting on the ramp/bridge deck is left there rather
+            -- than dragged down to the terrain the span line runs over.
+            local targetY = self:groundTargetAt(wp.x, wp.y, wp.z, expectedAt(index), false, self.groundTolerance)
             if targetY ~= nil then
                 local delta = wp.y - targetY
                 if math.abs(delta) > self.groundTolerance then
@@ -5646,6 +5709,14 @@ function ADFlyoverEditor:handleWheel(offset)
     -- is a place you can dial a value in before you start. This is what puts the wheel on move's
     -- falloff without a point picked.
     if ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOverToolCard(self.mouseX, self.mouseY) then
+        -- Prefer the specific field under the cursor, so scrolling a particular field adjusts THAT
+        -- field (the typed ones the active-tool wheel does not otherwise reach); fall back to the
+        -- tool's default wheel field when the cursor is over the card but not on a field.
+        local field = ADFlyoverHud:numberFieldAt(self.mouseX, self.mouseY)
+        if field ~= nil and field.stepAction ~= nil then
+            field.stepAction(step)
+            return true
+        end
         if self:applyWheelToActiveTool(step) then
             return true
         end
