@@ -1163,7 +1163,12 @@ end
 
 function ADFlyoverEditor:openRunMenu(seedId, sx, sy)
     local run, count = self:collectRunBetweenJunctions(seedId)
-    self.ctxMenu = { kind = "run", seedId = seedId, count = count or 0, runSet = run, sx = sx, sy = sy }
+    -- fromId/toId/ids are the run's two ends and the ordered route between them, for the span-shaped
+    -- actions (straighten, smooth). nil when the run has no clear two ends (a junction seed or a
+    -- closed loop); those actions then simply have nothing to act on.
+    local fromId, toId, ids = self:resolveWholeRun(seedId)
+    self.ctxMenu = { kind = "run", seedId = seedId, count = count or 0, runSet = run,
+        fromId = fromId, toId = toId, ids = ids, sx = sx, sy = sy }
     Logging.info("[FlyoverEditor]: run menu through id=%s (%d waypoints).", tostring(seedId), count or 0)
 end
 
@@ -1234,7 +1239,7 @@ end
 --- borrowed state. Safe because in Select mode that tool is idle and holds no span of its own.
 function ADFlyoverEditor:menuStraighten()
     local m = self.ctxMenu
-    if m == nil or m.kind ~= "span" then return end
+    if m == nil or m.ids == nil or m.fromId == nil or m.toId == nil then return end
     self.spanIds = m.ids
     self.straightenFromId, self.straightenToId, self.straightenPreview = m.fromId, m.toId, nil
     self:updateStraightenPreview()
@@ -1248,7 +1253,7 @@ end
 
 function ADFlyoverEditor:menuSmooth()
     local m = self.ctxMenu
-    if m == nil or m.kind ~= "span" then return end
+    if m == nil or m.ids == nil or m.fromId == nil or m.toId == nil then return end
     self.spanIds = m.ids
     self.smoothFromId, self.smoothToId = m.fromId, m.toId
     self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
@@ -1275,6 +1280,49 @@ function ADFlyoverEditor:menuDeleteSpan()
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
     self:closeMenu()
+end
+
+--- Span direction: apply two-way / one-way / flip along the span's own ordered pairs. convertAtCursor
+--- only offers point and whole-run scope, so the span case is done here, mirroring its link logic.
+--- Kept open so directions can be tried in a row.
+function ADFlyoverEditor:menuConvertSpan(op)
+    local m = self.ctxMenu
+    if m == nil or m.ids == nil or #m.ids < 2 then return end
+    ADEditorHistory:snapshot("convert span direction")
+    local ordered = m.ids
+    local changed = 0
+    for i = 1, #ordered - 1 do
+        local a, b = ordered[i], ordered[i + 1]
+        local aw = ADGraphManager:getWayPointById(a)
+        local bw = ADGraphManager:getWayPointById(b)
+        if aw ~= nil and bw ~= nil then
+            local forward = table.contains(aw.out, b)
+            local backward = table.contains(bw.out, a)
+            if op == self.CONVERT_OP.TWOWAY then
+                if not (forward and backward) then
+                    addLink(a, b); addLink(b, a); changed = changed + 1
+                end
+            elseif op == self.CONVERT_OP.ONEWAY then
+                if forward and backward then
+                    removeLink(b, a); changed = changed + 1
+                elseif not forward and backward then
+                    removeLink(b, a); addLink(a, b); changed = changed + 1
+                elseif not forward and not backward then
+                    addLink(a, b); changed = changed + 1
+                end
+            elseif op == self.CONVERT_OP.REVERSE then
+                if forward ~= backward then
+                    if forward then removeLink(a, b); addLink(b, a)
+                    else removeLink(b, a); addLink(a, b) end
+                    changed = changed + 1
+                end
+            end
+        end
+    end
+    Logging.info("[FlyoverEditor]: span direction -> %s, %d link(s) changed.",
+        self.CONVERT_OP_NAMES[op] or "?", changed)
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
 end
 
 --- Run direction, via the run-scoped convert; kept open so directions can be tried in a row.
@@ -5220,24 +5268,63 @@ function ADFlyoverEditor:updateStraightenPreview()
     self.straightenKept = #simplified
 end
 
+--- Straighten a span, splitting it at any junction or marker so crossing routes survive - the same
+--- split the smooth rebuild uses. Straightening the whole span through replaceChainInterior deleted
+--- interior junctions and took the connections of the routes crossing there with them; each
+--- junction-free piece is straightened on its own instead, and the anchors between pieces are left
+--- untouched.
+function ADFlyoverEditor:straightenSpanInPieces(ids)
+    local anchorPositions = self:collectSpanAnchors(ids)
+    local piecesDone = 0
+    -- Backwards, so a rebuilt piece cannot renumber the anchors of a piece not yet reached.
+    for i = #anchorPositions - 1, 1, -1 do
+        local startId = self:findWayPointAt(anchorPositions[i])
+        local endId = self:findWayPointAt(anchorPositions[i + 1])
+        if startId ~= nil and endId ~= nil and startId ~= endId then
+            local piece = self:runPathBetween(startId, endId)
+            if piece ~= nil and #piece > 2 then
+                local pts = {}
+                for j = 1, #piece do
+                    local wp = ADGraphManager:getWayPointById(piece[j])
+                    if wp ~= nil then
+                        pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
+                    end
+                end
+                local simplified = ADPolygonUtils.simplifyOpenChainRDP(pts, self.straightenTolerance)
+                if simplified ~= nil and #simplified >= 2 then
+                    local result = respreadAlong(simplified, #pts - 2)
+                    if result ~= nil then
+                        for k = 2, #result - 1 do
+                            result[k].y = self:resolveHeightAt(result[k].x, result[k].z,
+                                heightAlongChain(pts, result[k].x, result[k].z))
+                        end
+                        local a = ADGraphManager:getWayPointById(piece[1])
+                        local b = ADGraphManager:getWayPointById(piece[2])
+                        local dual = ADGraphManager:isDualRoad(a, b)
+                        local flags = b.flags or AutoDrive.FLAG_NONE
+                        if self:replaceChainInterior(piece, result, dual, flags) then
+                            piecesDone = piecesDone + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return piecesDone
+end
+
 function ADFlyoverEditor:commitStraighten()
     local pts, span = self:straightenSpanPoints()
-    local newPoints = self.straightenPreview
-    if pts == nil or span == nil or newPoints == nil then
+    if pts == nil or span == nil or self.straightenPreview == nil then
         self:cancelStraighten()
         return
     end
 
-    local first = ADGraphManager:getWayPointById(span[1])
-    local second = ADGraphManager:getWayPointById(span[2])
-    local dual = ADGraphManager:isDualRoad(first, second)
-    local flags = second.flags or AutoDrive.FLAG_NONE
-
     ADEditorHistory:snapshot("straighten span")
-    self:replaceChainInterior(span, newPoints, dual, flags)
+    local pieces = self:straightenSpanInPieces(span)
 
-    Logging.info("[FlyoverEditor]: straightened a %d-point span at %.2fm tolerance (%d point(s) were a real bend).",
-        #pts, self.straightenTolerance, math.max(0, (self.straightenKept or 2) - 2))
+    Logging.info("[FlyoverEditor]: straightened a %d-point span in %d junction-free piece(s) at %.2fm tolerance.",
+        #pts, pieces, self.straightenTolerance)
 
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self:invalidateIdReferences()

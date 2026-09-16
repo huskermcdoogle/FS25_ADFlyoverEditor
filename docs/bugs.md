@@ -104,6 +104,28 @@ If it turns out to be real, the symptom to watch for is WASD dead after Escape, 
 
 </details>
 
+## 3. Straighten destroys crossing connections at a junction — FIXED
+
+**Fixed** in build 0.24.0.0. Reported 2026-09-15 against 0.23.0.0. The straighten tool and the
+Select-mode span/run straighten share one commit, so both were affected.
+
+`commitStraighten` called `replaceChainInterior` on the whole span, which **deletes the interior
+waypoints** and rebuilds the chain. When an interior waypoint was a junction onto another route,
+deleting it took that route's connections with it — the "blowing up connections" when the span passes
+through an intersection.
+
+Smooth's rebuild had already solved exactly this by splitting the span at junctions
+(`rebuildSpanInPieces` / `collectSpanAnchors`) and rebuilding each junction-free piece, leaving the
+anchors untouched. Straighten now does the same via `straightenSpanInPieces`: each piece between
+anchors is straightened on its own, so the junctions — and the routes meeting there — survive. (A whole
+*run* is junction-free by construction, so run-straighten was never at risk.)
+
+Follow-up: the in-world **preview** is still whole-span (a straight line drawn through the junction),
+so it can look like it will cut across even though the commit is now piece-wise and safe. Making the
+preview piece-aware is not yet done.
+
+---
+
 ## New waypoints are not drawn while on foot
 
 Reported 2026-09-09. **Corrected from "editing requires a vehicle".** Editing on foot WORKS - a
