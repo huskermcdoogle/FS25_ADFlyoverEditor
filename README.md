@@ -101,7 +101,17 @@ informational, not a fault.
 Nothing but `Prelude.lua` may go in `<extraSourceFiles>`: the editor files write into AutoDrive's
 table at source time, and AutoDrive is unresolvable then.
 
-## Credits
+## Credits & acknowledgements
 
-By Gibbs. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive);
-not affiliated with or endorsed by the AutoDrive team.
+By Gibbs. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive)
+(MIT); not affiliated with or endorsed by the AutoDrive team.
+
+The field-loop feature was *inspired* by [Courseplay](https://github.com/Courseplay/Courseplay_FS25)'s
+field-course generation, but its geometry here is an **independent implementation** written from
+published algorithms (Taubin smoothing, Chaikin subdivision, standard polygon offsetting) and Giants'
+own field API — see the header of [`OffsetGeometry.lua`](scripts/editor/OffsetGeometry.lua). None of
+Courseplay's GPL-licensed code is used or derived from.
+
+## License
+
+[MIT](LICENSE) © 2026 Nick Gibbs.
