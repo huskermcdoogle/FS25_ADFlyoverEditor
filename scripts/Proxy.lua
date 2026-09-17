@@ -183,13 +183,23 @@ function X.run()
             end
         end
 
-        AD.onDrawEditorMode(standIn)
-        -- AutoDrive draws these as a PAIR - onDrawUIInfo calls onDrawEditorMode and then
-        -- onDrawPreviews, under the same condition. Suppressing onDrawUIInfo takes both away, so
-        -- calling only the first left the spline tool placing curves that were never drawn, and a
-        -- curvature wheel with nothing on screen to show its effect. Same stand-in, same reason.
-        if type(AD.onDrawPreviews) == "function" then
-            AD.onDrawPreviews(standIn)
+        -- While a modal (the browsable manual or the settings dialog) is up, draw NEITHER. We keep
+        -- proxyOwnsNetwork true above so AutoDrive's own vehicle-centred draw stays suppressed - the
+        -- world just goes quiet behind the modal - but we skip our own editor draw so its waypoint
+        -- labels, ids and the editor cursor are not queued as text on top of the page. Engine text
+        -- composites in a pass an overlay cannot cover, so the only way to keep it off a modal is not
+        -- to draw it (the editor's own network draw and panel are skipped for the same reason).
+        local modalUp = ADFlyoverEditor ~= nil and type(ADFlyoverEditor.isModalOpen) == "function"
+            and ADFlyoverEditor:isModalOpen()
+        if not modalUp then
+            AD.onDrawEditorMode(standIn)
+            -- AutoDrive draws these as a PAIR - onDrawUIInfo calls onDrawEditorMode and then
+            -- onDrawPreviews, under the same condition. Suppressing onDrawUIInfo takes both away, so
+            -- calling only the first left the spline tool placing curves that were never drawn, and a
+            -- curvature wheel with nothing on screen to show its effect. Same stand-in, same reason.
+            if type(AD.onDrawPreviews) == "function" then
+                AD.onDrawPreviews(standIn)
+            end
         end
     end)
     X.draws = X.draws + 1

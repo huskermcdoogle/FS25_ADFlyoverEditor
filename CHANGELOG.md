@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.30.16.0 — Browsable manual, wheel direction, cleaner reading surfaces (2026-09-17)
+
+Everything since 0.30.10.0's per-tool help: a browsable in-game manual, and a pass over the editor's
+wheel behaviour and how its panels and modals read against the world.
+
+**Browsable in-game manual**
+
+- The full manual is now readable **in-game** — a paged modal (a General reference plus one page per
+  tool), opened from the **browse the full manual** button on the help panel. Prev / next buttons, the
+  arrow keys, and **Esc**/**X** move through and close it; long pages **scroll** with the wheel.
+
+**Mouse wheel**
+
+- **Direction reversed** across the editor — numeric fields, tool settings, the settings-dialog
+  fields, and the manual's page scroll now all step the natural way. Spline curvature (its own wheel)
+  and the **− / +** stepper buttons are unchanged.
+
+**Panels and modals that read clean over the world**
+
+- The manual and the settings dialog now draw over a **cleared screen**: the world network, its
+  waypoint labels, the under-cursor field readout, and the editor cursor are all suppressed while a
+  modal is open, instead of showing through it.
+- AutoDrive's **map-marker names** no longer bleed through the tool panel, the floating card, or the
+  help card, and the **minimap airplane** no longer pokes through them either.
+- The contextual **help panel** is height-capped and **scrollable** (wheel over it) on long pages, so
+  the "browse the full manual" button is always on screen and clickable; it resets to the top when you
+  switch tools.
+- Opening a modal **freezes the camera**, so sliding the mouse to a screen edge to click a button no
+  longer edge-scrolls the map.
+
 ## 0.30.10.0 — Per-tool help & a user manual (2026-09-16)
 
 - **In-game help** — a **?** button on the panel header (and the **/** key) toggles a contextual help

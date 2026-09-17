@@ -721,6 +721,10 @@ function ADFlyoverEditor:enable()
     self.themeEditRole = 1
     self.dialogOpen = false
     self.helpOpen = false
+    self.manualOpen = false
+    self.manualIndex = 1
+    self.manualScroll = 0
+    self.helpScroll = 0
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -958,12 +962,16 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return Input[name] ~= nil and sym == Input[name]
     end
 
-    -- The settings dialog is modal: Esc closes it and every other key is swallowed (no tool numbers,
-    -- no undo). handleEditKey ran first above, so typing into a dialog field, and Esc to cancel that
-    -- edit, both still work before this.
-    if self.dialogOpen then
+    -- A modal (settings dialog or browsable manual) is up: Esc closes it, the arrow keys page the
+    -- manual, and every other key is swallowed (no tool numbers, no undo). handleEditKey ran first
+    -- above, so typing into a dialog field, and Esc to cancel that edit, both still work before this.
+    if self:isModalOpen() then
         if isKey("KEY_esc") then
-            self:closeSettingsDialog()
+            if self.manualOpen then self:closeManual() else self:closeSettingsDialog() end
+        elseif self.manualOpen and isKey("KEY_left") then
+            self:manualStep(-1)
+        elseif self.manualOpen and isKey("KEY_right") then
+            self:manualStep(1)
         end
         return
     end
@@ -1042,6 +1050,14 @@ function ADFlyoverEditor:update(dt)
     -- dialog is open and a pause is not silently frozen.
     self.elapsedMs = (self.elapsedMs or 0) + (dt or 0)
     if self:isGuiBlocking() then
+        return
+    end
+
+    -- While a modal (the browsable manual or the settings dialog) is up, freeze the world: the camera
+    -- is not updated, so the mouse drifting to a screen edge to reach a modal button no longer
+    -- edge-scrolls the map, and the cursor/hover/preview work below is skipped too. Everything resumes
+    -- the frame the modal closes. The camera keeps its position; nothing is torn down.
+    if self:isModalOpen() then
         return
     end
 
@@ -1979,10 +1995,10 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
         return
     end
 
-    -- The settings dialog is modal: while it is up it owns every click, and nothing reaches the
-    -- camera, the panel or the tools. The wheel arrives on its own action path and is handled in
-    -- handleWheel; here we take the clicks and swallow everything else.
-    if self.dialogOpen then
+    -- A modal (settings dialog or the browsable manual) owns every click, and nothing reaches the
+    -- camera, the panel or the tools. Both populate dialogRows, so dialogClick handles either. The
+    -- wheel arrives on its own action path (handleWheel); here we take clicks and swallow the rest.
+    if self:isModalOpen() then
         if button == 1 and isDown then
             ADFlyoverHud:dialogClick(posX, posY)
         end
@@ -2103,6 +2119,18 @@ end
 --- this. It shows the current tool's help and follows the tool as you switch, without blocking use.
 function ADFlyoverEditor:toggleHelp()
     self.helpOpen = not self.helpOpen
+    -- A freshly opened help panel starts at the top of the page, not wherever the last one was left.
+    if self.helpOpen then
+        self.helpScroll = 0
+    end
+end
+
+--- Scroll the contextual help page. Mirrors manualScrollBy: dir is the reversed wheel step, so the
+--- direction matches the manual (and everything else). The HUD clamps helpScroll to the page each
+--- frame, since only it knows how long the current tool's help is; here we just move it and keep it
+--- off the negative side.
+function ADFlyoverEditor:helpScrollBy(dir)
+    self.helpScroll = math.max(0, (self.helpScroll or 0) - dir * 0.06)
 end
 
 function ADFlyoverEditor:onLeftPress()
@@ -3158,7 +3186,16 @@ function ADFlyoverEditor:draw()
         return
     end
 
-    tryCall("drawNetwork", function() self:drawNetwork() end)
+    -- A modal (the browsable manual or the settings dialog) owns the whole screen. Skip the world
+    -- network entirely while one is up: its accent spheres and the on-foot fallback would otherwise
+    -- draw behind the modal, and - more to the point - the proxy's copy of AutoDrive's editor draw
+    -- (the waypoint labels, ids and the editor cursor) is queued as TEXT, which the engine composites
+    -- in a pass no overlay background can cover. The proxy skips its own draw the same way (see
+    -- ADFlyoverProxy.run) and the HUD draws only the modal, so the page/dialog reads clean instead of
+    -- having the network's labels bleed through it.
+    if not self:isModalOpen() then
+        tryCall("drawNetwork", function() self:drawNetwork() end)
+    end
 
     tryCall("flyoverPanel", function() ADFlyoverHud:draw(self) end)
 end
@@ -5774,11 +5811,31 @@ function ADFlyoverEditor:handleWheel(offset)
     if offset == nil or offset == 0 then
         return false
     end
-    local step = offset > 0 and 1 or -1
+    -- Deliberately reversed: wheel-up now DECREASES / pages down, wheel-down the reverse. Every wheel
+    -- the mod itself drives runs through here - the card's numeric fields, the tool settings, the
+    -- settings-dialog fields, and the manual's page scroll - so one negation flips them all to match
+    -- the direction players expected. The -/+ stepper BUTTONS are untouched (they call stepAction
+    -- directly, not this), and so is spline curvature: that wheel never reaches here - it falls
+    -- through to AutoDrive's handleSplineCurvature on the camera-zoom path (see updateSplinePreview),
+    -- which is exactly the one control the player asked to leave alone.
+    local step = offset > 0 and -1 or 1
 
-    -- The settings dialog owns the wheel while it is up, and consumes it so nothing zooms behind.
-    if self.dialogOpen then
-        if ADFlyoverHud ~= nil then ADFlyoverHud:dialogWheel(self.mouseX, self.mouseY, step) end
+    -- A modal owns the wheel while it is up, and consumes it so nothing zooms behind. In the manual
+    -- the wheel pages; in the settings dialog it adjusts the field under the cursor (via dialogWheel).
+    if self:isModalOpen() then
+        if self.manualOpen then
+            self:manualScrollBy(step)
+        elseif ADFlyoverHud ~= nil then
+            ADFlyoverHud:dialogWheel(self.mouseX, self.mouseY, step)
+        end
+        return true
+    end
+
+    -- The contextual help is non-modal, but the wheel scrolls it when the cursor is over it, so a long
+    -- page (Select's, say) can be read without paging to the manual. Same reversed step and 0.06 notch
+    -- as the manual, so the two scroll the same way.
+    if self.helpOpen and ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOverHelp(self.mouseX, self.mouseY) then
+        self:helpScrollBy(step)
         return true
     end
 
@@ -5833,6 +5890,7 @@ end
 
 function ADFlyoverEditor:openSettingsDialog()
     self.dialogOpen = true
+    self.manualOpen = false   -- the two modals are mutually exclusive
     self:cancelEditNumber()
 end
 
@@ -5843,6 +5901,54 @@ end
 
 function ADFlyoverEditor:toggleSettingsDialog()
     if self.dialogOpen then self:closeSettingsDialog() else self:openSettingsDialog() end
+end
+
+-- The browsable manual: a modal that pages through the General reference and every tool. It reuses
+-- the dialog's modal input path (dialogClick / dialogWheel and the modal branches in mouseEvent /
+-- keyEvent / handleWheel), so isModalOpen() is what those all gate on.
+
+function ADFlyoverEditor:isModalOpen()
+    return self.dialogOpen or self.manualOpen
+end
+
+--- The manual page (1-based) for a tool: page 1 is the General reference, pages 2.. are the tools in
+--- ADFlyoverHelp.ORDER, so opening the manual lands on the tool you were holding.
+function ADFlyoverEditor:manualPageForTool(tool)
+    if ADFlyoverHelp == nil or ADFlyoverHelp.ORDER == nil then return 1 end
+    local key = (tool == self.TOOL.NONE) and "select" or self.TOOL_NAMES[tool]
+    for i, k in ipairs(ADFlyoverHelp.ORDER) do
+        if k == key then return i + 1 end
+    end
+    return 1
+end
+
+function ADFlyoverEditor:openManual()
+    self.manualOpen = true
+    self.dialogOpen = false
+    self.helpOpen = false   -- the contextual help would otherwise render under and clash with it
+    self:cancelEditNumber()
+    self.manualIndex = self:manualPageForTool(self.tool)
+    self.manualScroll = 0
+end
+
+function ADFlyoverEditor:closeManual()
+    self.manualOpen = false
+end
+
+--- Page forward (dir 1) or back (dir -1) through the manual, wrapping at the ends. A new page starts
+--- scrolled to the top.
+function ADFlyoverEditor:manualStep(dir)
+    if ADFlyoverHelp == nil or ADFlyoverHelp.ORDER == nil then return end
+    local n = #ADFlyoverHelp.ORDER + 1
+    self.manualIndex = (((self.manualIndex or 1) - 1 + (dir >= 0 and 1 or -1)) % n) + 1
+    self.manualScroll = 0
+end
+
+--- Scroll the current manual page. dir > 0 is wheel-up (toward the top). The upper bound is the page
+--- length, which only the HUD knows, so it clamps manualScroll to the page each frame; here we just
+--- move it and keep it off the negative side.
+function ADFlyoverEditor:manualScrollBy(dir)
+    self.manualScroll = math.max(0, (self.manualScroll or 0) - dir * 0.06)
 end
 
 function ADFlyoverEditor:applyThemeScale(v)

@@ -122,6 +122,16 @@ local function labelRole(x, y, size, text, role, a, align)
     label(x, y, size, text, r, g, b, a or 1, align)
 end
 
+-- A FULLY opaque fill. The base UI overlay is not quite opaque even at alpha 1, so a single fill lets
+-- bright text on a panel underneath bleed through a dark modal. Stacking a few passes builds it solid.
+-- Used for the backgrounds of the overlay panels (help, settings dialog, manual) that sit over others.
+local function fillRoleSolid(ov, x, y, w, h, role)
+    local r, g, b = ADFlyoverTheme:rgb(role)
+    for _ = 1, 3 do
+        drawQuad(ov, x, y, w, h, r, g, b, 1)
+    end
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- The settings dialog draws in its OWN fixed palette, not the theme's - so it stays readable even
 -- when a custom theme has made the editor panel itself unreadable, which is the whole reason it
@@ -485,6 +495,24 @@ end
 function ADFlyoverHud:draw(editor)
     self:ensureOverlays()
 
+    -- A modal owns the screen: draw it ALONE. The panel is skipped on purpose, not just covered - its
+    -- own rows are text (the wide "under cursor" field readout reaches under the modal's left edge and
+    -- shows straight through it), and engine text composites in a pass an overlay background cannot
+    -- hide. The world network and its labels are already suppressed for the same reason (see
+    -- ADFlyoverEditor:draw and ADFlyoverProxy.run), so the manual/dialog is the only thing on screen.
+    if editor.dialogOpen then
+        self:drawSettingsDialog(editor)
+        return
+    end
+    if editor.manualOpen then
+        self:drawManual(editor)
+        return
+    end
+
+    -- Cleared each frame; drawHelp sets it again only when the help card is actually up. Otherwise a
+    -- stale rect would keep suppressing world labels over an area with no help panel on it.
+    self.helpRect = nil
+
     local rows = self:buildRows(editor)
     self.rows = rows
 
@@ -718,12 +746,11 @@ function ADFlyoverHud:draw(editor)
 
     self:drawContextMenu(editor)
 
-    -- Contextual help sits beside the panel (non-modal); the modal dialog draws last, over everything.
-    if editor.helpOpen then
+    -- Contextual help sits beside the panel and is non-modal, so you can read it while working. The
+    -- modals (settings dialog, manual) never reach here - they return at the top of draw(), drawn
+    -- alone over a cleared screen - so help and a modal can never render at once.
+    if editor.helpOpen and not editor.dialogOpen and not editor.manualOpen then
         self:drawHelp(editor)
-    end
-    if editor.dialogOpen then
-        self:drawSettingsDialog(editor)
     end
 end
 
@@ -937,7 +964,8 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     local mx, my = editor.mouseX, editor.mouseY
 
     -- Backdrop over the whole screen: dims the world/panel and (via dialogClick) eats stray clicks.
-    fillC(self.background, 0, 0, 1, 1, DLG.backdrop, 0.55)
+    fillC(self.background, 0, 0, 1, 1, DLG.backdrop, 0.5)
+    fillC(self.background, 0, 0, 1, 1, DLG.backdrop, 0.5)
 
     local items = {}
     local function push(t) items[#items + 1] = t end
@@ -1011,7 +1039,7 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     -- the theme; everything else below is the theme's own palette, at the theme's scale.
     local edge = 0.0028
     fillRole(self.borderOverlay, x - edge, top - h - edge, W + edge * 2, h + edge * 2, "cardBorder", 1)
-    fillRole(self.background, x, top - h, W, h, "panelBg", 1)
+    fillRoleSolid(self.background, x, top - h, W, h, "panelBg")
 
     local y = top - pad
     for _, it in ipairs(items) do
@@ -1109,6 +1137,14 @@ function ADFlyoverHud:drawHelp(editor)
     local pad = 0.006 * uiScale
     local fontSize = 0.0105 * uiScale
     local headH = rowH * 1.5
+    local footH = rowH * 1.35
+
+    -- Reset the scroll to the top when the page (tool) changes, so switching tools does not leave the
+    -- new page opened part way down.
+    if self.helpToolShown ~= key then
+        self.helpToolShown = key
+        editor.helpScroll = 0
+    end
 
     local lines = {}
     local function line(kind, text) lines[#lines + 1] = { kind = kind, text = text } end
@@ -1125,19 +1161,34 @@ function ADFlyoverHud:drawHelp(editor)
         for _, l in ipairs(help.controls) do line("body", l) end
     end
 
-    local h = headH + pad * 2
+    local mx, my = editor.mouseX, editor.mouseY
+
+    local contentH = 0
     for _, l in ipairs(lines) do
-        h = h + ((l.kind == "gap") and rowH * 0.4 or rowH)
+        contentH = contentH + ((l.kind == "gap") and rowH * 0.4 or rowH)
     end
 
-    -- To the right of the editor panel (so it does not cover the tools), clamped fully on screen.
+    -- To the right of the editor panel (so it does not cover the tools), top aligned with the panel,
+    -- grown down. The height is CAPPED so the whole card - header, body and footer - fits on screen and
+    -- the "browse the full manual" button is always reachable; the body scrolls (wheel over it) when
+    -- the page is longer than fits. This is what stopped the long pages (Select's) from pushing the
+    -- footer button off the bottom where it could not be clicked.
     local panelW = self.width * uiScale
     local x = math.max(0.006, math.min(self.posX + panelW + 0.015, 1 - W - 0.006))
-    local top = math.min(1, math.max(h, self.topY))
+    local top = math.min(1, math.max(0.30, self.topY))
+    local maxContentH = math.max(rowH * 3, top - 0.02 - headH - footH - pad * 4)
+    local visibleH = math.min(contentH, maxContentH)
+    local maxScroll = math.max(0, contentH - visibleH)
+    local scroll = math.max(0, math.min(editor.helpScroll or 0, maxScroll))
+    editor.helpScroll = scroll
+
+    local h = headH + pad + visibleH + pad + footH + pad
 
     local edge = 0.0025
     fillRole(self.borderOverlay, x - edge, top - h - edge, W + edge * 2, h + edge * 2, "cardBorder", 0.96)
-    fillRole(self.background, x, top - h, W, h, "cardBg", 0.99)
+    fillRoleSolid(self.background, x, top - h, W, h, "cardBg")
+    -- Whole-card blocker (stops a click reaching the world) and the wheel target for scrolling.
+    self.helpRect = { x = x, y = top - h, w = W, h = h }
     table.insert(self.rows, { x = x - edge, y = top - h - edge, w = W + edge * 2, h = h + edge * 2 })
 
     local y = top - pad - headH
@@ -1149,18 +1200,192 @@ function ADFlyoverHud:drawHelp(editor)
             "mutedText", 1, RenderText.ALIGN_RIGHT)
     end
 
+    -- content viewport [viewBottom, viewTop], scrolled; lines fully outside it are skipped (same as the
+    -- manual, so the edges stay clean with no partial clipping).
+    local viewTop = y - pad
+    local viewBottom = viewTop - visibleH
+    local cursor = 0
     for _, l in ipairs(lines) do
         local ih = (l.kind == "gap") and rowH * 0.4 or rowH
-        y = y - ih
-        local ty = y + (ih - fontSize) * 0.5
-        if l.kind == "summary" then
-            labelRole(x + pad * 1.5, ty, fontSize, l.text, "bodyText")
-        elseif l.kind == "section" then
-            labelRole(x + pad * 1.5, ty, fontSize * 0.82, l.text, "sectionText")
-        elseif l.kind == "body" then
-            labelRole(x + pad * 1.5, ty, fontSize * 0.92, l.text, "mutedText")
+        local lineTopY = viewTop - (cursor - scroll)
+        local lineBottomY = lineTopY - ih
+        if lineBottomY >= viewBottom - 0.0002 and lineTopY <= viewTop + 0.0002 then
+            local ty = lineBottomY + (ih - fontSize) * 0.5
+            if l.kind == "summary" then
+                labelRole(x + pad * 1.5, ty, fontSize, l.text, "bodyText")
+            elseif l.kind == "section" then
+                labelRole(x + pad * 1.5, ty, fontSize * 0.82, l.text, "sectionText")
+            elseif l.kind == "body" then
+                labelRole(x + pad * 1.5, ty, fontSize * 0.92, l.text, "mutedText")
+            end
+        end
+        cursor = cursor + ih
+    end
+
+    -- scrollbar on the right edge of the viewport when there is more than fits
+    if maxScroll > 0 then
+        local sbW = 0.003 * uiScale
+        local sbX = x + W - sbW - pad * 0.4
+        fillRole(self.rowOverlay, sbX, viewBottom, sbW, visibleH, "toolBg", 0.9)
+        local thumbH = math.max(rowH * 0.8, visibleH * (visibleH / contentH))
+        local frac = maxScroll > 0 and (scroll / maxScroll) or 0
+        local thumbTopY = viewTop - frac * (visibleH - thumbH)
+        fillRole(self.rowOverlay, sbX, thumbTopY - thumbH, sbW, thumbH, "accent", 0.9)
+    end
+
+    -- Footer: open the full browsable manual. Fixed below the viewport (not the scrolled content), so
+    -- it is always on screen and clickable. Added to self.rows after the blocker so the back-to-front
+    -- scan finds this button first over its area.
+    y = viewBottom - pad - footH
+    local fhov = mx ~= nil and mx >= x + pad and mx <= x + W - pad and my >= y and my <= y + footH
+    fillRole(self.rowOverlay, x + pad, y + footH * 0.14, W - pad * 2, footH * 0.72, fhov and "hoverBg" or "toolBg", 1)
+    labelRole(x + W * 0.5, y + (footH - fontSize) * 0.5, fontSize * 0.92, "browse the full manual  >",
+        "bodyText", 1, RenderText.ALIGN_CENTER)
+    table.insert(self.rows, { x = x + pad, y = y, w = W - pad * 2, h = footH,
+        action = function() editor:openManual() end })
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- The browsable manual: a modal that pages through the General reference (page 1) and every tool
+-- (ADFlyoverHelp.ORDER). Reuses the modal input path - it populates self.dialogRows, so dialogClick
+-- and dialogWheel handle its buttons. Prev / Next buttons, the arrow keys, the X, and Esc navigate.
+-- ---------------------------------------------------------------------------------------------
+function ADFlyoverHud:drawManual(editor)
+    if ADFlyoverHelp == nil or ADFlyoverHelp.tools == nil then return end
+    self:ensureOverlays()
+    self.dialogRows = {}
+    local T = ADFlyoverTheme
+
+    local order = ADFlyoverHelp.ORDER or {}
+    local pageCount = #order + 1
+    local idx = editor.manualIndex or 1
+    if idx < 1 then idx = 1 elseif idx > pageCount then idx = pageCount end
+    editor.manualIndex = idx
+
+    local uiScale = (((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1)) * ((T.scale) or 1)
+    local W = 0.42 * uiScale
+    local rowH = 0.019 * uiScale
+    local pad = 0.008 * uiScale
+    local fontSize = 0.0115 * uiScale
+    local headH = rowH * 1.5
+    local footH = rowH * 1.4
+    local mx, my = editor.mouseX, editor.mouseY
+
+    fillC(self.background, 0, 0, 1, 1, DLG.backdrop, 0.5)
+    fillC(self.background, 0, 0, 1, 1, DLG.backdrop, 0.5)
+
+    local title
+    local lines = {}
+    local function line(kind, text) lines[#lines + 1] = { kind = kind, text = text } end
+    if idx == 1 then
+        title = "General reference"
+        local g = ADFlyoverHelp.general
+        if g ~= nil then
+            if g.summary ~= nil then line("summary", g.summary) end
+            for _, sec in ipairs(g.sections or {}) do
+                line("gap", "")
+                line("section", string.upper(sec.title or ""))
+                for _, l in ipairs(sec.lines or {}) do line("body", l) end
+            end
+        end
+    else
+        local help = ADFlyoverHelp.tools[order[idx - 1]]
+        if help == nil then return end
+        title = (help.name or "?") .. "  -  " .. (help.group or "")
+        for _, l in ipairs(help.summary or {}) do line("summary", l) end
+        line("gap", "")
+        line("section", "WHAT IT DOES")
+        for _, l in ipairs(help.what or {}) do line("body", l) end
+        line("gap", "")
+        line("section", "HOW TO USE IT")
+        for _, l in ipairs(help.how or {}) do line("body", l) end
+        if help.controls ~= nil and #help.controls > 0 then
+            line("gap", "")
+            line("section", "CONTROLS")
+            for _, l in ipairs(help.controls) do line("body", l) end
         end
     end
+
+    local contentH = 0
+    for _, l in ipairs(lines) do
+        contentH = contentH + ((l.kind == "gap") and rowH * 0.4 or rowH)
+    end
+
+    -- Cap the panel to the screen and scroll the body if it does not fit. maxContentH is what is left
+    -- for the body after the title bar, footer and paddings, in a panel at most ~0.9 of the screen.
+    local maxContentH = math.max(rowH * 3, 0.9 - headH - footH - pad * 4)
+    local visibleH = math.min(contentH, maxContentH)
+    local maxScroll = math.max(0, contentH - visibleH)
+    local scroll = math.max(0, math.min(editor.manualScroll or 0, maxScroll))
+    editor.manualScroll = scroll
+
+    local h = headH + pad + visibleH + pad + footH + pad
+    local x = 0.5 - W * 0.5
+    local top = math.min(1, math.max(h, 0.5 + h * 0.5))
+
+    local edge = 0.0028
+    fillRole(self.borderOverlay, x - edge, top - h - edge, W + edge * 2, h + edge * 2, "cardBorder", 1)
+    fillRoleSolid(self.background, x, top - h, W, h, "panelBg")
+
+    -- title bar: title (left), page indicator, close X (right)
+    local y = top - pad - headH
+    local textY = y + (headH - fontSize) * 0.5
+    fillRole(self.headerOverlay, x, y, W, headH, "headerBg", 1)
+    labelRole(x + pad * 2, textY, fontSize, title, "headerText")
+    local xw = headH
+    labelRole(x + W - xw - pad, textY, fontSize * 0.8, string.format("%d / %d", idx, pageCount),
+        "mutedText", 1, RenderText.ALIGN_RIGHT)
+    local xbx = x + W - xw
+    local xhov = mx ~= nil and mx >= xbx and mx <= xbx + xw and my >= y and my <= y + headH
+    labelRole(xbx + xw * 0.5, textY, fontSize, "X", xhov and "headerText" or "mutedText", 1, RenderText.ALIGN_CENTER)
+    table.insert(self.dialogRows, { x = xbx, y = y, w = xw, h = headH, action = function() editor:closeManual() end })
+
+    -- content viewport [viewBottom, viewTop], scrolled. Lines fully outside it are skipped (no partial
+    -- clipping, so the edges stay clean); the scroll step is small enough that nothing is skipped over.
+    local viewTop = y - pad
+    local viewBottom = viewTop - visibleH
+    local cursor = 0   -- distance of the current line's top from the content start
+    for _, l in ipairs(lines) do
+        local ih = (l.kind == "gap") and rowH * 0.4 or rowH
+        local lineTopY = viewTop - (cursor - scroll)
+        local lineBottomY = lineTopY - ih
+        if lineBottomY >= viewBottom - 0.0002 and lineTopY <= viewTop + 0.0002 then
+            local ty = lineBottomY + (ih - fontSize) * 0.5
+            if l.kind == "summary" then
+                labelRole(x + pad * 2, ty, fontSize, l.text, "bodyText")
+            elseif l.kind == "section" then
+                labelRole(x + pad * 2, ty, fontSize * 0.82, l.text, "sectionText")
+            elseif l.kind == "body" then
+                labelRole(x + pad * 2, ty, fontSize * 0.92, l.text, "mutedText")
+            end
+        end
+        cursor = cursor + ih
+    end
+
+    -- scrollbar on the right edge of the viewport when there is more than fits
+    if maxScroll > 0 then
+        local sbW = 0.003 * uiScale
+        local sbX = x + W - sbW - pad * 0.4
+        fillRole(self.rowOverlay, sbX, viewBottom, sbW, visibleH, "toolBg", 0.9)
+        local thumbH = math.max(rowH * 0.8, visibleH * (visibleH / contentH))
+        local frac = scroll / maxScroll
+        local thumbTopY = viewTop - frac * (visibleH - thumbH)
+        fillRole(self.rowOverlay, sbX, thumbTopY - thumbH, sbW, thumbH, "accent", 0.9)
+    end
+
+    -- footer sits below the fixed viewport, not below the (possibly scrolled) content.
+    y = viewBottom - pad - footH
+    local halfW = (W - pad * 3) * 0.5
+    local function navBtn(bx, label, dir)
+        local hov = mx ~= nil and mx >= bx and mx <= bx + halfW and my >= y and my <= y + footH
+        fillRole(self.rowOverlay, bx, y, halfW, footH, hov and "hoverBg" or "toolBg", 1)
+        labelRole(bx + halfW * 0.5, y + (footH - fontSize) * 0.5, fontSize, label, "bodyText", 1,
+            RenderText.ALIGN_CENTER)
+        table.insert(self.dialogRows, { x = bx, y = y, w = halfW, h = footH,
+            action = function() editor:manualStep(dir) end })
+    end
+    navBtn(x + pad, "<  prev", -1)
+    navBtn(x + pad * 2 + halfW, "next  >", 1)
 end
 
 --- Is the mouse over the floating tool card? The wheel handler asks this so scrolling over the card
@@ -1171,6 +1396,37 @@ function ADFlyoverHud:isMouseOverToolCard(mx, my)
     end
     return mx >= self.ctxFrameX and mx <= self.ctxFrameX + self.ctxFrameW
         and my >= self.ctxFrameY and my <= self.ctxFrameY + self.ctxFrameH
+end
+
+--- Is the point over the contextual help card? The wheel handler asks this so a scroll over the help
+--- pages its body rather than zooming the camera. Only meaningful while the help is open (the rect is
+--- from the last help draw); callers gate on editor.helpOpen.
+function ADFlyoverHud:isMouseOverHelp(mx, my)
+    local r = self.helpRect
+    if mx == nil or r == nil then
+        return false
+    end
+    return mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
+end
+
+--- Does a screen point (normalised, y up - the same space as project() and the mouse) fall on one of
+--- the editor's solid UI surfaces: the corner panel, the floating tool card, or the help card? The
+--- world-label wrap uses this to drop AutoDrive's marker names where they would otherwise draw as text
+--- straight through the panel (the engine composites text over overlays, so hiding them is the only
+--- way). The help card is covered by the frame test only while it is open; its rect persists between
+--- draws, so this also folds in isMouseOver for the panel/card rows and any open context menu.
+function ADFlyoverHud:coversPoint(x, y)
+    if x == nil or y == nil then
+        return false
+    end
+    local function inRect(rx, ry, rw, rh)
+        return rw ~= nil and rw > 0 and x >= rx and x <= rx + rw and y >= ry and y <= ry + rh
+    end
+    if inRect(self.frameX, self.frameY, self.frameW, self.frameH) then return true end
+    if inRect(self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH) then return true end
+    local r = self.helpRect
+    if r ~= nil and inRect(r.x, r.y, r.w, r.h) then return true end
+    return (self:isMouseOver(x, y))
 end
 
 --- The lowest the panel may reach without covering the game's HUD map, for a panel spanning x..x+w.

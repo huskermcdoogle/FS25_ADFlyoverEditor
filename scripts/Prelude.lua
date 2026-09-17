@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.30.10.0"
+P.BUILD = "0.30.16.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -260,16 +260,19 @@ function P:mouseEvent(posX, posY, isDown, isUp, button)
 end
 
 function P:draw()
+    -- The map marker (the airplane on the game's minimap) is drawn FIRST, before the editor's own
+    -- panels. It still lands on top of the game's map - that was drawn before this listener runs - but
+    -- now UNDER the tool panel, floating card and help card, so it no longer poked through them where
+    -- they overlap the minimap. Guarded: a marker is a nicety, and a fault in it must never take the
+    -- editor's own drawing down.
+    if ADFlyoverMapMarker ~= nil then
+        pcall(ADFlyoverMapMarker.draw)
+    end
     if editorLoaded() then
         ADFlyoverEditor:draw()
     end
     if ADFlyoverProxy ~= nil then
         ADFlyoverProxy.drawMarker()
-    end
-    -- Last, so it lands on top of the game's map. Guarded: a marker is a nicety, and a fault in it
-    -- must never take the editor's own drawing down.
-    if ADFlyoverMapMarker ~= nil then
-        pcall(ADFlyoverMapMarker.draw)
     end
 end
 

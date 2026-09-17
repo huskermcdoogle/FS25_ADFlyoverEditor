@@ -163,6 +163,32 @@ function W.install(AD)
         return originalDraw(selfArg, ...)
     end
 
+    -- 6b. Marker-name labels bleeding through the editor's panels. AutoDrive draws map-marker names in
+    -- the world with Utils.renderTextAtWorldPosition (Specialization.lua onDrawEditorMode). The engine
+    -- composites text in a pass no overlay can cover, so a named waypoint sitting behind the tool
+    -- panel, the floating card or the help card showed its name straight through them - the "waypoint
+    -- label showing through" the panels. While the flyover editor is active, drop a label whose
+    -- projected screen point lands on one of those surfaces; every other label draws exactly as before.
+    -- Guarded end to end: if the projection or the hit test throws, the original still runs, so this can
+    -- never cost AutoDrive its text. Global, but gated on editorActive(), so it is inert when closed.
+    if type(Utils) == "table" and type(Utils.renderTextAtWorldPosition) == "function"
+        and not W.worldTextWrapped then
+        local originalRenderTextAtWorldPosition = Utils.renderTextAtWorldPosition
+        Utils.renderTextAtWorldPosition = function(x, y, z, ...)
+            if editorActive() and ADFlyoverHud ~= nil and type(ADFlyoverHud.coversPoint) == "function" then
+                local ok, hidden = pcall(function()
+                    local sx, sy, sz = project(x, y, z)
+                    return sz ~= nil and sz <= 1 and ADFlyoverHud:coversPoint(sx, sy)
+                end)
+                if ok and hidden then
+                    return
+                end
+            end
+            return originalRenderTextAtWorldPosition(x, y, z, ...)
+        end
+        W.worldTextWrapped = true
+    end
+
     -- 7. The name dialog. The fork made this work by EDITING AutoDrive's own EnterTargetNameGUI.lua
     -- so that onOpen and onClickOk honour an overrideWayPointId set from outside. Stock AutoDrive
     -- has no such code, so setting that field does nothing and the dialog silently falls back to
