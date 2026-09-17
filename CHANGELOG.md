@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.30.20.0 — Full German manual, and a feedback link (2026-09-17)
+
+- **Full German manual** — the in-game manual and the contextual **?** help are now fully localized:
+  with the game in German, every tool's **WHAT IT DOES / HOW TO USE IT / CONTROLS** and the **General
+  reference** page read in German, completing the localization begun in 0.30.19.0 (which covered the UI
+  chrome and the tool summaries). The German prose is stored unwrapped in the locale and wrapped to the
+  page at render, so bullets, hanging indents and umlauts all break correctly; English stays the source
+  of truth in `Help.lua` and is unchanged, and any untranslated string still falls back to English.
+- **Feedback** — a [Discord](https://discord.gg/teU3mXEbH) invite in the README for bugs, ideas and
+  questions.
+
 ## 0.30.19.0 — German localization, and a Move-wheel fix (2026-09-17)
 
 **German (Deutsch) support**

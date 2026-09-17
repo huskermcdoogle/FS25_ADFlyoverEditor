@@ -1181,21 +1181,22 @@ function ADFlyoverHud:drawHelp(editor)
 
     local lines = {}
     local function line(kind, text) lines[#lines + 1] = { kind = kind, text = text } end
-    -- Only the summary is localized (per the chosen scope); the WHAT / HOW / CONTROLS prose stays
-    -- English. The summary is wrapped from a single localized string, so German lines break to fit.
-    local sumLines = ADFlyoverLocale ~= nil and ADFlyoverLocale.summaryLines(key, help.summary, 44) or help.summary
+    -- Localized when a translation exists, English otherwise. The summary comes from one localized
+    -- string, the what / how / controls prose from the locale's help sections; all are wrapped to this
+    -- (narrower) panel's width so German breaks to fit. Headers localize too.
+    local sumLines = ADFlyoverLocale ~= nil and ADFlyoverLocale.summaryLines(key, help.summary, 42) or help.summary
     for _, l in ipairs(sumLines) do line("summary", l) end
-    line("gap", "")
-    line("section", "WHAT IT DOES")
-    for _, l in ipairs(help.what) do line("body", l) end
-    line("gap", "")
-    line("section", "HOW TO USE IT")
-    for _, l in ipairs(help.how) do line("body", l) end
-    if help.controls ~= nil and #help.controls > 0 then
+    local function section(header, skey, src)
+        if src == nil then return end
+        local body = ADFlyoverLocale ~= nil and ADFlyoverLocale.helpSection(key, skey, src, 42) or src
+        if #body == 0 then return end
         line("gap", "")
-        line("section", "CONTROLS")
-        for _, l in ipairs(help.controls) do line("body", l) end
+        line("section", TR(header))
+        for _, l in ipairs(body) do line("body", l) end
     end
+    section("WHAT IT DOES", "what", help.what)
+    section("HOW TO USE IT", "how", help.how)
+    section("CONTROLS", "controls", help.controls)
 
     local mx, my = editor.mouseX, editor.mouseY
 
@@ -1317,11 +1318,25 @@ function ADFlyoverHud:drawManual(editor)
         title = TR("General reference")
         local g = ADFlyoverHelp.general
         if g ~= nil then
-            if g.summary ~= nil then line("summary", g.summary) end
-            for _, sec in ipairs(g.sections or {}) do
+            local gSum = ADFlyoverLocale ~= nil and ADFlyoverLocale.generalSummary(g.summary) or g.summary
+            if gSum ~= nil then
+                for _, l in ipairs(ADFlyoverLocale ~= nil and ADFlyoverLocale.wrap(gSum, 46) or { gSum }) do
+                    line("summary", l)
+                end
+            end
+            local secs
+            if ADFlyoverLocale ~= nil then
+                secs = ADFlyoverLocale.generalSections(g.sections, 46)
+            else
+                secs = {}
+                for _, sec in ipairs(g.sections or {}) do
+                    secs[#secs + 1] = { title = string.upper(sec.title or ""), lines = sec.lines or {} }
+                end
+            end
+            for _, sec in ipairs(secs) do
                 line("gap", "")
-                line("section", string.upper(sec.title or ""))
-                for _, l in ipairs(sec.lines or {}) do line("body", l) end
+                line("section", sec.title)
+                for _, l in ipairs(sec.lines) do line("body", l) end
             end
         end
     else
@@ -1329,20 +1344,21 @@ function ADFlyoverHud:drawManual(editor)
         local help = ADFlyoverHelp.tools[toolKey]
         if help == nil then return end
         title = TR(help.name or "?") .. "  -  " .. TR(help.group or "")
-        -- Localized summary (wrapped from one string); the rest of the page stays English by scope.
         local sumLines = ADFlyoverLocale ~= nil and ADFlyoverLocale.summaryLines(toolKey, help.summary, 48) or (help.summary or {})
         for _, l in ipairs(sumLines) do line("summary", l) end
-        line("gap", "")
-        line("section", "WHAT IT DOES")
-        for _, l in ipairs(help.what or {}) do line("body", l) end
-        line("gap", "")
-        line("section", "HOW TO USE IT")
-        for _, l in ipairs(help.how or {}) do line("body", l) end
-        if help.controls ~= nil and #help.controls > 0 then
+        -- what / how / controls: localized (wrapped to width in the section's style) when a German
+        -- translation exists, else the bundled English lines. Headers localize too.
+        local function section(header, key, src)
+            if src == nil then return end
+            local body = ADFlyoverLocale ~= nil and ADFlyoverLocale.helpSection(toolKey, key, src, 46) or src
+            if #body == 0 then return end
             line("gap", "")
-            line("section", "CONTROLS")
-            for _, l in ipairs(help.controls) do line("body", l) end
+            line("section", TR(header))
+            for _, l in ipairs(body) do line("body", l) end
         end
+        section("WHAT IT DOES", "what", help.what)
+        section("HOW TO USE IT", "how", help.how)
+        section("CONTROLS", "controls", help.controls)
     end
 
     local contentH = 0

@@ -11,7 +11,7 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 *Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 0.30.19.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
+> **Status:** build 0.30.20.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
 
 ## Install
 
@@ -23,6 +23,10 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 Don't run it next to a modified AutoDrive build that already includes its own flyover editor (an
 AutoDrive fork, say) — both provide the editor, and whichever loads last wins.
+
+## Feedback
+
+Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/teU3mXEbH).
 
 ## Opening the editor
 

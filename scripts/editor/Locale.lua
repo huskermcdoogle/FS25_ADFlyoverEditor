@@ -227,6 +227,9 @@ L.STRINGS = {
         ["<  prev"] = "<  zurück",
         ["next  >"] = "weiter  >",
         ["General reference"] = "Allgemeine Referenz",
+        ["WHAT IT DOES"] = "WAS ES TUT",
+        ["HOW TO USE IT"] = "ANWENDUNG",
+        ["CONTROLS"] = "STEUERUNG",
 
         -- cursor field readout templates (formatted in FlyoverEditor)
         ["field %d"] = "Feld %d",
@@ -317,6 +320,263 @@ L.SUMMARIES = {
     },
 }
 
+-- Full-manual prose (the WHAT / HOW / CONTROLS of each tool), keyed by tool key. Stored UNWRAPPED - one
+-- string per paragraph (what), per bullet (how) or per control line (controls) - and wrapped to the
+-- page at render (L.helpSection), because German wraps differently from the English lines make_help.py
+-- bakes. English stays the source of truth in Help.lua; this only adds the German.
+L.HELP = {
+    de = {
+        ["select"] = {
+            what = {
+                "Im Auswahlmodus prüfst du das Vorhandene und wirkst darauf ein, statt Neues zu erstellen. Ein Klick auf das Netz öffnet ein Kontextmenü für das Angeklickte, und derselbe Klick kann von einem einzelnen Punkt über einen Abschnitt bis zu einer ganzen Route hochstufen - so musst du selten das Werkzeug wechseln, um etwas zu ändern.",
+            },
+            how = {
+                "Einen Wegpunkt anklicken, um sein PUNKT-Menü zu öffnen (benennen, verschieben, verbinden, umwandeln, löschen).",
+                "Erneut auf denselben Punkt klicken oder Doppelklick, um den ABSCHNITT beidseits davon zu greifen.",
+                "Ein weiterer Klick greift die ganze ROUTE zwischen den zwei nächsten Kreuzungen.",
+                "Ein Kästchen über die Karte ziehen, um mehrere Punkte auszuwählen.",
+                "Der angeklickte Punkt/Abschnitt/die Route wird in der Welt hervorgehoben, solange sein Menü offen ist.",
+                "Rechtsklick schließt das Menü, ohne etwas zu tun.",
+            },
+            controls = {
+                "Punkt-Menü: benennen, verschieben, von hier verbinden, von hier Spline, ein-/beidseitig, primär/sekundär, löschen.",
+                "Abschnitt-/Routen-Menü: begradigen, glätten, unterteilen, aufsetzen, Parallele (Route), ein-/beidseitig, Richtung umkehren, löschen.",
+                "Werkzeug schärfen: Eine Aktion aus einem Menü SCHÄRFT dieses Werkzeug auf der Auswahl; Einstellung wählen, dann Rechtsklick zum Anwenden.",
+            },
+        },
+        ["draw"] = {
+            what = {
+                "Zeichnen setzt neue Wegpunkte Klick für Klick und verbindet jeden mit dem letzten, sodass eine Route mitwächst. Es ist der grundlegende Weg, um Strecke zu bauen, die nicht aus einer vorhandenen Form abgeleitet ist.",
+            },
+            how = {
+                "Auf leeren Boden klicken, um einen Wegpunkt zu setzen; jeder neue verbindet sich mit dem vorigen.",
+                "Auf einen vorhandenen Wegpunkt klicken, um VON ihm aus zu zeichnen und die neue Route ins Netz einzubinden.",
+                "Rechtsklick beendet die aktuelle Route, der nächste Klick beginnt eine neue.",
+            },
+            controls = {
+                "Richtung: ob neue Verbindungen ein- oder beidseitig sind.",
+                "Priorität: primär oder sekundär (sekundär erscheint als Vorfahrt-gewähren-Straße).",
+                "einrasten auf: Oberfläche oder Gelände - worauf die neuen Punkte liegen.",
+            },
+        },
+        ["spline"] = {
+            what = {
+                "Spline verbindet zwei Wegpunkte mit einer Kurve statt eines geraden Segments - für weite Bögen, denen ein Fahrzeug zügig folgen kann. Eine Live-Vorschau zeigt die Kurve, bevor du sie festlegst.",
+            },
+            how = {
+                "Den Start-Wegpunkt anklicken, dann den End-Wegpunkt - die Kurve wird dazwischen als Vorschau gezeigt.",
+                "Am Rad drehen, um die Krümmung zu verstärken oder zu lockern, solange die Vorschau offen ist.",
+                "Erneut klicken/bestätigen, um sie zu platzieren; Rechtsklick bricht ab.",
+            },
+            controls = {
+                "Krümmung (Rad): wie eng die Kurve ist, auf einen sinnvollen Bereich begrenzt.",
+                "Endpunkte: von welchem Ende die Kurve berechnet wird (formt sie um).",
+                "End-/Start-Tangente: die Richtung umkehren, in der die Kurve jedes Ende verlässt.",
+                "Richtung/Priorität: wie bei Zeichnen - ein-/beidseitig und primär/sekundär.",
+            },
+        },
+        ["field loop"] = {
+            what = {
+                "Feldschleife baut eine vollständige beidseitige Route, die knapp außerhalb der Feldgrenze verläuft, auf einen Wenderadius geglättet und um Bäume herum nach innen versetzt. Es ist eine eigenständige Schleife - keine Kartenmarker, nicht mit dem übrigen Netz verbunden - die du danach mit Zeichnen oder dem Editor einbindest.",
+            },
+            how = {
+                "Den Cursor auf das Feld richten, um das die Schleife laufen soll.",
+                "Das Feldschleifen-Werkzeug wählen - es liest die Feldgrenze und legt die Schleife.",
+                "Die Schleife danach in dein Netz einbinden, falls du sie verbunden brauchst.",
+            },
+            controls = {
+                "Rand: wie weit außerhalb der Grenze die Schleife läuft.",
+                "Baumabstand: wie weit die Schleife von Bäumen bleibt, bevor sie ausweicht.",
+                "Wenderadius: die engste Kurve, die die Schleife machen darf.",
+                "Fahrzeughöhe: für wie hohe Maschine die Baumprüfung frei hält.",
+            },
+        },
+        ["parallel"] = {
+            what = {
+                "Parallele versetzt einen vorhandenen Abschnitt oder eine Route seitlich um einen festen Abstand, um eine zweite Spur daneben zu erzeugen - eine Überholspur oder einen Rückweg.",
+            },
+            how = {
+                "Den Abschnitt (zwei Punkte) oder die Route wählen, neben der du fahren willst.",
+                "Abstand und Seite einstellen, dann anwenden - die neue Parallelspur wird erstellt.",
+            },
+            controls = {
+                "Abstand: wie weit zur Seite die neue Spur liegt.",
+                "Seite: links oder rechts der Fahrtrichtung des Originals.",
+                "umfasst: ob es auf den gewählten Abschnitt oder die ganze Route wirkt.",
+            },
+        },
+        ["siding"] = {
+            what = {
+                "Ausweiche legt eine kurze Parallelstrecke neben eine Route und führt sie an beiden Enden wieder in die Route zurück - wie eine Haltebucht oder Ausweichstelle, in einer Aktion.",
+            },
+            how = {
+                "Den Ankerpunkt auf der Route wählen.",
+                "Versatz und Länge einstellen (Rad ändert die Länge), dann anwenden.",
+            },
+            controls = {
+                "Versatz: wie weit zur Seite die Ausweiche liegt.",
+                "Länge (Rad): wie lang die Parallelstrecke ist.",
+                "Seite: links oder rechts.",
+            },
+        },
+        ["move"] = {
+            what = {
+                "Verschieben zieht einen Wegpunkt an eine neue Stelle und setzt ihn dort auf den echten Boden. Eine Abnahme kann die Bewegung auf nahe Punkte entlang der Strecke ausdehnen, sodass sich ein ganzer Abschnitt weich verschiebt, statt dass ein Punkt springt.",
+            },
+            how = {
+                "Auf einen Wegpunkt zeigen und ziehen; loslassen, um ihn abzulegen.",
+                "Die Werkzeugkarte blendet sich beim Ziehen automatisch aus, damit sie nie im Weg ist.",
+                "Zuerst die Abnahme einstellen (Rad über der Karte, die +/- Stepper oder , und .), um Nachbarn mitzunehmen.",
+            },
+            controls = {
+                "Abnahme entlang Strecke: wie weit entlang der Route sich die Bewegung auf Nachbarn ausdehnt.",
+                "einrasten auf: Oberfläche oder Gelände für den abgelegten Punkt.",
+            },
+        },
+        ["smooth"] = {
+            what = {
+                "Glätten nimmt die kleinen Knicke aus einem Abschnitt, damit sich eine befahrene Strecke nicht mehr ruckelig anfühlt. Es hat zwei Modi: einer schiebt die vorhandenen Punkte in Linie (Kreuzungen und Marker bleiben), der andere baut den Abschnitt in gleichmäßigem Abstand neu auf.",
+            },
+            how = {
+                "Den Abschnitt oder die Route zum Glätten wählen.",
+                "Modus und Stärke/Abstand wählen, dann anwenden.",
+            },
+            controls = {
+                "Modus: vorhandene Punkte schieben oder den Abschnitt neu aufbauen.",
+                "Stärke: wie kräftig das Schieben zieht (Schiebe-Modus).",
+                "max. Abstand: Punktabstand beim Neuaufbau (Aufbau-Modus).",
+            },
+        },
+        ["straighten"] = {
+            what = {
+                "Begradigen entfernt schlingerndes Detail aus einem Abschnitt, behält aber echte Ecken, indem nur die Punkte fallen, die innerhalb einer Toleranz um die Gerade liegen. Erhöhe die Toleranz, um auch eine echte Kurve zu glätten. Kreuzungen in der Mitte bleiben erhalten.",
+            },
+            how = {
+                "Den Abschnitt oder die Route zum Begradigen wählen.",
+                "Die Toleranz einstellen - größer entfernt mehr - dann anwenden.",
+            },
+            controls = {
+                "Toleranz: wie weit ein Punkt von der Linie abweichen darf, bevor er erhalten bleibt.",
+            },
+        },
+        ["divide"] = {
+            what = {
+                "Unterteilen fügt eine gewählte Anzahl neuer Wegpunkte ein, gleichmäßig nach Abstand über einen Abschnitt verteilt - so bekommst du Griffe, wo die Strecke zu grob war.",
+            },
+            how = {
+                "Den Abschnitt oder die Route wählen.",
+                "Einstellen, wie viele Punkte hinzugefügt werden, dann anwenden.",
+            },
+            controls = {
+                "Punkte: wie viele neue Punkte über den Abschnitt verteilt werden.",
+            },
+        },
+        ["ground"] = {
+            what = {
+                "Aufsetzen senkt (oder hebt) die Wegpunkte eines Abschnitts innerhalb einer Toleranz auf den Boden und behebt Punkte, die über dem Gelände schweben oder darin stecken. Ein Punkt, der bereits korrekt auf einer platzierten Rampe oder Brücke liegt, bleibt erhalten, statt auf das Gelände unter der Geraden gezogen zu werden.",
+            },
+            how = {
+                "Den Abschnitt oder die Route wählen.",
+                "Die Toleranz einstellen (wie weit über dem Boden als Problem zählt) und anwenden.",
+            },
+            controls = {
+                "Toleranz: wie weit ein Punkt von der Oberfläche abweichen darf, bevor er bewegt wird.",
+                "Höhe: auf die obere Fläche aufsetzen oder auf die dem Punkt nächste.",
+                "einrasten auf: Gelände oder jede Oberfläche (Straßen, Brücken).",
+            },
+        },
+        ["convert"] = {
+            what = {
+                "Umwandeln schreibt Richtung und Priorität bereits vorhandener Verbindungen um - einen Abschnitt beidseitig, einseitig oder zu einer Vorfahrt-gewähren-Straße (sekundär) machen - für einen Punkt, einen Abschnitt oder eine ganze Route.",
+            },
+            how = {
+                "Den Punkt, Abschnitt oder die Route wählen.",
+                "Wählen, wozu er wird (beidseitig, einseitig, primär, sekundär) und anwenden.",
+            },
+            controls = {
+                "ändern zu: beidseitig, einseitig, primär oder sekundär.",
+                "Umfang: der Punkt, der Abschnitt oder die ganze Route.",
+            },
+        },
+        ["merge"] = {
+            what = {
+                "Zusammenführen ist für einen Abschnitt, in dem zwei getrennt aufgezeichnete Strecken nebeneinander laufen - die zwei Richtungen einer Straße oder eine doppelt aufgezeichnete Spur - und du willst, dass sie eins werden. Du markierst die Länge auf einer Strecke, zeigst dann auf die andere, und der markierte Abschnitt wird in sie aufgenommen. Es ist eine Drei-Klick-Aktion, kein einzelner Klick auf einen Haufen Punkte.",
+            },
+            how = {
+                "Auf ein Ende des Abschnitts auf EINER der zwei Strecken klicken.",
+                "Auf das andere Ende auf DERSELBEN Strecke klicken. Die zwei Klicks müssen zwei Enden eines verbundenen Abschnitts sein - sind sie nicht auf derselben Strecke, warnt eine Meldung und nichts passiert.",
+                "Auf einen Punkt der ANDEREN, daneben laufenden Strecke klicken. Der Teil, der aufgenommen wird, färbt sich grün; der Klick bestätigt, welche nahe Strecke gemeint ist, und die Zusammenführung geschieht.",
+                "Die zwei Strecken müssen innerhalb des Zusammenführ-Abstands zueinander liegen (quer über die Lücke gemessen), damit etwas zusammengeführt wird - sind sie zu weit auseinander, passiert nichts.",
+            },
+            controls = {
+                "Zusammenführ-Abstand: wie weit die zwei Strecken auseinander liegen dürfen und noch zusammengeführt werden, quer über die Lücke gemessen. Auf der AutoDrive-Einstellungsseite gesetzt.",
+                "Divergenz: wie weit die zwei Strecken ENTLANG des Abschnitts auseinanderdriften dürfen, bevor sie als getrennte Routen zählen und die Zusammenführung dort endet.",
+            },
+        },
+        ["name"] = {
+            what = {
+                "Benennen hängt einem Wegpunkt eine Beschriftung an, sodass er zu einem benannten Ziel/Marker auf der Karte wird - so, wie AutoDrive-Ziele benannt werden.",
+            },
+            how = {
+                "Den Wegpunkt anklicken, den du benennen willst.",
+                "Den Namen im Dialog eingeben, der sich öffnet, und bestätigen.",
+            },
+            controls = {
+                "Namensdialog: die Texteingabe des Grundspiels, per Klick geöffnet.",
+            },
+        },
+        ["delete"] = {
+            what = {
+                "Löschen entfernt Wegpunkte und die Verbindungen durch sie - einen einzelnen Punkt, einen gewählten Abschnitt oder eine ganze Route zwischen Kreuzungen, je nach Umfang.",
+            },
+            how = {
+                "Den Punkt, Abschnitt oder die Route wählen.",
+                "Den Umfang einstellen und anwenden - er wird entfernt (und ist widerrufbar).",
+            },
+            controls = {
+                "Umfang: der Punkt, der Abschnitt oder die ganze Route.",
+            },
+        },
+    },
+}
+
+-- The General-reference page (manual page 1). Same idea: one string per bullet, wrapped at render.
+-- Section titles are stored already upper-cased for the language (Lua's string.upper only touches
+-- ASCII, so it would leave umlauts mixed-case - hence pre-casing here).
+L.GENERAL = {
+    de = {
+        summary = "Öffnen, Verlassen und die überall gültigen Tasten und Steuerungen.",
+        sections = {
+            { title = "ÖFFNEN & VERLASSEN", lines = {
+                "Den Editor mit Linke Alt + F öffnen (im Steuerungsmenü belegbar) oder mit dem Knopf neben AutoDrives HUD.",
+                "Esc zum Verlassen. Jede Änderung ist widerrufbar.",
+                "Nur Einzelspieler. Änderungen werden geschrieben, wenn du der Host bist.",
+            } },
+            { title = "TASTEN", lines = {
+                "1-9, 0 - ein Werkzeug wählen (die Zahl auf dem jeweiligen Werkzeugknopf).",
+                "Q - rückgängig, E - wiederherstellen.",
+                "H - die schwebende Werkzeugkarte aus-/einblenden (sie blendet sich beim Ziehen auch selbst aus).",
+                ", und . - Abnahmeradius des Verschieben-Werkzeugs verkleinern/vergrößern.",
+                "Esc - den Editor verlassen (oder einen Dialog schließen / eine Eingabe abbrechen).",
+            } },
+            { title = "MAUS & KAMERA", lines = {
+                "Linksklick - platzieren / auswählen / bedienen, je nach Werkzeug.",
+                "Rechtsklick - eine Route beenden, ein Menü abbrechen oder ein geschärftes Werkzeug anwenden.",
+                "Mittlere Maustaste - die Kamera schwenken/drehen. WASD bewegt sie.",
+                "Rad - Kamera-Zoom oder das Zahlenfeld unter dem Cursor ändern.",
+            } },
+            { title = "ZAHLENFELDER", lines = {
+                "Jede Zahl im Panel lässt sich auf drei Arten ändern: die - / + Stepper klicken, mit dem Rad darüber scrollen oder den Wert anklicken und eintippen.",
+            } },
+            { title = "EINSTELLUNGEN & FARBEN", lines = {
+                "Das Zahnrad in der Panel-Kopfzeile (oder eine belegbare Taste) öffnet den Einstellungsdialog: UI-Größe, Design-Vorlage, Akzentfarbe und einen Farbeditor je Rolle.",
+                "Einstellungen sind auch im Panel unter AKTIONEN > Einstellungen. Alles wirkt sofort und speichert automatisch.",
+                "Konsolenbefehl FlyoverResetTheme (oder eine belegbare Taste) setzt Farben und Größe auf Standard zurück, falls eine eigene Farbe das Panel schwer lesbar macht.",
+            } },
+        },
+    },
+}
+
 --- Localized string for an English UI string. nil and non-strings pass straight through, and an
 --- English string with no entry for the current language returns unchanged - so wrapping any drawn
 --- literal in this call is always safe.
@@ -372,4 +632,81 @@ function L.summaryLines(toolKey, englishLines, maxChars)
         return wrapText(s, maxChars or 44)
     end
     return englishLines or {}
+end
+
+-- Word-wrap with a first-line prefix and a continuation prefix, for bullets ("- " / "  ") and hanging
+-- indents ("" / "  "). Byte length, so umlauts wrap a touch early - safe against overflow.
+local function wrapPrefixed(s, maxChars, firstPrefix, contPrefix)
+    firstPrefix = firstPrefix or ""
+    contPrefix = contPrefix or ""
+    local out, line = {}, nil
+    for word in string.gmatch(s, "%S+") do
+        if line == nil then
+            line = firstPrefix .. word
+        elseif #line + 1 + #word <= maxChars then
+            line = line .. " " .. word
+        else
+            out[#out + 1] = line
+            line = contPrefix .. word
+        end
+    end
+    if line ~= nil then out[#out + 1] = line end
+    if #out == 0 then out[#out + 1] = firstPrefix end
+    return out
+end
+
+-- How each help section wraps: "what" is flowing prose, "how" is bulleted, "controls" is
+-- hanging-indented - matching the shapes make_help.py bakes into the English.
+local HELP_STYLE = {
+    what = { first = "", cont = "" },
+    how = { first = "- ", cont = "  " },
+    controls = { first = "", cont = "  " },
+}
+
+--- The body lines for one tool help section ("what" / "how" / "controls"). When a German translation
+--- exists it is wrapped to maxChars in that section's style; otherwise the bundled English lines are
+--- returned exactly as make_help.py wrote them.
+function L.helpSection(toolKey, section, englishLines, maxChars)
+    local tbl = L.HELP[L.code()]
+    local items = tbl ~= nil and tbl[toolKey] ~= nil and tbl[toolKey][section] or nil
+    if items == nil then
+        return englishLines or {}
+    end
+    local style = HELP_STYLE[section] or HELP_STYLE.what
+    local out = {}
+    for _, para in ipairs(items) do
+        for _, ln in ipairs(wrapPrefixed(para, maxChars or 46, style.first, style.cont)) do
+            out[#out + 1] = ln
+        end
+    end
+    return out
+end
+
+--- The General-reference summary for the current language (English when untranslated).
+function L.generalSummary(englishSummary)
+    local g = L.GENERAL[L.code()]
+    return (g ~= nil and g.summary) or englishSummary
+end
+
+--- The General-reference sections, normalized to { title, lines } for the renderer. German is wrapped,
+--- its titles already cased; English matches the current renderer - title upper-cased, lines as-is.
+function L.generalSections(englishSections, maxChars)
+    local out = {}
+    local g = L.GENERAL[L.code()]
+    if g ~= nil and g.sections ~= nil then
+        for _, sec in ipairs(g.sections) do
+            local lines = {}
+            for _, item in ipairs(sec.lines or {}) do
+                for _, ln in ipairs(wrapPrefixed(item, maxChars or 46, "- ", "  ")) do
+                    lines[#lines + 1] = ln
+                end
+            end
+            out[#out + 1] = { title = sec.title, lines = lines }
+        end
+        return out
+    end
+    for _, sec in ipairs(englishSections or {}) do
+        out[#out + 1] = { title = string.upper(sec.title or ""), lines = sec.lines or {} }
+    end
+    return out
 end
