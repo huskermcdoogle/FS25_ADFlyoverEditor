@@ -9,9 +9,9 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 ![The flyover editor in use: the tool panel on the left, a run's context menu on the right, and an AutoDrive route drawn over the world](docs/flyover-editor.jpg)
 
-*Top-down editing of an AutoDrive route — the grouped tool panel, a run's context menu, and the network drawn over the map.*
+*Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 0.29.4.0 · single player only · requires `FS25_AutoDrive`
+> **Status:** build 0.30.4.0 · single player only · requires `FS25_AutoDrive`
 
 ## Install
 
