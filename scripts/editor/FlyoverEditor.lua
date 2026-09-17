@@ -1153,13 +1153,14 @@ function ADFlyoverEditor:updateFieldUnderCursor()
         end
 
         local field = farmland.getField ~= nil and farmland:getField() or nil
+        local tr = ADFlyoverLocale ~= nil and ADFlyoverLocale.t or function(s) return s end
         if field ~= nil and field.fieldId ~= nil then
-            label = "field " .. tostring(field.fieldId)
+            label = string.format(tr("field %d"), field.fieldId)
         elseif farmland.id ~= nil then
             -- Farmland with no field on it is still worth naming: it tells you the cursor is on
             -- owned land rather than off the map, which is the difference between "the field loop
             -- tool will not work here" and "you are pointing at nothing".
-            label = "farmland " .. tostring(farmland.id) .. " (no field)"
+            label = string.format(tr("farmland %d (no field)"), farmland.id)
         end
     end)
 
@@ -3858,137 +3859,137 @@ end
 
 --- What the current tool is waiting for, in plain words. This is the line that tells you what to
 --- do next instead of leaving you to remember it, and it is why the panel exists.
+--- One localized guidance message for the current tool state, returned WHOLE (not pre-split). The
+--- panel wraps it to width at render (see buildRows). Collapsing the old line pairs into one string is
+--- what lets German - which wraps differently from English - read as a sentence rather than two halves
+--- broken at the English line break. Format placeholders are kept inside the localized template so the
+--- live value lands in the right place in either language.
 function ADFlyoverEditor:getNextStepLines()
     local t = self.TOOL
+    local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
+    local function side() return (self.offsetSide or 1) >= 0 and L("left") or L("right") end
 
     if self.tool == t.NONE then
-        return { "No tool selected.", "Pick one above, or press 1-9 / 0." }
+        return L("No tool selected. Pick one above, or press 1-9 / 0.")
     end
 
     if self.tool == t.DRAW then
         if self.lastWaypointId ~= nil then
-            return { "Click ground to extend, or a", "waypoint to link. Right-click ends." }
+            return L("Click ground to extend, or a waypoint to link. Right-click ends.")
         end
-        return { "Click to start a run, or a", "waypoint to draw on from it." }
+        return L("Click to start a run, or a waypoint to draw on from it.")
     elseif self.tool == t.MOVE then
         if self.dragId ~= nil then
-            return { string.format("Wheel changes falloff (%.1fm),", self.falloffRadius), "live. Release to drop." }
+            return string.format(L("Wheel changes falloff (%.1fm), live. Release to drop."), self.falloffRadius)
         end
         if self.hoverId ~= nil then
-            return { "Drag the highlighted waypoint." }
+            return L("Drag the highlighted waypoint.")
         end
-        return { "Point at a waypoint, then drag it." }
+        return L("Point at a waypoint, then drag it.")
     elseif self.tool == t.DELETE then
         if self.selectionCount > 0 then
-            return { string.format("Click to delete %d selected.", self.selectionCount) }
+            return string.format(L("Click to delete %d selected."), self.selectionCount)
         end
         if self.deleteScope == self.DELETE_SCOPE.RUN then
-            return { "Click a run to delete all of it,", "out to the junctions at each end." }
+            return L("Click a run to delete all of it, out to the junctions at each end.")
         end
         if self.hoverId ~= nil then
-            return { "Click to delete the highlighted one." }
+            return L("Click to delete the highlighted one.")
         end
-        return { "Point at a waypoint to delete it." }
+        return L("Point at a waypoint to delete it.")
     elseif self.tool == t.SMOOTH then
         if self.smoothToId ~= nil then
             if self.smoothMode == self.SMOOTH_MODE.REBUILD then
-                return { string.format("Wheel sets max spacing (%.1fm).", self.smoothSpacing), "Curves stay denser." }
+                return string.format(L("Wheel sets max spacing (%.1fm). Curves stay denser."), self.smoothSpacing)
             end
-            return { string.format("Wheel sets strength (%d).", self.smoothStrength), "Right-click applies it." }
+            return string.format(L("Wheel sets strength (%d). Right-click applies it."), self.smoothStrength)
         end
         if self.smoothFromId ~= nil then
-            return { "Click the far end of the span." }
+            return L("Click the far end of the span.")
         end
-        return { "Click one end of the span." }
+        return L("Click one end of the span.")
     elseif self.tool == t.NAME then
-        return { "Click a waypoint to name it." }
+        return L("Click a waypoint to name it.")
     elseif self.tool == t.SPLINE then
         if self.splineToId ~= nil then
-            return { "Wheel adjusts the curve.", "Right-click places it." }
+            return L("Wheel adjusts the curve. Right-click places it.")
         end
         if self.splineFromId ~= nil then
-            return { "Click the waypoint to curve to." }
+            return L("Click the waypoint to curve to.")
         end
-        return { "Click the waypoint to curve from." }
+        return L("Click the waypoint to curve from.")
     elseif self.tool == t.FIELDLOOP then
-        return { "Click inside a field to ring it.", "Uses the field loop settings." }
+        return L("Click inside a field to ring it. Uses the field loop settings.")
     elseif self.tool == t.SIDING then
         if self.sidingBlockedBy ~= nil then
-            return { "Will not fit here.", "See the log for why." }
+            return L("Will not fit here. See the log for why.")
         end
         if self.sidingAnchorId ~= nil then
-            return { string.format("Wheel sets length (%.0fm, %s side).",
-                        ADFlyoverSettings.get("sidingLength") or 30,
-                        (self.offsetSide or 1) >= 0 and "left" or "right"),
-                     "Flip the side on the panel. Right-click applies." }
+            return string.format(L("Wheel sets length (%.0fm, %s side). Flip the side on the panel. Right-click applies."),
+                ADFlyoverSettings.get("sidingLength") or 30, side())
         end
-        return { "Click where the siding should", "sit - the click is its centre." }
+        return L("Click where the siding should sit - the click is its centre.")
     elseif self.tool == t.PARALLEL then
         if self.offsetToId ~= nil then
             if self.offsetBlockedBy ~= nil then
-                return { "Too tight to offset that far.", "Wheel it back, or swap sides." }
+                return L("Too tight to offset that far. Wheel it back, or swap sides.")
             end
-            return { string.format("Wheel sets offset (%.1fm %s).", self.offsetDistance,
-                        (self.offsetSide or 1) >= 0 and "left" or "right"),
-                     "Flip the side on the panel. Right-click applies." }
+            return string.format(L("Wheel sets offset (%.1fm %s). Flip the side on the panel. Right-click applies."),
+                self.offsetDistance, side())
         end
         if self.offsetFromId ~= nil then
-            return { "Click the far end of the span." }
+            return L("Click the far end of the span.")
         end
         if self.offsetScope == self.OFFSET_SCOPE.RUN then
-            return { "Click a run to offset the whole", "thing, junction to junction." }
+            return L("Click a run to offset the whole thing, junction to junction.")
         end
-        return { "Click one end of a span to run", "a track alongside it." }
+        return L("Click one end of a span to run a track alongside it.")
     elseif self.tool == t.GROUND then
         if self.groundToId ~= nil then
             local n = self.groundPreview ~= nil and #self.groundPreview or 0
             if n == 0 then
-                return { string.format("Nothing over %.1fm off the ground.", self.groundTolerance),
-                         "Wheel the tolerance down to see more." }
+                return string.format(L("Nothing over %.1fm off the ground. Wheel the tolerance down to see more."), self.groundTolerance)
             end
-            return { string.format("%d of %d waypoint(s) off the ground.", n, self.groundChecked or 0),
-                     "Right-click re-seats them." }
+            return string.format(L("%d of %d waypoint(s) off the ground. Right-click re-seats them."), n, self.groundChecked or 0)
         end
         if self.groundFromId ~= nil then
-            return { "Click the far end of the span." }
+            return L("Click the far end of the span.")
         end
         if self.offsetScope == self.OFFSET_SCOPE.RUN then
-            return { "Click a run to check the whole", "thing for waypoints off the ground." }
+            return L("Click a run to check the whole thing for waypoints off the ground.")
         end
-        return { "Click one end of a span to find", "waypoints off the ground." }
+        return L("Click one end of a span to find waypoints off the ground.")
     elseif self.tool == t.STRAIGHTEN then
         if self.straightenToId ~= nil then
-            return { string.format("Wheel sets tolerance (%.2fm).", self.straightenTolerance),
-                     "Right-click straightens the span." }
+            return string.format(L("Wheel sets tolerance (%.2fm). Right-click straightens the span."), self.straightenTolerance)
         end
         if self.straightenFromId ~= nil then
-            return { "Click the far end of the span." }
+            return L("Click the far end of the span.")
         end
-        return { "Click one end of a span to", "straighten it." }
+        return L("Click one end of a span to straighten it.")
     elseif self.tool == t.DIVIDE then
         if self.divideToId ~= nil then
-            return { string.format("Wheel sets the count (%d).", self.divideCount), "Right-click applies it." }
+            return string.format(L("Wheel sets the count (%d). Right-click applies it."), self.divideCount)
         end
         if self.divideFromId ~= nil then
-            return { "Click the far end of the span." }
+            return L("Click the far end of the span.")
         end
-        return { "Click one end of the span to divide." }
+        return L("Click one end of the span to divide.")
     elseif self.tool == t.CONVERT then
-        return {
-            string.format("Click to make %s", self.CONVERT_OP_NAMES[self.convertOp]),
-            self.convertScope == self.DELETE_SCOPE.RUN and "the whole run." or "this waypoint."
-        }
+        return string.format(L("Click to make it %s (%s)."),
+            L(self.CONVERT_OP_NAMES[self.convertOp]),
+            self.convertScope == self.DELETE_SCOPE.RUN and L("whole run") or L("this waypoint"))
     elseif self.tool == t.MERGE then
         if self.mergeToId ~= nil then
-            return { "Green marks what would be absorbed.", "Click a point on the OTHER track." }
+            return L("Green marks what would be absorbed. Click a point on the OTHER track.")
         end
         if self.mergeFromId ~= nil then
-            return { "Click the far end of the span,", "on the SAME track." }
+            return L("Click the far end of the span, on the SAME track.")
         end
-        return { "Click one end of the span to merge." }
+        return L("Click one end of the span to merge.")
     end
 
-    return { "" }
+    return ""
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -5839,13 +5840,20 @@ function ADFlyoverEditor:handleWheel(offset)
         return true
     end
 
+    -- Move's falloff radius is a spatial REACH, and players expect wheel-up to WIDEN it - the opposite
+    -- of the tolerances and counts the global reversal above suits. So the move tool keeps the original
+    -- (pre-reversal) wheel direction; everything else stays reversed. The -/+ steppers are unaffected
+    -- either way, since they call stepAction directly and never come through here.
+    local toolStep = (self.tool == self.TOOL.MOVE) and -step or step
+
     -- Any numeric field under the cursor takes the wheel: the floating card's fields, the settings
     -- fields in the corner block, and the armed popup. Only rows carrying a stepAction match, so a
-    -- scroll over a plain button or empty space still falls through to the camera zoom below.
+    -- scroll over a plain button or empty space still falls through to the camera zoom below. A field
+    -- flagged wheelKeepDir (move's falloff) keeps the original direction; the rest use the reversed one.
     if ADFlyoverHud ~= nil then
         local field = ADFlyoverHud:numberFieldAt(self.mouseX, self.mouseY)
         if field ~= nil and field.stepAction ~= nil then
-            field.stepAction(step)
+            field.stepAction(field.wheelKeepDir and -step or step)
             return true
         end
     end
@@ -5853,20 +5861,21 @@ function ADFlyoverEditor:handleWheel(offset)
     -- Over the tool card but not on a specific field: adjust the active tool's setting anyway, so the
     -- card is a place you can dial a value in before you start (move's falloff without a point picked).
     if ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOverToolCard(self.mouseX, self.mouseY) then
-        if self:applyWheelToActiveTool(step) then
+        if self:applyWheelToActiveTool(toolStep) then
             return true
         end
     end
 
     -- Otherwise a tool claims the wheel only while it has a pending action (a span picked, a drag in
-    -- progress), so the camera zoom keeps the wheel the rest of the time.
-    if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then return self:applyWheelToActiveTool(step) end
-    if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then return self:applyWheelToActiveTool(step) end
-    if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then return self:applyWheelToActiveTool(step) end
-    if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then return self:applyWheelToActiveTool(step) end
-    if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(step) end
-    if self.tool == self.TOOL.MOVE and self.dragId ~= nil then return self:applyWheelToActiveTool(step) end
-    if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(step) end
+    -- progress), so the camera zoom keeps the wheel the rest of the time. toolStep carries move's
+    -- kept-direction; for every other tool it is the reversed step.
+    if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.MOVE and self.dragId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
 
     return false
 end

@@ -38,6 +38,16 @@ ADFlyoverHud = {
     rowOverlay = nil
 }
 
+-- Localization shorthand: an English UI string in, its localized form out (or unchanged when there is
+-- no translation, or when the locale module is not loaded). Safe on nil and on already-formatted or
+-- dynamic values, which simply pass through - so it can wrap any drawn label or value freely.
+local function TR(s)
+    if ADFlyoverLocale ~= nil then
+        return ADFlyoverLocale.t(s)
+    end
+    return s
+end
+
 function ADFlyoverHud:ensureOverlays()
     if self.background == nil then
         self.background = Overlay.new(g_baseUIFilename, 0, 0, 1, 1)
@@ -205,7 +215,10 @@ function ADFlyoverHud:buildRows(editor)
     local rows = {}
 
     local function add(kind, text, value, active, action)
-        table.insert(rows, { kind = kind, text = text, value = value, active = active, action = action })
+        -- Labels and option values are localized here, at the one place every panel row is built.
+        -- Dynamic values (numbers, hex, key caps, the field readout) are not translation keys, so they
+        -- pass through TR unchanged; only the fixed UI chrome actually maps to another language.
+        table.insert(rows, { kind = kind, text = TR(text), value = TR(value), active = active, action = action })
     end
     -- A read-only numeric field the mouse wheel drives, now also carrying - / + steppers and per-field
     -- wheel: stepAction nudges the ACTIVE tool's setting (there is one such field per tool), which is
@@ -343,7 +356,7 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     add("gap")
-    add("status", string.format("selected %d   undo %d   placed %d",
+    add("status", string.format(TR("selected %d   undo %d   placed %d"),
         editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
 
     -- The per-tool context (below) becomes the floating tool card, and only exists while a tool is
@@ -409,6 +422,10 @@ function ADFlyoverHud:buildRows(editor)
         if entry.step ~= nil then
             rows[#rows].stepAction = function(dir) entry.step(dir) end
         end
+        -- Move's falloff is the one field that keeps the original wheel direction (wheel-up widens the
+        -- reach); handleWheel reads this flag. Move is the only tool whose editable number is such a
+        -- reach, so tagging by tool is exact. Steppers are unaffected - they bypass handleWheel.
+        rows[#rows].wheelKeepDir = (editor.tool == editor.TOOL.MOVE)
     end
 
     if editor.tool == editor.TOOL.SPLINE then
@@ -484,7 +501,11 @@ function ADFlyoverHud:buildRows(editor)
 
     add("gap")
     add("section", "NEXT")
-    for _, line in ipairs(editor:getNextStepLines()) do
+    -- getNextStepLines now returns one whole (localized) message; wrap it to the card width here so it
+    -- breaks correctly whatever the language.
+    local nextMsg = editor:getNextStepLines()
+    local nextLines = ADFlyoverLocale ~= nil and ADFlyoverLocale.wrap(nextMsg, 34) or { nextMsg }
+    for _, line in ipairs(nextLines) do
         add("hint", line)
     end
     end
@@ -793,7 +814,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         table.insert(items, { kind = kind, text = text, value = value, action = action })
     end
     if m.kind == "point" then
-        it("mhead", "point " .. tostring(m.id))
+        it("mhead", string.format(TR("point %d"), m.id))
         it("mitem", "name...", function() editor:menuName() end)
         it("mitem", "move", function() editor:menuArmMove() end)
         it("mitem", "connect from here", function() editor:menuArmDraw() end)
@@ -804,7 +825,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         it("mitem", "secondary", function() editor:menuConvert(OP.SECONDARY) end)
         it("mitem", "delete point", function() editor:menuDelete() end, true)
     elseif m.kind == "span" then
-        it("mhead", string.format("span  %d pts", m.ids ~= nil and #m.ids or 0))
+        it("mhead", string.format(TR("span  %d pts"), m.ids ~= nil and #m.ids or 0))
         it("mitem", "straighten", function() editor:menuArmStraighten() end)
         it("mitem", "smooth", function() editor:menuArmSmooth() end)
         it("mitem", "divide", function() editor:menuArmDivide() end)
@@ -814,7 +835,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         it("mitem", "flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
         it("mitem", "delete span", function() editor:menuDeleteSpan() end, true)
     elseif m.kind == "run" then
-        it("mhead", string.format("run  %s pts", tostring(m.count or "?")))
+        it("mhead", string.format(TR("run  %s pts"), tostring(m.count or "?")))
         it("mitem", "straighten", function() editor:menuArmStraighten() end)
         it("mitem", "smooth", function() editor:menuArmSmooth() end)
         it("mitem", "divide", function() editor:menuArmDivide() end)
@@ -828,7 +849,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         -- Armed: only the selected tool's own controls - its wheel value and any toggles - plus apply
         -- and cancel. The values are read live each frame, so the wheel updates them in place.
         local t = m.tool
-        it("mhead", (editor.TOOL_NAMES[t] or "tool") .. " - selected")
+        it("mhead", string.format(TR("%s - selected"), TR(editor.TOOL_NAMES[t] or "tool")))
         if t == editor.TOOL.SMOOTH then
             itv("mtoggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], function() editor:cycleSmoothMode() end)
             if editor.smoothMode == editor.SMOOTH_MODE.REBUILD then
@@ -851,6 +872,17 @@ function ADFlyoverHud:drawContextMenu(editor)
         it("mapply", "apply", function() editor:menuApplyArmed() end)
         it("mitem", "cancel", function() editor:menuCancelArmed() end)
         it("mnote", "scroll or +/- to adjust - right-click applies")
+    end
+
+    -- Localize every menu label and toggle value in one place, in-place: the headers were already
+    -- localized as they were built (they carry formatted ids), so TR passes them through unchanged;
+    -- the action labels and toggle values map here. Dynamic values (the wheel numbers) are not keys and
+    -- pass straight through. Done before layout so widths measure the text that is actually drawn.
+    for _, item in ipairs(items) do
+        item.text = TR(item.text)
+        if item.value ~= nil then
+            item.value = TR(item.value)
+        end
     end
 
     local ph = #items * rowH + pad * 2
@@ -917,7 +949,7 @@ function ADFlyoverHud:drawDialogField(item, x, y, w, h, fontSize, pad, mx, my)
     local aspect = g_screenAspectRatio or (16 / 9)
     local textY = y + (h - fontSize) * 0.5
     fillRole(self.rowOverlay, x, y, w, h, "toolBg", 0.95)
-    labelRole(x + pad * 1.5, textY, fontSize, item.text, "bodyText")
+    labelRole(x + pad * 1.5, textY, fontSize, TR(item.text), "bodyText")
 
     if item.editing then
         labelRole(x + w - pad * 1.5, textY, fontSize, item.value or "", "headerText", 1, RenderText.ALIGN_RIGHT)
@@ -941,7 +973,7 @@ function ADFlyoverHud:drawDialogField(item, x, y, w, h, fontSize, pad, mx, my)
     end
     button(minusX, "-", -1)
     button(plusX, "+", 1)
-    labelRole(minusX - pad * 0.8, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
+    labelRole(minusX - pad * 0.8, textY, fontSize, TR(item.value or "-"), "valueText", 1, RenderText.ALIGN_RIGHT)
 
     -- The label/value area: click cycles/edits, wheel over it steps. Shrunk so it does not swallow the
     -- stepper clicks (dialogRows is scanned back-to-front, and this row is added after the buttons).
@@ -1048,9 +1080,10 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         local textY = y + (ih - fontSize) * 0.5
         if it.kind == "title" then
             fillRole(self.headerOverlay, x, y, W, ih, "headerBg", 1)
-            labelRole(x + pad * 2, textY, fontSize, "FLYOVER EDITOR", "headerText")
-            local tw = getTextWidth ~= nil and getTextWidth(fontSize, "FLYOVER EDITOR") or 0
-            local ver = "settings  v" .. ((ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD) or "?")
+            local titleText = TR("FLYOVER EDITOR")
+            labelRole(x + pad * 2, textY, fontSize, titleText, "headerText")
+            local tw = getTextWidth ~= nil and getTextWidth(fontSize, titleText) or 0
+            local ver = TR("settings") .. "  v" .. ((ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD) or "?")
             labelRole(x + pad * 2 + tw + pad * 1.5, y + (ih - fontSize * 0.72) * 0.5, fontSize * 0.72, ver, "mutedText")
             local xw = ih
             local xbx = x + W - xw
@@ -1059,9 +1092,9 @@ function ADFlyoverHud:drawSettingsDialog(editor)
             table.insert(self.dialogRows, { x = xbx, y = y, w = xw, h = ih,
                 action = function() editor:closeSettingsDialog() end })
         elseif it.kind == "section" then
-            labelRole(x + pad * 2, y + (ih - fontSize * 0.82) * 0.5, fontSize * 0.82, it.text, "sectionText")
+            labelRole(x + pad * 2, y + (ih - fontSize * 0.82) * 0.5, fontSize * 0.82, TR(it.text), "sectionText")
         elseif it.kind == "note" then
-            labelRole(x + pad * 2, y + (ih - fontSize * 0.8) * 0.5, fontSize * 0.8, it.text, "mutedText")
+            labelRole(x + pad * 2, y + (ih - fontSize * 0.8) * 0.5, fontSize * 0.8, TR(it.text), "mutedText")
         elseif it.kind == "gap" then
             -- spacer only
         elseif it.kind == "swatch" then
@@ -1071,7 +1104,7 @@ function ADFlyoverHud:drawSettingsDialog(editor)
             local cy = y + (ih - chip) * 0.5
             fillRole(self.borderOverlay, cx - 0.0014, cy - 0.0014, chipW + 0.0028, chip + 0.0028, "cardBorder", 0.9)
             if it.role ~= nil then fillRole(self.rowOverlay, cx, cy, chipW, chip, it.role, 1) end
-            labelRole(cx + chipW + pad * 1.6, textY, fontSize * 0.9, it.text, "mutedText")
+            labelRole(cx + chipW + pad * 1.6, textY, fontSize * 0.9, TR(it.text), "mutedText")
             if it.value ~= nil and it.value ~= "" then
                 labelRole(x + W - pad * 2, textY, fontSize * 0.9, it.value, "valueText", 1, RenderText.ALIGN_RIGHT)
             end
@@ -1082,7 +1115,7 @@ function ADFlyoverHud:drawSettingsDialog(editor)
             local hov = mx ~= nil and mx >= bx0 and mx <= bx0 + bw0 and my >= y and my <= y + ih
             local accent = it.style == "accent"
             fillRole(self.rowOverlay, bx0, y, bw0, ih, accent and "accent" or (hov and "hoverBg" or "toolBg"), 1)
-            labelRole(x + W * 0.5, textY, fontSize, it.text, accent and "accentText" or "bodyText", 1, RenderText.ALIGN_CENTER)
+            labelRole(x + W * 0.5, textY, fontSize, TR(it.text), accent and "accentText" or "bodyText", 1, RenderText.ALIGN_CENTER)
             table.insert(self.dialogRows, { x = bx0, y = y, w = bw0, h = ih, action = it.action })
         end
     end
@@ -1148,7 +1181,10 @@ function ADFlyoverHud:drawHelp(editor)
 
     local lines = {}
     local function line(kind, text) lines[#lines + 1] = { kind = kind, text = text } end
-    for _, l in ipairs(help.summary) do line("summary", l) end
+    -- Only the summary is localized (per the chosen scope); the WHAT / HOW / CONTROLS prose stays
+    -- English. The summary is wrapped from a single localized string, so German lines break to fit.
+    local sumLines = ADFlyoverLocale ~= nil and ADFlyoverLocale.summaryLines(key, help.summary, 44) or help.summary
+    for _, l in ipairs(sumLines) do line("summary", l) end
     line("gap", "")
     line("section", "WHAT IT DOES")
     for _, l in ipairs(help.what) do line("body", l) end
@@ -1193,7 +1229,7 @@ function ADFlyoverHud:drawHelp(editor)
 
     local y = top - pad - headH
     fillRole(self.headerOverlay, x, y, W, headH, "headerBg", 1)
-    labelRole(x + pad * 1.5, y + (headH - fontSize) * 0.5, fontSize, (help.name or "?") .. "  -  help", "headerText")
+    labelRole(x + pad * 1.5, y + (headH - fontSize) * 0.5, fontSize, TR(help.name or "?") .. "  -  " .. TR("help"), "headerText")
     local cap = editor:toolKeyLabel(editor.tool)
     if cap ~= nil and cap ~= "" then
         labelRole(x + W - pad * 1.5, y + (headH - fontSize * 0.8) * 0.5, fontSize * 0.8, "key " .. cap,
@@ -1239,7 +1275,7 @@ function ADFlyoverHud:drawHelp(editor)
     y = viewBottom - pad - footH
     local fhov = mx ~= nil and mx >= x + pad and mx <= x + W - pad and my >= y and my <= y + footH
     fillRole(self.rowOverlay, x + pad, y + footH * 0.14, W - pad * 2, footH * 0.72, fhov and "hoverBg" or "toolBg", 1)
-    labelRole(x + W * 0.5, y + (footH - fontSize) * 0.5, fontSize * 0.92, "browse the full manual  >",
+    labelRole(x + W * 0.5, y + (footH - fontSize) * 0.5, fontSize * 0.92, TR("browse the full manual  >"),
         "bodyText", 1, RenderText.ALIGN_CENTER)
     table.insert(self.rows, { x = x + pad, y = y, w = W - pad * 2, h = footH,
         action = function() editor:openManual() end })
@@ -1278,7 +1314,7 @@ function ADFlyoverHud:drawManual(editor)
     local lines = {}
     local function line(kind, text) lines[#lines + 1] = { kind = kind, text = text } end
     if idx == 1 then
-        title = "General reference"
+        title = TR("General reference")
         local g = ADFlyoverHelp.general
         if g ~= nil then
             if g.summary ~= nil then line("summary", g.summary) end
@@ -1289,10 +1325,13 @@ function ADFlyoverHud:drawManual(editor)
             end
         end
     else
-        local help = ADFlyoverHelp.tools[order[idx - 1]]
+        local toolKey = order[idx - 1]
+        local help = ADFlyoverHelp.tools[toolKey]
         if help == nil then return end
-        title = (help.name or "?") .. "  -  " .. (help.group or "")
-        for _, l in ipairs(help.summary or {}) do line("summary", l) end
+        title = TR(help.name or "?") .. "  -  " .. TR(help.group or "")
+        -- Localized summary (wrapped from one string); the rest of the page stays English by scope.
+        local sumLines = ADFlyoverLocale ~= nil and ADFlyoverLocale.summaryLines(toolKey, help.summary, 48) or (help.summary or {})
+        for _, l in ipairs(sumLines) do line("summary", l) end
         line("gap", "")
         line("section", "WHAT IT DOES")
         for _, l in ipairs(help.what or {}) do line("body", l) end
@@ -1384,8 +1423,8 @@ function ADFlyoverHud:drawManual(editor)
         table.insert(self.dialogRows, { x = bx, y = y, w = halfW, h = footH,
             action = function() editor:manualStep(dir) end })
     end
-    navBtn(x + pad, "<  prev", -1)
-    navBtn(x + pad * 2 + halfW, "next  >", 1)
+    navBtn(x + pad, TR("<  prev"), -1)
+    navBtn(x + pad * 2 + halfW, TR("next  >"), 1)
 end
 
 --- Is the mouse over the floating tool card? The wheel handler asks this so scrolling over the card

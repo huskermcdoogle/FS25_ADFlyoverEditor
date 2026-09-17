@@ -1,0 +1,375 @@
+--[[
+ADFlyoverLocale - the editor's own small localization layer.
+
+Why not g_i18n:getText? This mod is SOURCED INTO AutoDrive's Lua environment (see Arming), so at
+runtime the "current mod" g_i18n resolves against is AutoDrive's, not ours - our own texts would not be
+found without passing a custom environment, and whether the engine even builds one for a companion
+loaded this way is not something to bet the UI on. So the strings live here, in plain Lua, chosen by
+g_languageShort, with English as the identity fallback. The three INPUT-ACTION names still go through
+the engine's own l10n in modDesc (the one place it is reliable), which is why they are not here.
+
+Scope (chosen with the user): the persistent UI chrome - panel and dialog labels, tool names, toggle
+options, section headers - plus each tool's one-line SUMMARY. The longer WHAT / HOW / CONTROLS help
+prose and the contextual NEXT-step guidance stay English for now.
+
+Adding a language: add a table under STRINGS (and SUMMARIES) keyed by its two-letter code. Any key with
+no entry falls back to English - the key itself for STRINGS, the bundled English lines for SUMMARIES -
+so a partial translation is safe and simply shows English wherever it is missing.
+]]
+
+ADFlyoverLocale = {}
+local L = ADFlyoverLocale
+
+--- The active two-letter language code ("en", "de", ...). FS exposes it as g_languageShort; a couple of
+--- other spellings are tried under pcall in case a build differs, then English as the safe default -
+--- every string has an English form, so a missed detection only costs the translation, never a crash.
+function L.code()
+    if type(g_languageShort) == "string" and #g_languageShort >= 2 then
+        return string.lower(string.sub(g_languageShort, 1, 2))
+    end
+    local ok, suffix = pcall(function()
+        if g_i18n ~= nil and type(g_i18n.getLanguageSuffix) == "function" then
+            return g_i18n:getLanguageSuffix()   -- e.g. "_de"
+        end
+        return nil
+    end)
+    if ok and type(suffix) == "string" then
+        local code = string.gsub(suffix, "^_", "")
+        if #code >= 2 then
+            return string.lower(string.sub(code, 1, 2))
+        end
+    end
+    return "en"
+end
+
+-- English string -> localized string, per language. English is the identity fallback, so it needs no
+-- table of its own. Keys are the exact English literals the UI draws, so a translation is a one-line
+-- addition with nothing else to wire.
+L.STRINGS = {
+    de = {
+        -- header / notes / status / cursor readout
+        ["FLYOVER EDITOR"] = "FLYOVER-EDITOR",
+        ["Standard AutoDrive editing suspended"] = "Standard-AutoDrive-Bearbeitung ausgesetzt",
+        ["tool card hidden - press H or the button to show"] = "Werkzeugkarte verborgen – H oder Knopf zum Anzeigen",
+        ["under cursor"] = "unter dem Cursor",
+        ["selected %d   undo %d   placed %d"] = "ausgewählt %d   rückgängig %d   platziert %d",
+
+        -- panel section headers
+        ["MODE"] = "MODUS",
+        ["CREATE"] = "ERSTELLEN",
+        ["SHAPE"] = "FORMEN",
+        ["CONNECT"] = "VERBINDEN",
+        ["UTILITY"] = "WERKZEUGE",
+        ["ACTIONS"] = "AKTIONEN",
+        ["SETTINGS"] = "EINSTELLUNGEN",
+        ["COLOUR OVERRIDE"] = "FARB-ÜBERSCHREIBUNG",
+        ["NEW CONNECTIONS"] = "NEUE VERBINDUNGEN",
+        ["THIS TOOL"] = "DIESES WERKZEUG",
+        ["NEXT"] = "NÄCHSTER SCHRITT",
+
+        -- settings-dialog section headers
+        ["DISPLAY"] = "ANZEIGE",
+        ["THEME"] = "DESIGN",
+        ["ADVANCED - PER-ROLE COLOUR"] = "ERWEITERT – FARBE JE ROLLE",
+
+        -- tool names, lower case (panel buttons)
+        ["select"] = "auswählen",
+        ["draw"] = "zeichnen",
+        ["spline"] = "Spline",
+        ["field loop"] = "Feldschleife",
+        ["parallel"] = "Parallele",
+        ["siding"] = "Ausweiche",
+        ["move"] = "verschieben",
+        ["smooth"] = "glätten",
+        ["straighten"] = "begradigen",
+        ["divide"] = "unterteilen",
+        ["ground"] = "aufsetzen",
+        ["convert"] = "umwandeln",
+        ["merge"] = "zusammenführen",
+        ["name"] = "benennen",
+        ["delete"] = "löschen",
+
+        -- tool names, capitalised (manual / help page titles, from Help.name)
+        ["Select"] = "Auswählen",
+        ["Draw"] = "Zeichnen",
+        ["Spline"] = "Spline",
+        ["Field loop"] = "Feldschleife",
+        ["Parallel"] = "Parallele",
+        ["Siding"] = "Ausweiche",
+        ["Move"] = "Verschieben",
+        ["Smooth"] = "Glätten",
+        ["Straighten"] = "Begradigen",
+        ["Divide"] = "Unterteilen",
+        ["Ground"] = "Aufsetzen",
+        ["Convert"] = "Umwandeln",
+        ["Merge"] = "Zusammenführen",
+        ["Name"] = "Benennen",
+        ["Delete"] = "Löschen",
+
+        -- actions / buttons / setting labels
+        ["undo"] = "rückgängig",
+        ["redo"] = "wiederherstellen",
+        ["settings"] = "Einstellungen",
+        ["show tool card"] = "Werkzeugkarte anzeigen",
+        ["hide tool card"] = "Werkzeugkarte verbergen",
+        ["reset to default"] = "auf Standard zurücksetzen",
+        ["clear this colour"] = "diese Farbe zurücksetzen",
+        ["reset all to default"] = "alles auf Standard zurücksetzen",
+        ["close"] = "schließen",
+        ["open"] = "offen",
+        ["advanced colours"] = "erweiterte Farben",
+        ["shown"] = "angezeigt",
+        ["hidden"] = "verborgen",
+        ["ui scale"] = "UI-Größe",
+        ["theme"] = "Design",
+        ["accent"] = "Akzent",
+        ["edit"] = "bearbeiten",
+        ["role"] = "Rolle",
+        ["current"] = "aktuell",
+        ["current (custom)"] = "aktuell (eigen)",
+        ["click / scroll / +- to change - saved automatically"] = "klicken / scrollen / +- zum Ändern – automatisch gespeichert",
+        ["changes apply live and save automatically  -  Esc to close"] = "Änderungen sofort aktiv, automatisch gespeichert  –  Esc schließt",
+
+        -- toggle labels
+        ["direction"] = "Richtung",
+        ["priority"] = "Priorität",
+        ["side"] = "Seite",
+        ["covers"] = "umfasst",
+        ["snap to"] = "einrasten auf",
+        ["mode"] = "Modus",
+        ["level"] = "Höhe",
+        ["off the ground"] = "über dem Boden",
+        ["make it"] = "ändern zu",
+        ["scope"] = "Umfang",
+        ["flow"] = "Verlauf",
+        ["endpoints (shape)"] = "Endpunkte (Form)",
+        ["end tangent"] = "End-Tangente",
+        ["start tangent"] = "Start-Tangente",
+        ["curvature (wheel)"] = "Krümmung (Rad)",
+        ["strength"] = "Stärke",
+        ["tolerance"] = "Toleranz",
+        ["points"] = "Punkte",
+        ["distance"] = "Abstand",
+
+        -- editable-number labels
+        ["offset"] = "Versatz",
+        ["length"] = "Länge",
+        ["margin"] = "Rand",
+        ["tree clearance"] = "Baumabstand",
+        ["turning radius"] = "Wenderadius",
+        ["vehicle height"] = "Fahrzeughöhe",
+        ["max spacing"] = "max. Abstand",
+        ["merge distance"] = "Zusammenführ-Abstand",
+        ["divergence"] = "Divergenz",
+        ["falloff along track"] = "Abnahme entlang Strecke",
+
+        -- toggle option values / name tables
+        ["primary"] = "primär",
+        ["secondary"] = "sekundär",
+        ["one-way"] = "einseitig",
+        ["two-way"] = "beidseitig",
+        ["reverse"] = "umgekehrt",
+        ["reversed"] = "umgekehrt",
+        ["left"] = "links",
+        ["right"] = "rechts",
+        ["terrain"] = "Gelände",
+        ["surface"] = "Oberfläche",
+        ["span line"] = "Streckenlinie",
+        ["top surface"] = "obere Fläche",
+        ["picked span"] = "gewählter Abschnitt",
+        ["whole run"] = "ganze Route",
+        ["one waypoint"] = "ein Wegpunkt",
+        ["relax (move points)"] = "lockern (Punkte verschieben)",
+        ["rebuild (respace)"] = "neu aufbauen (neu verteilen)",
+        ["swapped"] = "getauscht",
+        ["normal"] = "normal",
+        ["flipped"] = "umgedreht",
+        ["auto"] = "auto",
+
+        -- theme preset names
+        ["Contrast Dark"] = "Kontrast Dunkel",
+        ["Amber"] = "Bernstein",
+        ["Cyan"] = "Cyan",
+        ["Green"] = "Grün",
+        ["Slate + Blue"] = "Schiefer + Blau",
+        ["HC Light"] = "HK Hell",
+        ["Classic"] = "Klassisch",
+
+        -- accent names
+        ["amber"] = "bernstein",
+        ["blue"] = "blau",
+        ["cyan"] = "cyan",
+        ["green"] = "grün",
+        ["red"] = "rot",
+        ["purple"] = "violett",
+        ["white"] = "weiß",
+
+        -- per-role colour labels (advanced editor)
+        ["panel bg"] = "Panel-Hintergrund",
+        ["card bg"] = "Karten-Hintergrund",
+        ["header bg"] = "Kopf-Hintergrund",
+        ["panel border"] = "Panel-Rand",
+        ["card border"] = "Karten-Rand",
+        ["body text"] = "Fließtext",
+        ["value text"] = "Werttext",
+        ["muted text"] = "gedämpfter Text",
+        ["section text"] = "Abschnittstext",
+        ["header text"] = "Kopftext",
+        ["accent text"] = "Akzenttext",
+        ["hover"] = "Hover",
+        ["danger"] = "Gefahr",
+        ["tool bg"] = "Werkzeug-Hintergrund",
+        ["stepper bg"] = "Stepper-Hintergrund",
+
+        -- help / manual chrome
+        ["help"] = "Hilfe",
+        ["browse the full manual  >"] = "vollständiges Handbuch  >",
+        ["<  prev"] = "<  zurück",
+        ["next  >"] = "weiter  >",
+        ["General reference"] = "Allgemeine Referenz",
+
+        -- cursor field readout templates (formatted in FlyoverEditor)
+        ["field %d"] = "Feld %d",
+        ["farmland %d (no field)"] = "Grundstück %d (kein Feld)",
+
+        -- Select-mode context menu (headers, actions, the armed popup note)
+        ["point %d"] = "Punkt %d",
+        ["span  %d pts"] = "Abschnitt  %d Pkt.",
+        ["run  %s pts"] = "Route  %s Pkt.",
+        ["%s - selected"] = "%s – gewählt",
+        ["name..."] = "benennen…",
+        ["connect from here"] = "von hier verbinden",
+        ["spline from here"] = "von hier Spline",
+        ["make two-way"] = "beidseitig machen",
+        ["make one-way"] = "einseitig machen",
+        ["flip direction"] = "Richtung umkehren",
+        ["delete point"] = "Punkt löschen",
+        ["delete span"] = "Abschnitt löschen",
+        ["delete run"] = "Route löschen",
+        ["apply"] = "anwenden",
+        ["cancel"] = "abbrechen",
+        ["scroll or +/- to adjust - right-click applies"] = "scrollen oder +/- zum Ändern – Rechtsklick wendet an",
+
+        -- "NEXT" helper guidance (each is one whole message, wrapped to the panel at render; the format
+        -- placeholders must survive into the German exactly as they are here)
+        ["No tool selected. Pick one above, or press 1-9 / 0."] = "Kein Werkzeug gewählt. Oben eines wählen oder 1-9 / 0 drücken.",
+        ["Click ground to extend, or a waypoint to link. Right-click ends."] = "Boden anklicken zum Verlängern, oder einen Wegpunkt zum Verbinden. Rechtsklick beendet.",
+        ["Click to start a run, or a waypoint to draw on from it."] = "Klicken für eine neue Route, oder einen Wegpunkt zum Weiterzeichnen.",
+        ["Wheel changes falloff (%.1fm), live. Release to drop."] = "Rad ändert Abnahme (%.1fm), live. Zum Ablegen loslassen.",
+        ["Drag the highlighted waypoint."] = "Den markierten Wegpunkt ziehen.",
+        ["Point at a waypoint, then drag it."] = "Auf einen Wegpunkt zeigen, dann ziehen.",
+        ["Click to delete %d selected."] = "Klicken, um %d ausgewählte zu löschen.",
+        ["Click a run to delete all of it, out to the junctions at each end."] = "Eine Route anklicken, um sie ganz zu löschen, bis zu den Kreuzungen an beiden Enden.",
+        ["Click to delete the highlighted one."] = "Klicken, um den markierten zu löschen.",
+        ["Point at a waypoint to delete it."] = "Auf einen Wegpunkt zeigen, um ihn zu löschen.",
+        ["Wheel sets max spacing (%.1fm). Curves stay denser."] = "Rad setzt max. Abstand (%.1fm). Kurven bleiben dichter.",
+        ["Wheel sets strength (%d). Right-click applies it."] = "Rad setzt Stärke (%d). Rechtsklick wendet an.",
+        ["Click the far end of the span."] = "Das andere Ende des Abschnitts anklicken.",
+        ["Click one end of the span."] = "Ein Ende des Abschnitts anklicken.",
+        ["Click a waypoint to name it."] = "Einen Wegpunkt anklicken, um ihn zu benennen.",
+        ["Wheel adjusts the curve. Right-click places it."] = "Rad passt die Kurve an. Rechtsklick platziert sie.",
+        ["Click the waypoint to curve to."] = "Den Wegpunkt anklicken, zu dem die Kurve führt.",
+        ["Click the waypoint to curve from."] = "Den Wegpunkt anklicken, von dem die Kurve ausgeht.",
+        ["Click inside a field to ring it. Uses the field loop settings."] = "In ein Feld klicken, um es zu umranden. Nutzt die Feldschleifen-Einstellungen.",
+        ["Will not fit here. See the log for why."] = "Passt hier nicht. Grund siehe Log.",
+        ["Wheel sets length (%.0fm, %s side). Flip the side on the panel. Right-click applies."] = "Rad setzt Länge (%.0fm, Seite %s). Seite im Panel wechseln. Rechtsklick wendet an.",
+        ["Click where the siding should sit - the click is its centre."] = "Klicken, wo die Ausweiche liegen soll – der Klick ist ihre Mitte.",
+        ["Too tight to offset that far. Wheel it back, or swap sides."] = "Zu eng für diesen Versatz. Zurückdrehen oder Seite wechseln.",
+        ["Wheel sets offset (%.1fm %s). Flip the side on the panel. Right-click applies."] = "Rad setzt Versatz (%.1fm %s). Seite im Panel wechseln. Rechtsklick wendet an.",
+        ["Click a run to offset the whole thing, junction to junction."] = "Eine Route anklicken, um sie ganz zu versetzen, Kreuzung zu Kreuzung.",
+        ["Click one end of a span to run a track alongside it."] = "Ein Ende eines Abschnitts anklicken, um eine Spur daneben zu legen.",
+        ["Nothing over %.1fm off the ground. Wheel the tolerance down to see more."] = "Nichts über %.1fm über dem Boden. Toleranz herunterdrehen für mehr.",
+        ["%d of %d waypoint(s) off the ground. Right-click re-seats them."] = "%d von %d Wegpunkt(en) über dem Boden. Rechtsklick setzt sie auf.",
+        ["Click a run to check the whole thing for waypoints off the ground."] = "Eine Route anklicken, um sie ganz auf Wegpunkte über dem Boden zu prüfen.",
+        ["Click one end of a span to find waypoints off the ground."] = "Ein Ende eines Abschnitts anklicken, um Wegpunkte über dem Boden zu finden.",
+        ["Wheel sets tolerance (%.2fm). Right-click straightens the span."] = "Rad setzt Toleranz (%.2fm). Rechtsklick begradigt den Abschnitt.",
+        ["Click one end of a span to straighten it."] = "Ein Ende eines Abschnitts anklicken, um ihn zu begradigen.",
+        ["Wheel sets the count (%d). Right-click applies it."] = "Rad setzt die Anzahl (%d). Rechtsklick wendet an.",
+        ["Click one end of the span to divide."] = "Ein Ende des Abschnitts anklicken zum Unterteilen.",
+        ["Click to make it %s (%s)."] = "Klicken, um es %s zu machen (%s).",
+        ["whole run"] = "ganze Route",
+        ["this waypoint"] = "dieser Wegpunkt",
+        ["Green marks what would be absorbed. Click a point on the OTHER track."] = "Grün zeigt, was aufgenommen würde. Einen Punkt auf der ANDEREN Spur anklicken.",
+        ["Click the far end of the span, on the SAME track."] = "Das andere Ende des Abschnitts anklicken, auf DERSELBEN Spur.",
+        ["Click one end of the span to merge."] = "Ein Ende des Abschnitts zum Zusammenführen anklicken.",
+    },
+}
+
+-- Tool one-line summaries, keyed by the tool key (ADFlyoverHelp.ORDER). Kept as ONE string and wrapped
+-- to the panel at render, because German wraps differently from the English lines make_help.py bakes.
+L.SUMMARIES = {
+    de = {
+        ["select"] = "Der Standardmodus. Dinge anklicken, um sie zu bearbeiten; kein Werkzeug aktiv.",
+        ["draw"] = "Wegpunkte setzen und zu einer Route verbinden.",
+        ["spline"] = "Eine glatte, gekrümmte Verbindung zwischen zwei Punkten zeichnen.",
+        ["field loop"] = "Eine befahrbare Schleife um das Feld unter dem Cursor erzeugen.",
+        ["parallel"] = "Eine Spur parallel zu einem Abschnitt oder einer Route anlegen.",
+        ["siding"] = "Ein paralleler Abzweig, der an beiden Enden wieder einschwenkt.",
+        ["move"] = "Einen Wegpunkt ziehen, wahlweise mit seinen Nachbarn.",
+        ["smooth"] = "Das Zittern in einem Abschnitt oder einer Route abrunden.",
+        ["straighten"] = "Das Rauschen aus einem Abschnitt glätten, echte Kurven bleiben erhalten.",
+        ["divide"] = "Gleichmäßig verteilte Punkte entlang eines Abschnitts einfügen.",
+        ["ground"] = "Punkte wieder auf die Oberfläche unter ihnen aufsetzen.",
+        ["convert"] = "Einbahn / beidseitig und Priorität ändern.",
+        ["merge"] = "Zwei parallele Spuren zu einer gemeinsamen Spur zusammenführen.",
+        ["name"] = "Einem Wegpunkt einen Kartenmarker-Namen geben.",
+        ["delete"] = "Einen Punkt, einen Abschnitt oder eine Route entfernen.",
+    },
+}
+
+--- Localized string for an English UI string. nil and non-strings pass straight through, and an
+--- English string with no entry for the current language returns unchanged - so wrapping any drawn
+--- literal in this call is always safe.
+function L.t(s)
+    if type(s) ~= "string" then
+        return s
+    end
+    local tbl = L.STRINGS[L.code()]
+    if tbl ~= nil then
+        local v = tbl[s]
+        if v ~= nil then
+            return v
+        end
+    end
+    return s
+end
+
+-- Greedy word-wrap to at most maxChars per line. Byte length, so an umlaut counts a little long and
+-- wraps a touch early - safe against overflowing the panel rather than the reverse.
+local function wrapText(s, maxChars)
+    local out, line = {}, ""
+    for word in string.gmatch(s, "%S+") do
+        if line == "" then
+            line = word
+        elseif #line + 1 + #word <= maxChars then
+            line = line .. " " .. word
+        else
+            out[#out + 1] = line
+            line = word
+        end
+    end
+    if line ~= "" then
+        out[#out + 1] = line
+    end
+    if #out == 0 then
+        out[1] = ""
+    end
+    return out
+end
+
+--- Word-wrap a single string to lines of at most maxChars. Exposed for callers that hold a whole
+--- localized message (the "NEXT" guidance) and need it broken to the panel width at render.
+function L.wrap(s, maxChars)
+    return wrapText(s, maxChars or 44)
+end
+
+--- The summary lines for a tool page. When a translation exists it is wrapped to maxChars and returned;
+--- otherwise the bundled English lines are returned exactly as make_help.py wrote them.
+function L.summaryLines(toolKey, englishLines, maxChars)
+    local tbl = L.SUMMARIES[L.code()]
+    local s = tbl ~= nil and tbl[toolKey] or nil
+    if s ~= nil then
+        return wrapText(s, maxChars or 44)
+    end
+    return englishLines or {}
+end

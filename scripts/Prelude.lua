@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.30.16.0"
+P.BUILD = "0.30.19.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -89,6 +89,7 @@ P.EDITOR_FILES = {
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
+    "scripts/editor/Locale.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
 }

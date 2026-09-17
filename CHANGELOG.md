@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.30.19.0 — German localization, and a Move-wheel fix (2026-09-17)
+
+**German (Deutsch) support**
+
+- With the game set to German, the editor's interface now reads in German: the whole panel (tool
+  names, section headers, buttons, toggles and their option values, the settings and the standalone
+  settings dialog, the per-role colour editor, the status line and the under-cursor readout), the
+  **Select context menu**, the **"NEXT" step guidance**, the help/manual **chrome** (titles, prev /
+  next, "browse the full manual"), and **each tool's one-line summary**. The three editor keybinding
+  names are localized in the controls menu too.
+- The longer **WHAT / HOW / CONTROLS** help prose stays English for now.
+- Under the hood: a small, self-contained locale layer (`scripts/editor/Locale.lua`) keyed by the
+  English string, with English as the fallback — so any untranslated string simply shows English and an
+  English game is unchanged. Adding another language is a one-file job.
+
+**Move wheel direction**
+
+- The mouse wheel now **widens** Move's falloff radius on wheel-up, matching its **+** stepper. A
+  spatial reach reads the opposite way from the tolerances and counts the earlier wheel reversal
+  suited, so Move keeps the original direction while every other tool stays reversed.
+
 ## 0.30.16.0 — Browsable manual, wheel direction, cleaner reading surfaces (2026-09-17)
 
 Everything since 0.30.10.0's per-tool help: a browsable in-game manual, and a pass over the editor's

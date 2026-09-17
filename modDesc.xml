@@ -18,7 +18,7 @@ Single player only.
 ]]>
 		</en>
 	</description>
-	<version>0.30.16.0</version>
+	<version>0.30.19.0</version>
 	<multiplayer supported="false" />
 	<iconFilename>modIcon.dds</iconFilename>
 	<actions>
@@ -40,12 +40,15 @@ Single player only.
 	<l10n>
 		<text name="input_AD_FLYOVER_TOGGLE">
 			<en>AutoDrive Flyover: open / close editor</en>
+			<de>AutoDrive Flyover: Editor öffnen / schließen</de>
 		</text>
 		<text name="input_AD_FLYOVER_RESET_THEME">
 			<en>AutoDrive Flyover: reset editor colours and scale</en>
+			<de>AutoDrive Flyover: Editor-Farben und -Größe zurücksetzen</de>
 		</text>
 		<text name="input_AD_FLYOVER_SETTINGS">
 			<en>AutoDrive Flyover: open the settings dialog</en>
+			<de>AutoDrive Flyover: Einstellungen öffnen</de>
 		</text>
 	</l10n>
 	<extraSourceFiles>
