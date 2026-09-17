@@ -259,7 +259,42 @@ function ADFlyoverHud:buildRows(editor)
         rows[#rows].stepAction = function(d) editor:cycleThemeAccent(d) end
 
         add("action", "reset to default", "", true, function() editor:resetTheme() end)
+        add("toggle", "advanced colours", editor.advancedOpen and "shown" or "hidden", false,
+            function() editor:toggleAdvanced() end)
         add("note", "click / scroll / +- to change - saved automatically")
+
+        -- Layer 3: hand-tune one role at a time. Pick a role, then set its R/G/B (0-255); each write
+        -- is an override on top of the preset + accent, cleared back to those with the button below.
+        if editor.advancedOpen then
+            add("gap")
+            add("section", "COLOUR OVERRIDE")
+
+            local roleKey, roleLabel = editor:currentEditRole()
+            local overridden = roleKey ~= nil and ADFlyoverTheme.overrides[roleKey] ~= nil
+
+            add("toggle", "edit", roleLabel or "-", false, function() editor:cycleEditRole(1) end)
+            rows[#rows].stepAction = function(d) editor:cycleEditRole(d) end
+
+            add("swatch", overridden and "current (custom)" or "current",
+                roleKey ~= nil and ADFlyoverTheme:hexOf(roleKey) or "")
+            rows[#rows].swatchRole = roleKey
+
+            for _, cc in ipairs({ { "R", 1 }, { "G", 2 }, { "B", 3 } }) do
+                local chLabel, idx = cc[1], cc[2]
+                local entry = {
+                    label = "colour " .. chLabel, unit = "",
+                    get = function() return editor:roleChannel255(idx) end,
+                    apply = function(v) return editor:setRoleChannel255(idx, v) end,
+                    step = function(d) editor:stepRoleChannel(idx, d) end,
+                }
+                local editing = editor.editing ~= nil and editor.editing.label == entry.label
+                local shown = editing and (editor.editing.buffer .. "_") or tostring(editor:roleChannel255(idx))
+                add("number", chLabel, shown, editing, function() editor:beginEditNumber(entry) end)
+                rows[#rows].stepAction = function(d) editor:stepRoleChannel(idx, d) end
+            end
+
+            add("action", "clear this colour", "", overridden, function() editor:clearEditRole() end)
+        end
     end
 
     add("gap")
@@ -589,6 +624,22 @@ function ADFlyoverHud:draw(editor)
             labelRole(textX, textY, fontSize * 0.9, row.text, "mutedText")
         elseif row.kind == "hint" then
             labelRole(textX, textY, fontSize * 0.92, row.text, "hintText")
+        elseif row.kind == "swatch" then
+            -- A colour chip of the edited role plus its hex, so you can see the exact colour you are
+            -- tuning even when the role only shows up in a small corner of the panel.
+            local chip = h * 0.78
+            local chipW = chip / aspect
+            local cx = x + self.padding * 2
+            local cy = y + (h - chip) * 0.5
+            fillRole(self.borderOverlay, cx - 0.0012, cy - 0.0012, chipW + 0.0024, chip + 0.0024, "panelBorder", 0.9)
+            if row.swatchRole ~= nil then
+                fillRole(self.rowOverlay, cx, cy, chipW, chip, row.swatchRole, 1)
+            end
+            labelRole(cx + chipW + self.padding * 1.6, textY, fontSize * 0.86, row.text, "mutedText")
+            if row.value ~= nil and row.value ~= "" then
+                labelRole(x + width - self.padding * 2, textY, fontSize * 0.86, row.value, "valueText", 1,
+                    RenderText.ALIGN_RIGHT)
+            end
         end
     end
 

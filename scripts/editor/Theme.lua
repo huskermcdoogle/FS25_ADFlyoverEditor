@@ -85,6 +85,16 @@ T.DERIVED_ROLES = {
     "hoverBorder", "stepperBorder", "editBg", "hintText",
 }
 
+-- The roles the in-editor advanced colour editor lets you override, in the order it cycles them.
+-- A curated set - the ones worth hand-tuning - each with a short label for the panel.
+T.EDITABLE_ROLES = {
+    { "panelBg", "panel bg" }, { "cardBg", "card bg" }, { "headerBg", "header bg" },
+    { "panelBorder", "panel border" }, { "cardBorder", "card border" },
+    { "bodyText", "body text" }, { "valueText", "value text" }, { "mutedText", "muted text" },
+    { "sectionText", "section text" }, { "headerText", "header text" }, { "accentText", "accent text" },
+    { "hoverBg", "hover" }, { "danger", "danger" }, { "toolBg", "tool bg" }, { "stepperBg", "stepper bg" },
+}
+
 T.PRESET_ORDER = { "contrastDark", "amber", "cyan", "green", "slateBlue", "hcLight", "classic" }
 T.PRESET_NAMES = {
     contrastDark = "Contrast Dark", amber = "Amber", cyan = "Cyan", green = "Green",
@@ -135,7 +145,7 @@ T.scale = T.SCALE_DEFAULT
 T.overrides = {}     -- role -> { r, g, b }
 T.resolved = nil     -- role -> { r, g, b } (cache)
 
-function T:dirty() self.resolved = nil end
+function T:dirty() self.resolved = nil; self.resolvedSrgb = nil end
 
 --- Rebuild the resolved role map from preset + accent + overrides.
 function T:resolve()
@@ -160,13 +170,13 @@ function T:resolve()
         r[role] = rgb
     end
 
-    -- Everything above is sRGB, where mixing and the contrast maths belong. Convert the finished map
-    -- to linear as the last step, because that is what setColor wants.
-    for role, c in pairs(r) do
-        r[role] = toLinear(c)
-    end
-
-    self.resolved = r
+    -- Everything above is sRGB, where mixing and the contrast maths belong. Keep that map for the
+    -- colour editor (which works in sRGB / 0-255), then convert a copy to linear for setColor, which
+    -- is what FS25's overlays actually take.
+    self.resolvedSrgb = r
+    local lin = {}
+    for role, c in pairs(r) do lin[role] = toLinear(c) end
+    self.resolved = lin
 end
 
 --- Three 0..1 floats for the role, resolving on demand. Magenta if a role name is unknown, so a
@@ -181,6 +191,20 @@ end
 function T:arr(role)
     local r, g, b = self:rgb(role)
     return { r, g, b }
+end
+
+--- The role's colour in sRGB (0..1), the space the colour editor and hex work in - as opposed to
+--- rgb(), which returns the linear value setColor wants.
+function T:srgb(role)
+    if self.resolvedSrgb == nil then self:resolve() end
+    local c = self.resolvedSrgb[role] or { 1, 0, 1 }
+    return c[1], c[2], c[3]
+end
+
+--- "#rrggbb" for the role, from its sRGB value.
+function T:hexOf(role)
+    local r, g, b = self:srgb(role)
+    return rgbToHex({ r, g, b })
 end
 
 -- ---------------------------------------------------------------------------------------------

@@ -695,6 +695,8 @@ function ADFlyoverEditor:enable()
     self:setTool(self.TOOL.NONE)
     self.cardHidden = false
     self.settingsOpen = false
+    self.advancedOpen = false
+    self.themeEditRole = 1
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -5771,6 +5773,62 @@ end
 
 function ADFlyoverEditor:resetTheme()
     if ADFlyoverTheme ~= nil then ADFlyoverTheme:resetDefault() end
+end
+
+-- The advanced per-role colour editor: pick a role, then set its R/G/B (0-255, sRGB). Each write
+-- becomes an override that layers on top of the preset + accent; clearing it reverts to those.
+
+function ADFlyoverEditor:toggleAdvanced()
+    self.advancedOpen = not self.advancedOpen
+    self:cancelEditNumber()
+end
+
+--- Returns the currently-edited role's key and its label.
+function ADFlyoverEditor:currentEditRole()
+    if ADFlyoverTheme == nil then return nil end
+    local list = ADFlyoverTheme.EDITABLE_ROLES
+    local i = self.themeEditRole or 1
+    if i < 1 or i > #list then i = 1 end
+    return list[i][1], list[i][2]
+end
+
+function ADFlyoverEditor:cycleEditRole(dir)
+    if ADFlyoverTheme == nil then return end
+    local n = #ADFlyoverTheme.EDITABLE_ROLES
+    self.themeEditRole = (((self.themeEditRole or 1) - 1 + (dir >= 0 and 1 or -1)) % n) + 1
+    self:cancelEditNumber()   -- picking a new role abandons any half-typed channel
+end
+
+--- The edited role's channel (1=R, 2=G, 3=B) as an integer 0-255.
+function ADFlyoverEditor:roleChannel255(ch)
+    if ADFlyoverTheme == nil then return 0 end
+    local role = self:currentEditRole()
+    if role == nil then return 0 end
+    local c = { ADFlyoverTheme:srgb(role) }
+    return math.floor((c[ch] or 0) * 255 + 0.5)
+end
+
+function ADFlyoverEditor:setRoleChannel255(ch, v255)
+    if ADFlyoverTheme == nil then return nil end
+    local role = self:currentEditRole()
+    if role == nil then return nil end
+    local n = tonumber(v255) or 0
+    n = math.max(0, math.min(255, math.floor(n + 0.5)))
+    local r, g, b = ADFlyoverTheme:srgb(role)
+    local c = { r, g, b }
+    c[ch] = n / 255
+    ADFlyoverTheme:setOverride(role, c[1], c[2], c[3])
+    return n
+end
+
+function ADFlyoverEditor:stepRoleChannel(ch, dir)
+    self:setRoleChannel255(ch, self:roleChannel255(ch) + dir * 5)
+end
+
+function ADFlyoverEditor:clearEditRole()
+    if ADFlyoverTheme == nil then return end
+    local role = self:currentEditRole()
+    if role ~= nil then ADFlyoverTheme:clearOverride(role) end
 end
 
 --- Evenly spaced points along the span, by arc length.
