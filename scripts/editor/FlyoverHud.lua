@@ -122,6 +122,35 @@ local function labelRole(x, y, size, text, role, a, align)
     label(x, y, size, text, r, g, b, a or 1, align)
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- The settings dialog draws in its OWN fixed palette, not the theme's - so it stays readable even
+-- when a custom theme has made the editor panel itself unreadable, which is the whole reason it
+-- exists. Authored in sRGB and linearised the same way the theme is, since setColor takes linear.
+-- ---------------------------------------------------------------------------------------------
+local function s2l(v)
+    if v <= 0.04045 then return v / 12.92 end
+    return ((v + 0.055) / 1.055) ^ 2.4
+end
+local DLG = {
+    backdrop = { 0, 0, 0 },
+    bg       = { 0.10, 0.11, 0.14 },
+    border   = { 0.34, 0.40, 0.50 },
+    header   = { 0.17, 0.21, 0.29 },
+    text     = { 0.93, 0.95, 0.98 },
+    muted    = { 0.62, 0.66, 0.72 },
+    value    = { 0.70, 0.82, 1.00 },
+    accent   = { 0.26, 0.53, 0.90 },
+    accentTx = { 1, 1, 1 },
+    field    = { 0.14, 0.16, 0.21 },
+    step     = { 0.22, 0.26, 0.33 },
+}
+local function fillC(ov, x, y, w, h, c, a)
+    drawQuad(ov, x, y, w, h, s2l(c[1]), s2l(c[2]), s2l(c[3]), a or 1)
+end
+local function labelC(x, y, size, text, c, a, align)
+    label(x, y, size, text, s2l(c[1]), s2l(c[2]), s2l(c[3]), a or 1, align)
+end
+
 --- Render one adjustable numeric field as "label ........ value (-)(+)" and register the two stepper
 --- buttons as their own clickable rows, so a click on either nudges row.stepAction while a click on
 --- the value still types (row.action). The buttons sit at the right; the value is right-aligned just
@@ -176,10 +205,15 @@ function ADFlyoverHud:buildRows(editor)
         rows[#rows].stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
     end
 
-    add("header", "FLYOVER EDITOR", "Esc to exit")
+    add("header", "FLYOVER EDITOR")
+    -- Build number, dim, right after the title - so a screenshot in a bug report always says which
+    -- version it is. Short P.BUILD, not the full stale-warning string.
+    rows[#rows].build = "v" .. ((ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD) or "?")
+    -- A gear at the header's right edge opens the standalone settings dialog. (Esc still exits.)
+    rows[#rows].gear = true
     add("note", "Standard AutoDrive editing suspended")
     if editor.cardHidden and editor.tool ~= editor.TOOL.NONE then
-        add("note", "tool options hidden - middle-click to show")
+        add("note", "tool card hidden - press H or the button to show")
     end
     -- What the cursor is over. Field numbers are how fields are referred to when working on them,
     -- and in flyover mode there is no vehicle sitting in one to tell you which is which.
@@ -232,6 +266,12 @@ function ADFlyoverHud:buildRows(editor)
     end)
     add("action", "settings", editor.settingsOpen and "open" or "", true,
         function() editor:toggleSettings() end)
+    -- Hide/show the floating tool card - the panel-button half of it (the H key does the same). Only
+    -- offered when a tool is up, since Select mode has no card to hide.
+    if editor.tool ~= editor.TOOL.NONE then
+        add("action", editor.cardHidden and "show tool card" or "hide tool card", "H", true,
+            function() editor:toggleCard() end)
+    end
 
     -- The look-and-feel controls. Kept in the fixed corner block (above the status line) rather than
     -- the floating card so they stay put while you audition scales and colours, which all apply live.
@@ -304,7 +344,11 @@ function ADFlyoverHud:buildRows(editor)
     -- The per-tool context (below) becomes the floating tool card, and only exists while a tool is
     -- active, no menu/armed popup is up (those carry their own controls), and it has not been hidden
     -- with middle-click. In Select mode the point/span/run menus stand in for it, so there is no card.
-    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil and not editor.cardHidden then
+    -- The card also auto-hides while a point is being dragged (editor.dragId): it is only ever in the
+    -- way during a move, and this takes it away for exactly that gesture, then brings it straight back
+    -- on release - no key or button needed for the common case.
+    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil and not editor.cardHidden
+        and editor.dragId == nil then
     -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
     -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
     -- matter what is selected, which is what makes them clickable without looking - a button that
@@ -545,9 +589,32 @@ function ADFlyoverHud:draw(editor)
         if row.kind == "header" then
             fillRole(self.headerOverlay, x, y, width, h, "headerBg", 1)
             labelRole(textX, textY, fontSize, row.text, "headerText")
+            if row.build ~= nil then
+                -- Dim, small, tucked just after the title. Positioned by the title's measured width
+                -- so it sits right against it whatever the label or scale.
+                local titleW = getTextWidth ~= nil and getTextWidth(fontSize, row.text) or 0
+                local vSize = fontSize * 0.72
+                labelRole(textX + titleW + self.padding * 1.5, y + (h - vSize) * 0.5, vSize,
+                    row.build, "mutedText")
+            end
             if row.value ~= nil then
                 labelRole(x + width - self.padding * 2, textY, fontSize * 0.8, row.value,
                     "mutedText", 1, RenderText.ALIGN_RIGHT)
+            end
+            if row.gear then
+                local gh = h * 0.66
+                local gw = gh / aspect
+                local gx = x + width - self.padding * 1.5 - gw
+                local gy = y + (h - gh) * 0.5
+                local hovered = mx ~= nil and mx >= gx - self.padding and mx <= x + width
+                    and my >= y and my <= y + h
+                local gr, gg, gb = ADFlyoverTheme:rgb(hovered and "headerText" or "mutedText")
+                self:renderIcon(15, gx, gy, gw, gh, gr, gg, gb, 1)
+                -- Remembered so the header DRAG can exclude it: the header is the drag handle, so
+                -- without this a click on the gear starts a panel drag and never reaches its action.
+                self.gearRect = { x = gx - self.padding, y = y, w = gw + self.padding * 2.5, h = h }
+                table.insert(self.rows, { x = self.gearRect.x, y = y, w = self.gearRect.w, h = h,
+                    action = function() editor:openSettingsDialog() end })
             end
         elseif row.kind == "note" then
             labelRole(textX, textY, fontSize * 0.86, row.text, "mutedText")
@@ -644,6 +711,11 @@ function ADFlyoverHud:draw(editor)
     end
 
     self:drawContextMenu(editor)
+
+    -- Drawn last, over everything, so the modal dialog and its dim backdrop sit on top of the panel.
+    if editor.dialogOpen then
+        self:drawSettingsDialog(editor)
+    end
 end
 
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
@@ -658,6 +730,12 @@ function ADFlyoverHud:drawContextMenu(editor)
     -- Selection menus (point/span/run) show only in Select mode; the armed popup shows while its
     -- tool is active, replacing the action list with that tool's own controls.
     if m.kind ~= "armed" and editor.tool ~= editor.TOOL.NONE then
+        return
+    end
+    -- The card-hide (H, or the panel button) hides the armed popup too, so hiding is consistent
+    -- across tools - the floating card and this popup are the same "tool options" to the player.
+    -- Right-click still applies the armed tool while it is hidden, and the panel note says H shows it.
+    if m.kind == "armed" and editor.cardHidden then
         return
     end
     self:ensureOverlays()
@@ -790,6 +868,218 @@ function ADFlyoverHud:drawContextMenu(editor)
     end
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- The standalone settings dialog: a modal popup for scale + theme + accent + per-role colour, with
+-- reset and close. It draws over the editor, dims everything behind it, and owns every click and
+-- wheel notch while it is up (the editor routes input to dialogClick/dialogWheel). It matches the
+-- panel - the theme's own palette, at the theme's scale; the reset key/FlyoverResetTheme command are
+-- the theme-independent recovery path if a colour ever makes things unreadable.
+-- ---------------------------------------------------------------------------------------------
+
+--- One numeric/cycle field: "label ........ value (-)(+)", themed, hit-rows into dialogRows.
+function ADFlyoverHud:drawDialogField(item, x, y, w, h, fontSize, pad, mx, my)
+    local aspect = g_screenAspectRatio or (16 / 9)
+    local textY = y + (h - fontSize) * 0.5
+    fillRole(self.rowOverlay, x, y, w, h, "toolBg", 0.95)
+    labelRole(x + pad * 1.5, textY, fontSize, item.text, "bodyText")
+
+    if item.editing then
+        labelRole(x + w - pad * 1.5, textY, fontSize, item.value or "", "headerText", 1, RenderText.ALIGN_RIGHT)
+        table.insert(self.dialogRows, { x = x, y = y, w = w, h = h, action = item.action })
+        return
+    end
+
+    local bh = h * 0.74
+    local by = y + (h - bh) * 0.5
+    local bw = math.max(bh / aspect, 0.016)
+    local plusX = x + w - pad - bw
+    local minusX = plusX - bw - pad * 0.6
+
+    local function button(bx, glyph, dir)
+        local hov = mx ~= nil and mx >= bx and mx <= bx + bw and my >= by and my <= by + bh
+        fillRole(self.borderOverlay, bx - 0.0016, by - 0.0016, bw + 0.0032, bh + 0.0032, "stepperBorder", 0.7)
+        fillRole(self.rowOverlay, bx, by, bw, bh, hov and "hoverBg" or "stepperBg", 1)
+        labelRole(bx + bw * 0.5, textY, fontSize, glyph, "stepperText", hov and 1 or 0.85, RenderText.ALIGN_CENTER)
+        table.insert(self.dialogRows, { x = bx, y = by, w = bw, h = bh,
+            action = function() if item.stepAction then item.stepAction(dir) end end })
+    end
+    button(minusX, "-", -1)
+    button(plusX, "+", 1)
+    labelRole(minusX - pad * 0.8, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
+
+    -- The label/value area: click cycles/edits, wheel over it steps. Shrunk so it does not swallow the
+    -- stepper clicks (dialogRows is scanned back-to-front, and this row is added after the buttons).
+    table.insert(self.dialogRows, { x = x, y = y, w = math.max(0, minusX - x - pad * 0.4), h = h,
+        action = item.action, stepAction = item.stepAction })
+end
+
+function ADFlyoverHud:drawSettingsDialog(editor)
+    self:ensureOverlays()
+    self.dialogRows = {}
+    local T = ADFlyoverTheme
+
+    -- Matches the panel: the game UI scale times the mod scale, and (below) the theme's own colours.
+    local uiScale = (((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1)) * ((T.scale) or 1)
+    local W = 0.34 * uiScale
+    local rowH = 0.030 * uiScale
+    local pad = 0.008 * uiScale
+    local fontSize = 0.013 * uiScale
+    local headH = rowH * 1.4
+    local mx, my = editor.mouseX, editor.mouseY
+
+    -- Backdrop over the whole screen: dims the world/panel and (via dialogClick) eats stray clicks.
+    fillC(self.background, 0, 0, 1, 1, DLG.backdrop, 0.55)
+
+    local items = {}
+    local function push(t) items[#items + 1] = t end
+    push({ kind = "title" })
+    push({ kind = "section", text = "DISPLAY" })
+    do
+        local editing = editor.editing ~= nil and editor.editing.label == "ui scale"
+        push({ kind = "field", text = "ui scale",
+            value = editing and (editor.editing.buffer .. "_") or string.format("%.2f x", T.scale),
+            editing = editing,
+            action = function()
+                editor:beginEditNumber({ label = "ui scale", unit = "x",
+                    get = function() return T.scale end,
+                    apply = function(v) return editor:applyThemeScale(v) end,
+                    step = function(d) editor:stepThemeScale(d) end })
+            end,
+            stepAction = function(d) editor:stepThemeScale(d) end })
+    end
+    push({ kind = "section", text = "THEME" })
+    push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
+        action = function() editor:cycleThemePreset(1) end,
+        stepAction = function(d) editor:cycleThemePreset(d) end })
+    push({ kind = "field", text = "accent", value = T:accentName(),
+        action = function() editor:cycleThemeAccent(1) end,
+        stepAction = function(d) editor:cycleThemeAccent(d) end })
+
+    -- Advanced: hand-tune one role's R/G/B - the same controls as the in-panel advanced editor.
+    push({ kind = "section", text = "ADVANCED - PER-ROLE COLOUR" })
+    local roleKey, roleLabel = editor:currentEditRole()
+    local overridden = roleKey ~= nil and T.overrides[roleKey] ~= nil
+    push({ kind = "field", text = "role", value = roleLabel or "-",
+        action = function() editor:cycleEditRole(1) end,
+        stepAction = function(d) editor:cycleEditRole(d) end })
+    push({ kind = "swatch", role = roleKey, value = roleKey ~= nil and T:hexOf(roleKey) or "",
+        text = overridden and "current (custom)" or "current" })
+    for _, cc in ipairs({ { "R", 1 }, { "G", 2 }, { "B", 3 } }) do
+        local chLabel, idx = cc[1], cc[2]
+        local editingCh = editor.editing ~= nil and editor.editing.label == ("dlg colour " .. chLabel)
+        push({ kind = "field", text = chLabel,
+            value = editingCh and (editor.editing.buffer .. "_") or tostring(editor:roleChannel255(idx)),
+            editing = editingCh,
+            action = function()
+                editor:beginEditNumber({ label = "dlg colour " .. chLabel, unit = "",
+                    get = function() return editor:roleChannel255(idx) end,
+                    apply = function(v) return editor:setRoleChannel255(idx, v) end,
+                    step = function(d) editor:stepRoleChannel(idx, d) end })
+            end,
+            stepAction = function(d) editor:stepRoleChannel(idx, d) end })
+    end
+    if overridden then
+        push({ kind = "button", text = "clear this colour", action = function() editor:clearEditRole() end })
+    end
+
+    push({ kind = "gap" })
+    push({ kind = "button", text = "reset all to default", action = function() editor:resetTheme() end })
+    push({ kind = "button", text = "close", style = "accent", action = function() editor:closeSettingsDialog() end })
+    push({ kind = "note", text = "changes apply live and save automatically  -  Esc to close" })
+
+    local function itemH(it)
+        if it.kind == "title" then return headH
+        elseif it.kind == "gap" then return rowH * 0.4
+        elseif it.kind == "section" or it.kind == "note" then return rowH * 0.85
+        else return rowH end
+    end
+    local h = pad * 2
+    for _, it in ipairs(items) do h = h + itemH(it) end
+
+    local x = 0.5 - W * 0.5
+    local top = 0.5 + h * 0.5
+    -- Backdrop stays a fixed dark dim (not a theme colour) so it darkens the world behind whatever
+    -- the theme; everything else below is the theme's own palette, at the theme's scale.
+    local edge = 0.0028
+    fillRole(self.borderOverlay, x - edge, top - h - edge, W + edge * 2, h + edge * 2, "cardBorder", 1)
+    fillRole(self.background, x, top - h, W, h, "panelBg", 1)
+
+    local y = top - pad
+    for _, it in ipairs(items) do
+        local ih = itemH(it)
+        y = y - ih
+        local textY = y + (ih - fontSize) * 0.5
+        if it.kind == "title" then
+            fillRole(self.headerOverlay, x, y, W, ih, "headerBg", 1)
+            labelRole(x + pad * 2, textY, fontSize, "FLYOVER EDITOR", "headerText")
+            local tw = getTextWidth ~= nil and getTextWidth(fontSize, "FLYOVER EDITOR") or 0
+            local ver = "settings  v" .. ((ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD) or "?")
+            labelRole(x + pad * 2 + tw + pad * 1.5, y + (ih - fontSize * 0.72) * 0.5, fontSize * 0.72, ver, "mutedText")
+            local xw = ih
+            local xbx = x + W - xw
+            local hov = mx ~= nil and mx >= xbx and mx <= xbx + xw and my >= y and my <= y + ih
+            labelRole(xbx + xw * 0.5, textY, fontSize, "X", hov and "headerText" or "mutedText", 1, RenderText.ALIGN_CENTER)
+            table.insert(self.dialogRows, { x = xbx, y = y, w = xw, h = ih,
+                action = function() editor:closeSettingsDialog() end })
+        elseif it.kind == "section" then
+            labelRole(x + pad * 2, y + (ih - fontSize * 0.82) * 0.5, fontSize * 0.82, it.text, "sectionText")
+        elseif it.kind == "note" then
+            labelRole(x + pad * 2, y + (ih - fontSize * 0.8) * 0.5, fontSize * 0.8, it.text, "mutedText")
+        elseif it.kind == "gap" then
+            -- spacer only
+        elseif it.kind == "swatch" then
+            local chip = ih * 0.7
+            local chipW = chip / (g_screenAspectRatio or (16 / 9))
+            local cx = x + pad * 2
+            local cy = y + (ih - chip) * 0.5
+            fillRole(self.borderOverlay, cx - 0.0014, cy - 0.0014, chipW + 0.0028, chip + 0.0028, "cardBorder", 0.9)
+            if it.role ~= nil then fillRole(self.rowOverlay, cx, cy, chipW, chip, it.role, 1) end
+            labelRole(cx + chipW + pad * 1.6, textY, fontSize * 0.9, it.text, "mutedText")
+            if it.value ~= nil and it.value ~= "" then
+                labelRole(x + W - pad * 2, textY, fontSize * 0.9, it.value, "valueText", 1, RenderText.ALIGN_RIGHT)
+            end
+        elseif it.kind == "field" then
+            self:drawDialogField(it, x + pad, y, W - pad * 2, ih, fontSize, pad, mx, my)
+        elseif it.kind == "button" then
+            local bx0, bw0 = x + pad, W - pad * 2
+            local hov = mx ~= nil and mx >= bx0 and mx <= bx0 + bw0 and my >= y and my <= y + ih
+            local accent = it.style == "accent"
+            fillRole(self.rowOverlay, bx0, y, bw0, ih, accent and "accent" or (hov and "hoverBg" or "toolBg"), 1)
+            labelRole(x + W * 0.5, textY, fontSize, it.text, accent and "accentText" or "bodyText", 1, RenderText.ALIGN_CENTER)
+            table.insert(self.dialogRows, { x = bx0, y = y, w = bw0, h = ih, action = it.action })
+        end
+    end
+end
+
+--- Modal click: back-to-front over dialogRows so a stepper on top wins over the field beneath it.
+--- Always returns true - the dialog swallows every click, including ones that miss (the backdrop).
+function ADFlyoverHud:dialogClick(mx, my)
+    if self.dialogRows ~= nil then
+        for i = #self.dialogRows, 1, -1 do
+            local r = self.dialogRows[i]
+            if mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+                if r.action ~= nil then r.action() end
+                return true
+            end
+        end
+    end
+    return true
+end
+
+--- Modal wheel: steps whichever field the cursor is over. Always consumes, so nothing zooms behind.
+function ADFlyoverHud:dialogWheel(mx, my, step)
+    if self.dialogRows ~= nil and mx ~= nil then
+        for i = #self.dialogRows, 1, -1 do
+            local r = self.dialogRows[i]
+            if r.stepAction ~= nil and mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h then
+                r.stepAction(step)
+                return true
+            end
+        end
+    end
+    return true
+end
+
 --- Is the mouse over the floating tool card? The wheel handler asks this so scrolling over the card
 --- adjusts the active tool's setting even with nothing selected yet (move's falloff, a tolerance).
 function ADFlyoverHud:isMouseOverToolCard(mx, my)
@@ -826,6 +1116,12 @@ end
 
 --- Is the mouse over the panel's header row? That is the drag handle.
 function ADFlyoverHud:isMouseOverHeader(mouseX, mouseY)
+    -- The gear sits in the header but is NOT a drag handle - a click on it must reach its own action
+    -- (open the dialog), not start a panel drag.
+    local g = self.gearRect
+    if g ~= nil and mouseX >= g.x and mouseX <= g.x + g.w and mouseY >= g.y and mouseY <= g.y + g.h then
+        return false
+    end
     for _, row in ipairs(self.rows) do
         if row.kind == "header" and row.x ~= nil then
             return mouseX >= row.x and mouseX <= row.x + row.w

@@ -697,6 +697,7 @@ function ADFlyoverEditor:enable()
     self.settingsOpen = false
     self.advancedOpen = false
     self.themeEditRole = 1
+    self.dialogOpen = false
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -934,6 +935,16 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return Input[name] ~= nil and sym == Input[name]
     end
 
+    -- The settings dialog is modal: Esc closes it and every other key is swallowed (no tool numbers,
+    -- no undo). handleEditKey ran first above, so typing into a dialog field, and Esc to cancel that
+    -- edit, both still work before this.
+    if self.dialogOpen then
+        if isKey("KEY_esc") then
+            self:closeSettingsDialog()
+        end
+        return
+    end
+
     if isKey("KEY_esc") then
         Logging.info("[FlyoverEditor]: escape observed via keyEvent (fallback path).")
         self:disable()
@@ -970,6 +981,12 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         if ADEditorHistory:redo() ~= nil then
             self:invalidateIdReferences()
         end
+        return
+    end
+
+    -- Hide/show the floating tool card. A keyboard key rather than middle mouse, which is the camera.
+    if isKey("KEY_h") then
+        self:toggleCard()
         return
     end
 
@@ -1932,13 +1949,19 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
         return
     end
 
-    -- Middle-click toggles the floating tool card out of the way, for grabbing points that sit under
-    -- where it floats. Handled BEFORE camera:mouseEvent and consumed, so nothing pans on it.
-    if button == 2 and isDown then
-        self.cardHidden = not self.cardHidden
-        Logging.info("[FlyoverEditor]: tool card %s (middle-click).", self.cardHidden and "hidden" or "shown")
+    -- The settings dialog is modal: while it is up it owns every click, and nothing reaches the
+    -- camera, the panel or the tools. The wheel arrives on its own action path and is handled in
+    -- handleWheel; here we take the clicks and swallow everything else.
+    if self.dialogOpen then
+        if button == 1 and isDown then
+            ADFlyoverHud:dialogClick(posX, posY)
+        end
         return
     end
+
+    -- Middle mouse is the camera's own orbit/spin, so it is left entirely to the camera - hiding the
+    -- tool card is a keyboard key, a panel button, and an automatic hide while dragging instead
+    -- (see toggleCard and buildRows). Trying to share MMB fought the orbit and only half-worked.
 
     -- The panel gets the event first. A header drag has to claim the WHOLE gesture, including the
     -- camera, or panning the camera and dragging the panel happen at the same time.
@@ -2035,6 +2058,15 @@ function ADFlyoverEditor:toolHasPendingStart()
     elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
     end
     return false
+end
+
+--- Show/hide the floating tool card by hand - the keyboard key (H) and the panel button both call
+--- this. The card ALSO hides on its own while you drag a point (see buildRows), so this manual
+--- override is for when it covers something you want to see while you are not mid-drag. Middle mouse
+--- used to do this, but that button is the camera's orbit.
+function ADFlyoverEditor:toggleCard()
+    self.cardHidden = not self.cardHidden
+    Logging.info("[FlyoverEditor]: tool card %s.", self.cardHidden and "hidden" or "shown")
 end
 
 function ADFlyoverEditor:onLeftPress()
@@ -5708,6 +5740,12 @@ function ADFlyoverEditor:handleWheel(offset)
     end
     local step = offset > 0 and 1 or -1
 
+    -- The settings dialog owns the wheel while it is up, and consumes it so nothing zooms behind.
+    if self.dialogOpen then
+        if ADFlyoverHud ~= nil then ADFlyoverHud:dialogWheel(self.mouseX, self.mouseY, step) end
+        return true
+    end
+
     -- Any numeric field under the cursor takes the wheel: the floating card's fields, the settings
     -- fields in the corner block, and the armed popup. Only rows carrying a stepAction match, so a
     -- scroll over a plain button or empty space still falls through to the camera zoom below.
@@ -5751,6 +5789,24 @@ function ADFlyoverEditor:toggleSettings()
         -- Leaving the panel abandons a half-typed scale rather than stranding the number editor.
         self:cancelEditNumber()
     end
+end
+
+-- The standalone settings dialog: a modal, theme-independent popup (drawn and hit-tested by the HUD).
+-- While it is open the editor routes every click, wheel and key to it (see mouseEvent/keyEvent/
+-- handleWheel), so nothing leaks to the tools or the camera.
+
+function ADFlyoverEditor:openSettingsDialog()
+    self.dialogOpen = true
+    self:cancelEditNumber()
+end
+
+function ADFlyoverEditor:closeSettingsDialog()
+    self.dialogOpen = false
+    self:cancelEditNumber()
+end
+
+function ADFlyoverEditor:toggleSettingsDialog()
+    if self.dialogOpen then self:closeSettingsDialog() else self:openSettingsDialog() end
 end
 
 function ADFlyoverEditor:applyThemeScale(v)

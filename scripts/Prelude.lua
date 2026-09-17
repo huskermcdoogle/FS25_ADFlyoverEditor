@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.30.2.0"
+P.BUILD = "0.30.8.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -492,8 +492,20 @@ function P:consoleResetInput()
     return "This build of the editor has no resetInput."
 end
 
+--- Recovery: put the editor's colours and scale back to the default. Always available from the
+--- console, even with the editor closed, so a custom colour that makes the panel unreadable can
+--- never trap you - you cannot always click "reset to default" from inside a panel you cannot read.
+function P:consoleResetTheme()
+    if ADFlyoverTheme == nil then
+        return "Theme not loaded."
+    end
+    ADFlyoverTheme:resetDefault()
+    return "Flyover editor colours and scale reset to default (Contrast Dark + amber, 1.0x)."
+end
+
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
+addConsoleCommand("FlyoverResetTheme", "Reset the editor's colours and scale to default", "consoleResetTheme", P)
 addConsoleCommand("FlyoverProbeMap", "Report the HUD map and hotspot classes (run with the map small, then large)", "consoleProbeMap", P)
 addConsoleCommand("FlyoverProbeMapFns", "List the map's and camera's functions, untruncated (editor open)", "consoleProbeMapFns", P)
 addConsoleCommand("FlyoverFieldLoop", "Stage 5a: generate a field loop at the vehicle (additive)", "consoleFieldLoop", P)

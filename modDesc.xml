@@ -18,20 +18,34 @@ Single player only.
 ]]>
 		</en>
 	</description>
-	<version>0.30.2.0</version>
+	<version>0.30.8.0</version>
 	<multiplayer supported="false" />
 	<iconFilename>modIcon.dds</iconFilename>
 	<actions>
 		<action name="AD_FLYOVER_TOGGLE" />
+		<action name="AD_FLYOVER_RESET_THEME" />
+		<action name="AD_FLYOVER_SETTINGS" />
 	</actions>
 	<inputBinding>
 		<actionBinding action="AD_FLYOVER_TOGGLE">
 			<binding device="KB_MOUSE_DEFAULT" input="KEY_lalt KEY_f" />
 		</actionBinding>
+		<!-- Unbound by default (no <binding>): a reset is easy to hit by accident, so the player
+		     binds it deliberately in the controls menu. It is also always available as the console
+		     command FlyoverResetTheme. -->
+		<actionBinding action="AD_FLYOVER_RESET_THEME" />
+		<!-- Unbound by default; the gear on the panel header opens the same dialog. -->
+		<actionBinding action="AD_FLYOVER_SETTINGS" />
 	</inputBinding>
 	<l10n>
 		<text name="input_AD_FLYOVER_TOGGLE">
 			<en>AutoDrive Flyover: open / close editor</en>
+		</text>
+		<text name="input_AD_FLYOVER_RESET_THEME">
+			<en>AutoDrive Flyover: reset editor colours and scale</en>
+		</text>
+		<text name="input_AD_FLYOVER_SETTINGS">
+			<en>AutoDrive Flyover: open the settings dialog</en>
 		</text>
 	</l10n>
 	<extraSourceFiles>

@@ -19,7 +19,7 @@ ICON_ORDER = [
     "select", "draw", "spline", "fieldloop",
     "parallel", "siding", "move", "smooth",
     "straighten", "divide", "convert", "merge",
-    "name", "delete", "ground",
+    "name", "delete", "ground", "settings",
 ]
 
 
@@ -92,6 +92,24 @@ ICONS = {
                ("poly", [(0.5, 0.26), (0.5, 0.62)], 0.05),
                ("poly", [(0.42, 0.54), (0.5, 0.62), (0.58, 0.54)], 0.05)],
 }
+
+
+def _gear_shapes():
+    """A settings gear: a rim ring, a hub hole, and eight radial teeth."""
+    cx, cy, out = [], [], []
+    shapes = []
+    n = 8
+    for i in range(n):
+        a = (i / n) * 2 * math.pi
+        r1, r2 = 0.20, 0.33
+        shapes.append(("poly", [(0.5 + r1 * math.cos(a), 0.5 + r1 * math.sin(a)),
+                                (0.5 + r2 * math.cos(a), 0.5 + r2 * math.sin(a))], 0.075))
+    shapes.append(("ring", 0.5, 0.5, 0.20, 0.075))   # rim
+    shapes.append(("ring", 0.5, 0.5, 0.085, 0.05))    # hub hole
+    return shapes
+
+
+ICONS["settings"] = _gear_shapes()
 
 
 def seg_dist(px, py, ax, ay, bx, by):

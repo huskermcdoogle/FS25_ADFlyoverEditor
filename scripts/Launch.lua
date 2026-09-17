@@ -23,11 +23,20 @@ Launch - the two ways a player opens the editor without the developer console.
 
 ADFlyoverLaunch = {
     ACTION = "AD_FLYOVER_TOGGLE",
+    -- Recovery key: reset the editor's colours and scale. Registered the same context-following way
+    -- as the toggle so it works everywhere, even with the editor closed - the point of it is to
+    -- rescue a panel a custom colour has made unreadable, which you cannot do from that panel.
+    RESET_ACTION = "AD_FLYOVER_RESET_THEME",
+    -- Opens the settings dialog (same as the gear on the panel header). Opens the editor first if it
+    -- is closed, since the dialog lives inside it.
+    SETTINGS_ACTION = "AD_FLYOVER_SETTINGS",
     -- A single press can arrive by more than one route while a context is changing. Anything inside
     -- this window after a toggle is the same press, not a second one.
     DEBOUNCE_MS = 300,
     registeredContext = nil,
     eventId = nil,
+    resetEventId = nil,
+    settingsEventId = nil,
     everRegistered = false,
     loggedNoContext = false,
     lastToggleMs = -math.huge,
@@ -94,6 +103,27 @@ local function onAction()
     L.toggle("key binding")
 end
 
+local function onResetAction()
+    if ADFlyoverTheme == nil then
+        return
+    end
+    ADFlyoverTheme:resetDefault()
+    Logging.info("[ADFlyoverEditor] editor colours and scale reset to default via key binding.")
+end
+
+local function onSettingsAction()
+    if ADFlyoverEditor == nil then
+        return
+    end
+    -- The dialog lives inside the editor, so open the editor first if it is not already up.
+    if not ADFlyoverEditor.active and ADFlyoverEditor.toggle ~= nil then
+        ADFlyoverEditor:toggle()
+    end
+    if ADFlyoverEditor.active and ADFlyoverEditor.openSettingsDialog ~= nil then
+        ADFlyoverEditor:openSettingsDialog()
+    end
+end
+
 --- Keep the toggle registered in whatever context is current. Called every frame; does real work
 --- only when the context has changed since last time.
 function L.update()
@@ -127,6 +157,36 @@ function L.update()
             false, true, false, true)
         L.eventId = id
     end)
+
+    -- The reset key rides the same context change. Guarded on InputAction[RESET_ACTION] so an install
+    -- whose modDesc has not been reloaded yet (the action needs a full restart) simply has no reset
+    -- key, rather than erroring and taking the toggle registration down with it.
+    if L.resetEventId ~= nil then
+        pcall(function() g_inputBinding:removeActionEvent(L.resetEventId) end)
+        L.resetEventId = nil
+    end
+    if InputAction[L.RESET_ACTION] ~= nil then
+        pcall(function()
+            local _, id = g_inputBinding:registerActionEvent(InputAction[L.RESET_ACTION], L, onResetAction,
+                false, true, false, true)
+            L.resetEventId = id
+            if id ~= nil then g_inputBinding:setActionEventTextVisibility(id, false) end
+        end)
+    end
+
+    -- Settings-dialog key, same context-following registration and same nil-guard as the reset key.
+    if L.settingsEventId ~= nil then
+        pcall(function() g_inputBinding:removeActionEvent(L.settingsEventId) end)
+        L.settingsEventId = nil
+    end
+    if InputAction[L.SETTINGS_ACTION] ~= nil then
+        pcall(function()
+            local _, id = g_inputBinding:registerActionEvent(InputAction[L.SETTINGS_ACTION], L, onSettingsAction,
+                false, true, false, true)
+            L.settingsEventId = id
+            if id ~= nil then g_inputBinding:setActionEventTextVisibility(id, false) end
+        end)
+    end
 
     L.registeredContext = context
     if ok and L.eventId ~= nil then
