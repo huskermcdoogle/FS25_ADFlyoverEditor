@@ -26,7 +26,7 @@ AutoDrive fork, say) — both provide the editor, and whichever loads last wins.
 
 ## Feedback
 
-Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/teU3mXEbH).
+Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/w6mvhuaa9k).
 
 ## Opening the editor
 
