@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.30.10.0 — Per-tool help & a user manual (2026-09-16)
+
+- **In-game help** — a **?** button on the panel header (and the **/** key) toggles a contextual help
+  panel beside the editor that shows the **selected tool's** full help — what it does, how to use it,
+  and its controls — following the tool as you switch. Non-modal, so you can read it while working.
+- **User manual** — a complete written manual at [`docs/manual.md`](docs/manual.md), one section per
+  tool plus a General reference. It and the in-game help are generated from one source
+  (`tools/make_help.py`), so they never disagree.
+- **Tool numbers renumbered** — the keycaps now run **1→9, 0** straight down the Create and Shape
+  groups in the panel's reading order instead of scattering by internal id. There are ten number keys
+  and fourteen tools, so the Connect and Utility tools (convert, merge, name, delete) are click-only.
+
 ## 0.30.8.0 — Settings dialog, safer recovery, better card hiding (2026-09-16)
 
 - **Standalone settings dialog** — a modal popup opened by the **⚙ gear** on the panel header (or a

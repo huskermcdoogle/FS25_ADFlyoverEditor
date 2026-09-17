@@ -231,11 +231,6 @@ function ADFlyoverHud:buildRows(editor)
         { "CONNECT", { T.CONVERT, T.MERGE } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
-    local function toolKeyLabel(id)
-        if id >= 1 and id <= 9 then return tostring(id) end
-        if id == 10 then return "0" end
-        return ""
-    end
     -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
     local ICON_CELL = {
         [T.NONE] = 0, [T.DRAW] = 1, [T.SPLINE] = 2, [T.FIELDLOOP] = 3,
@@ -247,7 +242,7 @@ function ADFlyoverHud:buildRows(editor)
         add("section", grp[1])
         for _, id in ipairs(grp[2]) do
             local name = (id == T.NONE) and "select" or editor.TOOL_NAMES[id]
-            add("tool", name, toolKeyLabel(id), editor.tool == id, function() editor:setTool(id) end)
+            add("tool", name, editor:toolKeyLabel(id), editor.tool == id, function() editor:setTool(id) end)
             rows[#rows].iconCell = ICON_CELL[id]
         end
     end
@@ -615,6 +610,17 @@ function ADFlyoverHud:draw(editor)
                 self.gearRect = { x = gx - self.padding, y = y, w = gw + self.padding * 2.5, h = h }
                 table.insert(self.rows, { x = self.gearRect.x, y = y, w = self.gearRect.w, h = h,
                     action = function() editor:openSettingsDialog() end })
+
+                -- Help "?" toggle, just left of the gear (accent-tinted while help is open). Also
+                -- excluded from the header drag, same as the gear.
+                local hbw = gw + self.padding
+                local hbx = self.gearRect.x - self.padding * 0.5 - hbw
+                local hbHov = mx ~= nil and mx >= hbx and mx <= hbx + hbw and my >= y and my <= y + h
+                local hbRole = editor.helpOpen and "accent" or (hbHov and "headerText" or "mutedText")
+                labelRole(hbx + hbw * 0.5, textY, fontSize, "?", hbRole, 1, RenderText.ALIGN_CENTER)
+                self.helpBtnRect = { x = hbx, y = y, w = hbw, h = h }
+                table.insert(self.rows, { x = hbx, y = y, w = hbw, h = h,
+                    action = function() editor:toggleHelp() end })
             end
         elseif row.kind == "note" then
             labelRole(textX, textY, fontSize * 0.86, row.text, "mutedText")
@@ -712,7 +718,10 @@ function ADFlyoverHud:draw(editor)
 
     self:drawContextMenu(editor)
 
-    -- Drawn last, over everything, so the modal dialog and its dim backdrop sit on top of the panel.
+    -- Contextual help sits beside the panel (non-modal); the modal dialog draws last, over everything.
+    if editor.helpOpen then
+        self:drawHelp(editor)
+    end
     if editor.dialogOpen then
         self:drawSettingsDialog(editor)
     end
@@ -1080,6 +1089,80 @@ function ADFlyoverHud:dialogWheel(mx, my, step)
     return true
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Contextual help: a themed panel beside the editor showing the current tool's help (from Help.lua),
+-- following the tool as you switch. Non-modal - it takes no input; a full-frame blocker row just
+-- stops a click on it reaching the world underneath. Toggled by the "?" header button and the / key.
+-- ---------------------------------------------------------------------------------------------
+function ADFlyoverHud:drawHelp(editor)
+    if ADFlyoverHelp == nil or ADFlyoverHelp.tools == nil then return end
+    self:ensureOverlays()
+    local T = ADFlyoverTheme
+
+    local key = (editor.tool == editor.TOOL.NONE) and "select" or editor.TOOL_NAMES[editor.tool]
+    local help = ADFlyoverHelp.tools[key]
+    if help == nil then return end
+
+    local uiScale = (((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1)) * ((T.scale) or 1)
+    local W = 0.30 * uiScale
+    local rowH = 0.019 * uiScale
+    local pad = 0.006 * uiScale
+    local fontSize = 0.0105 * uiScale
+    local headH = rowH * 1.5
+
+    local lines = {}
+    local function line(kind, text) lines[#lines + 1] = { kind = kind, text = text } end
+    for _, l in ipairs(help.summary) do line("summary", l) end
+    line("gap", "")
+    line("section", "WHAT IT DOES")
+    for _, l in ipairs(help.what) do line("body", l) end
+    line("gap", "")
+    line("section", "HOW TO USE IT")
+    for _, l in ipairs(help.how) do line("body", l) end
+    if help.controls ~= nil and #help.controls > 0 then
+        line("gap", "")
+        line("section", "CONTROLS")
+        for _, l in ipairs(help.controls) do line("body", l) end
+    end
+
+    local h = headH + pad * 2
+    for _, l in ipairs(lines) do
+        h = h + ((l.kind == "gap") and rowH * 0.4 or rowH)
+    end
+
+    -- To the right of the editor panel (so it does not cover the tools), clamped fully on screen.
+    local panelW = self.width * uiScale
+    local x = math.max(0.006, math.min(self.posX + panelW + 0.015, 1 - W - 0.006))
+    local top = math.min(1, math.max(h, self.topY))
+
+    local edge = 0.0025
+    fillRole(self.borderOverlay, x - edge, top - h - edge, W + edge * 2, h + edge * 2, "cardBorder", 0.96)
+    fillRole(self.background, x, top - h, W, h, "cardBg", 0.99)
+    table.insert(self.rows, { x = x - edge, y = top - h - edge, w = W + edge * 2, h = h + edge * 2 })
+
+    local y = top - pad - headH
+    fillRole(self.headerOverlay, x, y, W, headH, "headerBg", 1)
+    labelRole(x + pad * 1.5, y + (headH - fontSize) * 0.5, fontSize, (help.name or "?") .. "  -  help", "headerText")
+    local cap = editor:toolKeyLabel(editor.tool)
+    if cap ~= nil and cap ~= "" then
+        labelRole(x + W - pad * 1.5, y + (headH - fontSize * 0.8) * 0.5, fontSize * 0.8, "key " .. cap,
+            "mutedText", 1, RenderText.ALIGN_RIGHT)
+    end
+
+    for _, l in ipairs(lines) do
+        local ih = (l.kind == "gap") and rowH * 0.4 or rowH
+        y = y - ih
+        local ty = y + (ih - fontSize) * 0.5
+        if l.kind == "summary" then
+            labelRole(x + pad * 1.5, ty, fontSize, l.text, "bodyText")
+        elseif l.kind == "section" then
+            labelRole(x + pad * 1.5, ty, fontSize * 0.82, l.text, "sectionText")
+        elseif l.kind == "body" then
+            labelRole(x + pad * 1.5, ty, fontSize * 0.92, l.text, "mutedText")
+        end
+    end
+end
+
 --- Is the mouse over the floating tool card? The wheel handler asks this so scrolling over the card
 --- adjusts the active tool's setting even with nothing selected yet (move's falloff, a tolerance).
 function ADFlyoverHud:isMouseOverToolCard(mx, my)
@@ -1116,10 +1199,12 @@ end
 
 --- Is the mouse over the panel's header row? That is the drag handle.
 function ADFlyoverHud:isMouseOverHeader(mouseX, mouseY)
-    -- The gear sits in the header but is NOT a drag handle - a click on it must reach its own action
-    -- (open the dialog), not start a panel drag.
-    local g = self.gearRect
-    if g ~= nil and mouseX >= g.x and mouseX <= g.x + g.w and mouseY >= g.y and mouseY <= g.y + g.h then
+    -- The gear and the "?" help button sit in the header but are NOT drag handles - a click on either
+    -- must reach its own action, not start a panel drag.
+    local function overRect(r)
+        return r ~= nil and mouseX >= r.x and mouseX <= r.x + r.w and mouseY >= r.y and mouseY <= r.y + r.h
+    end
+    if overRect(self.gearRect) or overRect(self.helpBtnRect) then
         return false
     end
     for _, row in ipairs(self.rows) do

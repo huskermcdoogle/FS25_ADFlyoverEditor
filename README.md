@@ -37,8 +37,12 @@ Grouped by job on the panel. **Select** is the default mode: no tool held, click
 |---|---|
 | **Create** | `draw` connect waypoints · `spline` curved connection · `field loop` headland loop around a field · `parallel` a track alongside a span · `siding` a spur splined in at both ends |
 | **Shape** | `move` drag a point, with falloff along the track · `smooth` · `straighten`, which keeps real bends · `divide` add evenly-spaced points · `ground` settle points onto the surface |
-| **Connect** | `convert` one-way / two-way and priority · `merge` join nearby nodes |
+| **Connect** | `convert` one-way / two-way and priority · `merge` fold two parallel lanes into one |
 | **Utility** | `name` label a waypoint · `delete` remove a point, span or run |
+
+For a full description of every tool — what it does, how to use it, and its controls — see the
+**[user manual](docs/manual.md)** (the same content is available in-game via the **?** button on the
+panel header, or the **/** key).
 
 ## Working with it
 
@@ -47,8 +51,8 @@ Grouped by job on the panel. **Select** is the default mode: no tool held, click
   highlighted in the world.
 - **Floating tool card** — a tool's controls appear on a small card near the cursor instead of in a
   far corner. Numeric settings can be **typed, scrolled, or nudged with − / + steppers**, and the
-  wheel adjusts whichever field you are hovering. **Middle-click** hides the card and lets a drag
-  pass through it.
+  wheel adjusts whichever field you are hovering. Press **H** (or the panel button) to hide the card
+  — it also auto-hides on its own while you drag a point.
 - **Span / run tools** (straighten, smooth, divide, ground, parallel) act on a picked span or a whole
   run: arm the tool, dial its setting, right-click to apply.
 

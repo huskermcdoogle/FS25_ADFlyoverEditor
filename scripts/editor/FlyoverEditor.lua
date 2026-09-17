@@ -151,6 +151,28 @@ ADFlyoverEditor = {
 ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11, PARALLEL = 12, SIDING = 13, GROUND = 14 }
 ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge", "parallel", "siding", "ground" }
 
+-- The number keys select tools in the PANEL'S READING ORDER (1-9, then 0 for the tenth), NOT by the
+-- internal TOOL id above - so the keycaps run 1..0 straight down the Create and Shape groups instead
+-- of scattering. There are ten number keys and fourteen tools, so the Connect and Utility tools
+-- (convert, merge, name, delete) get no number and are click-only. Keep this list in the same order
+-- the panel lays the tools out (see the GROUPS table in FlyoverHud.buildRows).
+ADFlyoverEditor.KEY_SLOTS = {
+    ADFlyoverEditor.TOOL.DRAW, ADFlyoverEditor.TOOL.SPLINE, ADFlyoverEditor.TOOL.FIELDLOOP,
+    ADFlyoverEditor.TOOL.PARALLEL, ADFlyoverEditor.TOOL.SIDING,
+    ADFlyoverEditor.TOOL.MOVE, ADFlyoverEditor.TOOL.SMOOTH, ADFlyoverEditor.TOOL.STRAIGHTEN,
+    ADFlyoverEditor.TOOL.DIVIDE, ADFlyoverEditor.TOOL.GROUND,
+}
+
+--- The keycap ("1".."9", "0", or "" for none) for a tool, from its slot in KEY_SLOTS.
+function ADFlyoverEditor:toolKeyLabel(tool)
+    for slot, t in ipairs(self.KEY_SLOTS) do
+        if t == tool then
+            return (slot == 10) and "0" or tostring(slot)
+        end
+    end
+    return ""
+end
+
 -- How far a waypoint may sit off the ground before the ground tool calls it out, in meters. The
 -- band starts well below a hand's width because the point of the tool is finding drift you cannot
 -- see, and reaches high enough to ignore a genuine bridge or gantry rather than dragging it down.
@@ -698,6 +720,7 @@ function ADFlyoverEditor:enable()
     self.advancedOpen = false
     self.themeEditRole = 1
     self.dialogOpen = false
+    self.helpOpen = false
     self.editing = nil
     self.elapsedMs = 0
     self.lastRightPressAt = nil
@@ -951,13 +974,14 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return
     end
 
-    -- Tool selection on the number row. keyEvent only observes and cannot consume, which is fine
-    -- here: nothing else is bound to these while the custom context is pushed.
-    for tool = 1, #self.TOOL_NAMES do
-        -- There is no KEY_10, so the tenth tool sits on 0 the way a number row runs.
-        local keyName = (tool == 10) and "KEY_0" or ("KEY_" .. tool)
+    -- Tool selection on the number row, in the panel's reading order (see KEY_SLOTS). keyEvent only
+    -- observes and cannot consume, which is fine here: nothing else is bound to these while the
+    -- custom context is pushed.
+    for slot = 1, #self.KEY_SLOTS do
+        -- There is no KEY_10, so the tenth slot sits on 0 the way a number row runs.
+        local keyName = (slot == 10) and "KEY_0" or ("KEY_" .. slot)
         if isKey(keyName) then
-            self:setTool(tool)
+            self:setTool(self.KEY_SLOTS[slot])
             return
         end
     end
@@ -987,6 +1011,12 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
     -- Hide/show the floating tool card. A keyboard key rather than middle mouse, which is the camera.
     if isKey("KEY_h") then
         self:toggleCard()
+        return
+    end
+
+    -- Show/hide the contextual help panel. The / key is also ?, which reads as "help".
+    if isKey("KEY_slash") then
+        self:toggleHelp()
         return
     end
 
@@ -2067,6 +2097,12 @@ end
 function ADFlyoverEditor:toggleCard()
     self.cardHidden = not self.cardHidden
     Logging.info("[FlyoverEditor]: tool card %s.", self.cardHidden and "hidden" or "shown")
+end
+
+--- Show/hide the contextual help panel - the "?" button on the header and the / (?) key both call
+--- this. It shows the current tool's help and follows the tool as you switch, without blocking use.
+function ADFlyoverEditor:toggleHelp()
+    self.helpOpen = not self.helpOpen
 end
 
 function ADFlyoverEditor:onLeftPress()
