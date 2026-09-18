@@ -2,7 +2,7 @@
 -- Per-tool help for the in-game contextual help and the browsable manual.
 
 ADFlyoverHelp = {}
-ADFlyoverHelp.ORDER = { "select", "draw", "spline", "field loop", "parallel", "siding", "move", "smooth", "straighten", "divide", "ground", "convert", "merge", "name", "delete" }
+ADFlyoverHelp.ORDER = { "select", "draw", "spline", "field loop", "parallel", "siding", "move", "smooth", "straighten", "divide", "ground", "convert", "merge", "junction", "name", "delete" }
 ADFlyoverHelp.tools = {}
 local T = ADFlyoverHelp.tools
 
@@ -407,6 +407,70 @@ T["merge"] = {
   },
 }
 
+T["junction"] = {
+  name = "Junction",
+  group = "CONNECT",
+  summary = {
+    "One click builds a whole intersection of",
+    "smooth, radius-bound turn connectors.",
+  },
+  what = {
+    "Junction generates the connectors an",
+    "intersection needs - every legal turn between",
+    "the roads inside its scope circle - in one",
+    "placement. Connectors are laid from the real",
+    "lane geometry: tie-ins sit on the actual",
+    "tracks, curves are bounded by the turn radius,",
+    "kept on the road surface, and kept clear of",
+    "static obstacles, with each turn solved at the",
+    "largest radius that fits its spot. Anything",
+    "that cannot be built safely is refused visibly",
+    "- drawn red, counted on the card, explained in",
+    "the log - rather than laid badly.",
+  },
+  how = {
+    "- Point at a crossing - the scope circle and the",
+    "  approaches it cuts preview live. The wheel",
+    "  sizes the circle: the primary lever for what",
+    "  counts as one junction.",
+    "- Left-click LOCKS the site (the circle turns",
+    "  solid). The preview stops following the",
+    "  cursor; the wheel and the card's settings",
+    "  still reshape it live.",
+    "- White curves are the turns it will lay; red",
+    "  ones are refused, with the reason counted on",
+    "  the card (too tight, off road, blocked, and so",
+    "  on).",
+    "- Right-click places everything as ONE undo",
+    "  step. Right-click with nothing to place",
+    "  unlocks the site; right-click again puts the",
+    "  tool away.",
+    "- With 'existing turns: rebuild', the old",
+    "  connectors inside the scope are cleared and",
+    "  laid fresh - the roads themselves are never",
+    "  touched.",
+  },
+  controls = {
+    "search radius (wheel): the scope circle -",
+    "  which roads belong to this junction.",
+    "turn radius: the target turning radius; each",
+    "  turn shrinks itself only as far as needed to",
+    "  fit its corner.",
+    "road check: keep the vehicle corridor on the",
+    "  road surface; off means radius only.",
+    "obstacles: refuse turns whose corridor hits",
+    "  trees, buildings, poles or fences.",
+    "corridor / clearance: the widths for the road-",
+    "  surface check and the obstacle box.",
+    "trim/extend: let a tie-in project past a stem",
+    "  that was trimmed short of the corner.",
+    "existing turns: keep what is already there, or",
+    "  rebuild it fresh.",
+    "curve: dubins (radius-bounded, pose to pose)",
+    "  or biarc; the shorter solution wins.",
+  },
+}
+
 T["name"] = {
   name = "Name",
   group = "UTILITY",
@@ -481,6 +545,18 @@ ADFlyoverHelp.general = {
       "  moves it.",
       "- Wheel - camera zoom, or adjust the numeric",
       "  field the cursor is over.",
+    } },
+    { title = "The tool card", lines = {
+      "- The floating card carries the active tool's",
+      "  settings. It jumps out BESIDE the first click",
+      "  of each action - offset, never on top of what",
+      "  you clicked.",
+      "- Drag it by its header strip (the bar with the",
+      "  tool's name) to park it anywhere. Once you",
+      "  have placed it yourself, it stays put for the",
+      "  whole session and never jumps again.",
+      "- H hides and shows it; it also auto-hides while",
+      "  you drag a waypoint.",
     } },
     { title = "Numeric fields", lines = {
       "- Every number on the panel can be changed three",

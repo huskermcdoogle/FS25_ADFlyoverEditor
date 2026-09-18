@@ -146,6 +146,18 @@ ADFlyoverEditor = {
     -- Trim/extend, on by default. Off, a tie-in never projects past a stem trimmed back short of
     -- where the turn geometry wants it - see junctionWalkBack/junctionTrackConnector.
     junctionExtendTrim = true,
+    -- Rebuild existing turns, OFF by default: on, an existing connection whose path leaves the road
+    -- skeleton (an old connector) is deleted and laid fresh instead of being kept as "already there".
+    junctionRebuild = false,
+    -- Connector curve engine: Dubins (default - radius-bounded pose-to-pose via AutoDrive's own
+    -- ADDubins) or the tangent biarc (also the automatic fallback when Dubins declines).
+    junctionUseDubins = true,
+    -- Static-obstacle check (trees, buildings, fences/poles/signs), on by default: a corridor that
+    -- overlaps one shrinks its radius to swing clear, and refuses (red, "blocked") if nothing fits.
+    junctionCheckObstacles = true,
+    -- Card-tunable widths: the on-road corridor (surface check) and the obstacle-clearance box.
+    junctionCorridor = 4.0,
+    junctionClearance = 5.0,
     junctionPreview = nil,
     -- The locked site {cx, cz, cy}: left-click arms the junction here so the preview stops following
     -- the cursor and right-click places it. Nil = not armed, so right-click puts the tool away.
@@ -204,12 +216,22 @@ AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP = 1.0
 
 -- Junction turn radius: shapes the connector curves (our own tangent geometry, not AutoDrive's spline
 -- curvature). Larger = wider, gentler turns. A future collision-aware version may swap this for Dubins.
-AutoDrive.FLYOVER_JUNCTION_TURN_MIN = 4.0
+AutoDrive.FLYOVER_JUNCTION_TURN_MIN = 2.0
 AutoDrive.FLYOVER_JUNCTION_TURN_MAX = 30.0
 AutoDrive.FLYOVER_JUNCTION_TURN_STEP = 1.0
 -- Width of the corridor a junction connector must keep on the road surface: a typical tractor (~3 m)
 -- plus an allowance for a trailer tracking inside the turn. Checked at the centre and both edges.
+-- Default only - the live value is per-editor (junctionCorridor) and tuned on the tool card.
 AutoDrive.FLYOVER_JUNCTION_CORRIDOR = 4.0
+AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MIN = 2.0
+AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MAX = 8.0
+AutoDrive.FLYOVER_JUNCTION_CORRIDOR_STEP = 0.5
+-- Width of the obstacle-clearance box (junctionClearance, on the card): wider than the surface
+-- corridor by default so mirrors and implement overhang get breathing room past poles and trees.
+AutoDrive.FLYOVER_JUNCTION_CLEARANCE = 5.0
+AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MIN = 2.0
+AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MAX = 10.0
+AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP = 0.5
 
 -- Which surface a point is grounded to when its column has more than one - a bridge deck over a road,
 -- say. "span line" follows the height the span's own ends imply; "top surface" takes the highest.
@@ -1614,9 +1636,10 @@ function ADFlyoverEditor:setTool(tool)
     self.dragId = nil
     self.boxActive = false
     self.ctxMenu = nil
-    -- A new tool gets its own jump-out-on-first-click, even if the card was dragged somewhere for the
-    -- PREVIOUS tool - "stays put for the remainder of tool usage" is scoped to one tool's session.
-    self.toolCardDragged = false
+    -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
+    -- the card was in the way, and re-jumping it on every tool change undid the player's own
+    -- placement. Once you put it somewhere, it stays there for the whole editor session; the
+    -- jump-out-beside-the-click only serves players who never placed it themselves.
     self.moveFocusId = nil
     -- Picking a tool always brings its card back: middle-click hides the CURRENT tool's card to work
     -- under it, but switching tools should not carry that hidden state onto the next one.
@@ -1940,7 +1963,7 @@ function ADFlyoverEditor:drawNetwork()
         -- ON the exit track. The small white spheres mark the tie-in (merge / exit) points - sitting on
         -- the real road a radius-appropriate distance back from where the tracks meet, NOT the boundary.
         for _, m in ipairs(jp.movements) do
-            if not m.exists and m.connector ~= nil then
+            if (not m.exists or m.rebuild) and m.connector ~= nil then
                 local c = m.connector
                 local chain = { { x = c.ax, y = baseY + 0.5, z = c.az } }
                 for _, p in ipairs(c.points) do
@@ -2466,7 +2489,10 @@ function ADFlyoverEditor:stopCurrentAction()
         -- tool away like any other - the way OUT of the tool without placing anything.
         if self.junctionArmed ~= nil then
             local jp = self.junctionPreview
-            if jp ~= nil and (jp.nNew or 0) > 0 then
+            -- Placeable = new turns OR rebuilds of existing ones: rebuild movements count into
+            -- nRebuild, not nNew, and gating on nNew alone made a pure-rebuild placement report
+            -- "nothing to place" and unlock instead of placing.
+            if jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0 then
                 self:applyJunction()
             else
                 Logging.info("[FlyoverEditor]: junction site unlocked (nothing to place).")
@@ -3123,6 +3149,33 @@ function ADFlyoverEditor:toggleJunctionCheckSurface()
     self.junctionPreviewKey = nil        -- force a resolve so the change is visible immediately
     Logging.info("[FlyoverEditor]: junction road-surface check %s.",
         self.junctionCheckSurface and "on" or "off (turns only bounded by radius)")
+end
+
+--- Toggle the static-obstacle check (trees, buildings, fences/poles/signs via the physics world).
+function ADFlyoverEditor:toggleJunctionCheckObstacles()
+    self.junctionCheckObstacles = not (self.junctionCheckObstacles ~= false)
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction obstacle check %s.",
+        self.junctionCheckObstacles and "on" or "off (corridors may pass through obstacles)")
+end
+
+--- Toggle the connector curve engine between Dubins (radius-bounded pose-to-pose) and the biarc.
+function ADFlyoverEditor:toggleJunctionCurveEngine()
+    self.junctionUseDubins = not (self.junctionUseDubins ~= false)
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction curve engine: %s.",
+        self.junctionUseDubins and "Dubins (radius-bounded)" or "biarc (tangent fit)")
+end
+
+--- Toggle rebuilding of existing turn connectors: on, a placement REPLACES an existing connection
+--- whose path leaves the road skeleton (deletes the old connector's interior nodes, lays a fresh
+--- one); off (default), such connections are kept as "already there". Through roads are never
+--- touched either way - their path IS the skeleton, so there is nothing to delete.
+function ADFlyoverEditor:toggleJunctionRebuild()
+    self.junctionRebuild = not (self.junctionRebuild == true)
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction existing turns will be %s.",
+        self.junctionRebuild and "REBUILT (old connectors replaced)" or "kept as they are")
 end
 
 --- Toggle whether a trimmed stem's tie-in may project past where the track actually ends. Off
@@ -4135,15 +4188,20 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span to merge.")
     elseif self.tool == t.JUNCTION then
         local jp = self.junctionPreview
+        local placeable = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) or 0
         if self.junctionArmed ~= nil then
-            if jp ~= nil and (jp.nNew or 0) > 0 then
+            if placeable > 0 then
+                if (jp.nRebuild or 0) > 0 then
+                    return string.format(L("Site locked: %d new, %d rebuilt. Right-click places; left-click moves the lock."),
+                        jp.nNew, jp.nRebuild)
+                end
                 return string.format(L("Site locked: %d new turn(s). Right-click places; left-click moves the lock."),
                     jp.nNew)
             end
             return L("Site locked, nothing new to place. Right-click unlocks; left-click moves the lock.")
         end
-        if jp ~= nil and (jp.nNew or 0) > 0 then
-            return string.format(L("%d new turn(s) here. Left-click locks the site; wheel = scope."), jp.nNew)
+        if placeable > 0 then
+            return string.format(L("%d turn(s) to lay here. Left-click locks the site; wheel = scope."), placeable)
         end
         return L("Point at a crossing and left-click to lock it. Wheel = scope; right-click leaves the tool.")
     end
@@ -6053,7 +6111,9 @@ end
 --- `out` from just past P up to and INCLUDING Q, and returns the arc's radius (math.huge when P->Q is
 --- already straight along T). Point spacing is by a fixed sagitta, so a tight arc gets denser points
 --- and a gentle one fewer - every arc stays equally smooth.
-local JUNCTION_SAG = 0.12
+-- Max chord deviation from the true curve (sagitta): the waypoint tolerance of every laid arc.
+-- Tightened 0.12 -> 0.05 (field feedback: curves read as chunky at small radii).
+local JUNCTION_SAG = 0.05
 local function junctionArcTo(out, px, pz, tx, tz, qx, qz, y0, y1)
     local dx, dz = qx - px, qz - pz
     local d2 = dx * dx + dz * dz
@@ -6142,6 +6202,47 @@ local function junctionDisconnect(a, b)
     table.removeValue(a.incoming, b.id)
 end
 
+--- The connector curve via AutoDrive's own ADDubins solver (scripts/Utils/Dubins.lua): the shortest
+--- curvature-bounded path between two POSES - position + heading at each tie-in - with the minimum
+--- turn radius guaranteed by construction. Where the biarc is pinned to bending directly between its
+--- two tangents, Dubins solves over the whole pose space (LSL/RSR/LSR/RSL/RLR/LRL), so it can swing
+--- OUT across the corridor before curving back - the wide, road-using shape sketched for the inside
+--- corner - and it never produces a radius below the bound. Dubins convention here (matching
+--- ADDubins.createWayPoints): plane X = world x, plane Y = -world z, theta = atan2(-dz, dx).
+--- Returns { points (interior, ~1.5 m), minRadius, length } or nil (solver missing/failed, or the
+--- path is an implausible loop - the caller falls back to the biarc).
+local function junctionDubins(pax, paz, tAx, tAz, pbx, pbz, tBx, tBz, turnR, y0, y1)
+    if ADDubins == nil or ADDubins.new == nil then return nil end
+    local ok, result = pcall(function()
+        local d = ADDubins:new()
+        local q0 = { pax, -paz, math.atan2(-tAz, tAx) }
+        local q1 = { pbx, -pbz, math.atan2(-tBz, tBx) }
+        -- A FRESH path table: ADDubins.DubinsPath is a shared global template that other callers
+        -- (the pathfinder) mutate in place.
+        local path = { qi = {}, param = {}, rho = 0, type = 0 }
+        if d:dubins_shortest_path(path, q0, q1, turnR) ~= ADDubins.EDUBOK then return nil end
+        local len = d:dubins_path_length(path)
+        if len == nil or len <= 0 then return nil end
+        -- An awkward pose pair can make the shortest Dubins path a huge loop-around; the biarc is
+        -- the better answer there. Plausibility: no longer than the direct run plus a few turns.
+        local dist = math.sqrt((pbx - pax) ^ 2 + (pbz - paz) ^ 2)
+        if len > dist * 2.5 + turnR * 7 then return nil end
+        -- Sample step from the SAME sagitta tolerance the biarc uses: the chord whose deviation from
+        -- a radius-turnR arc is JUNCTION_SAG - denser on tight radii, never chunky, bounded sane.
+        local step = 2 * math.sqrt(math.max(0.01, 2 * turnR * JUNCTION_SAG - JUNCTION_SAG * JUNCTION_SAG))
+        step = math.max(0.75, math.min(2.0, step))
+        local pts, q, x = {}, {}, step
+        while x < len - 0.25 do
+            d:dubins_path_sample(path, x, q)
+            pts[#pts + 1] = { x = q[1], y = y0 + (y1 - y0) * (x / len), z = -q[2] }
+            x = x + step
+        end
+        return { points = pts, minRadius = turnR, length = len }
+    end)
+    if not ok then return nil end
+    return result
+end
+
 -- Lay the connector chain NA -> points -> NB OURSELVES, one deterministic link at a time. This used
 -- to be ADGraphManager:createSplineConnection, which wires every link through toggleConnectionBetween
 -- - a state FLIP, not a set - so on a graph whose link lists carry any toggle-era corruption
@@ -6185,8 +6286,11 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- The solve raycasts the road surface for every candidate radius of every turn, so it is only
     -- redone when something it depends on changed: the cursor (to half a metre), a setting, or the
     -- graph. Between those the last preview stands.
-    local key = string.format("%d_%d_%d_%d_%s_%s_%d", math.floor(cx * 2), math.floor(cz * 2), R, turnR,
+    local key = string.format("%d_%d_%d_%d_%s_%s_%s_%s_%d", math.floor(cx * 2), math.floor(cz * 2), R, turnR,
         tostring(self.junctionCheckSurface ~= false), tostring(self.junctionExtendTrim ~= false),
+        tostring(self.junctionRebuild == true), tostring(self.junctionUseDubins ~= false)
+            .. tostring(self.junctionCheckObstacles ~= false)
+            .. string.format("_%d_%d", (self.junctionCorridor or 4) * 10, (self.junctionClearance or 5) * 10),
         ADGraphManager:getWayPointsCount())
     if key == self.junctionPreviewKey and self.junctionPreview ~= nil then
         return
@@ -6266,25 +6370,142 @@ function ADFlyoverEditor:updateJunctionPreview()
 
     -- "Already connected" = a directed path from the entry's inside node to the exit's inside node,
     -- staying INSIDE the scope - so a road passing straight through is not re-proposed as a turn onto
-    -- itself. Bounded to the (small) inside set, so cheap.
+    -- itself. Bounded to the (small) inside set, so cheap. Also returns THE path (as node ids, from
+    -- entry to exit) - the rebuild option needs to know which nodes carry the old connection.
     local function connectedInside(fromId, toId)
-        if fromId == toId then return true end
-        local seen = { [fromId] = true }
+        if fromId == toId then return true, { fromId } end
+        local parent = { [fromId] = fromId }
         local stack = { fromId }
         while #stack > 0 do
             local id = table.remove(stack)
             local w = inside[id]
             if w ~= nil then
                 for _, tid in pairs(w.out or {}) do
-                    if tid == toId then return true end
-                    if inside[tid] ~= nil and not seen[tid] then
-                        seen[tid] = true
+                    if tid == toId then
+                        local path = { toId }
+                        local cur = id
+                        while cur ~= fromId do
+                            table.insert(path, 1, cur)
+                            cur = parent[cur]
+                        end
+                        table.insert(path, 1, fromId)
+                        return true, path
+                    end
+                    if inside[tid] ~= nil and parent[tid] == nil then
+                        parent[tid] = id
                         stack[#stack + 1] = tid
                     end
                 end
             end
         end
-        return false
+        return false, nil
+    end
+
+    -- The road SKELETON: every node on any approach's own chain - the roads themselves, including
+    -- spliced-in tie nodes from earlier placements. The rebuild option deletes an existing turn's old
+    -- path nodes, and this set is what protects the roads: only path nodes OFF the skeleton (old
+    -- connector interiors) are ever removed. A through-movement's path lies entirely ON the skeleton,
+    -- so its "old path" is empty and it is left alone - rebuilding never duplicates a through road.
+    local rebuildOn = (self.junctionRebuild == true)
+    -- Skeleton = road nodes; roadLink = the LEGITIMATE links between them (consecutive along an
+    -- approach chain, unordered). Rebuild needs both: an old connection between two skeleton nodes
+    -- with no interior points (a short direct bridge) has no node to sweep - only the roadLink set
+    -- can tell that link apart from the road itself.
+    local skeleton, roadLink = {}, {}
+    local function linkKey(a, b) return math.min(a, b) .. "_" .. math.max(a, b) end
+    for _, ap in ipairs(approaches) do
+        local ch = self:junctionChain(ap, cx, cz, R)
+        for i, n in ipairs(ch) do
+            skeleton[n.id] = true
+            if i > 1 then roadLink[linkKey(ch[i - 1].id, n.id)] = true end
+        end
+    end
+    -- The debris sweep reaches a third PAST the scope circle (for old arcs that bulge out), so the
+    -- roads in that ring need skeleton protection too - without this, every road node just outside
+    -- the circle was reachable-from-the-junction, off-skeleton, and got swept: placements were eating
+    -- the roads AROUND the junction. Each approach's road is walked OUTWARD from its boundary node
+    -- (an entry upstream, an exit downstream, bearing-continuous) out to the sweep's own reach, and
+    -- those nodes and links are marked road exactly like the inside ones.
+    if rebuildOn then
+        local reach2 = (R * 1.3) ^ 2
+        for _, ap in ipairs(approaches) do
+            local useOut = (ap.dir == "out")
+            local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
+            if not useOut then wdx, wdz = -wdx, -wdz end
+            local node, cameFrom = ap.wp, nil
+            for _ = 1, math.ceil(R) do
+                local list = useOut and (node.out or {}) or (node.incoming or {})
+                local nextId, bestDot = nil, -math.huge
+                for _, nid in pairs(list) do
+                    if nid ~= cameFrom then
+                        local nx = ADGraphManager:getWayPointById(nid)
+                        if nx ~= nil and (nx.x - cx) ^ 2 + (nx.z - cz) ^ 2 <= reach2 then
+                            local dx, dz = nx.x - node.x, nx.z - node.z
+                            local l = math.sqrt(dx * dx + dz * dz)
+                            if l > 1e-6 then
+                                local dot = (dx / l) * wdx + (dz / l) * wdz
+                                if dot > bestDot then bestDot, nextId = dot, nid end
+                            end
+                        end
+                    end
+                end
+                if nextId == nil then break end
+                local nxt = ADGraphManager:getWayPointById(nextId)
+                roadLink[linkKey(node.id, nxt.id)] = true
+                cameFrom = node.id
+                local dx, dz = nxt.x - node.x, nxt.z - node.z
+                local l = math.sqrt(dx * dx + dz * dz)
+                if l > 1e-6 then wdx, wdz = dx / l, dz / l end
+                node = nxt
+                skeleton[node.id] = true
+            end
+        end
+    end
+
+    -- Rebuild's DEBRIS set: every inside node that is wired to the junction (reachable from the road
+    -- skeleton along inside links, either direction) but is not itself road. Per-movement old-path
+    -- deletion missed plenty - duplicate old connectors, connectors of pairs the current matrix
+    -- refuses, anything the single BFS path did not happen to run through. The complement of the
+    -- skeleton is the honest definition of "old junction wiring": rebuild clears ALL of it and lays
+    -- the fresh set. Roads (and anything crossing the scope circle, which becomes an approach and so
+    -- skeleton) are untouchable by construction.
+    local debris, staleLinks = {}, {}
+    if rebuildOn then
+        -- Reach extends a third past the scope circle: a big-radius old connector arc can bulge
+        -- outside it, and sweeping only the inside portion left dangling fragments behind.
+        local reach2 = (R * 1.3) ^ 2
+        local seen, stack, staleSeen = {}, {}, {}
+        for id in pairs(skeleton) do seen[id] = true; stack[#stack + 1] = id end
+        while #stack > 0 do
+            local id = table.remove(stack)
+            local w = inside[id] or ADGraphManager:getWayPointById(id)
+            if w ~= nil then
+                -- Direct skeleton-to-skeleton links that are NOT the road (not chain-consecutive)
+                -- are old wiring with no interior node to sweep - collected as links to sever.
+                if skeleton[id] then
+                    for _, nid in pairs(w.out or {}) do
+                        if skeleton[nid] and not roadLink[linkKey(id, nid)]
+                            and not staleSeen[linkKey(id, nid)] then
+                            staleSeen[linkKey(id, nid)] = true
+                            local o = ADGraphManager:getWayPointById(nid)
+                            if o ~= nil then staleLinks[#staleLinks + 1] = { w, o } end
+                        end
+                    end
+                end
+                for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                    for _, nid in pairs(lst) do
+                        if not seen[nid] then
+                            local nx = ADGraphManager:getWayPointById(nid)
+                            if nx ~= nil and (nx.x - cx) ^ 2 + (nx.z - cz) ^ 2 <= reach2 then
+                                seen[nid] = true
+                                stack[#stack + 1] = nid
+                                if not skeleton[nid] then debris[#debris + 1] = nx end
+                            end
+                        end
+                    end
+                end
+            end
+        end
     end
 
     -- Movement matrix: each entry -> each exit, dropping U-turns, tagged new vs already connected.
@@ -6293,7 +6514,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- bucket and, once the site is locked, its own log line with the angle, so nothing goes missing
     -- without a visible reason (see docs/junction-plan.md s5, "failing is a valid result").
     local movements = {}
-    local nNew, nExisting, nTight, nOffRoad, nNoCurve, nUTurn, nFar = 0, 0, 0, 0, 0, 0, 0
+    local nNew, nExisting, nTight, nOffRoad, nNoCurve, nUTurn, nFar, nRebuild, nBlocked = 0, 0, 0, 0, 0, 0, 0, 0, 0
     local usedMin, usedMax = nil, nil
     -- 150 deg turned out to be too tight on a real site - a legitimate sharp hook (a two-way point's
     -- "in" arm doubling back onto a nearby "out" arm) measured 152 deg and was silently dropped before
@@ -6315,17 +6536,34 @@ function ADFlyoverEditor:updateJunctionPreview()
                                 e.wp.id, x.wp.id, math.deg(angDiff), math.deg(uTurn))
                         end
                     else
-                        local exists = connectedInside(e.wp.id, x.wp.id)
+                        local exists, path = connectedInside(e.wp.id, x.wp.id)
+                        -- Rebuild option: an existing connection whose path runs through nodes OFF
+                        -- the road skeleton is an old connector. With rebuild on, that movement is
+                        -- re-solved like a new one and its old off-skeleton nodes are queued for
+                        -- deletion at place time. A path entirely ON the skeleton is the road itself
+                        -- (a through) - nothing to rebuild, left alone.
+                        local rebuild, oldPath = false, nil
+                        if exists and rebuildOn and path ~= nil then
+                            oldPath = {}
+                            for _, pid in ipairs(path) do
+                                if not skeleton[pid] and inside[pid] ~= nil then
+                                    oldPath[#oldPath + 1] = inside[pid]
+                                end
+                            end
+                            rebuild = #oldPath > 0
+                        end
                         -- Solve the turn at the largest radius (setting first, stepping down) that both
                         -- holds the radius bound and keeps the vehicle corridor on the road. A turn that
                         -- fails even at the floor is kept with its refusal reason, drawn red, never laid.
                         local con, usedR, refused = nil, nil, nil
-                        if not exists then
+                        if not exists or rebuild then
                             con, usedR, refused = self:junctionSolveMovement(e, x, cx, cz, R, turnR)
                         end
                         movements[#movements + 1] = { from = e, to = x, exists = exists, connector = con,
-                            usedRadius = usedR, refused = refused }
-                        if exists then
+                            usedRadius = usedR, refused = refused, rebuild = rebuild, oldPath = oldPath }
+                        if rebuild and con ~= nil and refused == nil then
+                            nRebuild = nRebuild + 1
+                        elseif exists then
                             nExisting = nExisting + 1
                         elseif con ~= nil and refused == nil then
                             nNew = nNew + 1
@@ -6333,6 +6571,13 @@ function ADFlyoverEditor:updateJunctionPreview()
                             nTight = nTight + 1
                         elseif refused == "offroad" then
                             nOffRoad = nOffRoad + 1
+                        elseif refused == "blocked" then
+                            nBlocked = nBlocked + 1
+                            if logSite then
+                                roadNote(string.format("blocked:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d blocked by a static obstacle at every radius down to the floor - refused.",
+                                    e.wp.id, x.wp.id)
+                            end
                         elseif refused == "far" then
                             nFar = nFar + 1
                             if logSite then
@@ -6410,8 +6655,9 @@ function ADFlyoverEditor:updateJunctionPreview()
         radius = R, turnRadius = turnR, cx = cx, cz = cz, cy = cy, armed = (self.junctionArmed ~= nil),
         approaches = approaches, movements = movements,
         nIn = nIn, nOut = nOut, nNew = nNew, nExisting = nExisting, nTight = nTight, nOffRoad = nOffRoad,
-        nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, nLane = nLane,
-        siteHasTwoWay = siteHasTwoWay, usedMin = usedMin, usedMax = usedMax, confidence = conf,
+        nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, nLane = nLane, nRebuild = nRebuild, nBlocked = nBlocked,
+        debris = debris, staleLinks = staleLinks, siteHasTwoWay = siteHasTwoWay,
+        usedMin = usedMin, usedMax = usedMax, confidence = conf,
     }
 end
 
@@ -6434,8 +6680,8 @@ end
 --- failure (degenerate/opposed tangents; not a shallow angle - see the note on `delta`). Used by BOTH
 --- preview and placement, so what is drawn is what is laid.
 function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, turnR)
-    local chainA = self:junctionChain(fromAp, cx, cz, radius)
-    local chainB = self:junctionChain(toAp, cx, cz, radius)
+    local chainA, deadEndA = self:junctionChain(fromAp, cx, cz, radius)
+    local chainB, deadEndB = self:junctionChain(toAp, cx, cz, radius)
     if #chainA < 2 or #chainB < 2 then return nil end
 
     -- Meeting region: the closest node between the two chains (dense ~4 m nodes make node-to-node a good
@@ -6519,10 +6765,35 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
 
     -- Tie-ins: t back from the corner, walked along the real chains (a non-positive walk stays at the
     -- meeting node - e.g. a dead-end whose gap to the crossbar already exceeds t).
-    local pax, pay, paz, tadx, tadz = junctionWalkBack(chainA, iA, t - sA, extend)
-    local pbx, pby, pbz, tbdx, tbdz = junctionWalkBack(chainB, iB, t - sB, extend)
+    -- Extension past the chain's end is only meaningful when the chain ends at a REAL dead end (a
+    -- trimmed stem). A chain that merely ran out at the scope circle is a road that keeps going -
+    -- projecting a tie-in past that boundary plants a spike node beside the real road (seen with a
+    -- turn radius comparable to the scope radius). There the walk clamps at the boundary instead.
+    local pax, pay, paz, tadx, tadz = junctionWalkBack(chainA, iA, t - sA, extend and deadEndA)
+    local pbx, pby, pbz, tbdx, tbdz = junctionWalkBack(chainB, iB, t - sB, extend and deadEndB)
     -- A leaves along its chain direction (toward the interior); B is arrived at heading out (negated).
-    local bi = junctionBiarc(pax, paz, tadx, tadz, pbx, pbz, -tbdx, -tbdz, pay, pby)
+    -- BOTH curve engines solve and the SHORTER path wins. This is not indecision - it is the guard
+    -- against Dubins' degenerate configuration: two poses on the SAME tangent circle, which is
+    -- exactly where fillet tie-ins sit on a clean crossing, make ADDubins parameterize the quarter
+    -- turn as a 450-degree loop (measured: 94 m where 19 m is right, on the same circle). The biarc
+    -- IS the optimal answer there and wins on length automatically; where Dubins genuinely helps
+    -- (offset poses, S-bends, hooks) it is shorter and wins instead. No tuned threshold to go stale.
+    local function pathLen(c)
+        if c == nil then return math.huge end
+        local len, px, pz = 0, pax, paz
+        for _, p in ipairs(c.points) do
+            len = len + math.sqrt((p.x - px) ^ 2 + (p.z - pz) ^ 2)
+            px, pz = p.x, p.z
+        end
+        return len + math.sqrt((pbx - px) ^ 2 + (pbz - pz) ^ 2)
+    end
+    local bia = junctionBiarc(pax, paz, tadx, tadz, pbx, pbz, -tbdx, -tbdz, pay, pby)
+    local dub = nil
+    if self.junctionUseDubins ~= false then
+        dub = junctionDubins(pax, paz, tadx, tadz, pbx, pbz, -tbdx, -tbdz, turnR, pay, pby)
+    end
+    local bi = bia
+    if dub ~= nil and pathLen(dub) < pathLen(bia) - 0.1 then bi = dub end
     if bi == nil then return nil end
     return { ax = pax, ay = pay, az = paz, bx = pbx, by = pby, bz = pbz,
         points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd) }
@@ -6534,7 +6805,7 @@ end
 --- probed at the centre only: they sit on the existing track, whose edge situation is not this turn's
 --- doing.
 function ADFlyoverEditor:junctionCorridorOffRoad(con)
-    local half = (AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
+    local half = (self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
     local pts = { { x = con.ax, z = con.az } }
     for _, p in ipairs(con.points) do pts[#pts + 1] = p end
     pts[#pts + 1] = { x = con.bx, z = con.bz }
@@ -6564,6 +6835,58 @@ end
 --- laid out, without the global setting being tuned per site. Returns connector, radius used, nil on
 --- success; on failure the last connector tried, the floor, and a reason ("tight" / "offroad" /
 --- "nocurve" / "far") so the preview can still show what was refused and why.
+-- Obstacle probe for junction connectors, using the SAME physics query AutoDrive's own pathfinder
+-- uses for its cells (overlapBox returning a synchronous shape count; see PathFinderModule ~1221).
+-- The mask is STATIC things a laid route must never pass through - trees, buildings, static objects
+-- (fences, poles, signs are static objects or buildings) - and deliberately NOT vehicles/traffic:
+-- something driving past while you place is not a reason to refuse a road. The box floats 0.6 m off
+-- the terrain (pathfinder ignores the lowest 0.5 m the same way) so curbs and ground clutter do not
+-- count, and reaches ~2.8 m up - trailer height.
+local junctionObstacleMask = nil
+local JunctionOverlapProbe = { cb = function() end }
+
+--- Number of corridor boxes along `con` that overlap a static obstacle. Boxes are laid segment by
+--- segment along the curve (half corridor width wide, segment-long), rotated to the local heading.
+function ADFlyoverEditor:junctionObstacleHits(con)
+    if overlapBox == nil or g_currentMission == nil or g_currentMission.terrainRootNode == nil then
+        return 0
+    end
+    if junctionObstacleMask == nil then
+        junctionObstacleMask = CollisionFlag.STATIC_OBJECT + CollisionFlag.TREE + CollisionFlag.BUILDING
+    end
+    local halfW = (self.junctionClearance or AutoDrive.FLYOVER_JUNCTION_CLEARANCE or 5.0) / 2
+    local pts = { { x = con.ax, z = con.az } }
+    for _, p in ipairs(con.points) do pts[#pts + 1] = p end
+    pts[#pts + 1] = { x = con.bx, z = con.bz }
+    local hits = 0
+    for i = 2, #pts do
+        local a, b = pts[i - 1], pts[i]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l = math.sqrt(dx * dx + dz * dz)
+        if l > 1e-3 then
+            local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
+            local gy = getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, mx, 1, mz) or 0
+            local ry = math.atan2(dx, dz)
+            local ok, shapes = pcall(overlapBox, mx, gy + 0.6 + 1.1, mz, 0, ry, 0,
+                halfW, 1.1, l * 0.5, "cb", JunctionOverlapProbe, junctionObstacleMask, true, true, true, true)
+            -- Proof-of-life notes, once each: a probe that errors would otherwise be a silent no-op
+            -- behind this pcall, indistinguishable from "no obstacles anywhere".
+            if not ok then
+                roadNote("obsProbeErr", "obstacle probe FAILED: %s - obstacle check is inactive.", tostring(shapes))
+            elseif type(shapes) ~= "number" then
+                roadNote("obsProbeOdd", "obstacle probe returned %s (expected a count) - obstacle check is inactive.", type(shapes))
+            else
+                roadNote("obsProbeOk", "obstacle probe active (mask %d).", junctionObstacleMask)
+                if shapes > 0 then
+                    hits = hits + 1
+                    roadNote("obsFirstHit", "obstacle probe FIRST HIT at %.1f, %.1f (%d shape(s)).", mx, mz, shapes)
+                end
+            end
+        end
+    end
+    return hits
+end
+
 --- Is this connector's corridor off the road ENOUGH to refuse it? A single stray sample - one edge
 --- probe clipping a narrow paved apron at a dirt/pavement seam, or a texture-boundary sliver - should
 --- not kill an otherwise good turn; a corridor that is mostly off-road should. Tolerates up to 1 sample
@@ -6581,6 +6904,7 @@ end
 function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR)
     local floor = AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4
     local checkSurface = self.junctionCheckSurface ~= false
+    local checkObstacles = self.junctionCheckObstacles ~= false
     local last, lastReason = nil, nil
     local r = turnR
     while r >= floor - 1e-6 do
@@ -6596,6 +6920,11 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
             last, lastReason = con, "tight"
         elseif checkSurface and self:junctionCorridorTooOffRoad(con) then
             last, lastReason = con, "offroad"
+        elseif checkObstacles and self:junctionObstacleHits(con) > 0 then
+            -- A static obstacle in the corridor: a smaller radius swings a different line, so the
+            -- same shrink search doubles as first-order avoidance; nothing clear down to the floor
+            -- is a verbose red refusal, never a connector through a tree.
+            last, lastReason = con, "blocked"
         else
             return con, r, nil
         end
@@ -6616,17 +6945,39 @@ function ADFlyoverEditor:junctionChain(ap, cx, cz, radius)
     local r2 = radius * radius
     local chain = { ap.wp }
     local node, cameFrom = ap.wp, nil
-    for _ = 1, 16 do
+    -- The walk follows BEARING CONTINUITY: at a fork (a tie node whose neighbours include both the
+    -- road's continuation and an old connector's first point), it takes whichever neighbour bends
+    -- LEAST from the current walking direction - the road runs on, a connector departs at an angle.
+    -- Taking the first listed neighbour instead could veer the "road chain" down a connector, which
+    -- poisons everything downstream (meeting point, tangents, tie-ins). Initial direction: an entry
+    -- is walked downstream (its travel bearing); an exit chain is walked UPSTREAM, so opposite.
+    local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
+    if not useOut then wdx, wdz = -wdx, -wdz end
+    -- Iteration bound scales with the scope: 16 was fine for small circles but left the MIDDLE of a
+    -- long road unwalked at larger ones - unprotected by the skeleton, i.e. swept as debris.
+    for _ = 1, math.max(16, math.ceil(radius)) do
         local list = useOut and (node.out or {}) or (node.incoming or {})
-        local nextId = nil
+        local nextId, bestDot = nil, -math.huge
         for _, nid in pairs(list) do
             if nid ~= cameFrom then
                 local nx = ADGraphManager:getWayPointById(nid)
-                if nx ~= nil and (nx.x - cx) ^ 2 + (nx.z - cz) ^ 2 <= r2 then nextId = nid; break end
+                if nx ~= nil and (nx.x - cx) ^ 2 + (nx.z - cz) ^ 2 <= r2 then
+                    local dx, dz = nx.x - node.x, nx.z - node.z
+                    local l = math.sqrt(dx * dx + dz * dz)
+                    if l > 1e-6 then
+                        local dot = (dx / l) * wdx + (dz / l) * wdz
+                        if dot > bestDot then bestDot, nextId = dot, nid end
+                    end
+                end
             end
         end
         if nextId == nil then break end
-        cameFrom, node = node.id, ADGraphManager:getWayPointById(nextId)
+        cameFrom = node.id
+        local nxt = ADGraphManager:getWayPointById(nextId)
+        local dx, dz = nxt.x - node.x, nxt.z - node.z
+        local l = math.sqrt(dx * dx + dz * dz)
+        if l > 1e-6 then wdx, wdz = dx / l, dz / l end
+        node = nxt
         chain[#chain + 1] = node
     end
     local last = chain[#chain]
@@ -6757,7 +7108,7 @@ function ADFlyoverEditor:applyJunction()
     if jp == nil then return end
     local newMoves = {}
     for _, m in ipairs(jp.movements) do
-        if not m.exists and m.connector ~= nil and m.refused == nil then
+        if (not m.exists or m.rebuild) and m.connector ~= nil and m.refused == nil then
             newMoves[#newMoves + 1] = m
         end
     end
@@ -6771,7 +7122,8 @@ function ADFlyoverEditor:applyJunction()
     end
     if (jp.nOffRoad or 0) > 0 then
         Logging.info("[FlyoverEditor]: junction - refused %d turn(s): no radius down to %.0f m keeps a %.1f m corridor on the road.",
-            jp.nOffRoad, AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4, AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4)
+            jp.nOffRoad, AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4,
+            self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4)
     end
     if (jp.nNoCurve or 0) > 0 then
         Logging.info("[FlyoverEditor]: junction - %d pair(s) had no joinable curve (see the id lines above) - not placed.",
@@ -6789,6 +7141,10 @@ function ADFlyoverEditor:applyJunction()
         Logging.info("[FlyoverEditor]: junction - %d redundant lane pairing(s) skipped (a closer match exists for the same turn, see above).",
             jp.nLane)
     end
+    if (jp.nBlocked or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - refused %d turn(s): a static obstacle sits in the corridor at every radius tried.",
+            jp.nBlocked)
+    end
     if #newMoves == 0 then
         Logging.info("[FlyoverEditor]: junction - nothing new to connect here.")
         return
@@ -6798,6 +7154,23 @@ function ADFlyoverEditor:applyJunction()
     local cx, cz, radius = jp.cx, jp.cz, jp.radius
     local allStubs = {}
     local placed = 0
+
+    -- Rebuild: sever the stale skeleton-to-skeleton links FIRST (old direct bridges with no interior
+    -- node - the node sweep cannot touch those). Before laying, so a fresh replacement over the same
+    -- pair cannot be cut by its own cleanup, and the tie-in chain walks see a clean graph.
+    local staleCut = 0
+    if jp.staleLinks ~= nil then
+        for _, pair in ipairs(jp.staleLinks) do
+            local a, b = pair[1], pair[2]
+            if a ~= nil and b ~= nil and a.id ~= nil and b.id ~= nil and a.id >= 0 and b.id >= 0 then
+                junctionDisconnect(a, b)
+                staleCut = staleCut + 1
+            end
+        end
+    end
+    if staleCut > 0 then
+        Logging.info("[FlyoverEditor]: junction - severed %d stale direct link(s) between road nodes (rebuild).", staleCut)
+    end
     -- A movement (e,x) and its MIRROR (e2,x2) with e2.wp.id==x.wp.id and x2.wp.id==e.wp.id can only
     -- both exist when BOTH boundary nodes carry traffic in and out of the scope - a genuine two-way
     -- point on each end (see the U-turn log's approach dump: a two-way node shows up as both an "in"
@@ -6816,7 +7189,7 @@ function ADFlyoverEditor:applyJunction()
         mirrorOf[pairKey(m.from.wp.id, m.to.wp.id)] = (mirrorOf[pairKey(m.from.wp.id, m.to.wp.id)] or 0) + 1
     end
     local dualPairPlaced = {}
-    local dualPlaced, mirrorsSkipped = 0, 0
+    local dualPlaced, mirrorsSkipped, rebuiltPlaced = 0, 0, 0
     -- THE invariant (hard gate, not a heuristic): if no two-way track comes into this site
     -- (jp.siteHasTwoWay, established structurally while scoping), then NOTHING placed here may be
     -- two-way. The mirror-pair signal cannot fire without two-way boundary nodes anyway, but this
@@ -6846,6 +7219,7 @@ function ADFlyoverEditor:applyJunction()
             end
             if ok then
                 placed = placed + 1
+                if m.rebuild then rebuiltPlaced = rebuiltPlaced + 1 end
             end
             for _, s in ipairs(stubsA) do allStubs[#allStubs + 1] = s end
             for _, s in ipairs(stubsB) do allStubs[#allStubs + 1] = s end
@@ -6885,18 +7259,41 @@ function ADFlyoverEditor:applyJunction()
         end
     end
 
+    local stubSeen = {}
     for _, s in ipairs(allStubs) do
-        if s ~= nil and s.id ~= nil and s.id >= 0 and #(s.out or {}) + #(s.incoming or {}) <= 2 then
+        if s ~= nil and not stubSeen[s] and s.id ~= nil and s.id >= 0
+            and #(s.out or {}) + #(s.incoming or {}) <= 2 then
+            stubSeen[s] = true
             tryCall("junction removeWayPoint", function() ADGraphManager:removeWayPoint(s.id, false) end)
         end
+    end
+
+    -- Rebuild's debris clearing, LAST of all and only once something actually placed: every old
+    -- off-skeleton node wired to this junction goes, including duplicate connectors and connectors of
+    -- pairs the matrix now refuses - the per-movement path deletion this replaces left those behind.
+    -- No degree guard here: a degree-3 debris node is an old connector fork, not road (roads are
+    -- skeleton and never in this list). Deleted by object reference, id re-read each time.
+    local debrisCleared = 0
+    if placed > 0 and jp.debris ~= nil then
+        for _, s in ipairs(jp.debris) do
+            if s ~= nil and not stubSeen[s] and s.id ~= nil and s.id >= 0 then
+                stubSeen[s] = true
+                if tryCall("junction clear debris", function() ADGraphManager:removeWayPoint(s.id, false) end) then
+                    debrisCleared = debrisCleared + 1
+                end
+            end
+        end
+    end
+    if debrisCleared > 0 then
+        Logging.info("[FlyoverEditor]: junction - cleared %d old junction point(s) (rebuild).", debrisCleared)
     end
 
     if mirrorsSkipped > 0 then
         Logging.info("[FlyoverEditor]: junction - %d mirrored one-way pair(s) folded into their dual connector (built once, not twice).",
             mirrorsSkipped)
     end
-    Logging.info("[FlyoverEditor]: junction placed %d connector(s) (%d dual), consumed %d stub point(s).",
-        placed, dualPlaced, #allStubs)
+    Logging.info("[FlyoverEditor]: junction placed %d connector(s) (%d dual, %d rebuilt over old ones), consumed %d stub point(s).",
+        placed, dualPlaced, rebuiltPlaced, #allStubs)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil

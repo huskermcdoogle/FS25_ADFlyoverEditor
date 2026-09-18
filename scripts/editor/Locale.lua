@@ -86,6 +86,7 @@ L.STRINGS = {
         ["ground"] = "aufsetzen",
         ["convert"] = "umwandeln",
         ["merge"] = "zusammenführen",
+        ["junction"] = "Kreuzung",
         ["name"] = "benennen",
         ["delete"] = "löschen",
 
@@ -103,6 +104,7 @@ L.STRINGS = {
         ["Ground"] = "Aufsetzen",
         ["Convert"] = "Umwandeln",
         ["Merge"] = "Zusammenführen",
+        ["Junction"] = "Kreuzung",
         ["Name"] = "Benennen",
         ["Delete"] = "Löschen",
 
@@ -296,6 +298,43 @@ L.STRINGS = {
         ["Green marks what would be absorbed. Click a point on the OTHER track."] = "Grün zeigt, was aufgenommen würde. Einen Punkt auf der ANDEREN Spur anklicken.",
         ["Click the far end of the span, on the SAME track."] = "Das andere Ende des Abschnitts anklicken, auf DERSELBEN Spur.",
         ["Click one end of the span to merge."] = "Ein Ende des Abschnitts zum Zusammenführen anklicken.",
+
+        -- junction tool: NEXT guidance
+        ["Site locked: %d new, %d rebuilt. Right-click places; left-click moves the lock."] = "Ort gesperrt: %d neu, %d neu gebaut. Rechtsklick platziert; Linksklick versetzt die Sperre.",
+        ["Site locked: %d new turn(s). Right-click places; left-click moves the lock."] = "Ort gesperrt: %d neue Abbiegung(en). Rechtsklick platziert; Linksklick versetzt die Sperre.",
+        ["Site locked, nothing new to place. Right-click unlocks; left-click moves the lock."] = "Ort gesperrt, nichts Neues zu platzieren. Rechtsklick entsperrt; Linksklick versetzt die Sperre.",
+        ["%d turn(s) to lay here. Left-click locks the site; wheel = scope."] = "%d Abbiegung(en) hier zu verlegen. Linksklick sperrt den Ort; Rad = Suchkreis.",
+        ["Point at a crossing and left-click to lock it. Wheel = scope; right-click leaves the tool."] = "Auf eine Kreuzung zeigen und mit Linksklick sperren. Rad = Suchkreis; Rechtsklick legt das Werkzeug weg.",
+
+        -- junction tool: card labels and values
+        ["search radius"] = "Suchradius",
+        ["turn radius"] = "Wenderadius",
+        ["road check"] = "Straßenprüfung",
+        ["off (radius only)"] = "aus (nur Radius)",
+        ["trim/extend"] = "Kürzen/Verlängern",
+        ["off (clamp at trim)"] = "aus (am Ende stoppen)",
+        ["existing turns"] = "Bestehende",
+        ["keep"] = "behalten",
+        ["rebuild"] = "neu bauen",
+        ["curve"] = "Kurve",
+        ["obstacles"] = "Hindernisse",
+        ["corridor"] = "Korridor",
+        ["clearance"] = "Freiraum",
+        ["approaches"] = "Zufahrten",
+        ["new movements"] = "neue Abbiegungen",
+        ["rebuilt existing"] = "neu gebaut",
+        ["old points to clear"] = "alte Punkte entfernt",
+        ["radius used"] = "genutzter Radius",
+        ["too tight (refused)"] = "zu eng (abgelehnt)",
+        ["off road (refused)"] = "neben der Straße (abgelehnt)",
+        ["no joinable curve"] = "keine Kurve möglich",
+        ["skipped as U-turn"] = "als Wende übersprungen",
+        ["too far apart"] = "zu weit auseinander",
+        ["redundant lane"] = "doppelte Spur",
+        ["blocked (refused)"] = "blockiert (abgelehnt)",
+        ["already there"] = "bereits vorhanden",
+        ["confidence"] = "Konfidenz",
+        ["point at a crossing"] = "auf eine Kreuzung zeigen",
     },
 }
 
@@ -316,6 +355,7 @@ L.SUMMARIES = {
         ["ground"] = "Punkte wieder auf die Oberfläche unter ihnen aufsetzen.",
         ["convert"] = "Einbahn / beidseitig und Priorität ändern.",
         ["merge"] = "Zwei parallele Spuren zu einer gemeinsamen Spur zusammenführen.",
+        ["junction"] = "Ein Klick baut eine ganze Kreuzung aus sanften, radiusgebundenen Abbiegern.",
         ["name"] = "Einem Wegpunkt einen Kartenmarker-Namen geben.",
         ["delete"] = "Einen Punkt, einen Abschnitt oder eine Route entfernen.",
     },
@@ -538,6 +578,28 @@ L.HELP = {
                 "Umfang: der Punkt, der Abschnitt oder die ganze Route.",
             },
         },
+        ["junction"] = {
+            what = {
+                "Kreuzung erzeugt in einer Platzierung alle Verbinder, die eine Kreuzung braucht - jede zulässige Abbiegung zwischen den Straßen im Suchkreis. Die Verbinder folgen der echten Spurgeometrie: Die Anschlusspunkte liegen auf den vorhandenen Strecken, die Kurven sind an den Wenderadius gebunden, bleiben auf der Fahrbahn und weichen festen Hindernissen aus; jede Abbiegung wird mit dem größten Radius gelöst, der an ihre Stelle passt. Was sich nicht sicher bauen lässt, wird sichtbar abgelehnt - rot gezeichnet, auf der Karte gezählt, im Log begründet - statt schlecht verlegt.",
+            },
+            how = {
+                "Auf eine Kreuzung zeigen - der Suchkreis und die geschnittenen Zufahrten erscheinen live in der Vorschau. Das Mausrad ändert den Kreis: der wichtigste Hebel dafür, was als eine Kreuzung zählt.",
+                "Linksklick SPERRT den Ort (der Kreis wird durchgezogen). Die Vorschau folgt dem Cursor nicht mehr; Rad und Karteneinstellungen formen sie weiter live.",
+                "Weiße Kurven werden verlegt; rote sind abgelehnt, der Grund steht gezählt auf der Karte (zu eng, neben der Straße, blockiert usw.).",
+                "Rechtsklick platziert alles als EINEN Undo-Schritt. Rechtsklick ohne etwas zu platzieren entsperrt den Ort; erneuter Rechtsklick legt das Werkzeug weg.",
+                "Mit 'Bestehende: neu bauen' werden die alten Verbinder im Kreis entfernt und frisch verlegt - die Straßen selbst bleiben unberührt.",
+            },
+            controls = {
+                "Suchradius (Rad): der Suchkreis - welche Straßen zu dieser Kreuzung gehören.",
+                "Wenderadius: der Ziel-Wenderadius; jede Abbiegung verkleinert ihn nur so weit wie nötig, um in ihre Ecke zu passen.",
+                "Straßenprüfung: hält den Fahrzeugkorridor auf der Fahrbahn; aus heißt nur Radius.",
+                "Hindernisse: lehnt Abbiegungen ab, deren Korridor Bäume, Gebäude, Masten oder Zäune trifft.",
+                "Korridor / Freiraum: die Breiten für Fahrbahnprüfung und Hindernisbox.",
+                "Kürzen/Verlängern: ein Anschlusspunkt darf über ein vor der Ecke gekürztes Ende hinausragen.",
+                "Bestehende: das Vorhandene behalten oder frisch neu bauen.",
+                "Kurve: Dubins (radiusgebunden, Pose zu Pose) oder Biarc; die kürzere Lösung gewinnt.",
+            },
+        },
     },
 }
 
@@ -565,6 +627,11 @@ L.GENERAL = {
                 "Rechtsklick - eine Route beenden, ein Menü abbrechen oder ein geschärftes Werkzeug anwenden.",
                 "Mittlere Maustaste - die Kamera schwenken/drehen. WASD bewegt sie.",
                 "Rad - Kamera-Zoom oder das Zahlenfeld unter dem Cursor ändern.",
+            } },
+            { title = "DIE WERKZEUGKARTE", lines = {
+                "Die schwebende Karte trägt die Einstellungen des aktiven Werkzeugs. Sie springt NEBEN den ersten Klick jeder Aktion - versetzt, nie auf das Angeklickte.",
+                "An ihrer Kopfleiste (dem Balken mit dem Werkzeugnamen) lässt sie sich überallhin ziehen. Einmal selbst platziert, bleibt sie die ganze Sitzung dort und springt nie wieder.",
+                "H blendet sie aus und ein; beim Ziehen eines Wegpunkts blendet sie sich auch selbst aus.",
             } },
             { title = "ZAHLENFELDER", lines = {
                 "Jede Zahl im Panel lässt sich auf drei Arten ändern: die - / + Stepper klicken, mit dem Rad darüber scrollen oder den Wert anklicken und eintippen.",

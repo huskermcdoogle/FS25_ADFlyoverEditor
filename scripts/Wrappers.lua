@@ -239,7 +239,28 @@ function W.install(AD)
                 -- Stock would call createMapMarkerOnClosest, which needs a controlled vehicle and
                 -- would put the marker somewhere other than where the user clicked.
                 local text = dialogSelf.textInputElement ~= nil and dialogSelf.textInputElement.text or ""
-                ADGraphManager:createMapMarker(overrideId, text)
+                -- Duplicate-name guard. AutoDrive's createMapMarker accepts ANY name: two markers
+                -- called "Hof" then sit side by side in every destination list, renaming one looks
+                -- like the rename "did not take" (the other was edited), and a vehicle sent "to Hof"
+                -- goes to whichever the list found first - the reported naming weirdness. Trimmed
+                -- (a trailing space made look-alike duplicates) and compared case-insensitively;
+                -- a duplicate is refused with the existing marker's location in the log.
+                text = text:gsub("^%s+", ""):gsub("%s+$", "")
+                local lower = text:lower()
+                for _, marker in pairs(ADGraphManager:getMapMarkers()) do
+                    if marker.name ~= nil and marker.name:lower() == lower then
+                        Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not creating a duplicate. Pick another name, or rename the existing one.",
+                            W.MOD_NAME, marker.name, tostring(marker.id))
+                        Dialog.overrideWayPointId = nil
+                        if dialogSelf.superClass ~= nil then
+                            return dialogSelf:onClickBack()
+                        end
+                        return
+                    end
+                end
+                if text:len() >= 1 then
+                    ADGraphManager:createMapMarker(overrideId, text)
+                end
                 Dialog.overrideWayPointId = nil
                 if dialogSelf.superClass ~= nil then
                     return dialogSelf:onClickBack()

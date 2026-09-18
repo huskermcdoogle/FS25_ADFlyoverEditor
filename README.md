@@ -11,7 +11,7 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 *Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 0.30.20.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
+> **Status:** build 0.31.0.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
 
 ## Install
 
@@ -41,7 +41,7 @@ Grouped by job on the panel. **Select** is the default mode: no tool held, click
 |---|---|
 | **Create** | `draw` connect waypoints · `spline` curved connection · `field loop` headland loop around a field · `parallel` a track alongside a span · `siding` a spur splined in at both ends |
 | **Shape** | `move` drag a point, with falloff along the track · `smooth` · `straighten`, which keeps real bends · `divide` add evenly-spaced points · `ground` settle points onto the surface |
-| **Connect** | `convert` one-way / two-way and priority · `merge` fold two parallel lanes into one |
+| **Connect** | `convert` one-way / two-way and priority · `merge` fold two parallel lanes into one · `junction` one click builds a whole intersection of smooth, radius-bound turn connectors |
 | **Utility** | `name` label a waypoint · `delete` remove a point, span or run |
 
 For a full description of every tool — what it does, how to use it, and its controls — see the

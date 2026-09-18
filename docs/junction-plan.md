@@ -154,6 +154,14 @@ matrix, and the collision-clearance gate.
 
 ---
 
+## Known reports (outside junction scope, unconfirmed)
+
+- **Waypoint naming bug** (field report, no repro yet): cause unknown - candidates are duplicate
+  marker names confusing AutoDrive's destination list, or marker/waypoint id drift after junction
+  placements renumber ids (removeWayPoint renumbers; markers reference waypoint ids - if AutoDrive
+  does not remap markers on renumber, names could land on the wrong node). Needs a repro: what was
+  named, what showed wrong, and whether a junction placement happened in between.
+
 ## 7. Deferred (V2+)
 
 - **Dubins pathfinding for the connector curve.** The current connector is a biarc fitted to the two

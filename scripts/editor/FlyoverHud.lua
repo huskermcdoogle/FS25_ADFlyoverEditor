@@ -38,6 +38,11 @@ ADFlyoverHud = {
     rowOverlay = nil
 }
 
+-- Height of the floating tool card's header strip - its drag handle (see buildRows and
+-- isMouseOverToolCardGrab). Declared here, at the top: both users sit far apart in this file, and a
+-- `local` is only visible to code compiled after it.
+local CTX_GRAB_H = 0.022
+
 -- Localization shorthand: an English UI string in, its localized form out (or unchanged when there is
 -- no translation, or when the locale module is not loaded). Safe on nil and on already-formatted or
 -- dynamic values, which simply pass through - so it can wrap any drawn label or value freely.
@@ -519,10 +524,36 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleJunctionCheckSurface() end)
         add("toggle", "trim/extend", (editor.junctionExtendTrim ~= false) and "on" or "off (clamp at trim)", false,
             function() editor:toggleJunctionExtendTrim() end)
+        add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
+            function() editor:toggleJunctionRebuild() end)
+        add("toggle", "curve", (editor.junctionUseDubins ~= false) and "dubins" or "biarc", false,
+            function() editor:toggleJunctionCurveEngine() end)
+        add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
+            function() editor:toggleJunctionCheckObstacles() end)
+        add("number", "corridor", string.format("%.1f m", editor.junctionCorridor or 4))
+        rows[#rows].stepAction = function(dir)
+            editor.junctionCorridor = math.max(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MIN,
+                math.min(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MAX,
+                    (editor.junctionCorridor or 4) + dir * AutoDrive.FLYOVER_JUNCTION_CORRIDOR_STEP))
+            editor.junctionPreviewKey = nil
+        end
+        add("number", "clearance", string.format("%.1f m", editor.junctionClearance or 5))
+        rows[#rows].stepAction = function(dir)
+            editor.junctionClearance = math.max(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MIN,
+                math.min(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MAX,
+                    (editor.junctionClearance or 5) + dir * AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP))
+            editor.junctionPreviewKey = nil
+        end
         local jp = editor.junctionPreview
         if jp ~= nil then
             add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
             add("toggle", "new movements", tostring(jp.nNew))
+            if (jp.nRebuild or 0) > 0 then
+                add("toggle", "rebuilt existing", tostring(jp.nRebuild))
+            end
+            if jp.debris ~= nil and #jp.debris > 0 then
+                add("toggle", "old points to clear", tostring(#jp.debris))
+            end
             if jp.usedMin ~= nil and jp.usedMax ~= nil then
                 local used = (jp.usedMin == jp.usedMax) and string.format("%.0f m", jp.usedMin)
                     or string.format("%.0f-%.0f m", jp.usedMin, jp.usedMax)
@@ -545,6 +576,9 @@ function ADFlyoverHud:buildRows(editor)
             end
             if (jp.nLane or 0) > 0 then
                 add("toggle", "redundant lane", tostring(jp.nLane))
+            end
+            if (jp.nBlocked or 0) > 0 then
+                add("toggle", "blocked (refused)", tostring(jp.nBlocked))
             end
             add("toggle", "already there", tostring(jp.nExisting))
             add("toggle", "confidence", string.format("%d%%", math.floor(jp.confidence * 100 + 0.5)))
@@ -649,7 +683,12 @@ function ADFlyoverHud:draw(editor)
     local hasContext = split < #rows
     self.ctxFrameW = 0
     if hasContext then
-        local ch = pad * 2
+        -- The card carries a VISIBLE header strip along its TOP - the drag handle, styled like the
+        -- corner panel's own draggable header so it reads as the same affordance. (The first grab
+        -- zone was an invisible strip, and - in this bottom-origin coordinate system - accidentally
+        -- along the BOTTOM edge. Nobody found it, reasonably.)
+        local grabH = CTX_GRAB_H
+        local ch = pad * 2 + grabH
         for i = split + 1, #rows do
             ch = ch + (rows[i].kind == "gap" and rowH * 0.35 or rowH)
         end
@@ -657,7 +696,7 @@ function ADFlyoverHud:draw(editor)
         local cardY = editor.toolCardY or top
         cardX = math.max(0, math.min(1 - width, cardX))
         cardY = math.max(ch, math.min(1, cardY))
-        local hC = place(split + 1, #rows, cardX, cardY)
+        local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
         self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
     end
 
@@ -672,6 +711,13 @@ function ADFlyoverHud:draw(editor)
             self.ctxFrameW + edge * 2, self.ctxFrameH + edge * 2, "cardBorder", 0.96)
         fillRole(self.background, self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH,
             "cardBg", 0.99)
+        -- The header strip: the card's drag handle, styled like the corner panel's own draggable
+        -- header so it reads as the same affordance, titled with the active tool's name.
+        local gy = self.ctxFrameY + self.ctxFrameH - CTX_GRAB_H
+        fillRole(self.headerOverlay, self.ctxFrameX, gy, self.ctxFrameW, CTX_GRAB_H, "headerBg", 1)
+        local gTitle = TR(editor.TOOL_NAMES[editor.tool] or "tool")
+        labelRole(self.ctxFrameX + pad * 2, gy + (CTX_GRAB_H - fontSize * 0.85) * 0.5,
+            fontSize * 0.85, gTitle, "headerText")
     end
 
     -- Normalised coords are square only on a 1:1 screen; on 16:9 a shape with equal w and h renders
@@ -1599,15 +1645,17 @@ function ADFlyoverHud:isMouseOverHeader(mouseX, mouseY)
     return false
 end
 
---- Is the mouse over the floating tool card's TOP STRIP - its drag handle? The card has no header
---- row of its own (unlike the corner panel), so a fixed-height strip along its top edge serves as one.
-local CTX_GRAB_H = 0.022
+--- Is the mouse over the floating tool card's header strip - its drag handle? The strip is the TOP
+--- of the card: in this bottom-origin coordinate system that is the ctxFrame's HIGH y end (the first
+--- version tested the low end, i.e. the card's bottom edge, and was invisible besides - nobody found
+--- it, reasonably).
 function ADFlyoverHud:isMouseOverToolCardGrab(mouseX, mouseY)
     if self.ctxFrameW == nil or self.ctxFrameW <= 0 then
         return false
     end
     return mouseX >= self.ctxFrameX and mouseX <= self.ctxFrameX + self.ctxFrameW
-        and mouseY >= self.ctxFrameY and mouseY <= self.ctxFrameY + CTX_GRAB_H
+        and mouseY >= self.ctxFrameY + self.ctxFrameH - CTX_GRAB_H
+        and mouseY <= self.ctxFrameY + self.ctxFrameH
 end
 
 --- Drag handling for the corner panel AND the floating tool card - two independent drags, each
