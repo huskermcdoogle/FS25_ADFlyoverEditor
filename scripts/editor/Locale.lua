@@ -121,6 +121,7 @@ L.STRINGS = {
         ["shown"] = "angezeigt",
         ["hidden"] = "verborgen",
         ["ui scale"] = "UI-Größe",
+        ["line weight"] = "Linienstärke",
         ["theme"] = "Design",
         ["accent"] = "Akzent",
         ["edit"] = "bearbeiten",

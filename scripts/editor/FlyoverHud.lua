@@ -251,7 +251,7 @@ function ADFlyoverHud:buildRows(editor)
         { "MODE", { T.NONE } },
         { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
-        { "CONNECT", { T.CONVERT, T.MERGE } },
+        { "CONNECT", { T.CONVERT, T.MERGE, T.JUNCTION } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
     -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
@@ -308,6 +308,17 @@ function ADFlyoverHud:buildRows(editor)
             or string.format("%.2f x", ADFlyoverTheme.scale)
         add("number", "ui scale", scaleShown, scaleEditing, function() editor:beginEditNumber(scaleEntry) end)
         rows[#rows].stepAction = function(d) editor:stepThemeScale(d) end
+
+        local lwEntry = {
+            label = "line weight", unit = "",
+            get = function() return ADFlyoverTheme.lineWeight end,
+            apply = function(v) return editor:applyLineWeight(v) end,
+            step = function(d) editor:stepLineWeight(d) end,
+        }
+        local lwEditing = editor.editing ~= nil and editor.editing.label == "line weight"
+        local lwShown = lwEditing and (editor.editing.buffer .. "_") or string.format("%.1f", ADFlyoverTheme.lineWeight)
+        add("number", "line weight", lwShown, lwEditing, function() editor:beginEditNumber(lwEntry) end)
+        rows[#rows].stepAction = function(d) editor:stepLineWeight(d) end
 
         add("toggle", "theme", ADFlyoverTheme.PRESET_NAMES[ADFlyoverTheme.preset] or ADFlyoverTheme.preset,
             false, function() editor:cycleThemePreset(1) end)
@@ -495,6 +506,51 @@ function ADFlyoverHud:buildRows(editor)
     elseif editor.tool == editor.TOOL.DELETE then
         add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
             function() editor:cycleDeleteScope() end)
+    elseif editor.tool == editor.TOOL.JUNCTION then
+        -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
+        addWheelNumber("search radius", string.format("%.0f m", editor.junctionRadius or 15))
+        add("number", "turn radius", string.format("%.0f m", editor.junctionTurnRadius or 12))
+        rows[#rows].stepAction = function(dir)
+            editor.junctionTurnRadius = math.max(AutoDrive.FLYOVER_JUNCTION_TURN_MIN,
+                math.min(AutoDrive.FLYOVER_JUNCTION_TURN_MAX,
+                    (editor.junctionTurnRadius or 12) + dir * AutoDrive.FLYOVER_JUNCTION_TURN_STEP))
+        end
+        add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
+            function() editor:toggleJunctionCheckSurface() end)
+        add("toggle", "trim/extend", (editor.junctionExtendTrim ~= false) and "on" or "off (clamp at trim)", false,
+            function() editor:toggleJunctionExtendTrim() end)
+        local jp = editor.junctionPreview
+        if jp ~= nil then
+            add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
+            add("toggle", "new movements", tostring(jp.nNew))
+            if jp.usedMin ~= nil and jp.usedMax ~= nil then
+                local used = (jp.usedMin == jp.usedMax) and string.format("%.0f m", jp.usedMin)
+                    or string.format("%.0f-%.0f m", jp.usedMin, jp.usedMax)
+                add("toggle", "radius used", used)
+            end
+            if (jp.nTight or 0) > 0 then
+                add("toggle", "too tight (refused)", tostring(jp.nTight))
+            end
+            if (editor.junctionCheckSurface ~= false) and (jp.nOffRoad or 0) > 0 then
+                add("toggle", "off road (refused)", tostring(jp.nOffRoad))
+            end
+            if (jp.nNoCurve or 0) > 0 then
+                add("toggle", "no joinable curve", tostring(jp.nNoCurve))
+            end
+            if (jp.nUTurn or 0) > 0 then
+                add("toggle", "skipped as U-turn", tostring(jp.nUTurn))
+            end
+            if (jp.nFar or 0) > 0 then
+                add("toggle", "too far apart", tostring(jp.nFar))
+            end
+            if (jp.nLane or 0) > 0 then
+                add("toggle", "redundant lane", tostring(jp.nLane))
+            end
+            add("toggle", "already there", tostring(jp.nExisting))
+            add("toggle", "confidence", string.format("%d%%", math.floor(jp.confidence * 100 + 0.5)))
+        else
+            add("note", "point at a crossing")
+        end
     end
     -- MERGE's distance and divergence are the typed number fields above (getEditableNumbers), each
     -- with its own steppers, so there is no separate read-only row for them here any more.
@@ -886,10 +942,13 @@ function ADFlyoverHud:drawContextMenu(editor)
     end
 
     local ph = #items * rowH + pad * 2
-    -- Offset right of the click so the clicked point stays uncovered - a second click on it makes a
-    -- span, a rapid second click makes a run, and both need the point still reachable.
-    local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + 0.006))
-    local top = math.max(ph, math.min(1, m.sy or 0.5))
+    -- Offset down and right of the click, not sitting on it: the box's bottom edge used to sit right
+    -- at the cursor y and grow UPWARD, so it covered the clicked point and the cursor itself. A menu
+    -- item under the pointer on open reads as a misclick waiting to happen. Now the box's TOP edge
+    -- starts a margin below the click and it grows downward, clear of both the point and the cursor.
+    local menuGapX, menuGapY = 0.014, 0.02
+    local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
+    local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
     local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
@@ -1015,6 +1074,19 @@ function ADFlyoverHud:drawSettingsDialog(editor)
                     step = function(d) editor:stepThemeScale(d) end })
             end,
             stepAction = function(d) editor:stepThemeScale(d) end })
+    end
+    do
+        local editing = editor.editing ~= nil and editor.editing.label == "line weight"
+        push({ kind = "field", text = "line weight",
+            value = editing and (editor.editing.buffer .. "_") or string.format("%.1f", T.lineWeight),
+            editing = editing,
+            action = function()
+                editor:beginEditNumber({ label = "line weight", unit = "",
+                    get = function() return T.lineWeight end,
+                    apply = function(v) return editor:applyLineWeight(v) end,
+                    step = function(d) editor:stepLineWeight(d) end })
+            end,
+            stepAction = function(d) editor:stepLineWeight(d) end })
     end
     push({ kind = "section", text = "THEME" })
     push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
@@ -1527,9 +1599,42 @@ function ADFlyoverHud:isMouseOverHeader(mouseX, mouseY)
     return false
 end
 
---- Drag handling. Returns true while the panel is being dragged, so the editor leaves the world
---- alone for the whole gesture rather than only for the initial click.
-function ADFlyoverHud:handleDrag(mouseX, mouseY, isDown, isUp, button)
+--- Is the mouse over the floating tool card's TOP STRIP - its drag handle? The card has no header
+--- row of its own (unlike the corner panel), so a fixed-height strip along its top edge serves as one.
+local CTX_GRAB_H = 0.022
+function ADFlyoverHud:isMouseOverToolCardGrab(mouseX, mouseY)
+    if self.ctxFrameW == nil or self.ctxFrameW <= 0 then
+        return false
+    end
+    return mouseX >= self.ctxFrameX and mouseX <= self.ctxFrameX + self.ctxFrameW
+        and mouseY >= self.ctxFrameY and mouseY <= self.ctxFrameY + CTX_GRAB_H
+end
+
+--- Drag handling for the corner panel AND the floating tool card - two independent drags, each
+--- claiming the whole gesture so it never also pans the camera or clicks through to the world.
+--- `editor` is needed to write the card's position back (editor.toolCardX/Y), and to remember that
+--- the player has taken control of it (editor.toolCardDragged) so the next click of the same action
+--- does not jump it back - see ADFlyoverEditor:onLeftPress.
+function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
+    if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
+        self.ctxDragging = true
+        self.ctxDragOffsetX = mouseX - self.ctxFrameX
+        self.ctxDragOffsetY = mouseY - self.ctxFrameY
+        return true
+    end
+    if self.ctxDragging then
+        if button == 1 and isUp then
+            self.ctxDragging = false
+            return true
+        end
+        if editor ~= nil then
+            editor.toolCardDragged = true
+            editor.toolCardX = math.max(0, math.min(1 - self.ctxFrameW, mouseX - self.ctxDragOffsetX))
+            editor.toolCardY = math.max(self.ctxFrameH or 0, math.min(1, mouseY - self.ctxDragOffsetY + (self.ctxFrameH or 0)))
+        end
+        return true
+    end
+
     if button == 1 and isDown and self:isMouseOverHeader(mouseX, mouseY) then
         self.dragging = true
         -- Remember the grab point within the panel so it does not jump to align a corner with

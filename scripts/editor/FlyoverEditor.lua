@@ -134,7 +134,22 @@ ADFlyoverEditor = {
     fieldQueryX = nil,
     fieldQueryZ = nil,
     mergeFromId = nil,
-    mergeToId = nil
+    mergeToId = nil,
+    -- Junction tool (V1): scope radius the wheel drives, the turn radius that shapes the connector
+    -- curves, and the last computed preview (scope / approaches / movement matrix / connector curves).
+    -- Line weight is a global theme setting.
+    junctionRadius = 15,
+    junctionTurnRadius = 12,
+    -- Road-surface / corridor check, on by default. Off lets a turn shrink for radius alone, never
+    -- for leaving the road - see junctionSolveMovement.
+    junctionCheckSurface = true,
+    -- Trim/extend, on by default. Off, a tie-in never projects past a stem trimmed back short of
+    -- where the turn geometry wants it - see junctionWalkBack/junctionTrackConnector.
+    junctionExtendTrim = true,
+    junctionPreview = nil,
+    -- The locked site {cx, cz, cy}: left-click arms the junction here so the preview stops following
+    -- the cursor and right-click places it. Nil = not armed, so right-click puts the tool away.
+    junctionArmed = nil
 }
 
 -- NONE is a real state, not an absence: with no tool selected a click does nothing at all, which
@@ -148,8 +163,8 @@ ADFlyoverEditor = {
 -- Ordered by how often each is actually reached for, because position IS the key binding: the
 -- tool at 10 answers to 0, the most awkward reach, and so belongs to the one used least.
 -- Order set from how the editor is really used, not from how the tools group conceptually.
-ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11, PARALLEL = 12, SIDING = 13, GROUND = 14 }
-ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge", "parallel", "siding", "ground" }
+ADFlyoverEditor.TOOL = { NONE = 0, DRAW = 1, MOVE = 2, DELETE = 3, NAME = 4, SPLINE = 5, DIVIDE = 6, SMOOTH = 7, CONVERT = 8, STRAIGHTEN = 9, FIELDLOOP = 10, MERGE = 11, PARALLEL = 12, SIDING = 13, GROUND = 14, JUNCTION = 15 }
+ADFlyoverEditor.TOOL_NAMES = { "draw", "move", "delete", "name", "spline", "divide", "smooth", "convert", "straighten", "field loop", "merge", "parallel", "siding", "ground", "junction" }
 
 -- The number keys select tools in the PANEL'S READING ORDER (1-9, then 0 for the tenth), NOT by the
 -- internal TOOL id above - so the keycaps run 1..0 straight down the Create and Shape groups instead
@@ -180,6 +195,21 @@ AutoDrive.FLYOVER_GROUND_MIN = 0.1
 AutoDrive.FLYOVER_GROUND_MAX = 10.0
 AutoDrive.FLYOVER_GROUND_STEP = 0.1
 AutoDrive.FLYOVER_GROUND_DEFAULT = 0.5
+
+-- Junction scope radius: the circle the wheel resizes to include/exclude the roads at a crossing.
+-- Default sized to the ~15 m spread the savegame survey found for real intersection clusters.
+AutoDrive.FLYOVER_JUNCTION_RADIUS_MIN = 6.0
+AutoDrive.FLYOVER_JUNCTION_RADIUS_MAX = 40.0
+AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP = 1.0
+
+-- Junction turn radius: shapes the connector curves (our own tangent geometry, not AutoDrive's spline
+-- curvature). Larger = wider, gentler turns. A future collision-aware version may swap this for Dubins.
+AutoDrive.FLYOVER_JUNCTION_TURN_MIN = 4.0
+AutoDrive.FLYOVER_JUNCTION_TURN_MAX = 30.0
+AutoDrive.FLYOVER_JUNCTION_TURN_STEP = 1.0
+-- Width of the corridor a junction connector must keep on the road surface: a typical tractor (~3 m)
+-- plus an allowance for a trailer tracking inside the turn. Checked at the centre and both edges.
+AutoDrive.FLYOVER_JUNCTION_CORRIDOR = 4.0
 
 -- Which surface a point is grounded to when its column has more than one - a bridge deck over a road,
 -- say. "span line" follows the height the span's own ends imply; "top surface" takes the highest.
@@ -1114,6 +1144,8 @@ function ADFlyoverEditor:update(dt)
         self:updateStraightenPreview()
     elseif self.tool == self.TOOL.SMOOTH then
         self:updateSmoothPreview()
+    elseif self.tool == self.TOOL.JUNCTION then
+        self:updateJunctionPreview()
     end
 
     -- A drag updates live so the move is visible while the button is held, but no snapshot is
@@ -1578,9 +1610,13 @@ function ADFlyoverEditor:setTool(tool)
     self.mergeFromId = nil
     self.mergeToId = nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
+    self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
     self.dragId = nil
     self.boxActive = false
     self.ctxMenu = nil
+    -- A new tool gets its own jump-out-on-first-click, even if the card was dragged somewhere for the
+    -- PREVIOUS tool - "stays put for the remainder of tool usage" is scoped to one tool's session.
+    self.toolCardDragged = false
     self.moveFocusId = nil
     -- Picking a tool always brings its card back: middle-click hides the CURRENT tool's card to work
     -- under it, but switching tools should not carry that hidden state onto the next one.
@@ -1687,6 +1723,7 @@ end
 function ADFlyoverEditor:drawNetworkFallback()
     local radiusSq = AutoDrive.FLYOVER_DRAW_RADIUS * AutoDrive.FLYOVER_DRAW_RADIUS
     local wayPoints = ADGraphManager:getWayPoints()
+    local lw = (ADFlyoverTheme ~= nil and ADFlyoverTheme.lineWeight) or 2
 
     for i = 1, #wayPoints do
         local wp = wayPoints[i]
@@ -1697,7 +1734,7 @@ function ADFlyoverEditor:drawNetworkFallback()
                 local target = ADGraphManager:getWayPointById(targetId)
                 if target ~= nil then
                     ADDrawingManager:addLineTask(wp.x, wp.y + 0.5, wp.z,
-                        target.x, target.y + 0.5, target.z, 1, 0, 1, 0)
+                        target.x, target.y + 0.5, target.z, lw, 0, 1, 0)
                 end
             end
         end
@@ -1708,6 +1745,10 @@ function ADFlyoverEditor:drawNetwork()
     if self.cursorX == nil then
         return
     end
+
+    -- Global preview line weight (a theme/display setting): the width passed as the SCALE argument of
+    -- every addLineTask below, so one setting thickens or thins all of the editor's world-space lines.
+    local lw = (ADFlyoverTheme ~= nil and ADFlyoverTheme.lineWeight) or 2
 
     -- The NETWORK itself is drawn by the mod's own editor rendering (AutoDrive:onDrawEditorMode),
     -- which is now centred on this cursor rather than on the vehicle. Drawing a second copy here
@@ -1789,7 +1830,7 @@ function ADFlyoverEditor:drawNetwork()
                 local wp = ADGraphManager:getWayPointById(id)
                 if wp ~= nil then
                     if prev ~= nil then
-                        ADDrawingManager:addLineTask(prev.x, prev.y + 0.7, prev.z, wp.x, wp.y + 0.7, wp.z, hr, hg, hb, 1)
+                        ADDrawingManager:addLineTask(prev.x, prev.y + 0.7, prev.z, wp.x, wp.y + 0.7, wp.z, lw, hr, hg, hb)
                     end
                     prev = wp
                 end
@@ -1803,7 +1844,7 @@ function ADFlyoverEditor:drawNetwork()
                         if menu.runSet[other] then
                             local ow = ADGraphManager:getWayPointById(other)
                             if ow ~= nil then
-                                ADDrawingManager:addLineTask(wp.x, wp.y + 0.7, wp.z, ow.x, ow.y + 0.7, ow.z, hr, hg, hb, 1)
+                                ADDrawingManager:addLineTask(wp.x, wp.y + 0.7, wp.z, ow.x, ow.y + 0.7, ow.z, lw, hr, hg, hb)
                             end
                         end
                     end
@@ -1824,7 +1865,7 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addSphereTask(p.x, py, p.z, pinned and 3.5 or 2.5,
                 pinned and 1 or 0, pinned and 0.5 or 1, pinned and 0 or 0.4, 0.8)
             if prev ~= nil then
-                ADDrawingManager:addLineTask(prev.x, (prev.y or fallbackY) + 0.6, prev.z, p.x, py, p.z, 0, 1, 0.4, 1)
+                ADDrawingManager:addLineTask(prev.x, (prev.y or fallbackY) + 0.6, prev.z, p.x, py, p.z, lw, 0, 1, 0.4)
             end
             prev = p
         end
@@ -1837,7 +1878,7 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.2, 0.8, 1, 0.6)
             if i > 1 then
                 local q = self.sidingPreview[i - 1]
-                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, 1, 0.2, 0.8, 1)
+                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 0.2, 0.8, 1)
             end
         end
     end
@@ -1849,7 +1890,7 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 1, 0.6, 0.1, 0.6)
             if i > 1 then
                 local q = self.offsetPreview[i - 1]
-                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, 1, 1, 0.6, 0.1)
+                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 1, 0.6, 0.1)
             end
         end
     end
@@ -1866,7 +1907,69 @@ function ADFlyoverEditor:drawNetwork()
             end
             ADDrawingManager:addSphereTask(p.x, p.y + 0.4, p.z, 3, r, g, b, 0.8)
             ADDrawingManager:addSphereTask(p.x, p.targetY + 0.4, p.z, 2, r, g, b, 0.4)
-            ADDrawingManager:addLineTask(p.x, p.y + 0.4, p.z, p.x, p.targetY + 0.4, p.z, 1, r, g, b)
+            ADDrawingManager:addLineTask(p.x, p.y + 0.4, p.z, p.x, p.targetY + 0.4, p.z, lw, r, g, b)
+        end
+    end
+
+    -- Junction preview: the scope circle, the approaches it cuts (green = entry, amber = exit, with a
+    -- stub along the travel direction), and each new turn drawn as its track-tangent connector curve.
+    -- Nothing here changes the network until right-click.
+    if self.tool == self.TOOL.JUNCTION and self.junctionPreview ~= nil then
+        local jp = self.junctionPreview
+        local baseY = (jp.cy or AutoDrive:getTerrainHeightAtWorldPos(jp.cx, jp.cz) or 0)
+        -- NB: addLineTask is (sx, sy, sz, ex, ey, ez, SCALE, r, g, b) - scale (line width) then colour,
+        -- no alpha. lw is the global preview line weight (see the top of drawNetwork).
+
+        -- Scope circle on the ground: thin grey while it scouts under the cursor, solid white once the
+        -- site is locked (left-click) and it stops following the mouse.
+        local segs = 48
+        local px0, pz0
+        local sr, sg, sb, sw = 0.55, 0.6, 0.66, lw * 0.5
+        if jp.armed then sr, sg, sb, sw = 1, 1, 1, lw end
+        for i = 0, segs do
+            local a = (i / segs) * 2 * math.pi
+            local px = jp.cx + math.sin(a) * jp.radius
+            local pz = jp.cz + math.cos(a) * jp.radius
+            if px0 ~= nil then
+                ADDrawingManager:addLineTask(px0, baseY + 0.3, pz0, px, baseY + 0.3, pz, sw, sr, sg, sb)
+            end
+            px0, pz0 = px, pz
+        end
+
+        -- NEW turns as track-tangent connector curves (white): tie-in ON the entry track, curve, tie-in
+        -- ON the exit track. The small white spheres mark the tie-in (merge / exit) points - sitting on
+        -- the real road a radius-appropriate distance back from where the tracks meet, NOT the boundary.
+        for _, m in ipairs(jp.movements) do
+            if not m.exists and m.connector ~= nil then
+                local c = m.connector
+                local chain = { { x = c.ax, y = baseY + 0.5, z = c.az } }
+                for _, p in ipairs(c.points) do
+                    chain[#chain + 1] = { x = p.x, y = (p.y or baseY) + 0.5, z = p.z }
+                end
+                chain[#chain + 1] = { x = c.bx, y = baseY + 0.5, z = c.bz }
+                -- White = will be laid; RED = refused on place (tighter than the turn radius even at
+                -- the floor, or no radius keeps the vehicle corridor on the road).
+                local cr, cg, cb = 1, 1, 1
+                if m.refused ~= nil then cr, cg, cb = 1, 0.25, 0.2 end
+                for i = 2, #chain do
+                    local q, r = chain[i - 1], chain[i]
+                    ADDrawingManager:addLineTask(q.x, q.y, q.z, r.x, r.y, r.z, lw, cr, cg, cb)
+                end
+                ADDrawingManager:addSphereTask(c.ax, (c.ay or baseY) + 0.5, c.az, 1.8, cr, cg, cb, 1)
+                ADDrawingManager:addSphereTask(c.bx, (c.by or baseY) + 0.5, c.bz, 1.8, cr, cg, cb, 1)
+            end
+        end
+
+        -- Approaches as tall pillars: GREEN = entry lane, AMBER = exit lane, with a direction arm on top.
+        for _, ap in ipairs(jp.approaches) do
+            local w = ap.wp
+            local r, g, b = 1, 0.65, 0.1                      -- exit: amber
+            if ap.dir == "in" then r, g, b = 0.1, 1, 0.3 end   -- entry: green
+            local gy = (w.y or baseY)
+            ADDrawingManager:addLineTask(w.x, gy, w.z, w.x, gy + 4, w.z, lw, r, g, b)
+            ADDrawingManager:addSphereTask(w.x, gy + 4, w.z, 2.5, r, g, b, 1)
+            ADDrawingManager:addLineTask(w.x, gy + 4, w.z,
+                w.x + math.sin(ap.bearing) * 4, gy + 4, w.z + math.cos(ap.bearing) * 4, lw, r, g, b)
         end
     end
 
@@ -1877,7 +1980,7 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.4, 1, 0.4, 0.6)
             if i > 1 then
                 local q = self.straightenPreview[i - 1]
-                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, 1, 0.4, 1, 0.4)
+                ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 0.4, 1, 0.4)
             end
         end
     end
@@ -1890,7 +1993,7 @@ function ADFlyoverEditor:drawNetwork()
             if i > 1 then
                 local q = self.dividePreview[i - 1]
                 ADDrawingManager:addLineTask(q.x, (q.y or cursorGroundY) + 0.6, q.z,
-                    p.x, (p.y or cursorGroundY) + 0.6, p.z, 0, 1, 0.4, 1)
+                    p.x, (p.y or cursorGroundY) + 0.6, p.z, lw, 0, 1, 0.4)
             end
         end
     end
@@ -1933,7 +2036,7 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addLineTask(
                 anchor.x, anchor.y + 0.5, anchor.z,
                 self.cursorX, cursorY + 0.5, self.cursorZ,
-                1, 1, 1, 1)
+                lw, 1, 1, 1)
         end
     end
 
@@ -1948,7 +2051,7 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addLineTask(
                 a[1], AutoDrive:getTerrainHeightAtWorldPos(a[1], a[2]) + 0.5, a[2],
                 b[1], AutoDrive:getTerrainHeightAtWorldPos(b[1], b[2]) + 0.5, b[2],
-                0, 1, 0.2, 1)
+                lw, 0, 1, 0.2)
         end
     end
 
@@ -1970,7 +2073,7 @@ function ADFlyoverEditor:drawNetwork()
                 ADDrawingManager:addLineTask(
                     prevX, AutoDrive:getTerrainHeightAtWorldPos(prevX, prevZ) + 0.5, prevZ,
                     px, AutoDrive:getTerrainHeightAtWorldPos(px, pz) + 0.5, pz,
-                    0.2, 0.6, 1, 1)
+                    lw, 0.2, 0.6, 1)
             end
             prevX, prevZ = px, pz
         end
@@ -2012,7 +2115,7 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
 
     -- The panel gets the event first. A header drag has to claim the WHOLE gesture, including the
     -- camera, or panning the camera and dragging the panel happen at the same time.
-    if ADFlyoverHud:handleDrag(posX, posY, isDown, isUp, button) then
+    if ADFlyoverHud:handleDrag(self, posX, posY, isDown, isUp, button) then
         return
     end
 
@@ -2089,24 +2192,6 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     end
 end
 
---- True while the active tool is mid-action - a span's first end picked, a run open, a drag armed.
---- Used to keep the floating tool card anchored on the FIRST click of an action so it does not jump
---- to the second point of a span.
-function ADFlyoverEditor:toolHasPendingStart()
-    local t = self.tool
-    if t == self.TOOL.STRAIGHTEN then return self.straightenFromId ~= nil
-    elseif t == self.TOOL.SMOOTH then return self.smoothFromId ~= nil
-    elseif t == self.TOOL.DIVIDE then return self.divideFromId ~= nil
-    elseif t == self.TOOL.GROUND then return self.groundFromId ~= nil
-    elseif t == self.TOOL.PARALLEL then return self.offsetFromId ~= nil
-    elseif t == self.TOOL.SIDING then return self.sidingAnchorId ~= nil
-    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil
-    elseif t == self.TOOL.MERGE then return self.mergeFromId ~= nil
-    elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
-    end
-    return false
-end
-
 --- Show/hide the floating tool card by hand - the keyboard key (H) and the panel button both call
 --- this. The card ALSO hides on its own while you drag a point (see buildRows), so this manual
 --- override is for when it covers something you want to see while you are not mid-drag. Middle mouse
@@ -2134,13 +2219,38 @@ function ADFlyoverEditor:helpScrollBy(dir)
     self.helpScroll = math.max(0, (self.helpScroll or 0) - dir * 0.06)
 end
 
+--- True while the active tool is mid-action - a span's first end picked, a run open, a drag armed.
+--- Used to fire the floating card's jump-out only ONCE per action (its first click), not on every
+--- click of that action (a span's second point, say) - and not again until the NEXT action starts.
+function ADFlyoverEditor:toolHasPendingStart()
+    local t = self.tool
+    if t == self.TOOL.STRAIGHTEN then return self.straightenFromId ~= nil
+    elseif t == self.TOOL.SMOOTH then return self.smoothFromId ~= nil
+    elseif t == self.TOOL.DIVIDE then return self.divideFromId ~= nil
+    elseif t == self.TOOL.GROUND then return self.groundFromId ~= nil
+    elseif t == self.TOOL.PARALLEL then return self.offsetFromId ~= nil
+    elseif t == self.TOOL.SIDING then return self.sidingAnchorId ~= nil
+    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil
+    elseif t == self.TOOL.MERGE then return self.mergeFromId ~= nil
+    elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
+    elseif t == self.TOOL.JUNCTION then return self.junctionArmed ~= nil
+    end
+    return false
+end
+
 function ADFlyoverEditor:onLeftPress()
-    -- Anchor the floating tool card at the FIRST click of an action and leave it there for the rest,
-    -- so picking the second point of a span does not make the card jump off the first. Panel clicks
-    -- do not reach here (the panel consumes them), so toggles and tool picks never move it either.
-    if not self:toolHasPendingStart() then
-        self.toolCardX = g_lastMousePosX or self.toolCardX
-        self.toolCardY = g_lastMousePosY or self.toolCardY
+    -- Jump the floating card out to a fixed offset from the FIRST click of an action - never right on
+    -- top of the point you just clicked, which is what made it feel like it was always in the way. It
+    -- can then be dragged (by its header) whever you actually want it, and it stays there - through
+    -- the rest of the action and every action after, in every tool - until the NEXT tool's first
+    -- click jumps it again. self.toolCardDragged (set by the drag itself) skips the jump once the
+    -- player has taken control of it, so a deliberate placement is never overridden.
+    if not self:toolHasPendingStart() and not self.toolCardDragged and g_lastMousePosX ~= nil then
+        local offX, offY = 0.10, 0.08
+        local ox = (g_lastMousePosX < 0.55) and offX or -offX     -- offset AWAY from screen centre,
+        local oy = (g_lastMousePosY < 0.55) and offY or -offY     -- so it lands on-screen, not clipped
+        self.toolCardX = math.max(0, math.min(1, g_lastMousePosX + ox))
+        self.toolCardY = math.max(0, math.min(1, g_lastMousePosY + oy))
     end
 
     -- Ctrl claims the drag for box selection, in every tool. It has to be decided here on the
@@ -2205,6 +2315,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:straightenClick()
     elseif self.tool == self.TOOL.DIVIDE then
         self:divideClick()
+    elseif self.tool == self.TOOL.JUNCTION then
+        self:junctionClick()
     elseif self.tool == self.TOOL.NONE then
         self:selectClick()
     end
@@ -2346,6 +2458,21 @@ function ADFlyoverEditor:stopCurrentAction()
     elseif tool == self.TOOL.MOVE then
         if self.dragId ~= nil then
             self:finishDrag()
+            return true
+        end
+    elseif tool == self.TOOL.JUNCTION then
+        -- Armed site: right-click places what the preview shows; if it shows nothing new, the
+        -- right-click just unlocks the site. Unarmed falls through, so the next right-click puts the
+        -- tool away like any other - the way OUT of the tool without placing anything.
+        if self.junctionArmed ~= nil then
+            local jp = self.junctionPreview
+            if jp ~= nil and (jp.nNew or 0) > 0 then
+                self:applyJunction()
+            else
+                Logging.info("[FlyoverEditor]: junction site unlocked (nothing to place).")
+            end
+            self.junctionArmed = nil
+            self.junctionPreview, self.junctionPreviewKey = nil, nil
             return true
         end
     end
@@ -2987,6 +3114,25 @@ function ADFlyoverEditor:handleEditKey(unicode, sym)
     end
 
     return true
+end
+
+--- Toggle the junction tool's road-surface / corridor check. Off, a turn is still bounded by the
+--- radius setting but is never shrunk or refused for leaving the road - see junctionSolveMovement.
+function ADFlyoverEditor:toggleJunctionCheckSurface()
+    self.junctionCheckSurface = not (self.junctionCheckSurface ~= false)
+    self.junctionPreviewKey = nil        -- force a resolve so the change is visible immediately
+    Logging.info("[FlyoverEditor]: junction road-surface check %s.",
+        self.junctionCheckSurface and "on" or "off (turns only bounded by radius)")
+end
+
+--- Toggle whether a trimmed stem's tie-in may project past where the track actually ends. Off
+--- restores the strict original behaviour (clamp at the trim); on (default) reaches the
+--- geometrically correct tie-in point even when the visible track was cut back short of it.
+function ADFlyoverEditor:toggleJunctionExtendTrim()
+    self.junctionExtendTrim = not (self.junctionExtendTrim ~= false)
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction trim/extend %s.",
+        self.junctionExtendTrim and "on (projects past a trimmed stem)" or "off (clamps at the trim)")
 end
 
 function ADFlyoverEditor:toggleSnapToTerrain()
@@ -3987,6 +4133,19 @@ function ADFlyoverEditor:getNextStepLines()
             return L("Click the far end of the span, on the SAME track.")
         end
         return L("Click one end of the span to merge.")
+    elseif self.tool == t.JUNCTION then
+        local jp = self.junctionPreview
+        if self.junctionArmed ~= nil then
+            if jp ~= nil and (jp.nNew or 0) > 0 then
+                return string.format(L("Site locked: %d new turn(s). Right-click places; left-click moves the lock."),
+                    jp.nNew)
+            end
+            return L("Site locked, nothing new to place. Right-click unlocks; left-click moves the lock.")
+        end
+        if jp ~= nil and (jp.nNew or 0) > 0 then
+            return string.format(L("%d new turn(s) here. Left-click locks the site; wheel = scope."), jp.nNew)
+        end
+        return L("Point at a crossing and left-click to lock it. Wheel = scope; right-click leaves the tool.")
     end
 
     return ""
@@ -5305,6 +5464,83 @@ local function columnSurfaces(x, z, topY, terrainY)
     return hits
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Road-surface probe, for junction clearance. "On the road" is either a road MESH under the point
+-- (the ray hits something other than the terrain and it carries the ROAD collision group, bit 13 -
+-- asphalt meshes, bridge decks) or terrain whose surface MATERIAL is a road one. The material comes
+-- from the 5th return of getTerrainAttributesAtWorldPos - the same value the game's WheelPhysics
+-- reads to pick tyre-track and surface-sound behaviour - and the base ids are fixed across the
+-- Giants maps (data/maps/*/sounds/sounds.xml): 0 field, 1 dirt, 2 grass, 3 sand, 5 leaves,
+-- 6 gravel, 7 asphalt, 97 railroad, 98/99 water. Names for the log come from
+-- g_currentMission.surfaceSounds when a map remaps them. Everything is guarded: if a call is not
+-- there, terrain counts as road - "unknown" is never a reason to refuse a turn.
+-- ---------------------------------------------------------------------------------------------
+local roadHitId, roadHitY = nil, nil
+local function roadRayCallback(_, hitObjectId, x, y, z, distance)
+    if y ~= nil then
+        roadHitId, roadHitY = hitObjectId, y
+    end
+end
+local RoadRay = { callback = roadRayCallback }
+local ROAD_MATERIALS = { [1] = true, [6] = true, [7] = true }         -- dirt track, gravel, asphalt
+local BASE_MATERIAL_NAMES = { [0] = "field", [1] = "dirt", [2] = "grass", [3] = "sand", [4] = "sound",
+    [5] = "leaves", [6] = "gravel", [7] = "asphalt", [97] = "railroad", [98] = "mediumWater", [99] = "shallowWater" }
+local roadProbeNoted = {}
+
+local function roadNote(key, fmt, ...)
+    if not roadProbeNoted[key] then
+        roadProbeNoted[key] = true
+        Logging.info("[FlyoverEditor]: junction clearance - " .. fmt, ...)
+    end
+end
+
+local function materialName(id)
+    local list = g_currentMission ~= nil and g_currentMission.surfaceSounds or nil
+    if type(list) == "table" then
+        for _, s in pairs(list) do
+            if type(s) == "table" and s.materialId == id and s.type == "wheel" and s.name ~= nil then
+                return s.name
+            end
+        end
+    end
+    return BASE_MATERIAL_NAMES[id] or ("material " .. tostring(id))
+end
+
+--- Is (x, z) on a drivable road surface?
+local function isRoadAt(x, z)
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    if terrain == nil or raycastClosest == nil then return true end
+    local ty = getTerrainHeightAtWorldPos(terrain, x, 1, z) or 0
+    if GROUND_MASK == nil then
+        GROUND_MASK = CollisionFlag.DEFAULT + CollisionFlag.ROAD + CollisionFlag.TERRAIN
+    end
+    roadHitId, roadHitY = nil, nil
+    pcall(raycastClosest, x, ty + 6, z, 0, -1, 0, 12, "callback", RoadRay, GROUND_MASK)
+    if roadHitId ~= nil and roadHitId ~= 0 and roadHitId ~= terrain then
+        local ok, group = pcall(getCollisionFilterGroup, roadHitId)
+        if ok and type(group) == "number" and bit32 ~= nil then
+            if bit32.band(group, CollisionFlag.ROAD) ~= 0 then
+                roadNote("mesh", "road mesh under the turn (ROAD collision group)")
+                return true
+            end
+            if CollisionFlag.VEHICLE ~= nil and bit32.band(group, CollisionFlag.VEHICLE) ~= 0 then
+                return true                                -- something parked there is not the road's fault
+            end
+        end
+        roadNote("object", "a static object (not a road mesh) sits over a probed spot; classed as not road")
+        return false
+    end
+    local ok, _, _, _, _, mat = pcall(getTerrainAttributesAtWorldPos, terrain, x, ty, z, true, true, true, true, false)
+    if ok and type(mat) == "number" then
+        local id = math.floor(mat + 0.5)
+        local road = ROAD_MATERIALS[id] == true
+        roadNote("mat:" .. id, "terrain material %d ('%s') classed as %s", id, materialName(id), road and "ROAD" or "not road")
+        return road
+    end
+    roadNote("nomat", "terrain material lookup unavailable; terrain is treated as road")
+    return true
+end
+
 --- Where a waypoint at (x, y, z) belongs, for the ground tool specifically.
 ---
 --- NOT resolveHeightAt, which is right for placing a new point and wrong here: in surface mode it
@@ -5755,6 +5991,822 @@ function ADFlyoverEditor:currentInteriorCount(fromId, toId)
     return math.max(0, #span - 2)
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Junction tool - V1: one-click intersection generator. Scope -> approaches -> movement matrix ->
+-- track-tangent connectors, previewed live and committed on right-click. The wheel sizes the scope
+-- circle, the primary disambiguation lever. See docs/junction-plan.md.
+-- ---------------------------------------------------------------------------------------------
+
+--- Smallest angle between two bearings, radians, 0..pi.
+local function junctionAngDiff(a, b)
+    local d = math.abs(a - b) % (2 * math.pi)
+    if d > math.pi then d = 2 * math.pi - d end
+    return d
+end
+
+-- Unit direction of a chain around index idx (lower index -> higher index).
+local function junctionSegDir(chain, idx)
+    local a = chain[math.max(1, idx - 1)]
+    local b = chain[math.min(#chain, idx + 1)]
+    local dx, dz = b.x - a.x, b.z - a.z
+    local l = math.max(1e-6, math.sqrt(dx * dx + dz * dz))
+    return dx / l, dz / l
+end
+
+--- Walk from chain[startIdx] toward index 1 (the boundary) by arc length `dist`, staying ON the chain
+--- for as long as there IS chain. Returns the point (x,y,z) and the unit direction (lower->higher
+--- index) of the segment it lands on. dist <= 0 returns chain[startIdx] itself.
+--- Running OUT of chain before covering `dist` EXTRAPOLATES past the boundary node along its own
+--- final segment direction, rather than clamping there - a stem trimmed back short of where the turn
+--- geometry needs its tie-in still gets one at the geometrically correct point, in line with the
+--- track, instead of a wrong one dragged in to wherever the trim happened to stop.
+--- `allowExtend` (card toggle "trim/extend", default true) governs what happens when `dist` runs out
+--- of chain: true extrapolates past the boundary node (see above); false clamps there, the original
+--- behaviour, for when a stem SHOULD be left exactly where it ends rather than projected further.
+local function junctionWalkBack(chain, startIdx, dist, allowExtend)
+    if dist <= 0 or startIdx <= 1 then
+        local p = chain[startIdx]
+        local dx, dz = junctionSegDir(chain, startIdx)
+        return p.x, p.y or 0, p.z, dx, dz
+    end
+    local remaining, i = dist, startIdx
+    while i > 1 and remaining > 0 do
+        local a, b = chain[i - 1], chain[i]
+        local seglen = math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+        if seglen >= remaining and seglen > 1e-6 then
+            local f = (seglen - remaining) / seglen
+            return a.x + (b.x - a.x) * f, (a.y or 0) + ((b.y or 0) - (a.y or 0)) * f, a.z + (b.z - a.z) * f,
+                (b.x - a.x) / seglen, (b.z - a.z) / seglen
+        end
+        remaining = remaining - seglen
+        i = i - 1
+    end
+    local a = chain[1]
+    local dx, dz = junctionSegDir(chain, 1)
+    if not allowExtend then
+        remaining = 0
+    end
+    return a.x - dx * remaining, a.y or 0, a.z - dz * remaining, dx, dz
+end
+
+--- Sample the circular arc that leaves P with unit tangent T and passes through Q. Appends points to
+--- `out` from just past P up to and INCLUDING Q, and returns the arc's radius (math.huge when P->Q is
+--- already straight along T). Point spacing is by a fixed sagitta, so a tight arc gets denser points
+--- and a gentle one fewer - every arc stays equally smooth.
+local JUNCTION_SAG = 0.12
+local function junctionArcTo(out, px, pz, tx, tz, qx, qz, y0, y1)
+    local dx, dz = qx - px, qz - pz
+    local d2 = dx * dx + dz * dz
+    local cross = tx * dz - tz * dx                    -- signed perpendicular reach of Q from T
+    if d2 < 1e-6 then return math.huge end
+    if math.abs(cross) < 1e-4 * math.sqrt(d2) then     -- straight: one chord
+        out[#out + 1] = { x = qx, y = y1, z = qz }
+        return math.huge
+    end
+    local nx, nz = -tz, tx                             -- left normal of T
+    if cross < 0 then nx, nz = tz, -tx end             -- centre is on the side Q lies on
+    local r = d2 / (2 * math.abs(cross))
+    local cx, cz = px + r * nx, pz + r * nz
+    local a0 = math.atan2(pz - cz, px - cx)
+    local a1 = math.atan2(qz - cz, qx - cx)
+    local da = math.atan2(math.sin(a1 - a0), math.cos(a1 - a0))
+    local dth = 2 * math.acos(math.max(-1, math.min(1, 1 - JUNCTION_SAG / r)))
+    local steps = math.max(2, math.ceil(math.abs(da) / math.max(dth, 1e-3)))
+    for i = 1, steps do
+        local u = i / steps
+        local th = a0 + da * u
+        out[#out + 1] = { x = cx + r * math.cos(th), y = y0 + (y1 - y0) * u, z = cz + r * math.sin(th) }
+    end
+    return r
+end
+
+--- Biarc from (P0, tangent T0) to (P1, tangent T1): two circular arcs meeting tangent-continuously at
+--- a joint J, the classic equal-handle construction. Given the tie-in POINTS (on the real tracks) and
+--- their LOCAL tangents, this is the smooth curve that honours both exactly; for a clean crossing with
+--- tie-ins at t = R*tan(delta/2) it degenerates to the single radius-R fillet arc. Returns the
+--- interior points (excluding P0 and P1) and the SMALLER of the two radii - the number to hold against
+--- the turn-radius setting. nil when the tangents cannot be joined (they point away from each other).
+local function junctionBiarc(p0x, p0z, t0x, t0z, p1x, p1z, t1x, t1z, y0, y1)
+    local vx, vz = p1x - p0x, p1z - p0z
+    local vv = vx * vx + vz * vz
+    if vv < 1e-6 then return nil end
+    local tt = t0x * t1x + t0z * t1z
+    local vt = vx * (t0x + t1x) + vz * (t0z + t1z)
+    local denom = 2 * (1 - tt)
+    local alpha
+    if math.abs(denom) < 1e-6 then                     -- parallel tangents
+        local vt1 = vx * t1x + vz * t1z
+        if math.abs(vt1) < 1e-6 then return nil end
+        alpha = vv / (4 * vt1)
+    else
+        alpha = (-vt + math.sqrt(math.max(0, vt * vt + denom * vv))) / denom
+    end
+    if alpha <= 1e-4 then return nil end
+    local jx = (p0x + alpha * t0x + p1x - alpha * t1x) / 2
+    local jz = (p0z + alpha * t0z + p1z - alpha * t1z) / 2
+    local ym = (y0 + y1) / 2
+    local pts = {}
+    local r1 = junctionArcTo(pts, p0x, p0z, t0x, t0z, jx, jz, y0, ym)
+    -- Second arc, built backwards from P1 (tangent -T1) to J so it arrives along T1, then reversed.
+    local back = {}
+    local r2 = junctionArcTo(back, p1x, p1z, -t1x, -t1z, jx, jz, y1, ym)
+    pts[#pts] = nil                                    -- drop J once; the back list (reversed) starts on it
+    for i = #back, 1, -1 do pts[#pts + 1] = back[i] end
+    -- Neither P0 nor P1 is in the list (junctionArcTo excludes its start point) - they are the tie-ins.
+    return { points = pts, minRadius = math.min(r1, r2), jx = jx, jz = jz }
+end
+
+-- Add a directed connection a->b (and b->a when dual). toggleConnectionBetween is a TOGGLE, so this is
+-- only correct on an edge that does NOT already exist - which is the case for the fresh tie-in edges.
+local function junctionConnect(a, b, dual)
+    if a == nil or b == nil then return end
+    ADGraphManager:toggleConnectionBetween(a, b, false, dual and true or false, false)
+end
+
+-- Remove whatever connection exists between a and b, in both directions.
+local function junctionDisconnect(a, b)
+    if a == nil or b == nil then return end
+    if table.contains(a.out or {}, b.id) then ADGraphManager:toggleConnectionBetween(a, b, false, false, false) end
+    if table.contains(b.out or {}, a.id) then ADGraphManager:toggleConnectionBetween(b, a, false, false, false) end
+end
+
+--- Recompute the junction preview around the cursor: the scope circle, the approaches it cuts, and
+--- which entry->exit movements are new versus already connected. Stored on self.junctionPreview; nil
+--- when there is nothing to show. Pure inspection - it changes no waypoints.
+function ADFlyoverEditor:updateJunctionPreview()
+    -- Armed: the site is locked where it was clicked and the preview stops following the cursor (the
+    -- wheel and the turn radius still reshape it). Unarmed: it follows the cursor as a live scout.
+    local cx, cz, cy
+    if self.junctionArmed ~= nil then
+        cx, cz, cy = self.junctionArmed.cx, self.junctionArmed.cz, self.junctionArmed.cy
+    else
+        if self.cursorX == nil then
+            self.junctionPreview, self.junctionPreviewKey = nil, nil
+            return
+        end
+        cx, cz, cy = self.cursorX, self.cursorZ, self.cursorY
+    end
+    local R = self.junctionRadius or 15
+    -- NB: a DIFFERENT name from the scope radius R - shadowing it once made the scope circle render
+    -- at the turn radius instead of the search radius.
+    local turnR = self.junctionTurnRadius or 12
+    -- The solve raycasts the road surface for every candidate radius of every turn, so it is only
+    -- redone when something it depends on changed: the cursor (to half a metre), a setting, or the
+    -- graph. Between those the last preview stands.
+    local key = string.format("%d_%d_%d_%d_%s_%s_%d", math.floor(cx * 2), math.floor(cz * 2), R, turnR,
+        tostring(self.junctionCheckSurface ~= false), tostring(self.junctionExtendTrim ~= false),
+        ADGraphManager:getWayPointsCount())
+    if key == self.junctionPreviewKey and self.junctionPreview ~= nil then
+        return
+    end
+    self.junctionPreviewKey = key
+    self.junctionPreview = nil
+    local R2 = R * R
+
+    -- Scope: waypoints inside the circle.
+    local inside = {}
+    local wps = ADGraphManager:getWayPoints()
+    for _, wp in pairs(wps) do
+        local dx, dz = wp.x - cx, wp.z - cz
+        if dx * dx + dz * dz <= R2 then
+            inside[wp.id] = wp
+        end
+    end
+
+    -- Raw approaches: every edge the circle cuts (one end inside, one outside). An edge coming INTO the
+    -- scope is an entry, one going OUT is an exit; a two-way lane yields both. Anchored at the inside
+    -- boundary node; bearing is the direction of travel (atan2(dx, dz), the convention FS bearings use).
+    local raw = {}
+    for _, wp in pairs(inside) do
+        for _, tid in pairs(wp.out or {}) do
+            if inside[tid] == nil then
+                local t = ADGraphManager:getWayPointById(tid)
+                if t ~= nil then
+                    raw[#raw + 1] = { wp = wp, dir = "out", bearing = math.atan2(t.x - wp.x, t.z - wp.z) }
+                end
+            end
+        end
+        for _, sid in pairs(wp.incoming or {}) do
+            if inside[sid] == nil then
+                local s = ADGraphManager:getWayPointById(sid)
+                if s ~= nil then
+                    raw[#raw + 1] = { wp = wp, dir = "in", bearing = math.atan2(wp.x - s.x, wp.z - s.z) }
+                end
+            end
+        end
+    end
+
+    -- Group the raw approaches: same direction, similar bearing, and close together fold into ONE. This
+    -- collapses the near-coincident, stacked one-way nodes the survey found (arms 0.4-0.9 m apart) so a
+    -- crossing reads as a handful of approaches instead of a web. First step of "approach grouping".
+    local approaches = {}
+    local nIn, nOut = 0, 0
+    for _, ap in ipairs(raw) do
+        local into = nil
+        for _, g in ipairs(approaches) do
+            if g.dir == ap.dir and junctionAngDiff(g.bearing, ap.bearing) < math.rad(35)
+                and (g.wp.x - ap.wp.x) ^ 2 + (g.wp.z - ap.wp.z) ^ 2 < 36 then
+                into = g
+                break
+            end
+        end
+        if into ~= nil then
+            into.count = into.count + 1
+        else
+            approaches[#approaches + 1] = { wp = ap.wp, dir = ap.dir, bearing = ap.bearing, count = 1 }
+            if ap.dir == "in" then nIn = nIn + 1 else nOut = nOut + 1 end
+        end
+    end
+
+    -- "Already connected" = a directed path from the entry's inside node to the exit's inside node,
+    -- staying INSIDE the scope - so a road passing straight through is not re-proposed as a turn onto
+    -- itself. Bounded to the (small) inside set, so cheap.
+    local function connectedInside(fromId, toId)
+        if fromId == toId then return true end
+        local seen = { [fromId] = true }
+        local stack = { fromId }
+        while #stack > 0 do
+            local id = table.remove(stack)
+            local w = inside[id]
+            if w ~= nil then
+                for _, tid in pairs(w.out or {}) do
+                    if tid == toId then return true end
+                    if inside[tid] ~= nil and not seen[tid] then
+                        seen[tid] = true
+                        stack[#stack + 1] = tid
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    -- Movement matrix: each entry -> each exit, dropping U-turns, tagged new vs already connected.
+    -- nNew counts only movements that got a BUILDABLE connector - what actually places - so it never
+    -- silently disagrees with what right-click lays. Every candidate that drops out gets its own
+    -- bucket and, once the site is locked, its own log line with the angle, so nothing goes missing
+    -- without a visible reason (see docs/junction-plan.md s5, "failing is a valid result").
+    local movements = {}
+    local nNew, nExisting, nTight, nOffRoad, nNoCurve, nUTurn, nFar = 0, 0, 0, 0, 0, 0, 0
+    local usedMin, usedMax = nil, nil
+    -- 150 deg turned out to be too tight on a real site - a legitimate sharp hook (a two-way point's
+    -- "in" arm doubling back onto a nearby "out" arm) measured 152 deg and was silently dropped before
+    -- this function had per-pair logging at all. 170 deg excludes only near-literal reversals; the
+    -- radius/corridor solver is what actually gates drivability (visibly, as "tight"/"off road"), so
+    -- this filter only needs to catch geometry that is not a turn at all.
+    local uTurn = math.rad(170)
+    local logSite = (self.junctionArmed ~= nil)
+    for _, e in ipairs(approaches) do
+        if e.dir == "in" then
+            for _, x in ipairs(approaches) do
+                if x.dir == "out" and x.wp.id ~= e.wp.id then
+                    local angDiff = junctionAngDiff(e.bearing, x.bearing)
+                    if angDiff > uTurn then
+                        nUTurn = nUTurn + 1
+                        if logSite then
+                            roadNote(string.format("uturn:%d_%d", e.wp.id, x.wp.id),
+                                "junction - entry id=%d -> exit id=%d skipped as a U-turn (%.0f deg > %.0f deg limit).",
+                                e.wp.id, x.wp.id, math.deg(angDiff), math.deg(uTurn))
+                        end
+                    else
+                        local exists = connectedInside(e.wp.id, x.wp.id)
+                        -- Solve the turn at the largest radius (setting first, stepping down) that both
+                        -- holds the radius bound and keeps the vehicle corridor on the road. A turn that
+                        -- fails even at the floor is kept with its refusal reason, drawn red, never laid.
+                        local con, usedR, refused = nil, nil, nil
+                        if not exists then
+                            con, usedR, refused = self:junctionSolveMovement(e, x, cx, cz, R, turnR)
+                        end
+                        movements[#movements + 1] = { from = e, to = x, exists = exists, connector = con,
+                            usedRadius = usedR, refused = refused }
+                        if exists then
+                            nExisting = nExisting + 1
+                        elseif con ~= nil and refused == nil then
+                            nNew = nNew + 1
+                        elseif refused == "tight" then
+                            nTight = nTight + 1
+                        elseif refused == "offroad" then
+                            nOffRoad = nOffRoad + 1
+                        elseif refused == "far" then
+                            nFar = nFar + 1
+                            if logSite then
+                                roadNote(string.format("far:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d never come close to each other (likely two separate crossings in one scope) - skipped.",
+                                    e.wp.id, x.wp.id)
+                            end
+                        else
+                            nNoCurve = nNoCurve + 1
+                            if logSite then
+                                roadNote(string.format("nocurve:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d has no joinable curve (near-collinear offset tangents).",
+                                    e.wp.id, x.wp.id)
+                            end
+                        end
+                        if con ~= nil and refused == nil and usedR ~= nil then
+                            usedMin = math.min(usedMin or usedR, usedR)
+                            usedMax = math.max(usedMax or usedR, usedR)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if logSite then
+        for _, ap in ipairs(approaches) do
+            -- Keyed by id AND direction: a two-way point contributes an "in" AND an "out" approach
+            -- under the SAME waypoint id, and a key by id alone hid whichever one logged second.
+            roadNote(string.format("approach:%d:%s", ap.wp.id, ap.dir), "junction - approach id=%d %s, bearing %.0f deg.",
+                ap.wp.id, ap.dir, math.deg(ap.bearing))
+        end
+    end
+
+    -- Redundant-lane pass: two movements with a similar entry bearing AND a similar exit bearing are
+    -- the SAME turn attempted from different lanes of the same two roads - a multi-lane road has
+    -- several parallel "in" approaches and several parallel "out" ones, and the raw matrix pairs every
+    -- lane with every lane, including an inner lane crossing to a far outer lane on the OTHER side of
+    -- the intersection. Distance to the scope centre cannot tell those apart (the wrong pairing can sit
+    -- just as close as the right one when the lanes themselves are only a few metres apart) - but the
+    -- tracks' own closest-approach distance (meetDist, already computed while solving the connector)
+    -- can: the CORRECT lane pairing is the one whose tracks actually come closest together. Within each
+    -- bearing-matched cluster, keep only that one and refuse the rest as "lane" - visibly, not silently.
+    local nLane = 0
+    for i = 1, #movements do
+        local mi = movements[i]
+        if mi.connector ~= nil and mi.refused == nil and not mi.exists then
+            for j = i + 1, #movements do
+                local mj = movements[j]
+                if mj.connector ~= nil and mj.refused == nil and not mj.exists
+                    and junctionAngDiff(mi.from.bearing, mj.from.bearing) < math.rad(20)
+                    and junctionAngDiff(mi.to.bearing, mj.to.bearing) < math.rad(20) then
+                    local loser = (mi.connector.meetDist <= mj.connector.meetDist) and mj or mi
+                    loser.refused = "lane"
+                    nNew = nNew - 1
+                    nLane = nLane + 1
+                    if logSite then
+                        roadNote(string.format("lane:%d_%d", loser.from.wp.id, loser.to.wp.id),
+                            "junction - entry id=%d -> exit id=%d is a redundant lane pairing (a closer match exists for this turn) - skipped.",
+                            loser.from.wp.id, loser.to.wp.id)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Rough confidence (refined later): a clean crossing has a small, balanced set of approaches.
+    local conf = 0
+    if #approaches >= 2 then
+        local balance = 1 - math.abs(nIn - nOut) / math.max(1, nIn + nOut)
+        local tidy = (#approaches <= 8) and 1 or (8 / #approaches)
+        conf = math.max(0, math.min(1, 0.5 * balance + 0.5 * tidy))
+    end
+
+    self.junctionPreview = {
+        radius = R, turnRadius = turnR, cx = cx, cz = cz, cy = cy, armed = (self.junctionArmed ~= nil),
+        approaches = approaches, movements = movements,
+        nIn = nIn, nOut = nOut, nNew = nNew, nExisting = nExisting, nTight = nTight, nOffRoad = nOffRoad,
+        nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, usedMin = usedMin, usedMax = usedMax, confidence = conf,
+    }
+end
+
+--- Build one movement's connector from the REAL track geometry (entry approach -> exit approach).
+--- Two earlier versions each got half of it: a straight-line fillet respected the turn radius but put
+--- its tangent points on straight extensions of the tracks (off a curved road, or floating in the gap
+--- where a stem dead-ends short of the crossbar); an on-track Hermite stayed on the road but had no
+--- radius control. This does both:
+---   1. meeting region = the closest node pair between the two chains; the two LOCAL travel directions
+---      there give the turn angle delta and the ideal corner V (where the local tangent lines cross);
+---   2. the tie-in distance is the fillet's t = turnR*tan(delta/2), measured from the CORNER - so a stem
+---      that stops short of the crossbar is not over-trimmed, and one that overshoots is trimmed back;
+---   3. each tie-in is placed by walking that distance along the REAL chain (guaranteed on the road,
+---      with the road's true local tangent), and the two are joined by a biarc - tangent-continuous at
+---      both ends by construction. For a clean crossing the biarc IS the radius-turnR fillet arc; on a
+---      curved or gapped site it flexes to stay on the road, and reports its smallest radius so a turn
+---      tighter than the setting can be flagged instead of laid.
+--- Returns { ax,ay,az, bx,by,bz, points, minRadius } or (nil, reason) when the tracks genuinely cannot
+--- be joined into ONE turn. `reason` is "far" for the plausibility gate below, or nil for every other
+--- failure (degenerate/opposed tangents; not a shallow angle - see the note on `delta`). Used by BOTH
+--- preview and placement, so what is drawn is what is laid.
+function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, turnR)
+    local chainA = self:junctionChain(fromAp, cx, cz, radius)
+    local chainB = self:junctionChain(toAp, cx, cz, radius)
+    if #chainA < 2 or #chainB < 2 then return nil end
+
+    -- Meeting region: the closest node between the two chains (dense ~4 m nodes make node-to-node a good
+    -- proxy for the true closest approach).
+    local iA, iB, bestd = 1, 1, math.huge
+    for a = 1, #chainA do
+        for b = 1, #chainB do
+            local d = (chainA[a].x - chainB[b].x) ^ 2 + (chainA[a].z - chainB[b].z) ^ 2
+            if d < bestd then bestd, iA, iB = d, a, b end
+        end
+    end
+
+    -- Local travel directions at the meeting: A toward the interior (lower->higher index), B out toward
+    -- its boundary (the negated chain direction).
+    local uAx, uAz = junctionSegDir(chainA, iA)
+    local sbx, sbz = junctionSegDir(chainB, iB)
+    local uBx, uBz = -sbx, -sbz
+    local pA, pB = chainA[iA], chainB[iB]
+    -- NO angle floor here: this network's own survey put the MEDIAN junction angle at 10 deg, and a
+    -- shallow merge below that is a completely ordinary new connection to make, not a degenerate one.
+    -- An earlier version dropped anything under 5 deg as "nothing to turn" - which silently ate real
+    -- shallow merges (they were not counted as tight/off-road either, so nothing said why they were
+    -- missing). The biarc below already reduces to a straight join in the limit as delta -> 0 (its
+    -- parallel-tangent branch), so there is nothing to gate: let it solve.
+    local delta = math.acos(math.max(-1, math.min(1, uAx * uBx + uAz * uBz)))
+    local t = turnR * math.tan(delta / 2)
+
+    -- The corner V where the two local tangent lines cross is used to measure how far each meeting
+    -- node sits from it, signed along travel: sA = corner is this far ahead of A's node (a stem
+    -- trimmed back short of the crossbar has a large positive sA), sB = B's node is this far past the
+    -- corner. Also computed here, and used for the plausibility gate right below.
+    local sA, sB = 0, 0
+    local det = uBx * uAz - uAx * uBz
+    if math.abs(det) > 1e-6 then
+        local s = (uBx * (pB.z - pA.z) - uBz * (pB.x - pA.x)) / det
+        local Vx, Vz = pA.x + s * uAx, pA.z + s * uAz
+        sA = (Vx - pA.x) * uAx + (Vz - pA.z) * uAz
+        sB = (pB.x - Vx) * uBx + (pB.z - Vz) * uBz
+    end
+
+    -- Plausibility gate: if the two tracks are not the same crossing, do not connect them - a wide
+    -- scope catching two separate nearby junctions was pairing every entry with every exit regardless
+    -- of distance, drawing connectors straight through the middle of the whole site instead of
+    -- hugging one corner.
+    --
+    -- "Far apart" is NOT the same test as "far from the closest existing node": a stem trimmed back
+    -- short of the true crossing (walkBack now extrapolates past it to reach the tie-in) makes the
+    -- raw node-to-node distance look exactly like an unrelated, genuinely distant crossing would -
+    -- both are "far" by that measure, but only one is real. What tells them apart is the CORNER: two
+    -- tracks converging on one nearby point (sA, sB both small - or negative, meaning the stem already
+    -- reaches past it) are the same crossing, however short they were trimmed; two tracks that would
+    -- only meet an implausible distance away (or a projected corner outside the scope circle
+    -- entirely) are not, however close their nearest surviving nodes happen to sit. That is checked
+    -- when the corner is well-defined (the tangents actually cross); parallel/near-parallel tangents
+    -- have no such corner, so those fall back to the original closest-node test - tracks that never
+    -- converge at all should not be connected regardless of trimming.
+    -- `junctionExtendTrim` (card toggle "trim/extend", default true) governs both this gate and the
+    -- walk below: off, a trimmed stem is never projected past where it actually ends, so the corner
+    -- test would be meaningless (the tie-in cannot reach the corner anyway) - fall back to the
+    -- original closest-node test in that case too.
+    local extend = self.junctionExtendTrim ~= false
+    if not extend then
+        local meetCap = math.max(radius * 0.5, turnR * 3, 15)
+        if bestd > meetCap * meetCap then return nil, "far" end
+    elseif math.abs(det) > 1e-6 then
+        local farCap = math.max(radius, turnR * 6, 20)
+        if sA > farCap or sB > farCap then return nil, "far" end
+    else
+        -- Parallel/near-parallel tangents (delta ~ 0) - the MOST common case, a straight-through
+        -- continuation, and the corner test above does not apply (there is no corner). Colinearity
+        -- IS the meeting signal here: two tracks lined up end to end are obviously the same road,
+        -- however far apart their trimmed ends sit - and that gap is already bounded by both ends
+        -- being inside the scope circle, so no extra distance cap is needed. What DOES matter is
+        -- whether they are actually on the same line: gate on the perpendicular offset from B to A's
+        -- line instead of the raw point distance - small offset is the same road; a real one is a
+        -- genuinely different, merely parallel one (an adjacent lane a few lanes over, say).
+        local perpDist = math.abs((pB.x - pA.x) * uAz - (pB.z - pA.z) * uAx)
+        local perpCap = math.max(turnR, 6)
+        if perpDist > perpCap then return nil, "far" end
+    end
+
+    -- Tie-ins: t back from the corner, walked along the real chains (a non-positive walk stays at the
+    -- meeting node - e.g. a dead-end whose gap to the crossbar already exceeds t).
+    local pax, pay, paz, tadx, tadz = junctionWalkBack(chainA, iA, t - sA, extend)
+    local pbx, pby, pbz, tbdx, tbdz = junctionWalkBack(chainB, iB, t - sB, extend)
+    -- A leaves along its chain direction (toward the interior); B is arrived at heading out (negated).
+    local bi = junctionBiarc(pax, paz, tadx, tadz, pbx, pbz, -tbdx, -tbdz, pay, pby)
+    if bi == nil then return nil end
+    return { ax = pax, ay = pay, az = paz, bx = pbx, by = pby, bz = pbz,
+        points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd) }
+end
+
+--- How many of a connector's corridor samples leave the road surface, and how many were taken. Every
+--- curve point is probed at its centre and half a corridor width to each side of the local heading
+--- (tractor width plus a trailer allowance - see FLYOVER_JUNCTION_CORRIDOR). The two tie-ins are
+--- probed at the centre only: they sit on the existing track, whose edge situation is not this turn's
+--- doing.
+function ADFlyoverEditor:junctionCorridorOffRoad(con)
+    local half = (AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
+    local pts = { { x = con.ax, z = con.az } }
+    for _, p in ipairs(con.points) do pts[#pts + 1] = p end
+    pts[#pts + 1] = { x = con.bx, z = con.bz }
+    local off, total = 0, 0
+    for i = 1, #pts do
+        local p = pts[i]
+        total = total + 1
+        if not isRoadAt(p.x, p.z) then off = off + 1 end
+        if i > 1 and i < #pts then
+            local a, b = pts[i - 1], pts[i + 1]
+            local dx, dz = b.x - a.x, b.z - a.z
+            local l = math.sqrt(dx * dx + dz * dz)
+            if l > 1e-6 then
+                local nx, nz = -dz / l, dx / l
+                total = total + 2
+                if not isRoadAt(p.x + nx * half, p.z + nz * half) then off = off + 1 end
+                if not isRoadAt(p.x - nx * half, p.z - nz * half) then off = off + 1 end
+            end
+        end
+    end
+    return off, total
+end
+
+--- Solve one turn at the largest radius that both holds the radius bound and keeps the corridor on
+--- the road: the setting first, then stepping down 1 m at a time to the turn-radius floor. Inside
+--- turns at a sharp corner therefore come out tighter than outside ones, as real intersections are
+--- laid out, without the global setting being tuned per site. Returns connector, radius used, nil on
+--- success; on failure the last connector tried, the floor, and a reason ("tight" / "offroad" /
+--- "nocurve" / "far") so the preview can still show what was refused and why.
+--- Is this connector's corridor off the road ENOUGH to refuse it? A single stray sample - one edge
+--- probe clipping a narrow paved apron at a dirt/pavement seam, or a texture-boundary sliver - should
+--- not kill an otherwise good turn; a corridor that is mostly off-road should. Tolerates up to 1 sample
+--- or 15% of the samples taken, whichever is larger.
+function ADFlyoverEditor:junctionCorridorTooOffRoad(con)
+    local off, total = self:junctionCorridorOffRoad(con)
+    local tolerance = math.max(1, math.ceil(total * 0.15))
+    return off > tolerance
+end
+
+--- `junctionCheckSurface` (card toggle, default true) skips the road-surface raycast entirely - the
+--- turn is still radius-bound but never refused/shrunk for leaving the road. For a map whose surface
+--- reads wrong (see isRoadAt's logged classifications), or just to place fast on a site you already
+--- know is clear, without waiting on a raycast per candidate radius per curve point.
+function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR)
+    local floor = AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4
+    local checkSurface = self.junctionCheckSurface ~= false
+    local last, lastReason = nil, nil
+    local r = turnR
+    while r >= floor - 1e-6 do
+        local con, whyNil = self:junctionTrackConnector(fromAp, toAp, cx, cz, radius, r)
+        if con == nil then
+            -- "far" does not depend on the turn radius candidate - stepping r down cannot bring two
+            -- tracks closer together, so stop instead of retrying it at every floor step.
+            if whyNil == "far" then return nil, r, "far" end
+            if last == nil then return nil, r, "nocurve" end
+            return last, r + 1, lastReason
+        end
+        if con.minRadius < r * 0.7 then
+            last, lastReason = con, "tight"
+        elseif checkSurface and self:junctionCorridorTooOffRoad(con) then
+            last, lastReason = con, "offroad"
+        else
+            return con, r, nil
+        end
+        r = r - 1
+    end
+    return last, floor, lastReason
+end
+
+--- Place every NEW turn in the current preview: for each, lay OUR connector points between the entry
+--- and exit lane nodes with createSplineConnection (one-way, priority inherited from the joined road),
+--- all under one undo snapshot. Existing turns and U-turns were already filtered out of the matrix.
+--- No radius/obstacle validation yet - that gate, and verbose per-turn refusals, come next.
+--- The lane chain from an approach's boundary node toward the intersection interior (out-edges for an
+--- entry, incoming for an exit), boundary node first, staying within the scope. Also whether that lane
+--- DEAD-ENDS inside the scope (no travel continuation) rather than passing through.
+function ADFlyoverEditor:junctionChain(ap, cx, cz, radius)
+    local useOut = (ap.dir == "in")
+    local r2 = radius * radius
+    local chain = { ap.wp }
+    local node, cameFrom = ap.wp, nil
+    for _ = 1, 16 do
+        local list = useOut and (node.out or {}) or (node.incoming or {})
+        local nextId = nil
+        for _, nid in pairs(list) do
+            if nid ~= cameFrom then
+                local nx = ADGraphManager:getWayPointById(nid)
+                if nx ~= nil and (nx.x - cx) ^ 2 + (nx.z - cz) ^ 2 <= r2 then nextId = nid; break end
+            end
+        end
+        if nextId == nil then break end
+        cameFrom, node = node.id, ADGraphManager:getWayPointById(nextId)
+        chain[#chain + 1] = node
+    end
+    local last = chain[#chain]
+    local travelList = useOut and (last.out or {}) or (last.incoming or {})
+    local continues = false
+    for _, nid in pairs(travelList) do
+        if nid ~= cameFrom then continues = true; break end
+    end
+    return chain, (not continues)
+end
+
+--- Create the tie-in node at the tangent point (Tx,Tz) on an approach's track and splice it in. A
+--- through-road keeps both sides (insert). A dead-end keeps only the outer side and returns the stub
+--- past the tie-in for the caller to consume (deleted LAST, since removeWayPoint renumbers ids). The
+--- new node inherits the track's priority flags. Returns the node, its priority flags, the stub, and
+--- whether the LOCAL track at the tie-in is itself two-way - the caller uses this (both ends must
+--- agree) to decide whether the new connector should be dual too, instead of always one-way.
+function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
+    local chain, deadEnd = self:junctionChain(ap, cx, cz, radius)
+    if #chain < 2 then
+        -- Only the boundary node here; tie at it. Its own edge (to whatever it still connects to)
+        -- tells us if this stub of track is two-way.
+        local wp = ap.wp
+        local nbrId = (ap.dir == "in") and (wp.incoming or {})[1] or (wp.out or {})[1]
+        local dual = false
+        if nbrId ~= nil then
+            local nbr = ADGraphManager:getWayPointById(nbrId)
+            if nbr ~= nil then
+                dual = (ap.dir == "in") and table.contains(wp.out or {}, nbrId)
+                    or table.contains(nbr.out or {}, wp.id)
+            end
+        end
+        return wp, (wp.flags or AutoDrive.FLAG_NONE), {}, dual
+    end
+    local bestSeg, bestFrac, bestd = 1, 0, math.huge
+    for i = 1, #chain - 1 do
+        local a, b = chain[i], chain[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local len2 = dx * dx + dz * dz
+        local f = (len2 > 1e-6) and math.max(0, math.min(1, ((Tx - a.x) * dx + (Tz - a.z) * dz) / len2)) or 0
+        local px, pz = a.x + f * dx, a.z + f * dz
+        local d = (px - Tx) ^ 2 + (pz - Tz) ^ 2
+        if d < bestd then bestd, bestSeg, bestFrac = d, i, f end
+    end
+    local outer, inner = chain[bestSeg], chain[bestSeg + 1]
+    local trackFlags = outer.flags or AutoDrive.FLAG_NONE
+    -- Whether the immediate outer<->inner segment is two-way - independent of which node ends up
+    -- reused or split, so it is computed once and returned from every branch below.
+    local segDual = (ap.dir == "in") and table.contains(inner.out or {}, outer.id)
+        or table.contains(outer.out or {}, inner.id)
+
+    -- If the tie-in lands ON an existing lane node (within 0.35 m), reuse that node rather than stacking
+    -- a new one on top of it - the survey showed near-coincident points already clutter real junctions.
+    -- A dead-end then consumes only what lies PAST the reused node (deleting those also drops its
+    -- inward edge, so it becomes the new terminus with nothing extra to do).
+    local hitIdx = (bestFrac < 0.5) and bestSeg or (bestSeg + 1)
+    local hit = chain[hitIdx]
+    if (hit.x - Tx) ^ 2 + (hit.z - Tz) ^ 2 < 0.35 ^ 2 then
+        local stubs = {}
+        if deadEnd then
+            for i = hitIdx + 1, #chain do
+                local w = chain[i]
+                if #(w.out or {}) + #(w.incoming or {}) > 2 then break end
+                stubs[#stubs + 1] = w
+            end
+        end
+        return hit, (hit.flags or AutoDrive.FLAG_NONE), stubs, segDual
+    end
+
+    -- Decide the stub to consume BEFORE mutating (so degree checks see the original graph). Stop at
+    -- anything that is not a plain lane node (degree > 2 = a junction / shared point), so we never
+    -- eat into the rest of the network.
+    local stubs = {}
+    if deadEnd then
+        for i = bestSeg + 1, #chain do
+            local w = chain[i]
+            if #(w.out or {}) + #(w.incoming or {}) > 2 then break end
+            stubs[#stubs + 1] = w
+        end
+    end
+
+    local ny = (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac
+    local N = ADGraphManager:recordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false)
+    if N == nil then return ap.wp, trackFlags, {}, segDual end
+
+    if ap.dir == "in" then
+        junctionDisconnect(outer, inner)
+        junctionConnect(outer, N, segDual)
+        if not deadEnd then junctionConnect(N, inner, segDual) end
+    else
+        junctionDisconnect(inner, outer)
+        junctionConnect(N, outer, segDual)
+        if not deadEnd then junctionConnect(inner, N, segDual) end
+    end
+    return N, trackFlags, stubs, segDual
+end
+
+--- Left-click: lock the junction site at the cursor (arm), or move the lock if one is set. From here
+--- the preview stays put while the wheel / turn radius reshape it, right-click places it, and a
+--- right-click with nothing to place unlocks. Mirrors the pick-then-apply flow of the span tools, so
+--- there is always a way out of the tool without laying anything.
+function ADFlyoverEditor:junctionClick()
+    if self.cursorX == nil then return end
+    self.junctionArmed = { cx = self.cursorX, cz = self.cursorZ, cy = self.cursorY }
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction site locked at %.1f, %.1f - wheel = scope, right-click places.",
+        self.cursorX, self.cursorZ)
+end
+
+--- Place every NEW turn in the preview (behaviour A): tie in at each track's tangent point (insert on a
+--- through-road, trim a dead-end back to it), lay the radius-R arc one-way from entry to exit, priority
+--- matched to the joined (exit) road, all under one undo. Dead-end stubs are consumed at the very end.
+function ADFlyoverEditor:applyJunction()
+    local jp = self.junctionPreview
+    if jp == nil then return end
+    local newMoves = {}
+    for _, m in ipairs(jp.movements) do
+        if not m.exists and m.connector ~= nil and m.refused == nil then
+            newMoves[#newMoves + 1] = m
+        end
+    end
+    -- Refusing a turn is a valid, verbose outcome (see docs/junction-plan.md s5): better unbuilt than
+    -- undrivable. Loosen the turn radius, or widen the scope so a gentler tie-in is found, to force it.
+    -- Every count below comes straight from the preview that was just looked at (armed, so it already
+    -- logged the per-pair detail) - not recomputed here, so this summary can never disagree with it.
+    if (jp.nTight or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - refused %d turn(s): tighter than the %.0f m turn radius even at the %.0f m floor.",
+            jp.nTight, jp.turnRadius or 0, AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4)
+    end
+    if (jp.nOffRoad or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - refused %d turn(s): no radius down to %.0f m keeps a %.1f m corridor on the road.",
+            jp.nOffRoad, AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4, AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4)
+    end
+    if (jp.nNoCurve or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - %d pair(s) had no joinable curve (see the id lines above) - not placed.",
+            jp.nNoCurve)
+    end
+    if (jp.nUTurn or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - %d pair(s) skipped as U-turns (bearings over 170 deg apart, see above).",
+            jp.nUTurn)
+    end
+    if (jp.nFar or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - %d pair(s) never came close to each other - likely two separate crossings caught by one scope; not placed.",
+            jp.nFar)
+    end
+    if (jp.nLane or 0) > 0 then
+        Logging.info("[FlyoverEditor]: junction - %d redundant lane pairing(s) skipped (a closer match exists for the same turn, see above).",
+            jp.nLane)
+    end
+    if #newMoves == 0 then
+        Logging.info("[FlyoverEditor]: junction - nothing new to connect here.")
+        return
+    end
+
+    ADEditorHistory:snapshot("junction")
+    local cx, cz, radius = jp.cx, jp.cz, jp.radius
+    local allStubs = {}
+    local placed = 0
+    -- A movement (e,x) and its MIRROR (e2,x2) with e2.wp.id==x.wp.id and x2.wp.id==e.wp.id can only
+    -- both exist when BOTH boundary nodes carry traffic in and out of the scope - a genuine two-way
+    -- point on each end (see the U-turn log's approach dump: a two-way node shows up as both an "in"
+    -- AND an "out" approach under the same id). That is exactly the ONLY case where a connector should
+    -- be dual - both directions were actually asked for. An earlier version instead asked each tie-in
+    -- "is the LOCAL track here two-way", which is the wrong question (it can be true on both ends of a
+    -- perfectly ordinary one-way turn, e.g. two different two-way roads meeting, with no request for
+    -- the turn itself to run both ways) and coloured connectors dual for no real reason. Confirming
+    -- the mirror ACTUALLY exists in this batch is the one signal that is never a false positive.
+    local function pairKey(a, b)
+        local lo, hi = math.min(a, b), math.max(a, b)
+        return lo .. "_" .. hi
+    end
+    local mirrorOf = {}
+    for _, m in ipairs(newMoves) do
+        mirrorOf[pairKey(m.from.wp.id, m.to.wp.id)] = (mirrorOf[pairKey(m.from.wp.id, m.to.wp.id)] or 0) + 1
+    end
+    local dualPairPlaced = {}
+    local dualPlaced, mirrorsSkipped = 0, 0
+    for _, m in ipairs(newMoves) do
+        local key = pairKey(m.from.wp.id, m.to.wp.id)
+        if dualPairPlaced[key] then
+            mirrorsSkipped = mirrorsSkipped + 1
+        else
+        local c = m.connector
+        local NA, _flagsA, stubsA = self:junctionTieIn(m.from, c.ax, c.az, cx, cz, radius)
+        local NB, exitFlags, stubsB = self:junctionTieIn(m.to, c.bx, c.bz, cx, cz, radius)
+        if NA ~= nil and NB ~= nil and NA.id ~= NB.id then
+            local dual = (mirrorOf[key] or 0) > 1
+            local ok = tryCall("junction createSplineConnection", function()
+                ADGraphManager:createSplineConnection(NA.id, c.points, NB.id, dual, false)
+            end)
+            if ok and dual then
+                dualPlaced = dualPlaced + 1
+                dualPairPlaced[key] = true
+            end
+            if ok then
+                local flags = exitFlags or AutoDrive.FLAG_NONE   -- match the joined (exit) road
+                if flags ~= AutoDrive.FLAG_NONE then
+                    local total = ADGraphManager:getWayPointsCount()
+                    for id = total - #c.points + 1, total do
+                        ADGraphManager:setWayPointFlags(id, flags, false)
+                    end
+                end
+                placed = placed + 1
+            end
+            for _, s in ipairs(stubsA) do allStubs[#allStubs + 1] = s end
+            for _, s in ipairs(stubsB) do allStubs[#allStubs + 1] = s end
+        end
+        end
+    end
+
+    for _, s in ipairs(allStubs) do
+        if s ~= nil and s.id ~= nil and s.id >= 0 and #(s.out or {}) + #(s.incoming or {}) <= 2 then
+            tryCall("junction removeWayPoint", function() ADGraphManager:removeWayPoint(s.id, false) end)
+        end
+    end
+
+    if mirrorsSkipped > 0 then
+        Logging.info("[FlyoverEditor]: junction - %d mirrored one-way pair(s) folded into their dual connector (built once, not twice).",
+            mirrorsSkipped)
+    end
+    Logging.info("[FlyoverEditor]: junction placed %d connector(s) (%d dual), consumed %d stub point(s).",
+        placed, dualPlaced, #allStubs)
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+    self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+end
+
 --- Wheel handler. Returns true when the wheel was consumed, which is what stops the camera zoom.
 --- Apply one wheel step to the active tool's key setting, ignoring the "has a pending action" gates.
 --- Shared by the gated handleWheel paths below and by wheeling directly over the tool card, where the
@@ -5804,6 +6856,12 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
             self.smoothStrength = math.max(0, math.min(AutoDrive.FLYOVER_SMOOTH_MAX, self.smoothStrength + step))
         end
         return true
+    elseif t == self.TOOL.JUNCTION then
+        -- The wheel is the scope radius - the primary disambiguation lever for what the crossing is.
+        self.junctionRadius = math.max(AutoDrive.FLYOVER_JUNCTION_RADIUS_MIN,
+            math.min(AutoDrive.FLYOVER_JUNCTION_RADIUS_MAX,
+                (self.junctionRadius or 15) + step * AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP))
+        return true
     end
     return false
 end
@@ -5842,8 +6900,8 @@ function ADFlyoverEditor:handleWheel(offset)
 
     -- Move's falloff radius is a spatial REACH, and players expect wheel-up to WIDEN it - the opposite
     -- of the tolerances and counts the global reversal above suits. So the move tool keeps the original
-    -- (pre-reversal) wheel direction; everything else stays reversed. The -/+ steppers are unaffected
-    -- either way, since they call stepAction directly and never come through here.
+    -- (pre-reversal) wheel direction; everything else (junction scope radius included) stays reversed.
+    -- The -/+ steppers are unaffected either way (they call stepAction directly, not here).
     local toolStep = (self.tool == self.TOOL.MOVE) and -step or step
 
     -- Any numeric field under the cursor takes the wheel: the floating card's fields, the settings
@@ -5876,6 +6934,9 @@ function ADFlyoverEditor:handleWheel(offset)
     if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.MOVE and self.dragId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    -- Junction claims the wheel whenever it is active (no pending action needed): the wheel IS the
+    -- scope-radius lever, so it takes the wheel over the world too, not just over the card.
+    if self.tool == self.TOOL.JUNCTION then return self:applyWheelToActiveTool(toolStep) end
 
     return false
 end
@@ -5968,6 +7029,16 @@ end
 function ADFlyoverEditor:stepThemeScale(dir)
     if ADFlyoverTheme == nil then return end
     ADFlyoverTheme:setScale(ADFlyoverTheme.scale + dir * ADFlyoverTheme.SCALE_STEP)
+end
+
+function ADFlyoverEditor:applyLineWeight(v)
+    if ADFlyoverTheme == nil then return nil end
+    return ADFlyoverTheme:setLineWeight(v)
+end
+
+function ADFlyoverEditor:stepLineWeight(dir)
+    if ADFlyoverTheme == nil then return end
+    ADFlyoverTheme:setLineWeight(ADFlyoverTheme.lineWeight + dir * ADFlyoverTheme.LINEWEIGHT_STEP)
 end
 
 function ADFlyoverEditor:cycleThemePreset(dir)

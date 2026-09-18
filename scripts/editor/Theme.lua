@@ -21,6 +21,9 @@ T.FOLDER = "modSettings/FS25_ADFlyoverEditor/"
 T.FILE = "theme.xml"
 
 T.SCALE_MIN, T.SCALE_MAX, T.SCALE_STEP, T.SCALE_DEFAULT = 0.7, 2.0, 0.05, 1.0
+-- Global line weight for the editor's world-space preview drawing (network highlights, tool previews,
+-- the junction tool). A display setting like scale, so it lives here and persists with the theme.
+T.LINEWEIGHT_MIN, T.LINEWEIGHT_MAX, T.LINEWEIGHT_STEP, T.LINEWEIGHT_DEFAULT = 0.5, 6.0, 0.5, 2.0
 
 -- #rrggbb (or #rgb) -> { r, g, b } in 0..1
 local function hexToRgb(hex)
@@ -142,6 +145,7 @@ T.ACCENTS = {
 T.preset = "contrastDark"
 T.accent = T.ACCENTS.amber
 T.scale = T.SCALE_DEFAULT
+T.lineWeight = T.LINEWEIGHT_DEFAULT
 T.overrides = {}     -- role -> { r, g, b }
 T.resolved = nil     -- role -> { r, g, b } (cache)
 
@@ -266,6 +270,17 @@ function T:setScale(v)
     return self.scale
 end
 
+--- Clamp/snap and store the global preview line weight. Returns the applied value.
+function T:setLineWeight(v)
+    v = tonumber(v)
+    if v == nil then return self.lineWeight end
+    v = math.max(self.LINEWEIGHT_MIN, math.min(self.LINEWEIGHT_MAX, v))
+    v = math.floor(v / self.LINEWEIGHT_STEP + 0.5) * self.LINEWEIGHT_STEP
+    self.lineWeight = v
+    self:save()
+    return self.lineWeight
+end
+
 function T:setOverride(role, r, g, b)
     self.overrides[role] = { r, g, b }
     self:dirty()
@@ -288,6 +303,7 @@ function T:resetDefault()
     self.preset = "contrastDark"
     self.accent = self.ACCENTS.amber
     self.scale = self.SCALE_DEFAULT
+    self.lineWeight = self.LINEWEIGHT_DEFAULT
     self.overrides = {}
     self:dirty()
     self:save()
@@ -319,6 +335,7 @@ function T.save()
         setXMLString(xml, "flyoverTheme#preset", T.preset)
         setXMLString(xml, "flyoverTheme#accent", T.accent)
         setXMLFloat(xml, "flyoverTheme#scale", T.scale)
+        setXMLFloat(xml, "flyoverTheme#lineWeight", T.lineWeight)
         local i = 0
         for role, rgb in pairs(T.overrides) do
             setXMLString(xml, string.format("flyoverTheme.override(%d)#role", i), role)
@@ -353,6 +370,12 @@ function T.load()
         if scale ~= nil then
             scale = math.max(T.SCALE_MIN, math.min(T.SCALE_MAX, scale))
             T.scale = math.floor(scale / T.SCALE_STEP + 0.5) * T.SCALE_STEP
+        end
+
+        local lw = getXMLFloat(xml, "flyoverTheme#lineWeight")
+        if lw ~= nil then
+            lw = math.max(T.LINEWEIGHT_MIN, math.min(T.LINEWEIGHT_MAX, lw))
+            T.lineWeight = math.floor(lw / T.LINEWEIGHT_STEP + 0.5) * T.LINEWEIGHT_STEP
         end
 
         T.overrides = {}

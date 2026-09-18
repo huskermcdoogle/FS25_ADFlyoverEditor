@@ -156,11 +156,17 @@ matrix, and the collision-clearance gate.
 
 ## 7. Deferred (V2+)
 
-- **Dubins pathfinding for the connector curve.** The current connector is our own tangent cubic
-  Hermite shaped by a turn-radius setting - good enough to place and drive. As collision avoidance comes
-  in, a **Dubins** path (arc–line–arc, the shortest curvature-bounded path for a car-like minimum
-  turning radius) is the better geometry: it guarantees the radius bound and composes cleanly with
-  obstacle/other-connector avoidance. Swap `junctionConnectorPoints` for a Dubins solver at that stage.
+- **Dubins pathfinding for the connector curve.** The current connector is a biarc fitted to the two
+  tracks' LOCAL tangent lines at the meeting point - good enough to place and drive, but pinned to
+  those lines, so the only move it has on a tight inside corner is to shrink its radius in place (see
+  the corridor note below, which is exactly the case this motivates). A **Dubins** path (arc–line–arc,
+  the shortest curvature-bounded path for a car-like minimum turning radius) solves over the full pose
+  space instead of one fixed line: with the entry/exit HEADINGS fixed but no tangent line forcing the
+  geometry, it can find a path that swings across the corridor toward the outside edge before curving
+  back to the exit lane - the lateral, corridor-using shape the reference sketch below shows, which a
+  radius-shrunk fillet cannot produce. It also guarantees the radius bound and composes cleanly with
+  obstacle/other-connector avoidance. Swap `junctionTrackConnector`'s biarc for a Dubins solver at that
+  stage, searching over candidate corridor offsets rather than a single fixed line.
 
 
 - **Common-node convergence for collision handling** — route multi-way movements through one shared,
@@ -169,7 +175,29 @@ matrix, and the collision-clearance gate.
   own design pass. (This is the "logic point people have determined helps multi-directional
   intersections" — worth doing, later.)
 - **Auto-scan the whole map** for candidate intersections (linter-style batch build/repair).
+- **"Create track on road / path" tool.** Click a road and lay a track that follows it: the junction
+  clearance probe (road mesh via ROAD collision group, painted road via terrain layer) already tells
+  road from verge, so the tool can find the surface's centreline (or a lane offset from it) and walk it,
+  dropping ~4 m points until the road ends or branches. Same probe, new consumer.
 - **Messy / offset N-way inference** and connector-vs-connector deconfliction at dense sites.
+- **Build order: straight-throughs first, then simplify, then splice bends.** At a dense multi-lane
+  site the current pass solves every movement independently in one go. A staged pipeline was
+  suggested instead: (1) connect the straight-through pairs first (delta ~ 0 - these are usually the
+  least ambiguous and most load-bearing movements), (2) simplify/drop redundant points once the
+  through-lanes are settled, THEN (3) splice in the turning connectors against the now-simplified
+  network. Worth real design time, not a quick patch - the current single-pass matrix plus the
+  redundant-lane dedup (§4/§6) is the interim approach.
+- **Corridor-shaped connectors, not just radius-shrunk ones.** Confirmed against a real inside-corner
+  site: shrinking the arc radius in place (today's fix, §4/§6) keeps the turn on-road but produces a
+  tighter, sharper-feeling turn than the site actually supports. What a driven path there really looks
+  like is NOT a smaller circle pinned to the same line - it swings OUT to use the full paved width
+  (toward the outside edge the road/verge offers) before curving back onto the exit lane, the way the
+  reference sketch on this site showed. That is lateral use of the corridor, not just a radius change.
+  When the vehicle-allowance work lands (this section, wider point) the solver should search for the
+  best LINE through the drivable corridor - not just the best radius on a fixed line - so an inside
+  turn can bulge outward the way this one visibly wants to. This is naturally the Dubins solver's job
+  (above), which searches pose-to-pose rather than being pinned to a fixed tangent line - the two
+  deferred items here are really one piece of work.
 
 ---
 
