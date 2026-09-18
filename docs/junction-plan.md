@@ -1,6 +1,7 @@
 # Auto junction placement — design & implementation plan
 
-**Status:** proposed (design). Not yet built. Two decisions still open (see *Open decisions*).
+**Status:** proposed (design). Not yet built. Scope and open decisions settled — ready to turn into an
+implementation task.
 
 Goal: a tool that builds a working AutoDrive intersection between nearby tracks — smooth, tangential,
 one-way curved connectors (merge and diverge ramps), kept clear of obstacles — matching the geometry
@@ -62,6 +63,12 @@ matching the spread-cluster style the map already uses.
    so the curve is nudged or the movement is refused with a reason. One check covers every obstacle
    type instead of a brittle per-type list from `placeables.xml`.
 4. **One click builds the whole intersection**, not one connector at a time.
+5. **Start with the clean 2-road crossing**, but keep the pipeline stages separate so N-way is an
+   incremental extension — fast iteration is expected (decision A).
+6. **Confidence-gated, with a click fallback and loud failures** (decision B): preview and commit when
+   the auto-grouping is confident; when it is not, ask for endpoint clicks instead of guessing. The
+   wheeled search radius is the primary disambiguation lever. A refused movement is a valid, verbose
+   outcome — see §5.
 
 ---
 
@@ -88,18 +95,39 @@ When you click near where roads should meet:
 
 ---
 
-## 5. The hard part, and how it is de-risked
+## 5. Confidence, the search radius, and failing loudly
 
 Auto-inferring *intent* from a single click — how many roads, which lanes pair up, at odd angles or
-offsets — is the genuinely tricky part. Mitigations:
+offsets — is the genuinely tricky part. The flow handles it with a live radius lever, a confidence
+gate, and honest failure:
 
-- **Nail the clean case first**: two roads crossing (each one-way, or a one-way pair). That is most of
-  the 84 four-way junctions on the map.
-- **Lean on the preview**: the full proposed intersection is always shown before commit, with a
-  scope-radius / turning-radius / clearance the user can dial, so a bad guess is *visible*, not
-  destructive.
-- **Keep a fallback**: when auto-grouping is ambiguous, drop to "click the roads to include" — the same
-  generator, explicit inputs.
+- **Wheeled search radius = the primary lever.** The scope radius is on the wheel, so dialling it in or
+  out includes/excludes tracks and reshapes the proposed intersection live. This is expected to resolve
+  most ambiguity on its own, before any fallback is needed.
+- **Confidence-gated commit.** The grouping carries a confidence score.
+  - **High confidence** → the full proposed intersection previews (green/red per movement); right-click
+    commits.
+  - **Low confidence** → instead of guessing, the tool asks you to **click the endpoints that should be
+    connected**. Same generator, explicit inputs. The radius lever usually keeps you out of this mode.
+- **Clean 2-road crossing first**, but the pipeline stages (scope → approaches → movements →
+  connectors) are kept separate so extending to N-way is an incremental change — fast iteration is
+  expected.
+
+### Failing is a valid result — and it is verbose
+A refused movement is often the *correct* outcome: better to leave a turn unbuilt than to lay an
+undrivable one. So the generator builds every movement that passes and **reports every one that does
+not, per movement, with the reason** — in the preview (red arm + label) and in the log. Failure
+reasons:
+
+- **Turning radius too tight** — the required curve is sharper than the turning-radius setting. Refusing
+  is usually right; loosen the radius or widen the approach to force it.
+- **Obstacle in the way** — the collision query hit a building / fence / pole / sign / tree within
+  clearance, and the curve could not be nudged clear.
+- **Overpass / height mismatch** — the tracks cross but sit outside the height tolerance (a bridge).
+- **No legal movement** — the one-way directions do not permit that turn.
+- **Ambiguous grouping** — confidence too low; falls back to endpoint clicks (above).
+
+Partial success is normal and fine: place what works, and say clearly what did not, and why.
 
 ---
 
@@ -146,13 +174,14 @@ matrix, and the collision-clearance gate.
 
 ---
 
-## 9. Open decisions
+## 9. Decisions — settled
 
-- **A. Approach grouping in V1.** *Recommended:* target the **clean 2-road crossing** first (fast to a
-  working, previewable tool); arbitrary N-way inference is a follow-up. Alternative: require full N-way
-  from day one (much longer, more guessing).
-- **B. When the auto-guess is unsure.** *Recommended:* **fall back to "click the roads to include"**
-  (same generator, explicit inputs). Alternative: always just preview the best guess and let the user
-  accept/reject.
+- **A. Approach grouping in V1 → clean 2-road crossing first.** The pipeline stages are kept separate
+  so N-way is an incremental extension; fast iteration is expected.
+- **B. Unsure auto-guess → both preview *and* click fallback, gated by confidence.** Confident groupings
+  preview and commit; low-confidence ones ask for endpoint clicks. The wheeled search radius is the main
+  disambiguation lever and should keep the fallback rarely needed. Failures (tight radius, obstacle,
+  overpass, no legal movement) are first-class, verbose, per-movement outcomes — refusing a bad
+  connection is often the right move (§5).
 
-Once A and B are settled, this plan is ready to turn into an implementation task.
+This plan is ready to turn into an implementation task.
