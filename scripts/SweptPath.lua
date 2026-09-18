@@ -98,10 +98,84 @@ local function axleCentres(vehicle)
     end
     local function centre(g)
         if g == nil then return nil end
-        return { x = g.x / g.n, y = g.y / g.n, z = g.z / g.n }
+        return { x = g.x / g.n, y = g.y / g.n, z = g.z / g.n, lz = g.lz }
     end
     local all = allN > 0 and { x = allX / allN, y = allY / allN, z = allZ / allN } or nil
     return centre(front), centre(rear), all
+end
+
+--- Measure the design-vehicle parameters (spec §4) off a real, entered rig instead of typing them:
+--- tow wheelbase, steering-node and hitch offsets from the rear axle (signed along the body axis),
+--- trailer hitch->wheel-centroid length, widths, full-lock radius, the driver's look-ahead and
+--- waypoint-reach distance. Returns a SweptSim rig table, or nil and a reason.
+function R.captureRig(vehicle)
+    if vehicle == nil or vehicle.components == nil then return nil, "no vehicle" end
+    local root = vehicle.components[1].node
+    local front, rear = axleCentres(vehicle)
+    if front == nil or rear == nil then return nil, "vehicle exposes no wheels" end
+    local steerNode = (vehicle.getAISteeringNode ~= nil and vehicle:getAISteeringNode()) or root
+    local _, _, steerLz = localToLocal(steerNode, root, 0, 0, 0)
+    local rig = {
+        name = vehicle.getName and vehicle:getName() or "vehicle",
+        wheelbase = math.max(0.5, front.lz - rear.lz),
+        steerNodeOffset = steerLz - rear.lz,
+        towWidth = (vehicle.size and vehicle.size.width) or 2.5,
+        maxRotTime = math.max(0.1, math.abs(vehicle.maxRotTime or 1)),
+        minTurnRadius = vehicle.maxTurningRadius or 6.0,
+        lookAhead = 4, minDistance = 1.8,
+        hitchOffset = 0, trailerLength = 0, trailerWidth = 0,
+    }
+    local AD = ADFlyoverArming and ADFlyoverArming.autoDrive
+    if AD ~= nil then
+        if AD.getMinLookaheadByVehicleType then rig.lookAhead = AD.getMinLookaheadByVehicleType(vehicle) end
+        if AD.defineMinDistanceByVehicleType then rig.minDistance = AD.defineMinDistanceByVehicleType(vehicle) end
+    end
+    -- First wheeled implement = the trailer. Hitch offset is measured in the TOW's root frame so it
+    -- carries its sign (negative = behind the rear axle, a drawbar).
+    local spec = vehicle.spec_attacherJoints
+    if spec ~= nil and spec.attachedImplements ~= nil then
+        for _, imp in ipairs(spec.attachedImplements) do
+            local obj = imp.object
+            local joint = spec.attacherJoints and spec.attacherJoints[imp.jointDescIndex]
+            if obj ~= nil and joint ~= nil and joint.jointTransform ~= nil then
+                local _, trRear, trAll = axleCentres(obj)
+                if trRear ~= nil then
+                    local _, _, hitchLz = localToLocal(joint.jointTransform, root, 0, 0, 0)
+                    local hx, _, hz = getWorldTranslation(joint.jointTransform)
+                    local piv = trAll or trRear
+                    rig.hitchOffset = hitchLz - rear.lz
+                    rig.trailerLength = math.sqrt((piv.x - hx) ^ 2 + (piv.z - hz) ^ 2)
+                    rig.trailerWidth = (obj.size and obj.size.width) or 2.5
+                    rig.name = rig.name .. " + " .. (obj.getName and obj:getName() or "trailer")
+                    break
+                end
+            end
+        end
+    end
+    return rig
+end
+
+function R.describeRig(rig)
+    if rig == nil then return "no rig captured (FlyoverSweptRig with a vehicle entered)" end
+    return string.format("%s: wheelbase %.2f, steer node %+.2f, full-lock R %.1f, look-ahead %.1f, reach %.1f, hitch %+.2f, trailer %.2f (w %.1f/%.1f)",
+        rig.name, rig.wheelbase, rig.steerNodeOffset, rig.minTurnRadius, rig.lookAhead, rig.minDistance,
+        rig.hitchOffset, rig.trailerLength, rig.towWidth or 0, rig.trailerWidth or 0)
+end
+
+--- Console: capture the entered vehicle as the design rig the junction preview simulates with.
+function R.captureCurrentRig()
+    local v = controlledVehicle()
+    if v == nil then
+        -- Fall back to any entered vehicle even without AutoDrive state.
+        local AD = ADFlyoverArming and ADFlyoverArming.autoDrive
+        v = AD and AD.getControlledVehicle and AD.getControlledVehicle() or nil
+    end
+    local rig, why = R.captureRig(v)
+    if rig == nil then return "could not capture: " .. tostring(why) end
+    R.rig = rig
+    log("design rig captured - %s", R.describeRig(rig))
+    if ADFlyoverEditor ~= nil then ADFlyoverEditor.junctionPreviewKey = nil end
+    return "captured " .. R.describeRig(rig)
 end
 
 --- Walk the attached implements: for each, the world position of the tow side's hitch node and the

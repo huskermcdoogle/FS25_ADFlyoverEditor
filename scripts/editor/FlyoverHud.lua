@@ -530,6 +530,8 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleJunctionCurveEngine() end)
         add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
             function() editor:toggleJunctionCheckObstacles() end)
+        add("toggle", "swept path", (editor.junctionSwept ~= false) and "on" or "off", false,
+            function() editor:toggleJunctionSwept() end)
         add("number", "corridor", string.format("%.1f m", editor.junctionCorridor or 4))
         rows[#rows].stepAction = function(dir)
             editor.junctionCorridor = math.max(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MIN,
@@ -581,6 +583,12 @@ function ADFlyoverHud:buildRows(editor)
                 add("toggle", "blocked (refused)", tostring(jp.nBlocked))
             end
             add("toggle", "already there", tostring(jp.nExisting))
+            if jp.sweptMax ~= nil then
+                add("toggle", "trailer cut-in", string.format("%.1f m", jp.sweptMax))
+                if (jp.nSweptWide or 0) > 0 then
+                    add("toggle", "trailer past corridor", tostring(jp.nSweptWide))
+                end
+            end
             add("toggle", "confidence", string.format("%d%%", math.floor(jp.confidence * 100 + 0.5)))
         else
             add("note", "point at a crossing")

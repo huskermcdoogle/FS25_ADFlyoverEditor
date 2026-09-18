@@ -155,6 +155,7 @@ ADFlyoverEditor = {
     -- Static-obstacle check (trees, buildings, fences/poles/signs), on by default: a corridor that
     -- overlaps one shrinks its radius to swing clear, and refuses (red, "blocked") if nothing fits.
     junctionCheckObstacles = true,
+    junctionSwept = true,
     -- Card-tunable widths: the on-road corridor (surface check) and the obstacle-clearance box.
     junctionCorridor = 4.0,
     junctionClearance = 5.0,
@@ -2007,6 +2008,22 @@ function ADFlyoverEditor:drawNetwork()
                 end
                 ADDrawingManager:addSphereTask(c.ax, (c.ay or baseY) + 0.5, c.az, 1.8, cr, cg, cb, 1)
                 ADDrawingManager:addSphereTask(c.bx, (c.by or baseY) + 0.5, c.bz, 1.8, cr, cg, cb, 1)
+                -- Swept-path prediction (locked site): where the design rig would actually go. ORANGE =
+                -- tow rear axle, CYAN = trailer axle - the recorder's colours, so a recorded run and a
+                -- prediction overlaid read the same. A trailer that would run its inside edge past the
+                -- corridor draws RED instead of cyan.
+                if m.swept ~= nil then
+                    local sw = m.swept
+                    local function track(pts, r, g, b, lift)
+                        for i = 2, #pts do
+                            local q, p = pts[i - 1], pts[i]
+                            ADDrawingManager:addLineTask(q.x, baseY + lift, q.z, p.x, baseY + lift, p.z, lw * 0.7, r, g, b)
+                        end
+                    end
+                    track(sw.tow, 1, 0.55, 0.1, 0.35)
+                    if sw.wide then track(sw.trailer, 1, 0.2, 0.15, 0.4)
+                    else track(sw.trailer, 0.2, 0.85, 1, 0.4) end
+                end
             end
         end
 
@@ -3179,6 +3196,13 @@ function ADFlyoverEditor:toggleJunctionCheckSurface()
 end
 
 --- Toggle the static-obstacle check (trees, buildings, fences/poles/signs via the physics world).
+function ADFlyoverEditor:toggleJunctionSwept()
+    self.junctionSwept = not (self.junctionSwept ~= false)
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction swept-path prediction %s.",
+        self.junctionSwept and "on (tow and trailer lines drawn on the locked site)" or "off")
+end
+
 function ADFlyoverEditor:toggleJunctionCheckObstacles()
     self.junctionCheckObstacles = not (self.junctionCheckObstacles ~= false)
     self.junctionPreviewKey = nil
@@ -6317,7 +6341,11 @@ function ADFlyoverEditor:updateJunctionPreview()
         tostring(self.junctionCheckSurface ~= false), tostring(self.junctionExtendTrim ~= false),
         tostring(self.junctionRebuild == true), tostring(self.junctionUseDubins ~= false)
             .. tostring(self.junctionCheckObstacles ~= false)
-            .. string.format("_%d_%d", (self.junctionCorridor or 4) * 10, (self.junctionClearance or 5) * 10),
+            .. string.format("_%d_%d", (self.junctionCorridor or 4) * 10, (self.junctionClearance or 5) * 10)
+            -- The swept-path prediction runs only on a LOCKED site (see below), so locking must
+            -- refresh the preview; and a newly captured rig changes every predicted line.
+            .. "_" .. tostring(self.junctionSwept ~= false) .. "_" .. tostring(self.junctionArmed ~= nil)
+            .. "_" .. tostring(ADFlyoverSweptPath and ADFlyoverSweptPath.rig and ADFlyoverSweptPath.rig.name or "-"),
         ADGraphManager:getWayPointsCount())
     if key == self.junctionPreviewKey and self.junctionPreview ~= nil then
         return
@@ -6670,6 +6698,39 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
     end
 
+    -- Swept-path prediction (docs/swept-path-spec.md §5-6, phase 5 step 1: VISUALISE). On a locked
+    -- site only - it is a per-turn simulation and the scouting preview already re-solves on every
+    -- half-metre of cursor travel - drive the design rig along each placeable connector with the
+    -- stock-driver model and keep the predicted tow and trailer tracks for the preview to draw, plus
+    -- the trailer's worst inside cut-in for the card. No gate yet: this is the step where the model's
+    -- claims are made visible before anything is allowed to refuse on them.
+    local sweptMax, nSweptWide = nil, 0
+    if self.junctionSwept ~= false and self.junctionArmed ~= nil and SweptSim ~= nil then
+        local rig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or SweptSim.EXAMPLE_RIG
+        local halfCorr = (self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
+        for _, m in ipairs(movements) do
+            if m.connector ~= nil and m.refused == nil and (not m.exists or m.rebuild) then
+                local ok, sw = pcall(function() return self:junctionSweptPredict(m, cx, cz, R, rig) end)
+                if ok and sw ~= nil then
+                    m.swept = sw
+                    -- Inside trailer EDGE beyond the corridor half-width = the turn the trailer clips.
+                    local edge = sw.trailerIn + (rig.trailerWidth or 2.5) / 2
+                    sw.wide = edge > halfCorr
+                    if sw.wide then nSweptWide = nSweptWide + 1 end
+                    sweptMax = math.max(sweptMax or 0, sw.trailerIn)
+                    Logging.info("[FlyoverEditor]: swept - entry id=%d -> exit id=%d (%s turn): tow cuts %.2f m inside, trailer axle %.2f m inside / %.2f m outside the connector; inside edge %.2f m vs corridor half-width %.1f m -> %s (rig: %s).",
+                        m.from.wp.id, m.to.wp.id, sw.leftTurn and "left" or "right", sw.towIn, sw.trailerIn,
+                        sw.trailerOut, edge, halfCorr, sw.wide and "PAST CORRIDOR" or "fits", rig.name or "?")
+                elseif ok and sw == nil then
+                    Logging.info("[FlyoverEditor]: swept - entry id=%d -> exit id=%d: no prediction (geometry unusable for a run-in/run-out).",
+                        m.from.wp.id, m.to.wp.id)
+                elseif not ok then
+                    roadNote("sweptErr", "swept-path prediction failed: %s", tostring(sw))
+                end
+            end
+        end
+    end
+
     -- Rough confidence (refined later): a clean crossing has a small, balanced set of approaches.
     local conf = 0
     if #approaches >= 2 then
@@ -6685,7 +6746,96 @@ function ADFlyoverEditor:updateJunctionPreview()
         nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, nLane = nLane, nRebuild = nRebuild, nBlocked = nBlocked,
         debris = debris, staleLinks = staleLinks, siteHasTwoWay = siteHasTwoWay,
         usedMin = usedMin, usedMax = usedMax, confidence = conf,
+        sweptMax = sweptMax, nSweptWide = nSweptWide,
     }
+end
+
+--- Drive the design rig through one movement with the stock-driver twin (SweptSim) and return the
+--- predicted tracks and the trailer's worst inside cut-in relative to the connector. The simulated
+--- route is: a 40 m straight run-in (extrapolated back along the entry lane), the entry lane's real
+--- nodes up to the tie-in, the connector as it would be laid, the exit lane's real nodes from its
+--- tie-in outward, and a 40 m straight run-out - the transitions are where the cut-in happens, so the
+--- rig has to arrive already settled on the straight. Returns nil when the geometry is unusable.
+function ADFlyoverEditor:junctionSweptPredict(m, cx, cz, radius, rig)
+    local c = m.connector
+    local chainA = self:junctionChain(m.from, cx, cz, radius)
+    local chainB = self:junctionChain(m.to, cx, cz, radius)
+    local path = {}
+    -- Entry lane: chain[1] is the boundary, increasing toward the interior; keep the nodes the tie-in
+    -- lies AHEAD of (those the rig drives over before the connector starts).
+    for k = 1, #chainA do
+        local n = chainA[k]
+        local dx, dz = junctionSegDir(chainA, k)
+        if (c.ax - n.x) * dx + (c.az - n.z) * dz > 0.3 then
+            path[#path + 1] = { x = n.x, y = n.y, z = n.z }
+        end
+    end
+    path[#path + 1] = { x = c.ax, y = c.ay, z = c.az }
+    for _, p in ipairs(c.points) do path[#path + 1] = { x = p.x, y = p.y, z = p.z } end
+    local firstConnector = #path - #c.points     -- index of the tie-in A in `path`
+    path[#path + 1] = { x = c.bx, y = c.by, z = c.bz }
+    local lastConnector = #path
+    -- Exit lane: walked from the boundary inward, so travel is index-DEcreasing; keep the nodes that
+    -- lie beyond the tie-in in the outward direction, interior first.
+    for k = #chainB, 1, -1 do
+        local n = chainB[k]
+        local dx, dz = junctionSegDir(chainB, k)
+        if (n.x - c.bx) * -dx + (n.z - c.bz) * -dz > 0.3 then
+            path[#path + 1] = { x = n.x, y = n.y, z = n.z }
+        end
+    end
+    if #path < 3 then return nil end
+    -- Straight run-in / run-out along the first / last real segment.
+    local function unit(ax, az, bx, bz)
+        local dx, dz = bx - ax, bz - az
+        local l = math.sqrt(dx * dx + dz * dz)
+        if l < 1e-6 then return nil end
+        return dx / l, dz / l
+    end
+    local ux, uz = unit(path[1].x, path[1].z, path[2].x, path[2].z)
+    local vx, vz = unit(path[#path - 1].x, path[#path - 1].z, path[#path].x, path[#path].z)
+    if ux == nil or vx == nil then return nil end
+    table.insert(path, 1, { x = path[1].x - ux * 40, y = path[1].y, z = path[1].z - uz * 40 })
+    path[#path + 1] = { x = path[#path].x + vx * 40, y = path[#path].y, z = path[#path].z + vz * 40 }
+    firstConnector, lastConnector = firstConnector + 1, lastConnector + 1
+
+    local heading = math.atan2(ux, uz)
+    local sim = SweptSim.simulate(path, rig, SweptSim.STOCK_DRIVER,
+        { x = path[1].x, z = path[1].z, heading = heading, trailerHeading = heading, speed = 30, rot = 0 },
+        { dt = 0.02, maxTime = 60, speedLimitKmh = 40 })
+    if #sim < 10 then return nil end
+
+    -- Cut-in is measured against the CONNECTOR only (its inside is the corner), for the steps whose
+    -- trailer axle projects inside it. Turn sense from the connector's end tangents: with forward =
+    -- (sin h, cos h) and left = (cos h, -sin h), a left turn has a NEGATIVE cross of entry x exit.
+    local con = {}
+    for k = firstConnector, lastConnector do con[#con + 1] = path[k] end
+    local cross = ux * vz - uz * vx
+    local leftTurn = cross < 0
+    local trailerIn, towIn, trailerOut = 0, 0, 0
+    local a, b = con[1], con[#con]
+    for _, s in ipairs(sim) do
+        local inA = (s.ax - a.x) * (con[2].x - a.x) + (s.az - a.z) * (con[2].z - a.z) > 0
+        local inB = (s.ax - b.x) * (con[#con - 1].x - b.x) + (s.az - b.z) * (con[#con - 1].z - b.z) > 0
+        if inA and inB then
+            local o = SweptSim.offsetFromPath(con, s.ax, s.az)
+            local inside = leftTurn and o or -o
+            if inside > trailerIn then trailerIn = inside end
+            if -inside > trailerOut then trailerOut = -inside end
+            local ot = SweptSim.offsetFromPath(con, s.x, s.z)
+            local insideT = leftTurn and ot or -ot
+            if insideT > towIn then towIn = insideT end
+        end
+    end
+    -- Thin the tracks for drawing: every 4th step is ~0.1-0.3 m apart at the speeds involved.
+    local tow, trailer = {}, {}
+    for k = 1, #sim, 4 do
+        local s = sim[k]
+        tow[#tow + 1] = { x = s.x, z = s.z }
+        trailer[#trailer + 1] = { x = s.ax, z = s.az }
+    end
+    return { tow = tow, trailer = trailer, trailerIn = trailerIn, towIn = towIn, trailerOut = trailerOut,
+             leftTurn = leftTurn }
 end
 
 --- Build one movement's connector from the REAL track geometry (entry approach -> exit approach).

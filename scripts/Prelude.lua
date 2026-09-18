@@ -59,7 +59,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.31.2.0"
+P.BUILD = "0.31.3.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -91,6 +91,7 @@ P.EDITOR_FILES = {
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",
+    "scripts/editor/SweptSim.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
 }
@@ -539,6 +540,8 @@ function P:consoleSweptSave(name) return sweptCall(ADFlyoverSweptPath.save, name
 function P:consoleSweptLoad(name) return sweptCall(ADFlyoverSweptPath.load, name) end
 function P:consoleSweptShow() return sweptCall(ADFlyoverSweptPath.toggleShow) end
 function P:consoleSweptClear() return sweptCall(ADFlyoverSweptPath.clear) end
+function P:consoleSweptRig() return sweptCall(ADFlyoverSweptPath.captureCurrentRig) end
+addConsoleCommand("FlyoverSweptRig", "Swept path: measure the entered vehicle (+ trailer) as the design rig the junction preview simulates", "consoleSweptRig", P)
 addConsoleCommand("FlyoverSweptRecord", "Swept path: toggle recording the controlled vehicle while AutoDrive drives it", "consoleSweptRecord", P)
 addConsoleCommand("FlyoverSweptSave", "Swept path: save the current run as <name> (modSettings/FS25_ADFlyoverEditor/swept/)", "consoleSweptSave", P)
 addConsoleCommand("FlyoverSweptLoad", "Swept path: load a saved run <name> as the overlay", "consoleSweptLoad", P)
