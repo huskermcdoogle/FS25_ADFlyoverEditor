@@ -88,6 +88,12 @@ When you click near where roads should meet:
    - radius ≥ the turning-radius setting; resampled to ~4 m spacing;
    - each inherits its through-road's priority (decision 1);
    - each cleared against **all** obstacles (decision 3) *and* against the other connectors.
+   - **Flexible tie-in points.** The point where a connector meets a track is *not* locked to whichever
+     waypoint the scope circle happened to cut. The generator may **split a segment at the best spot
+     along it, or trim / extend a track's endpoint**, so the join fits the turning radius and the
+     scope. This matters most where a track **T's into** another set of tracks: its natural tie-in is
+     its **endpoint**, not a mid-span node, and the endpoint may need to shift to sit cleanly within the
+     scope. So tie-in selection is part of the connector solve, not fixed by detection.
 5. **Node structure** — spread merge/diverge nodes, matching the map today. (The single **common node**
    for collision-prioritisation is V2, see §7.)
 6. **Preview then commit** — the whole proposed intersection draws live (green where clear, red where
