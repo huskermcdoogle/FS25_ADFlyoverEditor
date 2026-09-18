@@ -6116,18 +6116,50 @@ local function junctionBiarc(p0x, p0z, t0x, t0z, p1x, p1z, t1x, t1z, y0, y1)
     return { points = pts, minRadius = math.min(r1, r2), jx = jx, jz = jz }
 end
 
--- Add a directed connection a->b (and b->a when dual). toggleConnectionBetween is a TOGGLE, so this is
--- only correct on an edge that does NOT already exist - which is the case for the fresh tie-in edges.
+-- Deterministic link primitives - NOT toggles. AutoDrive's toggleConnectionBetween flips state (its
+-- remove branch fires on an OR of two list checks and its insert never checks for duplicates), so
+-- anything built on it can leave a link in a state nobody asked for when an operation re-enters the
+-- same pair - a repeat placement over the same spot, an undo/redo interleave. That is the class of
+-- bug that minted two-way ("blue") links on one-way roads. These two are idempotent and explicit:
+-- calling them twice is the same as calling them once, and the resulting state is exactly what the
+-- arguments say, regardless of what was there before.
 local function junctionConnect(a, b, dual)
-    if a == nil or b == nil then return end
-    ADGraphManager:toggleConnectionBetween(a, b, false, dual and true or false, false)
+    if a == nil or b == nil or a.id == b.id then return end
+    if not table.contains(a.out, b.id) then table.insert(a.out, b.id) end
+    if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) end
+    if dual then
+        if not table.contains(b.out, a.id) then table.insert(b.out, a.id) end
+        if not table.contains(a.incoming, b.id) then table.insert(a.incoming, b.id) end
+    end
 end
 
--- Remove whatever connection exists between a and b, in both directions.
+-- Remove every connection between a and b, both directions, unconditionally.
 local function junctionDisconnect(a, b)
     if a == nil or b == nil then return end
-    if table.contains(a.out or {}, b.id) then ADGraphManager:toggleConnectionBetween(a, b, false, false, false) end
-    if table.contains(b.out or {}, a.id) then ADGraphManager:toggleConnectionBetween(b, a, false, false, false) end
+    table.removeValue(a.out, b.id)
+    table.removeValue(b.incoming, a.id)
+    table.removeValue(b.out, a.id)
+    table.removeValue(a.incoming, b.id)
+end
+
+-- Lay the connector chain NA -> points -> NB OURSELVES, one deterministic link at a time. This used
+-- to be ADGraphManager:createSplineConnection, which wires every link through toggleConnectionBetween
+-- - a state FLIP, not a set - so on a graph whose link lists carry any toggle-era corruption
+-- (duplicates, one-sided entries) it could remove where it meant to add and double where it meant to
+-- single. With this, EVERY link the junction tool creates goes through junctionConnect above, whose
+-- result is exactly what its arguments say. Interior points carry `flags` from creation (no
+-- after-the-fact re-flag pass over an id range). Returns true when the whole chain laid.
+local function junctionLayChain(NA, points, NB, dual, flags)
+    local prev = NA
+    for _, p in ipairs(points) do
+        local wp = ADGraphManager:recordWayPoint(p.x, p.y, p.z, false, false, false, 0,
+            flags or AutoDrive.FLAG_NONE, false)
+        if wp == nil then return false end
+        junctionConnect(prev, wp, dual)
+        prev = wp
+    end
+    junctionConnect(prev, NB, dual)
+    return true
 end
 
 --- Recompute the junction preview around the cursor: the scope circle, the approaches it cuts, and
@@ -6163,14 +6195,28 @@ function ADFlyoverEditor:updateJunctionPreview()
     self.junctionPreview = nil
     local R2 = R * R
 
-    -- Scope: waypoints inside the circle.
+    -- Scope: waypoints inside the circle. While gathering, also establish the site's ONE structural
+    -- fact about two-way-ness: does ANY link touching the scope run in both directions? If it does
+    -- not, this site is one-way in, so it must be one-way out - the placement is HARD-gated on this
+    -- (see applyJunction): with no two-way track coming in, nothing the tool lays may ever be two-way.
     local inside = {}
+    local siteHasTwoWay = false
     local wps = ADGraphManager:getWayPoints()
     for _, wp in pairs(wps) do
         local dx, dz = wp.x - cx, wp.z - cz
         if dx * dx + dz * dz <= R2 then
             inside[wp.id] = wp
         end
+    end
+    for _, wp in pairs(inside) do
+        for _, tid in pairs(wp.out or {}) do
+            local t = ADGraphManager:getWayPointById(tid)
+            if t ~= nil and table.contains(t.out or {}, wp.id) then
+                siteHasTwoWay = true
+                break
+            end
+        end
+        if siteHasTwoWay then break end
     end
 
     -- Raw approaches: every edge the circle cuts (one end inside, one outside). An edge coming INTO the
@@ -6364,7 +6410,8 @@ function ADFlyoverEditor:updateJunctionPreview()
         radius = R, turnRadius = turnR, cx = cx, cz = cz, cy = cy, armed = (self.junctionArmed ~= nil),
         approaches = approaches, movements = movements,
         nIn = nIn, nOut = nOut, nNew = nNew, nExisting = nExisting, nTight = nTight, nOffRoad = nOffRoad,
-        nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, usedMin = usedMin, usedMax = usedMax, confidence = conf,
+        nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, nLane = nLane,
+        siteHasTwoWay = siteHasTwoWay, usedMin = usedMin, usedMax = usedMax, confidence = conf,
     }
 end
 
@@ -6558,9 +6605,9 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
 end
 
 --- Place every NEW turn in the current preview: for each, lay OUR connector points between the entry
---- and exit lane nodes with createSplineConnection (one-way, priority inherited from the joined road),
---- all under one undo snapshot. Existing turns and U-turns were already filtered out of the matrix.
---- No radius/obstacle validation yet - that gate, and verbose per-turn refusals, come next.
+--- and exit lane nodes via junctionLayChain (deterministic links only; priority inherited from the
+--- joined road), all under one undo snapshot. Existing turns and U-turns were already filtered out of
+--- the matrix; radius/corridor refusals happened in the solve.
 --- The lane chain from an approach's boundary node toward the intersection interior (out-edges for an
 --- entry, incoming for an exit), boundary node first, staying within the scope. Also whether that lane
 --- DEAD-ENDS inside the scope (no travel continuation) rather than passing through.
@@ -6608,8 +6655,13 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
         if nbrId ~= nil then
             local nbr = ADGraphManager:getWayPointById(nbrId)
             if nbr ~= nil then
-                dual = (ap.dir == "in") and table.contains(wp.out or {}, nbrId)
-                    or table.contains(nbr.out or {}, wp.id)
+                -- Explicit if/else, not `cond and A or B`: that idiom falls through to B whenever A
+                -- is false, and A false is the NORMAL one-way case (see segDual below).
+                if ap.dir == "in" then
+                    dual = table.contains(wp.out or {}, nbrId)
+                else
+                    dual = table.contains(nbr.out or {}, wp.id)
+                end
             end
         end
         return wp, (wp.flags or AutoDrive.FLAG_NONE), {}, dual
@@ -6626,10 +6678,18 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
     end
     local outer, inner = chain[bestSeg], chain[bestSeg + 1]
     local trackFlags = outer.flags or AutoDrive.FLAG_NONE
-    -- Whether the immediate outer<->inner segment is two-way - independent of which node ends up
-    -- reused or split, so it is computed once and returned from every branch below.
-    local segDual = (ap.dir == "in") and table.contains(inner.out or {}, outer.id)
-        or table.contains(outer.out or {}, inner.id)
+    -- Whether the immediate outer<->inner segment is two-way: does the link OPPOSITE the travel
+    -- direction exist too? An explicit if/else, NOT `cond and A or B` - that idiom evaluates B
+    -- whenever A is false, and here A false IS the normal one-way case, so it fell through to
+    -- testing the forward link that always exists. Result: segDual was TRUE for every entry-side
+    -- splice on every one-way road, and every entry tie node got spliced in two-way - the "blue"
+    -- links the invariant tripwire kept catching.
+    local segDual
+    if ap.dir == "in" then
+        segDual = table.contains(inner.out or {}, outer.id)   -- forward is outer->inner
+    else
+        segDual = table.contains(outer.out or {}, inner.id)   -- forward is inner->outer
+    end
 
     -- If the tie-in lands ON an existing lane node (within 0.35 m), reuse that node rather than stacking
     -- a new one on top of it - the survey showed near-coincident points already clutter real junctions.
@@ -6757,6 +6817,12 @@ function ADFlyoverEditor:applyJunction()
     end
     local dualPairPlaced = {}
     local dualPlaced, mirrorsSkipped = 0, 0
+    -- THE invariant (hard gate, not a heuristic): if no two-way track comes into this site
+    -- (jp.siteHasTwoWay, established structurally while scoping), then NOTHING placed here may be
+    -- two-way. The mirror-pair signal cannot fire without two-way boundary nodes anyway, but this
+    -- gate makes the guarantee independent of that reasoning ever being wrong.
+    local allowDual = (jp.siteHasTwoWay == true)
+    local baseCount = ADGraphManager:getWayPointsCount()
     for _, m in ipairs(newMoves) do
         local key = pairKey(m.from.wp.id, m.to.wp.id)
         if dualPairPlaced[key] then
@@ -6766,27 +6832,56 @@ function ADFlyoverEditor:applyJunction()
         local NA, _flagsA, stubsA = self:junctionTieIn(m.from, c.ax, c.az, cx, cz, radius)
         local NB, exitFlags, stubsB = self:junctionTieIn(m.to, c.bx, c.bz, cx, cz, radius)
         if NA ~= nil and NB ~= nil and NA.id ~= NB.id then
-            local dual = (mirrorOf[key] or 0) > 1
-            local ok = tryCall("junction createSplineConnection", function()
-                ADGraphManager:createSplineConnection(NA.id, c.points, NB.id, dual, false)
+            local dual = allowDual and (mirrorOf[key] or 0) > 1
+            -- Our own deterministic chain-layer - NOT createSplineConnection, whose links go through
+            -- toggleConnectionBetween (a flip, not a set). Flags match the joined (exit) road and are
+            -- set at creation.
+            local ok, laid = tryCall("junction lay chain", function()
+                return junctionLayChain(NA, c.points, NB, dual, exitFlags)
             end)
+            ok = ok and laid == true
             if ok and dual then
                 dualPlaced = dualPlaced + 1
                 dualPairPlaced[key] = true
             end
             if ok then
-                local flags = exitFlags or AutoDrive.FLAG_NONE   -- match the joined (exit) road
-                if flags ~= AutoDrive.FLAG_NONE then
-                    local total = ADGraphManager:getWayPointsCount()
-                    for id = total - #c.points + 1, total do
-                        ADGraphManager:setWayPointFlags(id, flags, false)
-                    end
-                end
                 placed = placed + 1
             end
             for _, s in ipairs(stubsA) do allStubs[#allStubs + 1] = s end
             for _, s in ipairs(stubsB) do allStubs[#allStubs + 1] = s end
         end
+        end
+    end
+
+    -- Tripwire for THE invariant, run BEFORE stub deletion renumbers ids: on a one-way site, no node
+    -- this placement created may carry a two-way link. With deterministic primitives and the
+    -- allowDual gate this cannot happen by construction - so if it EVER fires, a creation path has a
+    -- real bug, and it says so loudly instead of quietly shipping a blue link. Where the intended
+    -- direction is provable (both nodes new: createSplineConnection appends interior points in travel
+    -- order, so lower id -> higher id IS the travel direction), it also repairs on the spot.
+    if not allowDual then
+        local total = ADGraphManager:getWayPointsCount()
+        for id = baseCount + 1, total do
+            local n = ADGraphManager:getWayPointById(id)
+            if n ~= nil then
+                for _, outId in pairs(n.out or {}) do
+                    local o = ADGraphManager:getWayPointById(outId)
+                    if o ~= nil and table.contains(o.out or {}, n.id) then
+                        Logging.warning("[FlyoverEditor]: junction INVARIANT VIOLATION - two-way link %d<->%d created on a one-way site. Report this.",
+                            n.id, o.id)
+                        if outId > baseCount then
+                            local keepFrom = math.min(n.id, o.id)
+                            local keepTo = math.max(n.id, o.id)
+                            local kf = ADGraphManager:getWayPointById(keepFrom)
+                            local kt = ADGraphManager:getWayPointById(keepTo)
+                            table.removeValue(kt.out, keepFrom)
+                            table.removeValue(kf.incoming, keepTo)
+                            Logging.warning("[FlyoverEditor]: junction - repaired to one-way %d -> %d (interior points run in travel order).",
+                                keepFrom, keepTo)
+                        end
+                    end
+                end
+            end
         end
     end
 
