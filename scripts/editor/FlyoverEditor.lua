@@ -6570,7 +6570,15 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- without a visible reason (see docs/junction-plan.md s5, "failing is a valid result").
     local movements = {}
     local nNew, nExisting, nTight, nOffRoad, nNoCurve, nUTurn, nFar, nRebuild, nBlocked = 0, 0, 0, 0, 0, 0, 0, 0, 0
+    local nTrailerRoad, nTrailerHit = 0, 0
     local usedMin, usedMax = nil, nil
+    -- The design rig for the swept-path gate: only on a LOCKED site with the toggle on (a simulation
+    -- per candidate radius per turn is too much for the scouting preview that re-solves on every
+    -- half-metre of cursor travel). Unlocked, the solve is the line-only one as before.
+    local sweptRig = nil
+    if self.junctionSwept ~= false and self.junctionArmed ~= nil and SweptSim ~= nil then
+        sweptRig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or SweptSim.EXAMPLE_RIG
+    end
     -- 150 deg turned out to be too tight on a real site - a legitimate sharp hook (a two-way point's
     -- "in" arm doubling back onto a nearby "out" arm) measured 152 deg and was silently dropped before
     -- this function had per-pair logging at all. 170 deg excludes only near-literal reversals; the
@@ -6612,7 +6620,7 @@ function ADFlyoverEditor:updateJunctionPreview()
                         -- fails even at the floor is kept with its refusal reason, drawn red, never laid.
                         local con, usedR, refused = nil, nil, nil
                         if not exists or rebuild then
-                            con, usedR, refused = self:junctionSolveMovement(e, x, cx, cz, R, turnR)
+                            con, usedR, refused = self:junctionSolveMovement(e, x, cx, cz, R, turnR, sweptRig)
                         end
                         movements[#movements + 1] = { from = e, to = x, exists = exists, connector = con,
                             usedRadius = usedR, refused = refused, rebuild = rebuild, oldPath = oldPath }
@@ -6624,13 +6632,37 @@ function ADFlyoverEditor:updateJunctionPreview()
                             nNew = nNew + 1
                         elseif refused == "tight" then
                             nTight = nTight + 1
+                            if logSite then
+                                roadNote(string.format("tight:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d tighter than the turn radius (or the rig's full lock) at every radius down to the floor - refused.",
+                                    e.wp.id, x.wp.id)
+                            end
                         elseif refused == "offroad" then
                             nOffRoad = nOffRoad + 1
+                            if logSite then
+                                roadNote(string.format("offroad:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d leaves the road surface at every radius down to the floor - refused.",
+                                    e.wp.id, x.wp.id)
+                            end
                         elseif refused == "blocked" then
                             nBlocked = nBlocked + 1
                             if logSite then
                                 roadNote(string.format("blocked:%d_%d", e.wp.id, x.wp.id),
                                     "junction - entry id=%d -> exit id=%d blocked by a static obstacle at every radius down to the floor - refused.",
+                                    e.wp.id, x.wp.id)
+                            end
+                        elseif refused == "trailerRoad" then
+                            nTrailerRoad = nTrailerRoad + 1
+                            if logSite then
+                                roadNote(string.format("trailerRoad:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d: the design rig's body leaves the road at every radius (swept-path gate) - refused.",
+                                    e.wp.id, x.wp.id)
+                            end
+                        elseif refused == "trailerHit" then
+                            nTrailerHit = nTrailerHit + 1
+                            if logSite then
+                                roadNote(string.format("trailerHit:%d_%d", e.wp.id, x.wp.id),
+                                    "junction - entry id=%d -> exit id=%d: the design rig's body sweeps through a static obstacle at every radius (swept-path gate) - refused.",
                                     e.wp.id, x.wp.id)
                             end
                         elseif refused == "far" then
@@ -6709,8 +6741,13 @@ function ADFlyoverEditor:updateJunctionPreview()
         local rig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or SweptSim.EXAMPLE_RIG
         local halfCorr = (self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
         for _, m in ipairs(movements) do
-            if m.connector ~= nil and m.refused == nil and (not m.exists or m.rebuild) then
-                local ok, sw = pcall(function() return self:junctionSweptPredict(m, cx, cz, R, rig) end)
+            -- Refused turns too: their red connector is exactly where seeing the predicted bodies
+            -- explains the refusal. The solve already ran the prediction on the connector it kept.
+            if m.connector ~= nil and (not m.exists or m.rebuild) then
+                local ok, sw = true, m.connector.swept
+                if sw == nil then
+                    ok, sw = pcall(function() return self:junctionSweptPredict(m.from, m.to, m.connector, cx, cz, R, rig) end)
+                end
                 if ok and sw ~= nil then
                     m.swept = sw
                     -- Inside trailer EDGE beyond the corridor half-width = the turn the trailer clips.
@@ -6746,7 +6783,7 @@ function ADFlyoverEditor:updateJunctionPreview()
         nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, nLane = nLane, nRebuild = nRebuild, nBlocked = nBlocked,
         debris = debris, staleLinks = staleLinks, siteHasTwoWay = siteHasTwoWay,
         usedMin = usedMin, usedMax = usedMax, confidence = conf,
-        sweptMax = sweptMax, nSweptWide = nSweptWide,
+        sweptMax = sweptMax, nSweptWide = nSweptWide, nTrailerRoad = nTrailerRoad, nTrailerHit = nTrailerHit,
     }
 end
 
@@ -6756,10 +6793,9 @@ end
 --- nodes up to the tie-in, the connector as it would be laid, the exit lane's real nodes from its
 --- tie-in outward, and a 40 m straight run-out - the transitions are where the cut-in happens, so the
 --- rig has to arrive already settled on the straight. Returns nil when the geometry is unusable.
-function ADFlyoverEditor:junctionSweptPredict(m, cx, cz, radius, rig)
-    local c = m.connector
-    local chainA = self:junctionChain(m.from, cx, cz, radius)
-    local chainB = self:junctionChain(m.to, cx, cz, radius)
+function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, rig)
+    local chainA = self:junctionChain(fromAp, cx, cz, radius)
+    local chainB = self:junctionChain(toAp, cx, cz, radius)
     local path = {}
     -- Entry lane: chain[1] is the boundary, increasing toward the interior; keep the nodes the tie-in
     -- lies AHEAD of (those the rig drives over before the connector starts).
@@ -6814,28 +6850,107 @@ function ADFlyoverEditor:junctionSweptPredict(m, cx, cz, radius, rig)
     local leftTurn = cross < 0
     local trailerIn, towIn, trailerOut = 0, 0, 0
     local a, b = con[1], con[#con]
+    local function insideConnector(px, pz)
+        local inA = (px - a.x) * (con[2].x - a.x) + (pz - a.z) * (con[2].z - a.z) > 0
+        local inB = (px - b.x) * (con[#con - 1].x - b.x) + (pz - b.z) * (con[#con - 1].z - b.z) > 0
+        return inA and inB
+    end
+    -- The TURN EVENT: from the tow's rear axle entering the connector until the trailer axle has
+    -- left it. The envelope probes below (road surface, obstacles) cover exactly this window - the
+    -- trailer is still cutting inside after the tow is back on the exit road, and that cut is this
+    -- turn's doing; whatever happens on the plain straights before and after is not.
+    local started, ended = false, false
+    local edges = {}          -- body-edge points to probe the road surface at
+    local towTrack, trlTrack = {}, {}  -- axle tracks to probe obstacles along (within the window)
+    local halfTow, halfTrl = (rig.towWidth or 2.5) / 2, (rig.trailerWidth or 2.5) / 2
+    -- Past the exit tie-in B, in the direction of travel out of the connector.
+    local function pastB(px, pz)
+        return (px - b.x) * (b.x - con[#con - 1].x) + (pz - b.z) * (b.z - con[#con - 1].z) > 0
+    end
+    local trailerPt = (rig.trailerLength or 0) > 0
     for _, s in ipairs(sim) do
-        local inA = (s.ax - a.x) * (con[2].x - a.x) + (s.az - a.z) * (con[2].z - a.z) > 0
-        local inB = (s.ax - b.x) * (con[#con - 1].x - b.x) + (s.az - b.z) * (con[#con - 1].z - b.z) > 0
-        if inA and inB then
-            local o = SweptSim.offsetFromPath(con, s.ax, s.az)
-            local inside = leftTurn and o or -o
-            if inside > trailerIn then trailerIn = inside end
-            if -inside > trailerOut then trailerOut = -inside end
-            local ot = SweptSim.offsetFromPath(con, s.x, s.z)
-            local insideT = leftTurn and ot or -ot
-            if insideT > towIn then towIn = insideT end
+        if not started and insideConnector(s.x, s.z) then started = true end
+        if started and not ended then
+            if insideConnector(s.ax, s.az) then
+                local o = SweptSim.offsetFromPath(con, s.ax, s.az)
+                local inside = leftTurn and o or -o
+                if inside > trailerIn then trailerIn = inside end
+                if -inside > trailerOut then trailerOut = -inside end
+            end
+            -- The event ends when the LAST body - the trailer axle, or the tow's rear axle when
+            -- there is no trailer - is past the exit tie-in. Closing it when the tow left the
+            -- connector cut short right-turn quadrants before the trailer (9 m behind) had even
+            -- entered: every right turn measured "0.00 m inside" and went unprobed.
+            if trailerPt then
+                if pastB(s.ax, s.az) and #trlTrack > 5 then ended = true end
+            elseif pastB(s.x, s.z) and #towTrack > 5 then
+                ended = true
+            end
+            if insideConnector(s.x, s.z) then
+                local ot = SweptSim.offsetFromPath(con, s.x, s.z)
+                local insideT = leftTurn and ot or -ot
+                if insideT > towIn then towIn = insideT end
+            end
+            if not ended then
+                towTrack[#towTrack + 1] = { x = s.x, z = s.z }
+                trlTrack[#trlTrack + 1] = { x = s.ax, z = s.az }
+                -- Body edges: rear and front axle of the tow, and the trailer axle, each +-half width
+                -- along the body's LEFT vector (cos h, -sin h).
+                local lx, lz = math.cos(s.heading), -math.sin(s.heading)
+                local fx, fz = math.sin(s.heading), math.cos(s.heading)
+                local frx, frz = s.x + fx * rig.wheelbase, s.z + fz * rig.wheelbase
+                local tlx, tlz = math.cos(s.trailerHeading), -math.sin(s.trailerHeading)
+                edges[#edges + 1] = { x = s.x + lx * halfTow, z = s.z + lz * halfTow }
+                edges[#edges + 1] = { x = s.x - lx * halfTow, z = s.z - lz * halfTow }
+                edges[#edges + 1] = { x = frx + lx * halfTow, z = frz + lz * halfTow }
+                edges[#edges + 1] = { x = frx - lx * halfTow, z = frz - lz * halfTow }
+                if (rig.trailerLength or 0) > 0 then
+                    edges[#edges + 1] = { x = s.ax + tlx * halfTrl, z = s.az + tlz * halfTrl }
+                    edges[#edges + 1] = { x = s.ax - tlx * halfTrl, z = s.az - tlz * halfTrl }
+                end
+            end
         end
     end
-    -- Thin the tracks for drawing: every 4th step is ~0.1-0.3 m apart at the speeds involved.
+    -- Thin the full tracks for drawing: every 4th step is ~0.1-0.3 m apart at the speeds involved.
     local tow, trailer = {}, {}
     for k = 1, #sim, 4 do
         local s = sim[k]
         tow[#tow + 1] = { x = s.x, z = s.z }
         trailer[#trailer + 1] = { x = s.ax, z = s.az }
     end
+    -- Thin the probe sets the same way: a probe every ~0.5 m of travel is plenty for a raycast.
+    local function thin(pts, every)
+        local out = {}
+        for k = 1, #pts, every do out[#out + 1] = pts[k] end
+        if #pts > 0 and (#pts - 1) % every ~= 0 then out[#out + 1] = pts[#pts] end
+        return out
+    end
     return { tow = tow, trailer = trailer, trailerIn = trailerIn, towIn = towIn, trailerOut = trailerOut,
-             leftTurn = leftTurn }
+             leftTurn = leftTurn, edges = thin(edges, 6 * 3), towTrack = thin(towTrack, 6), trlTrack = thin(trlTrack, 6) }
+end
+
+--- Do the design rig's BODY EDGES leave the road during the turn? Same tolerance rule as the
+--- connector's corridor check (one stray sample, or 15%, whichever is larger), applied to where
+--- the tow and the trailer would actually be rather than to the waypoint line.
+function ADFlyoverEditor:junctionSweptOffRoad(sw)
+    local off, total = 0, 0
+    for _, p in ipairs(sw.edges or {}) do
+        total = total + 1
+        if not isRoadAt(p.x, p.z) then off = off + 1 end
+    end
+    if total == 0 then return false, 0, 0 end
+    local tolerance = math.max(1, math.ceil(total * 0.15))
+    return off > tolerance, off, total
+end
+
+--- Static obstacles under the rig's predicted bodies during the turn: the tow's track at the tow's
+--- width, the trailer's at the trailer's.
+function ADFlyoverEditor:junctionSweptHits(sw, rig)
+    local hits = self:junctionObstacleHitsAlong(sw.towTrack or {}, (rig.towWidth or 2.5) / 2)
+    if (rig.trailerLength or 0) > 0 then
+        hits = hits + self:junctionObstacleHitsAlong(sw.trlTrack or {}, (rig.trailerWidth or 2.5) / 2)
+    end
+    return hits
 end
 
 --- Build one movement's connector from the REAL track geometry (entry approach -> exit approach).
@@ -7049,21 +7164,44 @@ end
 -- the terrain (pathfinder ignores the lowest 0.5 m the same way) so curbs and ground clutter do not
 -- count, and reaches ~2.8 m up - trailer height.
 local junctionObstacleMask = nil
-local JunctionOverlapProbe = { cb = function() end }
+-- The overlap callback collects WHAT it hit (shape name, split-shape flag, rigid body type) so a
+-- refusal can be traced to an actual object in the log rather than a count. A tree's canopy over
+-- a road is the suspected false positive; the names will say.
+local JunctionOverlapProbe = { hits = {} }
+function JunctionOverlapProbe.cb(self, transformId)
+    if transformId ~= nil and transformId ~= 0 and transformId ~= g_currentMission.terrainRootNode then
+        local ok, desc = pcall(function()
+            local name = getName(transformId) or "?"
+            local split = (getHasClassId ~= nil and ClassIds ~= nil and ClassIds.SHAPE ~= nil
+                and getSplitType ~= nil and getSplitType(transformId) ~= 0) and " tree(split)" or ""
+            local rb = (getRigidBodyType ~= nil) and tostring(getRigidBodyType(transformId)) or "?"
+            local mask = (getCollisionFilterGroup ~= nil) and tostring(getCollisionFilterGroup(transformId)) or "?"
+            return string.format("%s%s rb=%s group=%s", name, split, rb, mask)
+        end)
+        self.hits[#self.hits + 1] = ok and desc or ("? (" .. tostring(desc) .. ")")
+    end
+    return true
+end
 
 --- Number of corridor boxes along `con` that overlap a static obstacle. Boxes are laid segment by
 --- segment along the curve (half corridor width wide, segment-long), rotated to the local heading.
 function ADFlyoverEditor:junctionObstacleHits(con)
+    local halfW = (self.junctionClearance or AutoDrive.FLYOVER_JUNCTION_CLEARANCE or 5.0) / 2
+    local pts = { { x = con.ax, z = con.az } }
+    for _, p in ipairs(con.points) do pts[#pts + 1] = p end
+    pts[#pts + 1] = { x = con.bx, z = con.bz }
+    return self:junctionObstacleHitsAlong(pts, halfW)
+end
+
+--- The probe itself, along any polyline at any half-width: boxes segment by segment, rotated to the
+--- local heading. Shared by the connector corridor and the swept-path body tracks.
+function ADFlyoverEditor:junctionObstacleHitsAlong(pts, halfW)
     if overlapBox == nil or g_currentMission == nil or g_currentMission.terrainRootNode == nil then
         return 0
     end
     if junctionObstacleMask == nil then
         junctionObstacleMask = CollisionFlag.STATIC_OBJECT + CollisionFlag.TREE + CollisionFlag.BUILDING
     end
-    local halfW = (self.junctionClearance or AutoDrive.FLYOVER_JUNCTION_CLEARANCE or 5.0) / 2
-    local pts = { { x = con.ax, z = con.az } }
-    for _, p in ipairs(con.points) do pts[#pts + 1] = p end
-    pts[#pts + 1] = { x = con.bx, z = con.bz }
     local hits = 0
     for i = 2, #pts do
         local a, b = pts[i - 1], pts[i]
@@ -7073,6 +7211,7 @@ function ADFlyoverEditor:junctionObstacleHits(con)
             local mx, mz = (a.x + b.x) * 0.5, (a.z + b.z) * 0.5
             local gy = getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, mx, 1, mz) or 0
             local ry = math.atan2(dx, dz)
+            JunctionOverlapProbe.hits = {}
             local ok, shapes = pcall(overlapBox, mx, gy + 0.6 + 1.1, mz, 0, ry, 0,
                 halfW, 1.1, l * 0.5, "cb", JunctionOverlapProbe, junctionObstacleMask, true, true, true, true)
             -- Proof-of-life notes, once each: a probe that errors would otherwise be a silent no-op
@@ -7086,6 +7225,10 @@ function ADFlyoverEditor:junctionObstacleHits(con)
                 if shapes > 0 then
                     hits = hits + 1
                     roadNote("obsFirstHit", "obstacle probe FIRST HIT at %.1f, %.1f (%d shape(s)).", mx, mz, shapes)
+                    -- Name every distinct object hit, once each, with where.
+                    for _, desc in ipairs(JunctionOverlapProbe.hits) do
+                        roadNote("obsHit:" .. desc, "obstacle probe hit %s at %.1f, %.1f (box half-width %.2f m).", desc, mx, mz, halfW)
+                    end
                 end
             end
         end
@@ -7107,11 +7250,15 @@ end
 --- turn is still radius-bound but never refused/shrunk for leaving the road. For a map whose surface
 --- reads wrong (see isRoadAt's logged classifications), or just to place fast on a site you already
 --- know is clear, without waiting on a raycast per candidate radius per curve point.
-function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR)
+function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR, rig)
     local floor = AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4
     local checkSurface = self.junctionCheckSurface ~= false
     local checkObstacles = self.junctionCheckObstacles ~= false
     local last, lastReason = nil, nil
+    -- The design vehicle's own floor (docs/swept-path-spec.md §6, gate 1): a connector tighter than
+    -- its full-lock radius is one the driver would understeer straight through, whatever the setting
+    -- says. Candidates below it are not even tried.
+    local rigFloor = (rig ~= nil and rig.minTurnRadius) or 0
     local r = turnR
     while r >= floor - 1e-6 do
         local con, whyNil = self:junctionTrackConnector(fromAp, toAp, cx, cz, radius, r)
@@ -7122,7 +7269,7 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
             if last == nil then return nil, r, "nocurve" end
             return last, r + 1, lastReason
         end
-        if con.minRadius < r * 0.7 then
+        if con.minRadius < math.max(r * 0.7, rigFloor) then
             last, lastReason = con, "tight"
         elseif checkSurface and self:junctionCorridorTooOffRoad(con) then
             last, lastReason = con, "offroad"
@@ -7132,11 +7279,31 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
             -- is a verbose red refusal, never a connector through a tree.
             last, lastReason = con, "blocked"
         else
-            return con, r, nil
+            -- Swept-path gate (spec §6, gates 2-3), only with a design rig (locked site, toggle on):
+            -- drive the rig through this candidate and probe the road and the obstacles under where
+            -- its bodies actually go. The prediction rides on the connector so the preview draws it
+            -- without a second simulation.
+            local sw = nil
+            if rig ~= nil and SweptSim ~= nil then
+                local ok, res = pcall(function() return self:junctionSweptPredict(fromAp, toAp, con, cx, cz, radius, rig) end)
+                if ok then sw = res else roadNote("sweptErr", "swept-path prediction failed: %s", tostring(res)) end
+                con.swept = sw
+            end
+            if sw ~= nil and checkSurface and self:junctionSweptOffRoad(sw) then
+                last, lastReason = con, "trailerRoad"
+            elseif sw ~= nil and checkObstacles and self:junctionSweptHits(sw, rig) > 0 then
+                last, lastReason = con, "trailerHit"
+            else
+                return con, r, nil
+            end
         end
         r = r - 1
+        if r < rigFloor - 1e-6 and r >= floor - 1e-6 then
+            -- Nothing below the rig's floor can pass gate 1; report the last real attempt.
+            break
+        end
     end
-    return last, floor, lastReason
+    return last, math.max(floor, r + 1), lastReason
 end
 
 --- Place every NEW turn in the current preview: for each, lay OUR connector points between the entry

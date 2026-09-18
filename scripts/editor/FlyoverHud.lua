@@ -582,6 +582,12 @@ function ADFlyoverHud:buildRows(editor)
             if (jp.nBlocked or 0) > 0 then
                 add("toggle", "blocked (refused)", tostring(jp.nBlocked))
             end
+            if (jp.nTrailerRoad or 0) > 0 then
+                add("toggle", "rig off road (refused)", tostring(jp.nTrailerRoad))
+            end
+            if (jp.nTrailerHit or 0) > 0 then
+                add("toggle", "rig hits obstacle (refused)", tostring(jp.nTrailerHit))
+            end
             add("toggle", "already there", tostring(jp.nExisting))
             if jp.sweptMax ~= nil then
                 add("toggle", "trailer cut-in", string.format("%.1f m", jp.sweptMax))
