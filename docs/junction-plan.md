@@ -156,6 +156,13 @@ matrix, and the collision-clearance gate.
 
 ## 7. Deferred (V2+)
 
+- **Dubins pathfinding for the connector curve.** The current connector is our own tangent cubic
+  Hermite shaped by a turn-radius setting - good enough to place and drive. As collision avoidance comes
+  in, a **Dubins** path (arc–line–arc, the shortest curvature-bounded path for a car-like minimum
+  turning radius) is the better geometry: it guarantees the radius bound and composes cleanly with
+  obstacle/other-connector avoidance. Swap `junctionConnectorPoints` for a Dubins solver at that stage.
+
+
 - **Common-node convergence for collision handling** — route multi-way movements through one shared,
   prioritised node so AutoDrive serialises vehicles through it. A refinement layered on top of the
   smooth connectors, and the opposite of the spread-cluster style the map uses today, so it earns its
