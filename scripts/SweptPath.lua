@@ -66,10 +66,14 @@ end
 local function axleCentres(vehicle)
     local spec = vehicle.spec_wheels
     if spec == nil or spec.wheels == nil or #spec.wheels == 0 then
-        return nil, nil
+        return nil, nil, nil
     end
     local root = vehicle.components[1].node
     local groups = {}
+    -- Also the centroid of ALL wheels: for a tandem/tridem trailer the kinematic pivot is between
+    -- the axles, not on the rearmost one, and the rearmost group over-states the offtracking (first
+    -- calibration: every corner over-predicted by 0.4-0.85 m against the rearmost axle).
+    local allN, allX, allY, allZ = 0, 0, 0, 0
     for _, wheel in ipairs(spec.wheels) do
         local node = wheel.node or wheel.repr
         local phys = wheel.physics or {}
@@ -84,6 +88,7 @@ local function axleCentres(vehicle)
                 groups[key] = g
             end
             g.n, g.x, g.y, g.z = g.n + 1, g.x + wx, g.y + wy, g.z + wz
+            allN, allX, allY, allZ = allN + 1, allX + wx, allY + wy, allZ + wz
         end
     end
     local front, rear
@@ -95,7 +100,8 @@ local function axleCentres(vehicle)
         if g == nil then return nil end
         return { x = g.x / g.n, y = g.y / g.n, z = g.z / g.n }
     end
-    return centre(front), centre(rear)
+    local all = allN > 0 and { x = allX / allN, y = allY / allN, z = allZ / allN } or nil
+    return centre(front), centre(rear), all
 end
 
 --- Walk the attached implements: for each, the world position of the tow side's hitch node and the
@@ -112,11 +118,12 @@ local function collectTrailers(vehicle, out, depth)
         local joint = spec.attacherJoints and spec.attacherJoints[imp.jointDescIndex]
         if obj ~= nil and joint ~= nil and joint.jointTransform ~= nil then
             local hx, hy, hz = getWorldTranslation(joint.jointTransform)
-            local _, rear = axleCentres(obj)
+            local _, rear, all = axleCentres(obj)
             -- Only things with wheels are trailers for this purpose: a mounted implement has no
             -- axle to offtrack, and would only add a hitch with nothing behind it.
             if rear ~= nil then
                 out[#out + 1] = { hx = hx, hy = hy, hz = hz, ax = rear.x, ay = rear.y, az = rear.z,
+                                  cx = all.x, cy = all.y, cz = all.z,
                                   name = obj.getName and obj:getName() or "?" }
             end
             collectTrailers(obj, out, depth + 1)
@@ -328,6 +335,7 @@ function R.save(name)
                 local tk = string.format("%s.trailer(%d)", k, j - 1)
                 setXMLString(xml, tk .. "#hitch", string.format("%.3f %.3f %.3f", tr.hx, tr.hy, tr.hz))
                 setXMLString(xml, tk .. "#axle", string.format("%.3f %.3f %.3f", tr.ax, tr.ay, tr.az))
+                if tr.cx then setXMLString(xml, tk .. "#wheels", string.format("%.3f %.3f %.3f", tr.cx, tr.cy, tr.cz)) end
             end
         end
         saveXMLFile(xml)
@@ -385,6 +393,7 @@ function R.load(name)
                 local tr = {}
                 tr.hx, tr.hy, tr.hz = vec3(getXMLString(xml, tk .. "#hitch"))
                 tr.ax, tr.ay, tr.az = vec3(getXMLString(xml, tk .. "#axle"))
+                tr.cx, tr.cy, tr.cz = vec3(getXMLString(xml, tk .. "#wheels"))
                 s.trailers[#s.trailers + 1] = tr
                 j = j + 1
             end

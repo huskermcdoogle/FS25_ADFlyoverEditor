@@ -248,6 +248,30 @@ gate 3 (trailer clearance): the predictor must flag both turns; the connector ge
 passed them. Lesson for the recorder, already applied: store the current waypoint's position, not
 only its id.
 
+**First calibration (2026-09-18, run `clean90`, Transtar II + trailer, six clean corners on freshly
+laid junction connectors, R 6–14 m, no stalls).** `SweptSim.lua` with the stock profile and the
+recorder's numbers, before any tuning:
+
+| corner | rear axle inside cut, rec / sim | trailer axle inside cut, rec / sim |
+|---|---|---|
+| c1 73° R, R≈6 | 1.39 / 1.66 | **3.43 / 3.67** |
+| c2 77° L, R≈7 | 1.26 / 1.35 | 2.45 / 2.80 |
+| c3 74° L, R≈9 | 1.51 / 1.52 | 2.02 / 2.50 |
+| c4 105° L, R≈14 | 0.83 / 0.99 | 1.30 / 1.80 |
+| c5 88° L, R≈10 | 1.12 / 1.26 | 1.82 / 2.52 |
+| c6 74° L, R≈10 | 1.49 / 1.52 | 2.00 / 2.50 |
+
+Tow rear axle within 0.35 m on every corner; the drawbar swing-out (outside excursion) matches to
+0.1–0.3 m. The trailer cut-in is **over-predicted by 0.25–0.7 m, always on the safe side** — a fit
+over full-lock radius and effective trailer length moved it only ~0.06 m (the trailer is a tandem;
+the centroid, now also recorded, is the better pivot) and the residual is likely tyre slip the
+kinematic tractrix has no term for. Accepted for V1 as a built-in margin. Cornering speed matched
+where AD was actually cornering (c1 9.0 vs 8.9 km/h, c5 31.4 vs 31.4); the other lows in the record
+were route start/end slowdowns, not the corner rule. One diagnostic-only mismatch remains: the sim
+reaches the same curvature at ~0.68× the recorded `rotatedTime`, i.e. the rotatedTime→wheel-angle
+mapping is not the linear full-lock scale assumed; it does not affect the driven line and is left as
+an open item.
+
 **Calibration loop.** For each class: simulate → record → compare (max lateral error of the tow and
 trailer lines, and the cut-in depth at entry/exit). Tune the profile's effective look-ahead and
 steering-gain terms until error is under a stated tolerance (proposal: 0.3 m) across all classes.
