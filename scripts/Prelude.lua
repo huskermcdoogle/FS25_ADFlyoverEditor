@@ -42,6 +42,7 @@ source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Launch.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapProbe.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapMarker.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/SweptPath.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -58,7 +59,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.31.0.0"
+P.BUILD = "0.31.1.0"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -170,6 +171,16 @@ function P:update(dt)
     if ADFlyoverMapMarker ~= nil and ADFlyoverMapMarker.update ~= nil then
         pcall(ADFlyoverMapMarker.update)
     end
+    -- The swept-path recorder samples the controlled vehicle while AutoDrive drives it - editor
+    -- open or not. Guarded: a diagnostic must never take the frame down.
+    if P.state == "armed" and ADFlyoverSweptPath ~= nil then
+        local ok, err = pcall(ADFlyoverSweptPath.update, dt)
+        if not ok and not P.sweptFaulted then
+            P.sweptFaulted = true
+            logError("swept-path recorder faulted (disabled): %s", tostring(err))
+            ADFlyoverSweptPath.armed = false
+        end
+    end
 
     if P.state ~= "waiting" then
         return
@@ -272,6 +283,9 @@ function P:draw()
     if editorLoaded() then
         ADFlyoverEditor:draw()
     end
+    if P.state == "armed" and ADFlyoverSweptPath ~= nil then
+        pcall(ADFlyoverSweptPath.draw)
+    end
     if ADFlyoverProxy ~= nil then
         ADFlyoverProxy.drawMarker()
     end
@@ -294,6 +308,7 @@ function P:consoleStatus()
         ADFlyoverWrappers.describe(),
         ADFlyoverProxy.describe(),
         ADFlyoverSettings.describe(),
+        ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.describe() or "swept: not loaded",
     }
     for _, line in ipairs(lines) do
         log("%s", line)
@@ -507,6 +522,28 @@ function P:consoleResetTheme()
     ADFlyoverTheme:resetDefault()
     return "Flyover editor colours and scale reset to default (Contrast Dark + amber, 1.0x)."
 end
+
+-- Swept-path recorder (docs/swept-path-spec.md, phase 1). Console-only for now.
+local function sweptCall(fn, ...)
+    if ADFlyoverSweptPath == nil then
+        return "SweptPath.lua did not source."
+    end
+    if P.state ~= "armed" then
+        return "not armed yet - load a savegame first."
+    end
+    local ok, result = pcall(fn, ...)
+    return ok and tostring(result) or ("swept failed: " .. tostring(result))
+end
+function P:consoleSweptRecord() return sweptCall(ADFlyoverSweptPath.toggleRecord) end
+function P:consoleSweptSave(name) return sweptCall(ADFlyoverSweptPath.save, name) end
+function P:consoleSweptLoad(name) return sweptCall(ADFlyoverSweptPath.load, name) end
+function P:consoleSweptShow() return sweptCall(ADFlyoverSweptPath.toggleShow) end
+function P:consoleSweptClear() return sweptCall(ADFlyoverSweptPath.clear) end
+addConsoleCommand("FlyoverSweptRecord", "Swept path: toggle recording the controlled vehicle while AutoDrive drives it", "consoleSweptRecord", P)
+addConsoleCommand("FlyoverSweptSave", "Swept path: save the current run as <name> (modSettings/FS25_ADFlyoverEditor/swept/)", "consoleSweptSave", P)
+addConsoleCommand("FlyoverSweptLoad", "Swept path: load a saved run <name> as the overlay", "consoleSweptLoad", P)
+addConsoleCommand("FlyoverSweptShow", "Swept path: toggle the world overlay", "consoleSweptShow", P)
+addConsoleCommand("FlyoverSweptClear", "Swept path: discard the current run", "consoleSweptClear", P)
 
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
