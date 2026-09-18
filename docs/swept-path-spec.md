@@ -63,10 +63,15 @@ outer envelope of where the tractor goes, never its track.** The trailer then of
 
 **Steering law.** `AutoDrive.driveInDirection` (`Utils/UtilFuncs.lua` L1326) passes the local target
 `(lx, lz)` to the game's `AIVehicleUtil.driveInDirection` with a steering-angle cap of 60° or the
-vehicle's `maxRotation` (`DrivePathModule` ~L331). A corner the vehicle cannot make at its look-ahead
-is not refused by the driver — it is **understeered into the inside**. The exact law lives in the
-game source at `dataS/scripts/vehicles/AIVehicleUtil.lua` (extracted to the session scratchpad from
-`sdk/debugger/gameSource.zip`); the implementer transcribes it, not approximates it.
+vehicle's `maxRotation` (`DrivePathModule` ~L331). Read from `dataS/scripts/vehicles/AIVehicleUtil.lua`
+(L144): it is **not** pure-pursuit curvature. The bearing to the target, `angle = acos(lz)`, sets a
+steering demand **proportional to the bearing angle**, `targetRotTime = maxRotTime × min(angle /
+steeringAngleLimit, 1)` (left) or `minRotTime × …` (right), and `rotatedTime` slews toward it at
+`getAISteeringSpeed()` per ms. So the wheel angle is a P-controller on bearing with a rate limit,
+saturating at full lock once the target is `steeringAngleLimit` degrees off the nose. A corner the
+vehicle cannot make at its look-ahead is not refused by the driver — it is **understeered into the
+inside**. The recorder logs `rotatedTime` (±0.9 = full lock on the MT635) precisely because it is
+the term this law is calibrated on.
 
 **Speed** (`getMaxSpeedForAngle`, ~L570). Speed is set by the **sharpest angle between consecutive
 segments visible ahead** (scan up to `MAXLOOKAHEADPOINTS = 20` points / `LOOKAHEADDISTANCE = 20 m`,
@@ -227,6 +232,21 @@ rig and the recorder on. The classes (extend as the field reports come in):
 5. T-junction with a trimmed stem
 6. straight-through across a trimmed gap
 7. two-lane road, left turn crossing the oncoming lane
+
+**First recorded case (2026-09-18, run `trucktrail`, Transtar II + trailer).** Measured by the
+recorder: tow wheelbase 5.82 m, steering node 0.65 m ahead of the rear axle, hitch **0.94 m behind**
+the rear axle (drawbar), trailer hitch→axle 8.39 m, AD look-ahead 10.32 m. Two right turns through
+freshly-laid junction connectors (59° at rear-axle R 4.3 m; 76° at R 5.6 m) each ended in a stall
+just past the exit tie-in with the wheels still hard right: the **trailer clipped an obstacle on the
+inside** of the turn. Overlaid on the saved network (matched by position — ids had been renumbered
+by a rebuild in between): turn 1, tow rear axle 1.24 m inside the laid line and trailer axle
+**2.85 m** inside; turn 3, tow rear axle 0.4 m *outside* the line (on it, in effect) and trailer axle
+**3.71 m** inside. Add half a trailer width and the inside trailer edge ran 4–5 m inside a line whose
+corridor check probes 2 m either side. Both are transients (steady state for 8.39 m at R≈6 would be
+~5 m), which is why the model is a simulation and not a closed form. This is the reference case for
+gate 3 (trailer clearance): the predictor must flag both turns; the connector geometry alone
+passed them. Lesson for the recorder, already applied: store the current waypoint's position, not
+only its id.
 
 **Calibration loop.** For each class: simulate → record → compare (max lateral error of the tow and
 trailer lines, and the cut-in depth at entry/exit). Tune the profile's effective look-ahead and

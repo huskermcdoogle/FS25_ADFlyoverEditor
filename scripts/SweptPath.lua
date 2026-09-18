@@ -175,7 +175,10 @@ local function takeSample(vehicle, now)
         sx = sx, sy = sy, sz = sz,
         fx = front and front.x, fy = front and front.y, fz = front and front.z,
         rx = rear and rear.x, ry = rear and rear.y, rz = rear and rear.z,
-        wp = wp and wp.id,
+        -- The id AND the position: ids are renumbered by every waypoint deletion (removeWayPoint
+        -- compacts them), so an id alone stops meaning anything the moment the network is edited -
+        -- which, with the junction tool, is between one drive and the next.
+        wp = wp and wp.id, wpx = wp and wp.x, wpz = wp and wp.z,
         tx = dpm and dpm.targetX, tz = dpm and dpm.targetZ,
         rot = vehicle.rotatedTime,
         trailers = trailers,
@@ -318,6 +321,7 @@ function R.save(name)
             if s.fx then setXMLString(xml, k .. "#front", string.format("%.3f %.3f %.3f", s.fx, s.fy, s.fz)) end
             if s.rx then setXMLString(xml, k .. "#rear", string.format("%.3f %.3f %.3f", s.rx, s.ry, s.rz)) end
             if s.wp then setXMLInt(xml, k .. "#wp", s.wp) end
+            if s.wpx then setXMLString(xml, k .. "#wpAt", string.format("%.3f %.3f", s.wpx, s.wpz)) end
             if s.tx then setXMLString(xml, k .. "#look", string.format("%.3f %.3f", s.tx, s.tz)) end
             if s.rot then setXMLFloat(xml, k .. "#rot", s.rot) end
             for j, tr in ipairs(s.trailers) do
@@ -363,6 +367,11 @@ function R.load(name)
             s.fx, s.fy, s.fz = vec3(getXMLString(xml, k .. "#front"))
             s.rx, s.ry, s.rz = vec3(getXMLString(xml, k .. "#rear"))
             s.wp = getXMLInt(xml, k .. "#wp")
+            local at = getXMLString(xml, k .. "#wpAt")
+            if at then
+                local ax, az = at:match("([%-%d%.]+) ([%-%d%.]+)")
+                s.wpx, s.wpz = tonumber(ax), tonumber(az)
+            end
             local look = getXMLString(xml, k .. "#look")
             if look then
                 local tx, tz = look:match("([%-%d%.]+) ([%-%d%.]+)")

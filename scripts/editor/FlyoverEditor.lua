@@ -627,6 +627,23 @@ function ADFlyoverEditor:isAvailable()
     return GuiTopDownCamera ~= nil and GuiTopDownCursor ~= nil
 end
 
+--- Give the mouse wheel back to the cameras: collapse any expanded AutoDrive pull-down list (the one
+--- state that keeps re-asserting mouseWheelActive) and clear the flag. Used on enable and disable.
+function ADFlyoverEditor:releaseAutoDriveWheel()
+    local hud = AutoDrive.Hud
+    local vehicle = AutoDrive.getControlledVehicle and AutoDrive.getControlledVehicle() or nil
+    if hud ~= nil and hud.closeAllPullDownLists ~= nil and (AutoDrive.pullDownListExpanded or 0) ~= 0 then
+        local ok, err = pcall(hud.closeAllPullDownLists, hud, vehicle)
+        if ok then
+            Logging.info("[FlyoverEditor]: collapsed an expanded AutoDrive pull-down list (it was holding the mouse wheel).")
+        else
+            Logging.warning("[FlyoverEditor]: could not collapse AutoDrive's pull-down list: %s", tostring(err))
+            AutoDrive.pullDownListExpanded = 0
+        end
+    end
+    AutoDrive.mouseWheelActive = false
+end
+
 function ADFlyoverEditor:enable()
     -- COMPANION EDIT: refuse on a multiplayer client. Every graph write here passes
     -- sendEvent = false, and AutoDrive only writes the route file when g_server is present - so a
@@ -649,6 +666,15 @@ function ADFlyoverEditor:enable()
         return
     end
     Logging.info("[FlyoverEditor]: GuiTopDownCamera and GuiTopDownCursor are both present.")
+
+    -- AutoDrive's wheel hook ends in `return AutoDrive.mouseWheelActive` - a flag its HUD sets while
+    -- the cursor is over a scrollable element, and RE-ASSERTS on every mouse event for as long as a
+    -- pull-down list is expanded. The mouseEvent wrapper mutes AutoDrive's handler while the editor
+    -- is open, so whatever that flag was at the moment of entry is frozen for the whole session: opened
+    -- with a destination list still dropped down, every wheel event was "handled" and the flyover
+    -- camera could not zoom - and the flag came straight back after exit too, taking the vehicle
+    -- camera's zoom with it. Collapse the lists and clear the flag here, on the way in.
+    self:releaseAutoDriveWheel()
     -- Before ANYTHING is touched. Compared against the line printed after teardown, this is the
     -- only pair that says whether a cycle put the input system back as it found it. Logging only
     -- after the push, as the first version did, made a clean cycle indistinguishable from a lossy
@@ -881,8 +907,9 @@ function ADFlyoverEditor:disable()
         end)
     end
 
-    -- Leaving this set makes the mod swallow wheel events after the editor has gone.
-    AutoDrive.mouseWheelActive = false
+    -- Leaving this set makes the mod swallow wheel events after the editor has gone - and clearing the
+    -- flag alone is not enough: an expanded pull-down list re-sets it on the next mouse event.
+    self:releaseAutoDriveWheel()
     Logging.info("[FlyoverEditor]: mouse cursor set to %s on exit (showHUD=%s, was %s on entry).",
         tostring(wantCursor), tostring(okHud and hudOn or "unreadable"), tostring(self.previousShowMouseCursor))
     if self.contextPushed then
@@ -6682,15 +6709,39 @@ end
 function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, turnR)
     local chainA, deadEndA = self:junctionChain(fromAp, cx, cz, radius)
     local chainB, deadEndB = self:junctionChain(toAp, cx, cz, radius)
-    if #chainA < 2 or #chainB < 2 then return nil end
+    -- A ONE-node chain is a stem whose only in-scope node is its tip (trimmed back to, or just inside,
+    -- the scope circle) - seen on two-way stems at a T, where every turn through the stem was refused
+    -- as "no joinable curve". The geometry below only needs the chain for a DIRECTION and a point to
+    -- walk back from, and the approach's bearing already gives the direction (an entry walks
+    -- downstream, an exit upstream - the same convention junctionChain starts its walk with). So
+    -- extend a lone node with a virtual second one a few metres along that bearing, for GEOMETRY ONLY:
+    -- placement re-walks the real chain itself (junctionTieIn) and never sees this point.
+    local function withVirtual(chain, ap)
+        if #chain >= 2 then return chain end
+        local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
+        if ap.dir ~= "in" then wdx, wdz = -wdx, -wdz end
+        local p = chain[1]
+        return { p, { x = p.x + wdx * 4, y = p.y, z = p.z + wdz * 4, id = p.id, virtual = true } }
+    end
+    if #chainA < 1 or #chainB < 1 then
+        roadNote(string.format("chain:%d_%d", fromAp.wp.id, toAp.wp.id),
+            "junction - entry id=%d -> exit id=%d: no lane chain at all (entry %d, exit %d) - refused.",
+            fromAp.wp.id, toAp.wp.id, #chainA, #chainB)
+        return nil, "chain"
+    end
+    chainA, chainB = withVirtual(chainA, fromAp), withVirtual(chainB, toAp)
 
     -- Meeting region: the closest node between the two chains (dense ~4 m nodes make node-to-node a good
     -- proxy for the true closest approach).
     local iA, iB, bestd = 1, 1, math.huge
     for a = 1, #chainA do
         for b = 1, #chainB do
-            local d = (chainA[a].x - chainB[b].x) ^ 2 + (chainA[a].z - chainB[b].z) ^ 2
-            if d < bestd then bestd, iA, iB = d, a, b end
+            -- Virtual direction nodes (see withVirtual) never host the meeting: a tie-in walked back
+            -- from one could land ON it, i.e. 4 m into thin air past the real stem tip.
+            if not chainA[a].virtual and not chainB[b].virtual then
+                local d = (chainA[a].x - chainB[b].x) ^ 2 + (chainA[a].z - chainB[b].z) ^ 2
+                if d < bestd then bestd, iA, iB = d, a, b end
+            end
         end
     end
 
@@ -6794,7 +6845,12 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     end
     local bi = bia
     if dub ~= nil and pathLen(dub) < pathLen(bia) - 0.1 then bi = dub end
-    if bi == nil then return nil end
+    if bi == nil then
+        roadNote(string.format("nofit:%d_%d", fromAp.wp.id, toAp.wp.id),
+            "junction - entry id=%d -> exit id=%d: neither curve engine fit (delta %.0f deg, t %.1f, sA %.1f, sB %.1f, tie-ins %.1f m apart) - refused.",
+            fromAp.wp.id, toAp.wp.id, math.deg(delta), t, sA, sB, math.sqrt((pbx - pax) ^ 2 + (pbz - paz) ^ 2))
+        return nil, "nofit"
+    end
     return { ax = pax, ay = pay, az = paz, bx = pbx, by = pby, bz = pbz,
         points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd) }
 end
@@ -7426,9 +7482,12 @@ function ADFlyoverEditor:handleWheel(offset)
     if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.MOVE and self.dragId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
-    -- Junction claims the wheel whenever it is active (no pending action needed): the wheel IS the
-    -- scope-radius lever, so it takes the wheel over the world too, not just over the card.
-    if self.tool == self.TOOL.JUNCTION then return self:applyWheelToActiveTool(toolStep) end
+    -- Junction claims the wheel once a SITE IS LOCKED (its pending action - the lock message says
+    -- "wheel = scope" at that moment), the same rule as every tool above. It used to claim the wheel
+    -- unconditionally while the tool was up, which took the camera zoom away for the whole time the
+    -- tool was selected - hunting for the next crossing with no way to zoom. Before the lock the card
+    -- still takes the wheel when hovered (the branch above), so the scope can be dialled in first.
+    if self.tool == self.TOOL.JUNCTION and self.junctionArmed ~= nil then return self:applyWheelToActiveTool(toolStep) end
 
     return false
 end
