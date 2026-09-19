@@ -187,6 +187,29 @@ pursuit's cut-in lands the vehicle where the line used to be. Re-simulate; two o
 converge. Bounded by the *outer* corridor edge: the line may not be swept off the outside of the
 road either. If the bounded reshape still fails a gate, refuse.
 
+**Kickout shape (decided 2026-09-18, from the first driven reshape).** The outward push must **start
+early and end late** — on the entry lane before the tie-in and back onto the exit lane well after it —
+and it is **asymmetric**: the return is longer than the setup, because the trailer is still cutting
+inside a full rig-length after the tow has left the curve. A push blended *inside* the connector (the
+first implementation) is the wrong shape twice over: on a ~16 m connector a 2 m push produced 30°
+kinks at both ends, and it recovers little. Offline, Transtar rig, 90° turn, 2 m push:
+
+| kickout | R 8: trailer inside original line | R 12 | max kink |
+|---|---|---|---|
+| none | 3.36 m | 2.60 m | 8° / 5° |
+| blended inside the curve | 2.71 m | 1.44 m | 36° / 12° |
+| early 10 m / late 10 m | 1.36 m | 0.44 m | 9° |
+| **early 12 m / late 20 m** | **1.21 m** | **0.39 m** | **8° / 7°** |
+| 3 m, early 12 / late 20 | 0.10 m | 0.10 m | 10° |
+
+The early/late form recovers ~3× as much per metre of push, with no kinks. Its cost is the tow's
+front swinging further to the *outside* (3.5–3.8 m vs 2.1 m) — the oncoming-lane side — which is
+exactly what the tow-body road and obstacle probes are there to bound. Defaults derive from the rig:
+`early ≈ lookAhead + 2`, `late ≈ lookAhead + trailerLength`. Consequence: the reshape **moves the
+tie-ins** outward along the lanes (this answers the open question in §11), so placement must be able
+to splice a tie-in on the lane *outside* the scope circle, and a later rebuild must clear a kickout's
+points beyond its usual 1.3 R debris sweep.
+
 **Visualise** — in the locked preview, draw the predicted tow line and trailer line (thin, distinct
 colours) under the white connector, and tint the swept region where it leaves the corridor. This is
 the first deliverable (§8): it makes the model's claims *visible* before any gate trusts them.
@@ -271,6 +294,50 @@ were route start/end slowdowns, not the corner rule. One diagnostic-only mismatc
 reaches the same curvature at ~0.68× the recorded `rotatedTime`, i.e. the rotatedTime→wheel-angle
 mapping is not the linear full-lock scale assumed; it does not affect the driven line and is left as
 an open item.
+
+**Correction (same day, from the in-game rig capture).** `FlyoverSweptRig` measured the rig the
+recordings came from - Transtar II + SKS 30/1050 - and overturned two hand-copied numbers:
+
+- the hitch is a **fifth wheel 0.93 m AHEAD of the rear axle**, not a drawbar 0.94 m behind it (the
+  recorder stores an unsigned distance; the sign was my assumption). The whole 0.25–0.7 m
+  "conservative over-prediction" attributed above to tyre slip was that sign;
+- the trailer's kinematic pivot is the centroid of its axle group, **7.08 m** from the hitch, not its
+  rearmost axle at 8.39 m.
+
+**Second correction, same day: full lock.** Two independent geometric derivations were tried and both
+were wrong the same way. First `wheel.physics.rotMax` (45°, R = 5.84 m); when a later fix changed
+nothing, it turned out `vehicle.maxRotation` - the field `DrivePathModule` itself reads as the
+steering-angle limit - is the *same* 45° on this truck, so the second attempt reached the identical
+wrong number by a different door. What settled it was a **clean recording** (`looptest.xml`: the
+Transtar held hard over for 15 s with nothing to hit - the earlier "4.3–5.0 m" figure had come from
+`clip1`/`trucktrail`, both stalled against an obstacle, not a real measurement). A least-squares
+circle fit over the sustained-lock samples (`rotatedTime` ≥ 1.15, 66 points, mean residual 4 cm)
+converges to **R = 6.26 m** for the rear axle as the window tightens toward peak lock. That matches
+`vehicle.maxTurningRadius` (6.1 m) within 0.15 m - the field earlier dismissed as "a nominal AI
+figure" was right, and both wheel-angle formulas undershot it by ~0.4 m for a reason not yet
+understood (Ackermann geometry between inner/outer wheel angles is the leading guess). `captureRig`
+now trusts `maxTurningRadius` as primary, falling back to the wheel-angle estimate only when a
+vehicle has none set. `maxRotTime` was corrected the same way: the clean recording shows
+`rotatedTime` reaching 1.18, not the assumed 1.05 - read as whatever unit the game itself uses,
+never normalized.
+
+Re-run on the same six corners with the corrected geometry: trailer inside-cut error **0.03–0.51 m**
+(mean 0.23 m, still biased toward under-predicting - the unsafe side, now smaller in absolute terms
+but worth the gate keeping its margin). Tow rear axle mean error **0.53 m**, worse than the 0.18–0.30 m
+measured against the wrong (tighter) full-lock radius - and the per-corner detail exposes why: the
+**inside** track matches well (within ~0.2 m on every corner) but the tow's **outside swing is
+over-predicted by ~0.9–1.0 m on every single corner**, both turn directions. That is a new,
+previously-invisible finding (the old aggregate error metric averaged it away) and is now the open
+item: something in the steering law's approach to a corner - most likely the look-ahead target
+sweeping across the apex before the vehicle has turned in, producing more outward swing in the model
+than the real rate-limited steering produces - is not yet right. Flagged, not yet fixed. It is NOT
+harmless to the gate: the body-edge probe (§6) samples both sides of the tow, so an over-wide outside
+swing can refuse a turn over a phantom outside obstacle/off-road risk that a real driver would clear.
+Conservative-direction, so it fails safe rather than unsafe - but a turn refused for the wrong reason
+still needs the sweep-wide reshape's search budget, or is refused when it should not be.
+
+"Both hitch types via one signed offset" (§4) has now been exercised for real - by getting the sign
+wrong and measuring the cost.
 
 **Calibration loop.** For each class: simulate → record → compare (max lateral error of the tow and
 trailer lines, and the cut-in depth at entry/exit). Tune the profile's effective look-ahead and

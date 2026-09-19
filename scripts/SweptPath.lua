@@ -55,6 +55,11 @@ local function log(fmt, ...)
     Logging.info("[%s] swept: " .. fmt, R.MOD_NAME, ...)
 end
 
+-- Forward declaration: captureCurrentRig (above the definition, in the geometry section) calls this.
+-- A `local function` is only visible to code compiled AFTER it, so without this the call resolved
+-- to a nil global - FlyoverSweptRig failed with "attempt to call a nil value".
+local controlledVehicle
+
 -- ---------------------------------------------------------------------------------------------
 -- Vehicle geometry
 -- ---------------------------------------------------------------------------------------------
@@ -125,6 +130,33 @@ function R.captureRig(vehicle)
         lookAhead = 4, minDistance = 1.8,
         hitchOffset = 0, trailerLength = 0, trailerWidth = 0,
     }
+    -- FULL LOCK: vehicle.maxTurningRadius is PRIMARY, not a fallback - this took two wrong turns to
+    -- reach. First try read wheel.physics.rotMax (45 deg -> 5.8 m); when that number didn't move,
+    -- second try read vehicle.maxRotation instead (the field DrivePathModule itself uses for the
+    -- steering-angle limit) - also 45 deg -> 5.8 m, the SAME wrong number by a different door. A
+    -- CLEAN recording settled it: looptest.xml, 15 s of the Transtar held hard over with nothing to
+    -- hit (the earlier 4.3-5.0 m "calibration" had been a stall against an obstacle, not a real
+    -- measurement). A least-squares circle fit over the sustained-lock samples (rotatedTime >= 1.15,
+    -- 66 points, mean fit residual 4 cm) gives R = 6.26 m for the rear axle - converging there as the
+    -- window is tightened toward peak lock (6.67 -> 6.59 -> 6.51 -> 6.44 -> 6.26). maxTurningRadius
+    -- was 6.1 m: within 0.15 m of a clean driven circle, while both wheel-angle formulas undershot by
+    -- ~0.4 m in the same direction for a reason not yet understood (Ackermann geometry is the leading
+    -- guess). Two independently-wrong geometric derivations against one field that matches driven
+    -- reality is reason enough to trust the field. The wheel-angle estimate is kept as a fallback for
+    -- a vehicle with no maxTurningRadius set at all.
+    rig.nominalTurnRadius = vehicle.maxTurningRadius
+    if vehicle.maxTurningRadius ~= nil and vehicle.maxTurningRadius > 0 then
+        rig.minTurnRadius = vehicle.maxTurningRadius
+    elseif vehicle.maxRotation ~= nil and vehicle.maxRotation > 0 then
+        local deg = (vehicle.maxRotation > 2 * math.pi) and vehicle.maxRotation or math.deg(vehicle.maxRotation)
+        local delta = math.min(math.rad(deg), math.rad(75))
+        rig.minTurnRadius = rig.wheelbase / math.tan(delta)
+        rig.maxWheelAngleDeg = math.deg(delta)
+    end
+    if vehicle.maxRotation ~= nil and vehicle.maxRotation > 0 then
+        local deg = (vehicle.maxRotation > 2 * math.pi) and vehicle.maxRotation or math.deg(vehicle.maxRotation)
+        rig.steerLimitDeg = math.min(deg, 75)
+    end
     local AD = ADFlyoverArming and ADFlyoverArming.autoDrive
     if AD ~= nil then
         if AD.getMinLookaheadByVehicleType then rig.lookAhead = AD.getMinLookaheadByVehicleType(vehicle) end
@@ -157,9 +189,12 @@ end
 
 function R.describeRig(rig)
     if rig == nil then return "no rig captured (FlyoverSweptRig with a vehicle entered)" end
-    return string.format("%s: wheelbase %.2f, steer node %+.2f, full-lock R %.1f, look-ahead %.1f, reach %.1f, hitch %+.2f, trailer %.2f (w %.1f/%.1f)",
-        rig.name, rig.wheelbase, rig.steerNodeOffset, rig.minTurnRadius, rig.lookAhead, rig.minDistance,
-        rig.hitchOffset, rig.trailerLength, rig.towWidth or 0, rig.trailerWidth or 0)
+    return string.format("%s: wheelbase %.2f, steer node %+.2f, full-lock R %.1f (wheels %.0f deg; game's nominal %s), look-ahead %.1f, reach %.1f, hitch %+.2f (%s), trailer %.2f (w %.1f/%.1f)",
+        rig.name, rig.wheelbase, rig.steerNodeOffset, rig.minTurnRadius, rig.maxWheelAngleDeg or 0,
+        rig.nominalTurnRadius and string.format("%.1f", rig.nominalTurnRadius) or "n/a",
+        rig.lookAhead, rig.minDistance, rig.hitchOffset,
+        (rig.hitchOffset or 0) >= 0 and "fifth wheel, ahead of the rear axle" or "drawbar, behind the rear axle",
+        rig.trailerLength, rig.towWidth or 0, rig.trailerWidth or 0)
 end
 
 --- Console: capture the entered vehicle as the design rig the junction preview simulates with.
@@ -205,7 +240,7 @@ local function collectTrailers(vehicle, out, depth)
     end
 end
 
-local function controlledVehicle()
+controlledVehicle = function()
     local AD = ADFlyoverArming and ADFlyoverArming.autoDrive
     if AD == nil or AD.getControlledVehicle == nil then
         return nil

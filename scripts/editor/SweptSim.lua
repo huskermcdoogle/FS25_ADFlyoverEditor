@@ -55,12 +55,23 @@ S.STOCK_DRIVER = {
 --- A rig: the numbers the recorder measures (spec §4). All metres, offsets along the tow body axis
 --- from the rear axle, positive forward.
 --- minTurnRadius is the rear-axle radius at full lock; it sets the max wheel angle via the wheelbase.
+--- The preset below is the Transtar II + SKS 30/1050 semi as CAPTURED in game (FlyoverSweptRig).
+--- Two corrections from the first hand-copied version, both found by the capture: the hitch is a
+--- FIFTH WHEEL 0.93 m AHEAD of the rear axle (it was entered as a drawbar, -0.94 - the whole of the
+--- "tyre slip" over-prediction attributed to that in the spec's first calibration note was actually
+--- that sign), and the trailer's pivot is the centroid of its axle group (7.08 m), not its rearmost
+--- axle (8.39 m). Full lock is the CLEAN measurement from looptest.xml (15 s held hard over, nothing
+--- to hit): a least-squares circle fit over the sustained-lock samples gives R = 6.26 m for the rear
+--- axle, matching vehicle.maxTurningRadius (6.1 m) within 0.15 m - see captureRig for why that field
+--- is now trusted over any wheel-angle formula. maxRotTime is the largest rotatedTime this vehicle was
+--- actually seen to reach (1.18, from the same recording) - not a normalized +-1, so it is read as
+--- whatever the game's own units are and used as-is, never divided by anything.
 S.EXAMPLE_RIG = {
-    name = "Transtar II + trailer",
-    wheelbase = 5.82, steerNodeOffset = 0.65, minTurnRadius = 4.3, maxRotTime = 1.05,
-    lookAhead = 10.32, minDistance = 3.0,
-    hitchOffset = -0.94, trailerLength = 8.39,
-    towWidth = 2.5, trailerWidth = 2.5,
+    name = "Transtar II + SKS 30/1050 (preset)",
+    wheelbase = 5.84, steerNodeOffset = 0.66, minTurnRadius = 6.26, maxRotTime = 1.18,
+    lookAhead = 10.32, minDistance = 5.9,
+    hitchOffset = 0.93, trailerLength = 7.08,
+    towWidth = 2.7, trailerWidth = 2.6,
 }
 
 local function dist2d(ax, az, bx, bz)
@@ -193,7 +204,11 @@ function S.simulate(path, rig, driver, start, opts)
             local lz = (dx * fx + dz * fz) / n
             local lx = (dx * lx_ + dz * lz_) / n
             local ang = math.deg(math.acos(math.max(-1, math.min(1, lz))))
-            local mag = math.min(ang / driver.steerLimitDeg, 1)
+            -- rig.steerLimitDeg overrides the driver's generic 60 deg when the CAPTURED vehicle's own
+            -- maxRotation is known - exactly the per-vehicle override DrivePathModule itself applies
+            -- (maxAngle = 60 unless vehicle.maxRotation says otherwise). Falls back to the driver's
+            -- figure for a rig with no capture (the baked-in preset, an older saved rig).
+            local mag = math.min(ang / (rig.steerLimitDeg or driver.steerLimitDeg), 1)
             sTarget = (lx > 0.00001) and mag or -mag
         end
         if sTarget > s then s = math.min(s + slewNorm * dt, sTarget)

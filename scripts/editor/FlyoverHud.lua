@@ -512,13 +512,37 @@ function ADFlyoverHud:buildRows(editor)
         add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
             function() editor:cycleDeleteScope() end)
     elseif editor.tool == editor.TOOL.JUNCTION then
+        -- First row always: which job the tool is doing. "clear" reuses everything build does to
+        -- find a site's own runs and old wiring, but shows a much shorter card - none of the turn-
+        -- solving settings below apply when nothing is being laid.
+        add("toggle", "action", (editor.junctionMode == "clear") and "clear" or "build", false,
+            function() editor:toggleJunctionMode() end)
+        if editor.junctionMode == "clear" then
+            addWheelNumber("search radius", string.format("%.0f m", editor:junctionRadiusValue()))
+            add("toggle", "leave through paths", (editor.junctionLeaveThrough ~= false) and "on" or "off", false,
+                function() editor:toggleJunctionLeaveThrough() end)
+            local cjp = editor.junctionPreview
+            if cjp ~= nil then
+                local cleave = editor.junctionLeaveThrough ~= false
+                local doomed = cleave and cjp.turnDebris or cjp.debris
+                add("toggle", "approaches found", tostring(#(cjp.approaches or {})))
+                add("toggle", "will clear", tostring(#(doomed or {})))
+                if cleave and #(cjp.throughDebris or {}) > 0 then
+                    add("toggle", "through points kept", tostring(#(cjp.throughDebris or {})))
+                end
+                -- What happens to the ends the clear leaves behind. Lanes still running through are
+                -- not tidied, so this is a statement of the target, not a count.
+                add("toggle", "tidy lane ends to",
+                    string.format("%.0f m", AutoDrive.FLYOVER_JUNCTION_STUB_GAP or 4))
+            else
+                add("note", "point at a junction")
+            end
+        else
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
-        addWheelNumber("search radius", string.format("%.0f m", editor.junctionRadius or 15))
+        addWheelNumber("search radius", string.format("%.0f m", editor:junctionRadiusValue()))
         add("number", "turn radius", string.format("%.0f m", editor.junctionTurnRadius or 12))
         rows[#rows].stepAction = function(dir)
-            editor.junctionTurnRadius = math.max(AutoDrive.FLYOVER_JUNCTION_TURN_MIN,
-                math.min(AutoDrive.FLYOVER_JUNCTION_TURN_MAX,
-                    (editor.junctionTurnRadius or 12) + dir * AutoDrive.FLYOVER_JUNCTION_TURN_STEP))
+            editor:setJunctionTurnRadius((editor.junctionTurnRadius or 12) + dir * AutoDrive.FLYOVER_JUNCTION_TURN_STEP)
         end
         add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
             function() editor:toggleJunctionCheckSurface() end)
@@ -582,6 +606,9 @@ function ADFlyoverHud:buildRows(editor)
             if (jp.nBlocked or 0) > 0 then
                 add("toggle", "blocked (refused)", tostring(jp.nBlocked))
             end
+            if (jp.nSweep or 0) > 0 then
+                add("toggle", "laid wide", string.format("%d  (up to %.0f m)", jp.nSweep, jp.sweepMax or 0))
+            end
             if (jp.nTrailerRoad or 0) > 0 then
                 add("toggle", "rig off road (refused)", tostring(jp.nTrailerRoad))
             end
@@ -598,6 +625,7 @@ function ADFlyoverHud:buildRows(editor)
             add("toggle", "confidence", string.format("%d%%", math.floor(jp.confidence * 100 + 0.5)))
         else
             add("note", "point at a crossing")
+        end
         end
     end
     -- MERGE's distance and divergence are the typed number fields above (getEditableNumbers), each

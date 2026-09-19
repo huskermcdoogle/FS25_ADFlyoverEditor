@@ -35,6 +35,13 @@ S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
 S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 6, current = 6 }
+-- The junction tool's two radii are PERSISTED because they are not preferences so much as a
+-- property of the network being edited (how far apart its junctions sit), and losing them on every
+-- restart is actively misleading: a radius set to 20, a game restart for a new build, and the tool
+-- is silently back at 15 while the card the user last looked at said 20. That cost a full round of
+-- testing where a fix looked like it had done nothing.
+S.settings.junctionRadius = { values = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 }, default = 10, current = 10 }          -- 6..40 m, default 15
+S.settings.junctionTurnRadius = { values = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }, default = 11, current = 11 }      -- 2..30 m, default 12
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
@@ -139,7 +146,8 @@ end
 function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
-                            "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence" }) do
+                            "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence",
+                            "junctionRadius", "junctionTurnRadius" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
     end
     return table.concat(parts, " ")

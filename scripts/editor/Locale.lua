@@ -306,7 +306,22 @@ L.STRINGS = {
         ["%d turn(s) to lay here. Left-click locks the site; wheel = scope."] = "%d Abbiegung(en) hier zu verlegen. Linksklick sperrt den Ort; Rad = Suchkreis.",
         ["Point at a crossing and left-click to lock it. Wheel = scope; right-click leaves the tool."] = "Auf eine Kreuzung zeigen und mit Linksklick sperren. Rad = Suchkreis; Rechtsklick legt das Werkzeug weg.",
 
+        -- junction tool: NEXT guidance (clear mode)
+        ["Site locked: will clear %d point(s). Right-click clears; left-click moves the lock."] = "Ort gesperrt: %d Punkt(e) werden entfernt. Rechtsklick entfernt; Linksklick versetzt die Sperre.",
+        ["Site locked, nothing here to clear. Right-click unlocks; left-click moves the lock."] = "Ort gesperrt, nichts zu entfernen. Rechtsklick entsperrt; Linksklick versetzt die Sperre.",
+        ["%d point(s) to clear here. Left-click locks the site; wheel = scope."] = "%d Punkt(e) hier zu entfernen. Linksklick sperrt den Ort; Rad = Suchkreis.",
+        ["Point at a junction and left-click to lock it. Wheel = scope; right-click leaves the tool."] = "Auf eine Kreuzung zeigen und mit Linksklick sperren. Rad = Suchkreis; Rechtsklick legt das Werkzeug weg.",
+
         -- junction tool: card labels and values
+        ["action"] = "Aktion",
+        ["build"] = "bauen",
+        ["clear"] = "entfernen",
+        ["leave through paths"] = "Durchfahrten belassen",
+        ["approaches found"] = "Zufahrten gefunden",
+        ["will clear"] = "wird entfernt",
+        ["through points kept"] = "Durchfahrtspunkte belassen",
+        ["tidy lane ends to"] = "Fahrbahnenden bis",
+        ["point at a junction"] = "auf eine Kreuzung zeigen",
         ["search radius"] = "Suchradius",
         ["turn radius"] = "Wenderadius",
         ["road check"] = "Straßenprüfung",
@@ -335,6 +350,7 @@ L.STRINGS = {
         ["too far apart"] = "zu weit auseinander",
         ["redundant lane"] = "doppelte Spur",
         ["blocked (refused)"] = "blockiert (abgelehnt)",
+        ["laid wide"] = "weit ausgeholt",
         ["rig off road (refused)"] = "Gespann neben der Straße (abgelehnt)",
         ["rig hits obstacle (refused)"] = "Gespann trifft Hindernis (abgelehnt)",
         ["already there"] = "bereits vorhanden",

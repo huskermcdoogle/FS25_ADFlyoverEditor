@@ -234,3 +234,34 @@ matrix, and the collision-clearance gate.
   connection is often the right move (§5).
 
 This plan is ready to turn into an implementation task.
+
+## Decision (2026-09-18): the wheel selects RUNS; the tracks and the rig shape the junction
+
+The search circle used to do two jobs: pick which tracks take part (whatever it cuts) and bound all
+the work - lane chains clipped to it, tie-ins clamped at its edge, the already-connected test and
+rebuild's cleanup living inside it. So the wheel was quietly an intersection-geometry control and the
+same crossing came out differently at different circle sizes. Now the circle only **identifies or
+excludes**; the thinking is in whole **runs**.
+
+- **Runs.** Each track the circle cuts is followed OUTWARD along its run, by length along the run:
+  `1.5 x turn radius + (look-ahead + trailer length) + 10 m` - what a tie-in plus a kickout's late
+  return can need (~45 m for the Transtar rig), not a blanket region. `ap.wp` becomes that far anchor,
+  `ap.selWp` the node where the circle cut it, `ap.bearing` the bearing at the cut (turn-angle
+  decisions), `ap.chainBearing` the bearing at the anchor. Selections that reach the same anchor are
+  one lane and merge - which absorbs an existing kickout that crosses the circle beside its lane.
+- **A run ends at another junction.** We do NOT tie in or kick out upstream of a neighbouring junction:
+  that would run our wiring through its crossing (its conflict points), and its rebuild would see our
+  kickout as its own old wiring and delete it. A short run therefore shortens the kickout, then steps
+  the radius down, then refuses - with the run's length and why it stopped in the log. Passing
+  through is a later topic; it needs junctions to own their wiring.
+- **Ownership: one rule.** Wiring belongs to THIS junction iff some node of it lies inside the search
+  circle + `FLYOVER_JUNCTION_OWN_TOLERANCE` (5 m). Used three ways: a fork met while following a run
+  is our own tie-in (walk on) or another junction (the run ends); rebuild clears an off-road cluster
+  only if it joins two different lane groups AND is ours (so tracks that diverge and reconverge up
+  the road, sidings, and the junction next door are left alone - while a cluster that is ours goes
+  whole, kickout tails included); and a connection is "already there" only if its path passes through
+  here (and is not a long detour: > 1.5x the way via the locked point + 20 m).
+- **Lane walks** break ties at a fork toward the lower waypoint id (the older node is the road, the
+  newer one wiring laid onto it) and never turn more than ~70 degrees at one node.
+- The two distance gates that still read the search radius (`meetCap`, `farCap`) now scale with the
+  turn radius only.

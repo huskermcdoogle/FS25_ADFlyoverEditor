@@ -138,7 +138,7 @@ ADFlyoverEditor = {
     -- Junction tool (V1): scope radius the wheel drives, the turn radius that shapes the connector
     -- curves, and the last computed preview (scope / approaches / movement matrix / connector curves).
     -- Line weight is a global theme setting.
-    junctionRadius = 15,
+    junctionRadius = nil,   -- nil until first read: junctionRadiusValue() pulls the PERSISTED setting
     junctionTurnRadius = 12,
     -- Road-surface / corridor check, on by default. Off lets a turn shrink for radius alone, never
     -- for leaving the road - see junctionSolveMovement.
@@ -149,6 +149,8 @@ ADFlyoverEditor = {
     -- Rebuild existing turns, OFF by default: on, an existing connection whose path leaves the road
     -- skeleton (an old connector) is deleted and laid fresh instead of being kept as "already there".
     junctionRebuild = false,
+    junctionMode = "build",     -- "build" (default) or "clear" - see toggleJunctionMode
+    junctionLeaveThrough = true, -- clear mode: spare through wiring at a T / 4-way (see debris pass)
     -- Connector curve engine: Dubins (default - radius-bounded pose-to-pose via AutoDrive's own
     -- ADDubins) or the tangent biarc (also the automatic fallback when Dubins declines).
     junctionUseDubins = true,
@@ -233,6 +235,37 @@ AutoDrive.FLYOVER_JUNCTION_CLEARANCE = 5.0
 AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MIN = 2.0
 AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MAX = 10.0
 AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP = 0.5
+-- Sweep-wide reshape (docs/swept-path-spec.md §6): how far a connector may be pushed OUTWARD of its
+-- fitted line so the design rig's cut-in lands back on the road - "swing left to make a wider right
+-- turn". Tried in steps before the radius is ever stepped down; the corridor road check on the
+-- shifted line is what bounds it to the outer road edge, this is only the search limit.
+-- The WORK REGION: how far from the locked point the tool follows the selected tracks to do its
+-- geometry - find where they meet, place tie-ins, run kickouts, recognise what is already connected,
+-- clear old wiring on a rebuild. It is a fixed reach, deliberately NOT the wheel's search radius: the
+-- wheel only decides WHICH tracks take part (the circle has to cut them); where the tool enters and
+-- leaves those tracks is decided by the tracks and the rig, and must come out the same whatever size
+-- the circle was when it found them. 60 m holds a 12 m turn's tie-ins (12 m from the corner) plus a
+-- full early/late kickout (12 m before, ~19 m after) with room to spare, and a sharp hook's longer t.
+AutoDrive.FLYOVER_JUNCTION_WORK_REACH = 60
+-- OWNERSHIP: wiring belongs to THIS junction when some node of it lies inside the search circle plus
+-- this tolerance. One rule, used three ways: a fork met while following a run outward is this
+-- junction's own tie-in (walk on) or another junction (the run ends there); a rebuild clears a
+-- cluster only if it is ours; and a connection only counts as "already there" if it passes through
+-- here. It is what keeps tracks that diverge and reconverge up the road, and the junction next door,
+-- out of this one's business - the wheel doing exactly its job of identifying or excluding.
+AutoDrive.FLYOVER_JUNCTION_OWN_TOLERANCE = 5
+AutoDrive.FLYOVER_JUNCTION_SWEEP_MAX = 3.0
+AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP = 1.0
+
+-- After a clear, a lane that dead-ends at the junction is trimmed back or run forward so it stops
+-- THIS FAR FROM THE EDGE OF THE ROAD IT MEETS, and any points added get the lane's own spacing.
+-- Clearance from the nearest crossing TRACK, not a radius from a point: a tail should stop at the
+-- edge of the road it joins, and where that road is a pair of tracks the near one is its edge. About
+-- half a lane, so the stub stops just clear of the carriageway.
+AutoDrive.FLYOVER_JUNCTION_TRACK_CLEARANCE = 2.5
+-- Fallback for a lane with no crossing road to measure against at all: a plain radius from the
+-- centre of the tracks. Wider, because with nothing to clear there is nothing to hug.
+AutoDrive.FLYOVER_JUNCTION_STUB_GAP = 4.0
 
 -- Which surface a point is grounded to when its column has more than one - a bridge deck over a road,
 -- say. "span line" follows the height the span's own ends imply; "top surface" takes the highest.
@@ -2029,7 +2062,7 @@ function ADFlyoverEditor:drawNetwork()
 
         -- Approaches as tall pillars: GREEN = entry lane, AMBER = exit lane, with a direction arm on top.
         for _, ap in ipairs(jp.approaches) do
-            local w = ap.wp
+            local w = ap.selWp or ap.wp
             local r, g, b = 1, 0.65, 0.1                      -- exit: amber
             if ap.dir == "in" then r, g, b = 0.1, 1, 0.3 end   -- entry: green
             local gy = (w.y or baseY)
@@ -2037,6 +2070,33 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addSphereTask(w.x, gy + 4, w.z, 2.5, r, g, b, 1)
             ADDrawingManager:addLineTask(w.x, gy + 4, w.z,
                 w.x + math.sin(ap.bearing) * 4, gy + 4, w.z + math.cos(ap.bearing) * 4, lw, r, g, b)
+        end
+
+        -- Clear mode: RED spheres for what right-click removes, dim BLUE for through-path points a
+        -- "leave through paths" clear will spare - so the shape of what stays behind is visible
+        -- before committing to it, the same way the build side shows white before placing.
+        if jp.clearMode then
+            local leave = self.junctionLeaveThrough ~= false
+            local doomed = leave and jp.turnDebris or jp.debris
+            for _, w in ipairs(doomed or {}) do
+                ADDrawingManager:addSphereTask(w.x, (w.y or baseY) + 0.5, w.z, 1.6, 1, 0.2, 0.15, 1)
+            end
+            if leave then
+                for _, w in ipairs(jp.throughDebris or {}) do
+                    ADDrawingManager:addSphereTask(w.x, (w.y or baseY) + 0.5, w.z, 1.4, 0.2, 0.5, 1, 0.7)
+                end
+            end
+            -- YELLOW lines: each road's claim - its centreline offset either side by half its track
+            -- spread plus the clearance. GREEN spheres: where each lane end will finish, which is
+            -- where its own path first meets someone else's claim. Both come from the tidy itself,
+            -- run in dry mode, so this is not a drawing of what should happen - it is what will.
+            for _, b in ipairs(jp.tidyBands or {}) do
+                ADDrawingManager:addLineTask(b.ax, baseY + 1.2, b.az, b.bx, baseY + 1.2, b.bz,
+                    lw, 1, 0.9, 0.15)
+            end
+            for _, e in ipairs(jp.tidyEnds or {}) do
+                ADDrawingManager:addSphereTask(e.x, (e.y or baseY) + 1.0, e.z, 2.0, 0.2, 1, 0.3, 1)
+            end
         end
     end
 
@@ -2535,8 +2595,26 @@ function ADFlyoverEditor:stopCurrentAction()
             local jp = self.junctionPreview
             -- Placeable = new turns OR rebuilds of existing ones: rebuild movements count into
             -- nRebuild, not nNew, and gating on nNew alone made a pure-rebuild placement report
-            -- "nothing to place" and unlock instead of placing.
-            if jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0 then
+            -- "nothing to place" and unlock instead of placing. Clear mode never has new/rebuild
+            -- movements (the solve is skipped entirely) - its own work is a non-empty debris/stale-
+            -- link set, filtered the same way applyJunctionClear will filter it.
+            local hasWork
+            if jp ~= nil and jp.clearMode then
+                local leave = self.junctionLeaveThrough ~= false
+                local nodes = leave and jp.turnDebris or jp.debris
+                local anySeverableLink = false
+                if leave then
+                    for _, pair in ipairs(jp.staleLinks or {}) do
+                        if not pair.isThrough then anySeverableLink = true; break end
+                    end
+                else
+                    anySeverableLink = (#(jp.staleLinks or {})) > 0
+                end
+                hasWork = (nodes ~= nil and #nodes > 0) or anySeverableLink
+            else
+                hasWork = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0
+            end
+            if hasWork then
                 self:applyJunction()
             else
                 Logging.info("[FlyoverEditor]: junction site unlocked (nothing to place).")
@@ -3222,6 +3300,56 @@ end
 --- whose path leaves the road skeleton (deletes the old connector's interior nodes, lays a fresh
 --- one); off (default), such connections are kept as "already there". Through roads are never
 --- touched either way - their path IS the skeleton, so there is nothing to delete.
+--- "build" lays new turns (the tool's original job); "clear" removes a junction's own wiring and
+--- leaves the roads it joins in place - the tool's read of what belongs to the site (runs, lane
+--- groups, the debris cluster) is identical either way, so this reuses it rather than being a
+--- separate tool. Switching resets the preview key so the change takes effect immediately.
+--- The junction radii, read through the PERSISTED setting so they survive a restart (see
+--- Settings.lua). Editor state stays the live value; the setting is the thing that outlives the
+--- session, and these two read/write it.
+function ADFlyoverEditor:junctionRadiusValue()
+    if self.junctionRadius == nil and ADFlyoverSettings ~= nil then
+        self.junctionRadius = ADFlyoverSettings.get("junctionRadius") or 15
+    end
+    return self.junctionRadius or 15
+end
+
+function ADFlyoverEditor:setJunctionRadius(v)
+    self.junctionRadius = math.max(AutoDrive.FLYOVER_JUNCTION_RADIUS_MIN,
+        math.min(AutoDrive.FLYOVER_JUNCTION_RADIUS_MAX, v))
+    if ADFlyoverSettings ~= nil then ADFlyoverSettings.setNearest("junctionRadius", self.junctionRadius) end
+    self.junctionPreviewKey = nil
+end
+
+function ADFlyoverEditor:setJunctionTurnRadius(v)
+    self.junctionTurnRadius = math.max(AutoDrive.FLYOVER_JUNCTION_TURN_MIN,
+        math.min(AutoDrive.FLYOVER_JUNCTION_TURN_MAX, v))
+    if ADFlyoverSettings ~= nil then ADFlyoverSettings.setNearest("junctionTurnRadius", self.junctionTurnRadius) end
+    self.junctionPreviewKey = nil
+end
+
+function ADFlyoverEditor:toggleJunctionMode()
+    self.junctionMode = (self.junctionMode == "clear") and "build" or "clear"
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction tool set to %s.",
+        self.junctionMode == "clear" and "clear (removes old wiring, leaves the roads)" or "build (lays new turns)")
+end
+
+--- Clear mode only: at a T or a 4-way, the wiring that carries a road STRAIGHT THROUGH the crossing
+--- is, structurally, exactly the same kind of "joins two different lanes" wiring as an actual turn -
+--- the debris test alone cannot tell them apart. This spares it by BEARING: a cluster (or a direct
+--- stale link) joining two lane groups whose approach bearings are within 40 deg of EACH OTHER (both
+--- ends "heading the same way" - travel direction is recorded at both, so a road running straight
+--- across shows near-identical bearings at its two ends) is continuing the road nearly straight, not
+--- turning, and is left alone when this is on. Off clears
+--- everything the site owns, the same as before this option existed.
+function ADFlyoverEditor:toggleJunctionLeaveThrough()
+    self.junctionLeaveThrough = not self.junctionLeaveThrough
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction clear will %s.",
+        self.junctionLeaveThrough and "leave through paths in place" or "clear through paths too")
+end
+
 function ADFlyoverEditor:toggleJunctionRebuild()
     self.junctionRebuild = not (self.junctionRebuild == true)
     self.junctionPreviewKey = nil
@@ -4239,6 +4367,21 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span to merge.")
     elseif self.tool == t.JUNCTION then
         local jp = self.junctionPreview
+        if jp ~= nil and jp.clearMode then
+            local leave = self.junctionLeaveThrough ~= false
+            local nodes = (leave and jp.turnDebris or jp.debris) or {}
+            local n = #nodes
+            if self.junctionArmed ~= nil then
+                if n > 0 then
+                    return string.format(L("Site locked: will clear %d point(s). Right-click clears; left-click moves the lock."), n)
+                end
+                return L("Site locked, nothing here to clear. Right-click unlocks; left-click moves the lock.")
+            end
+            if n > 0 then
+                return string.format(L("%d point(s) to clear here. Left-click locks the site; wheel = scope."), n)
+            end
+            return L("Point at a junction and left-click to lock it. Wheel = scope; right-click leaves the tool.")
+        end
         local placeable = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) or 0
         if self.junctionArmed ~= nil then
             if placeable > 0 then
@@ -6114,6 +6257,25 @@ local function junctionAngDiff(a, b)
 end
 
 -- Unit direction of a chain around index idx (lower index -> higher index).
+--- Index i of the chain segment (chain[i] -> chain[i+1]) that point (px,pz) lies on: the nearest
+--- segment by true distance. Splitting a lane at a tie-in has to be done THIS way, by position
+--- along the chain - not by testing each node with a dot product against its local direction. A
+--- chain is long now and carries on through the junction and round whatever bends the road has on
+--- the far side; out there a node can pass a "the tie-in is ahead of me" dot test again purely by
+--- the way the road happens to point, and the assembled route then jumps to the far side and back.
+local function junctionChainIndexNear(chain, px, pz)
+    local bestI, bestD = 1, math.huge
+    for i = 1, #chain - 1 do
+        local a, b = chain[i], chain[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l2 = dx * dx + dz * dz
+        local u = (l2 > 1e-9) and math.max(0, math.min(1, ((px - a.x) * dx + (pz - a.z) * dz) / l2)) or 0
+        local d = (a.x + u * dx - px) ^ 2 + (a.z + u * dz - pz) ^ 2
+        if d < bestD then bestD, bestI = d, i end
+    end
+    return bestI
+end
+
 local function junctionSegDir(chain, idx)
     local a = chain[math.max(1, idx - 1)]
     local b = chain[math.min(#chain, idx + 1)]
@@ -6330,7 +6492,7 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
         cx, cz, cy = self.cursorX, self.cursorZ, self.cursorY
     end
-    local R = self.junctionRadius or 15
+    local R = self:junctionRadiusValue()
     -- NB: a DIFFERENT name from the scope radius R - shadowing it once made the scope circle render
     -- at the turn radius instead of the search radius.
     local turnR = self.junctionTurnRadius or 12
@@ -6352,6 +6514,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     end
     self.junctionPreviewKey = key
     self.junctionPreview = nil
+    self.junctionChainCache = {}
     local R2 = R * R
 
     -- Scope: waypoints inside the circle. While gathering, also establish the site's ONE structural
@@ -6423,16 +6586,158 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
     end
 
+    -- ---------------------------------------------------------------------------------------------
+    -- From here on the WHEEL IS DONE. The search circle has said which tracks take part; everything
+    -- that follows - where the tracks meet, where the tool ties into them, kickouts, what is already
+    -- connected, what a rebuild clears - works in the fixed WORK REGION and comes out the same
+    -- whatever size the circle was. (It used to all run inside the circle: tie-ins clamped at its
+    -- edge, a turn radius near the scope radius could not be laid, and a kickout needed the circle
+    -- widened to fit - the wheel was quietly an intersection-geometry control.)
+    --
+    -- Each selected track is RE-ANCHORED: followed away from the junction (an entry upstream, an
+    -- exit downstream, bearing-continuous) to the edge of the work region, and that far node becomes
+    -- the approach's anchor - the start of its lane chain. The node where the circle cut the track is
+    -- kept as selWp (the preview's pillar stands there) and ap.bearing stays the bearing AT the cut,
+    -- near the junction, for the turn-angle decisions. Two selections that re-anchor to the same node
+    -- are the same lane and fold into one - which is also what absorbs an existing kickout that
+    -- happens to cross the circle beside its lane: followed outward it rejoins the lane and lands on
+    -- the lane's own anchor.
+    -- How far a run is followed OUTWARD from where the circle cut it, as LENGTH ALONG THE RUN: what a
+    -- turn can need - a tie-in up to ~1.5 turn radii back from the corner, then the kickout's late
+    -- return (look-ahead + trailer length) - plus a margin. Need-based, so it is tens of metres, not
+    -- a big blanket region; and it is a length along the track, not a radius from the click.
+    local reachRig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or (SweptSim ~= nil and SweptSim.EXAMPLE_RIG) or {}
+    local runReach = turnR * 1.5 + ((reachRig.lookAhead or 8) + (reachRig.trailerLength or 0)) + 10
+    -- The node INDEX the rest of the solve searches in: generous enough to hold every followed run.
+    -- Only an index bound - nothing geometric is measured against it.
+    local W = math.max(AutoDrive.FLYOVER_JUNCTION_WORK_REACH or 60, R + runReach + 10)
+    local W2 = W * W
+    local work = {}
+    for _, wp in pairs(wps) do
+        local dx, dz = wp.x - cx, wp.z - cz
+        if dx * dx + dz * dz <= W2 then work[wp.id] = wp end
+    end
+    local ownR2 = (R + (AutoDrive.FLYOVER_JUNCTION_OWN_TOLERANCE or 5)) ^ 2
+    self.junctionOwn = { cx = cx, cz = cz, r2 = ownR2 }
+    local function isOwn(wp) return (wp.x - cx) ^ 2 + (wp.z - cz) ^ 2 <= ownR2 end
+    -- Does the wiring hanging off `fromId` through `startId` reach the search circle (+ tolerance)?
+    -- A bounded flood that may not pass back through `fromId` - so it cannot cheat by running down
+    -- our own lane into the circle.
+    local function branchIsOurs(startId, fromId)
+        local seenB, stackB, n = { [fromId] = true, [startId] = true }, { startId }, 0
+        while #stackB > 0 and n < 200 do
+            local id = table.remove(stackB)
+            local w = work[id]
+            n = n + 1
+            if w ~= nil then
+                if isOwn(w) then return true end
+                for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                    for _, x in pairs(lst) do
+                        if not seenB[x] and work[x] ~= nil then
+                            seenB[x] = true
+                            stackB[#stackB + 1] = x
+                        end
+                    end
+                end
+            end
+        end
+        return false
+    end
+    do
+        local merged, byAnchor = {}, {}
+        for _, ap in ipairs(approaches) do
+            local useOut = (ap.dir == "out")
+            local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
+            if not useOut then wdx, wdz = -wdx, -wdz end
+            local node, cameFrom = ap.wp, nil
+            local tbx, tbz = math.sin(ap.bearing), math.cos(ap.bearing)   -- travel direction at the anchor
+            local run, endedAt = 0, nil
+            for _ = 1, 400 do
+                local list = useOut and (node.out or {}) or (node.incoming or {})
+                local nextId, bestDot = nil, -math.huge
+                for _, nid in pairs(list) do
+                    if nid ~= cameFrom and work[nid] ~= nil then
+                        local nx = work[nid]
+                        local dx, dz = nx.x - node.x, nx.z - node.z
+                        local l = math.sqrt(dx * dx + dz * dz)
+                        if l > 1e-6 then
+                            local dot = (dx / l) * wdx + (dz / l) * wdz
+                            if nextId == nil or dot > bestDot + 0.15 or (dot > bestDot - 0.15 and nid < nextId) then
+                                bestDot, nextId = math.max(dot, bestDot), nid
+                            end
+                        end
+                    end
+                end
+                -- Never walk back on ourselves, and never round a sharp corner onto another road.
+                if nextId == nil or bestDot < 0.3 then endedAt = "end of track"; break end
+                -- A FORK outside the circle: is the side branch this junction's own wiring (an
+                -- earlier tie-in or kickout - it reaches the circle) or ANOTHER junction? At another
+                -- junction the run ENDS: tying in or kicking out upstream of it would run our wiring
+                -- through its crossing - across its conflict points, and into the hands of its
+                -- rebuild, which would see our kickout as its own old wiring and delete it.
+                if not isOwn(node) then
+                    local foreign = false
+                    for _, lst in ipairs({ node.out or {}, node.incoming or {} }) do
+                        for _, b in pairs(lst) do
+                            if b ~= cameFrom and b ~= nextId and work[b] ~= nil and not branchIsOurs(b, node.id) then
+                                foreign = true
+                            end
+                        end
+                    end
+                    if foreign then endedAt = "another junction"; break end
+                end
+                local nxt = work[nextId]
+                local dx, dz = nxt.x - node.x, nxt.z - node.z
+                local l = math.sqrt(dx * dx + dz * dz)
+                if l > 1e-6 then
+                    wdx, wdz = dx / l, dz / l
+                    -- walking an entry goes UPSTREAM, so travel direction is the reverse of the walk
+                    if useOut then tbx, tbz = wdx, wdz else tbx, tbz = -wdx, -wdz end
+                end
+                cameFrom = node.id
+                node = nxt
+                run = run + l
+                if run >= runReach then break end
+            end
+            ap.selWp = ap.wp
+            ap.wp = node
+            ap.chainBearing = math.atan2(tbx, tbz)
+            ap.runLength, ap.runEnded = run, endedAt
+            local k = ap.dir .. "_" .. node.id
+            if byAnchor[k] == nil then
+                byAnchor[k] = ap
+                merged[#merged + 1] = ap
+            else
+                byAnchor[k].count = (byAnchor[k].count or 1) + (ap.count or 1)
+            end
+        end
+        approaches = merged
+        nIn, nOut = 0, 0
+        for _, ap in ipairs(approaches) do
+            if ap.dir == "in" then nIn = nIn + 1 else nOut = nOut + 1 end
+        end
+    end
+    -- Downstream code reads `inside` and `R` as "the region the junction lives in": that is now the
+    -- work region. The selection circle keeps its own radius for the key, the draw and the card.
+    local selectR = R
+    inside = work
+    R = W
+
     -- "Already connected" = a directed path from the entry's inside node to the exit's inside node,
     -- staying INSIDE the scope - so a road passing straight through is not re-proposed as a turn onto
     -- itself. Bounded to the (small) inside set, so cheap. Also returns THE path (as node ids, from
     -- entry to exit) - the rebuild option needs to know which nodes carry the old connection.
     local function connectedInside(fromId, toId)
         if fromId == toId then return true, { fromId } end
+        -- BREADTH-first (a queue, not a stack): the FIRST path found is then the fewest-hops one.
+        -- That matters now that the region is 60 m: the two tracks may also be joined the long way
+        -- round - through a neighbouring junction, around a block - and a depth-first search could
+        -- return that detour, or return it for a pair this junction does not connect at all.
         local parent = { [fromId] = fromId }
-        local stack = { fromId }
-        while #stack > 0 do
-            local id = table.remove(stack)
+        local queue, head = { fromId }, 1
+        while head <= #queue do
+            local id = queue[head]
+            head = head + 1
             local w = inside[id]
             if w ~= nil then
                 for _, tid in pairs(w.out or {}) do
@@ -6444,11 +6749,33 @@ function ADFlyoverEditor:updateJunctionPreview()
                             cur = parent[cur]
                         end
                         table.insert(path, 1, fromId)
+                        -- A connection THROUGH THIS JUNCTION is about as long as anchor -> locked
+                        -- point -> anchor. One much longer than that is a detour via somewhere else:
+                        -- not this junction's turn, so the turn is still to be laid.
+                        local len = 0
+                        for i = 2, #path do
+                            local a, b = inside[path[i - 1]], inside[path[i]]
+                            if a ~= nil and b ~= nil then
+                                len = len + math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2)
+                            end
+                        end
+                        -- ...and it has to pass through THIS crossing at all (ownership rule).
+                        local touches = false
+                        for _, pid in ipairs(path) do
+                            local pw = inside[pid]
+                            if pw ~= nil and isOwn(pw) then touches = true; break end
+                        end
+                        if not touches then return false, nil end
+                        local f, t = inside[fromId], inside[toId]
+                        if f ~= nil and t ~= nil then
+                            local via = math.sqrt((f.x - cx) ^ 2 + (f.z - cz) ^ 2) + math.sqrt((t.x - cx) ^ 2 + (t.z - cz) ^ 2)
+                            if len > via * 1.5 + 20 then return false, nil end
+                        end
                         return true, path
                     end
                     if inside[tid] ~= nil and parent[tid] == nil then
                         parent[tid] = id
-                        stack[#stack + 1] = tid
+                        queue[#queue + 1] = tid
                     end
                 end
             end
@@ -6461,18 +6788,108 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- path nodes, and this set is what protects the roads: only path nodes OFF the skeleton (old
     -- connector interiors) are ever removed. A through-movement's path lies entirely ON the skeleton,
     -- so its "old path" is empty and it is left alone - rebuilding never duplicates a through road.
-    local rebuildOn = (self.junctionRebuild == true)
+    -- Clear mode always needs the debris cluster (that IS its job), whatever "existing turns" says.
+    local clearMode = (self.junctionMode == "clear")
+    local rebuildOn = (self.junctionRebuild == true) or clearMode
+    -- Same condition as `logSite` below (declared later, after this runs) - named separately rather
+    -- than moved, to touch as little of the tested code above this point as possible.
+    local logSite2 = (self.junctionArmed ~= nil)
     -- Skeleton = road nodes; roadLink = the LEGITIMATE links between them (consecutive along an
     -- approach chain, unordered). Rebuild needs both: an old connection between two skeleton nodes
     -- with no interior points (a short direct bridge) has no node to sweep - only the roadLink set
     -- can tell that link apart from the road itself.
     local skeleton, roadLink = {}, {}
+    -- A subset of the skeleton: the part of each lane that is unambiguously PARENT ROAD. Kept apart
+    -- from the skeleton because the two answer different questions - the skeleton is "is this road
+    -- for group detection", which has to reach the crossing, while this is "would clearing this eat
+    -- someone's road", which must not.
+    local runNode, runNodeOf = {}, {}
     local function linkKey(a, b) return math.min(a, b) .. "_" .. math.max(a, b) end
-    for _, ap in ipairs(approaches) do
+    -- LANE GROUPS: approaches whose chains share a node are the same physical lane (a through
+    -- road's entry and its exit walk the same nodes from opposite ends; a two-way track's four
+    -- approaches all do). A turn connector is, by definition, wiring between two DIFFERENT groups -
+    -- which is what lets rebuild tell old junction wiring from a siding or a parking bay that hangs
+    -- off one lane (see the debris pass below).
+    local groupOf, owner = {}, {}
+    local function findGroup(i)
+        while groupOf[i] ~= i do
+            groupOf[i] = groupOf[groupOf[i]]
+            i = groupOf[i]
+        end
+        return i
+    end
+    local apIndex = {}
+    for ai, ap in ipairs(approaches) do
+        groupOf[ai] = ai
+        apIndex[ap] = ai
         local ch = self:junctionChain(ap, cx, cz, R)
+        -- SKELETON STOPS AT THE CROSSING. The chain itself runs the whole way and stays complete -
+        -- build geometry needs it for tie-ins and for finding where two tracks meet. But only the
+        -- part from the anchor up to where this lane comes CLOSEST to the locked point is this lane's
+        -- ROAD. Past that closest point the walk is on the far side of the crossing, travelling over
+        -- whatever wiring carries traffic across it - and marking that as road makes it skeleton,
+        -- which makes it permanently unclearable.
+        --
+        -- That is what kept the T connected through every clear: the tool's own connectors are laid
+        -- tangent-continuous, so the walk ran straight through the middle and out the other side.
+        -- A surviving route was traced entirely over nodes 1.7-8 m from the lock, every one of them
+        -- marked skeleton by this loop. Stopping at the closest approach is exact - no tolerance to
+        -- tune, and a lane that merely bends is unaffected because its closest point is still the
+        -- point nearest the junction.
+        local closest, bestD2 = #ch, math.huge
         for i, n in ipairs(ch) do
+            local d2 = (n.x - cx) ^ 2 + (n.z - cz) ^ 2
+            if d2 < bestD2 then bestD2, closest = d2, i end
+        end
+        -- NOTE: an earlier version also refused to call anything inside the SEARCH CIRCLE road, to
+        -- catch the connector "tails" this rule still leaves behind (the walk steps a little way onto
+        -- a connector before reaching its closest point, and those nodes survive a clear). That went
+        -- badly: with no road inside the circle the junction's whole interior became a single cluster
+        -- that no longer touched two distinguishable lanes, the "joins two lane groups" test failed,
+        -- and a junction locked dead-centre cleared NOTHING (30 points sitting 1.5 m from the lock,
+        -- all rejected as a siding). Group detection needs the lanes to stay road up to the crossing.
+        for i = 1, closest do
+            local n = ch[i]
             skeleton[n.id] = true
+            if owner[n.id] == nil then
+                owner[n.id] = ai
+            else
+                local a, b = findGroup(ai), findGroup(owner[n.id])
+                if a ~= b then groupOf[a] = b end
+            end
             if i > 1 then roadLink[linkKey(ch[i - 1].id, n.id)] = true end
+        end
+        -- THE RUN: from the anchor in to the LAST node that forks before the closest approach. A
+        -- plain road node has exactly two distinct neighbours; one with three is a tie node, where
+        -- something joins the lane. The walk can only have left the road onto a connector AT a fork,
+        -- so everything up to the last one is road it stayed on, and only past that can it be tail.
+        -- Structural, so there is no distance to tune and nothing that moves with the search radius.
+        --
+        -- The first fork is the wrong boundary even though it sounds safer: kickouts are laid to
+        -- start early and end late deliberately, so their tie nodes sit 16-29 m out, and stopping
+        -- there hands the sweep most of the lane again - the very thing this is here to prevent.
+        --
+        -- The crossing's extent sweep spares these, which is what stops a clear eating a T's stem.
+        -- Whatever it does take past the last fork is wiring or tail, and the lane-end tidy trims the
+        -- run back to the gap afterwards.
+        local runEnd = 1
+        for i = 2, closest do
+            local n = ch[i]
+            local seen, deg = {}, 0
+            for _, lst in ipairs({ n.out or {}, n.incoming or {} }) do
+                for _, nid in pairs(lst) do
+                    if not seen[nid] then seen[nid] = true deg = deg + 1 end
+                end
+            end
+            if deg >= 3 then runEnd = i end
+        end
+        if runEnd == 1 then runEnd = closest end
+        -- By id for the extent sweep, which runs before anything is deleted; by OBJECT for the
+        -- lane-end tidy, which runs after - removeWayPoint renumbers every id above the one it
+        -- takes, so an id held across a deletion quietly comes to mean a different node.
+        for i = 1, runEnd do
+            runNode[ch[i].id] = true
+            runNodeOf[ch[i]] = true
         end
     end
     -- The debris sweep reaches a third PAST the scope circle (for old arcs that bulge out), so the
@@ -6483,7 +6900,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- those nodes and links are marked road exactly like the inside ones.
     if rebuildOn then
         local reach2 = (R * 1.3) ^ 2
-        for _, ap in ipairs(approaches) do
+        for ai, ap in ipairs(approaches) do
             local useOut = (ap.dir == "out")
             local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
             if not useOut then wdx, wdz = -wdx, -wdz end
@@ -6524,42 +6941,365 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- skeleton is the honest definition of "old junction wiring": rebuild clears ALL of it and lays
     -- the fresh set. Roads (and anything crossing the scope circle, which becomes an approach and so
     -- skeleton) are untouchable by construction.
-    local debris, staleLinks = {}, {}
-    if rebuildOn then
-        -- Reach extends a third past the scope circle: a big-radius old connector arc can bulge
-        -- outside it, and sweeping only the inside portion left dangling fragments behind.
-        local reach2 = (R * 1.3) ^ 2
-        local seen, stack, staleSeen = {}, {}, {}
-        for id in pairs(skeleton) do seen[id] = true; stack[#stack + 1] = id end
-        while #stack > 0 do
-            local id = table.remove(stack)
-            local w = inside[id] or ADGraphManager:getWayPointById(id)
-            if w ~= nil then
-                -- Direct skeleton-to-skeleton links that are NOT the road (not chain-consecutive)
-                -- are old wiring with no interior node to sweep - collected as links to sever.
-                if skeleton[id] then
-                    for _, nid in pairs(w.out or {}) do
-                        if skeleton[nid] and not roadLink[linkKey(id, nid)]
-                            and not staleSeen[linkKey(id, nid)] then
-                            staleSeen[linkKey(id, nid)] = true
-                            local o = ADGraphManager:getWayPointById(nid)
-                            if o ~= nil then staleLinks[#staleLinks + 1] = { w, o } end
-                        end
-                    end
-                end
-                for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
-                    for _, nid in pairs(lst) do
-                        if not seen[nid] then
-                            local nx = ADGraphManager:getWayPointById(nid)
-                            if nx ~= nil and (nx.x - cx) ^ 2 + (nx.z - cz) ^ 2 <= reach2 then
-                                seen[nid] = true
-                                stack[#stack + 1] = nid
-                                if not skeleton[nid] then debris[#debris + 1] = nx end
+    -- WHAT MUST SURVIVE A CLEAR: the nodes carrying a route that currently runs THROUGH this junction.
+    --
+    -- This replaces classifying each debris cluster by bearing. That approach kept finding new ways to
+    -- be wrong, because it asked an indirect question ("do these two lane groups point the same way?")
+    -- whose inputs were unstable - first the choice of representative approach for a merged group
+    -- (flapped 13 -> 82 -> 79 deg for one connector across near-identical locks), then the composition
+    -- of the clusters themselves, which changes after a clear renumbers ids, so a second pass over the
+    -- same junction classified differently and deleted the through road it had just spared.
+    --
+    -- The property actually wanted is connectivity: do not sever a road that currently runs through
+    -- here. So ask that directly. For every entry->exit approach pair whose bearings are within 40 deg
+    -- of each other (the same straight-on test the U-turn filter uses from the other end, and measured
+    -- per MOVEMENT on the approaches' own bearings - no representative to pick, nothing to go stale),
+    -- take the route that currently connects them and protect every node on it. A cluster holding any
+    -- protected node is through wiring and is spared whole.
+    --
+    -- Erring: a cluster that mixes a through route with turn wiring is spared ENTIRELY. That leaves
+    -- some turn wiring behind, which is the safe direction to be wrong in - leftover connectors can be
+    -- cleared by hand, a severed road cannot be un-severed without rebuilding it.
+    local protectedNodes = {}
+    if clearMode and self.junctionLeaveThrough ~= false then
+        local nProtected, nRoutes = 0, 0
+        for _, e in ipairs(approaches) do
+            if e.dir == "in" then
+                for _, x in ipairs(approaches) do
+                    if x.dir == "out" and x.wp.id ~= e.wp.id
+                        and junctionAngDiff(e.bearing, x.bearing) < math.rad(40) then
+                        local connected, path = connectedInside(e.wp.id, x.wp.id)
+                        if connected and path ~= nil then
+                            nRoutes = nRoutes + 1
+                            for _, pid in ipairs(path) do
+                                if not protectedNodes[pid] then
+                                    protectedNodes[pid] = true
+                                    nProtected = nProtected + 1
+                                end
                             end
                         end
                     end
                 end
             end
+        end
+        if logSite2 then
+            roadNote(string.format("clearProtect:%d:%d", math.floor(cx * 2), math.floor(cz * 2)),
+                "junction clear - %d through route(s) run through this site; %d point(s) on them are protected from clearing.",
+                nRoutes, nProtected)
+        end
+    end
+    -- OWNERSHIP FOR CLEARING is wider than `isOwn` (search circle + 5 m). The tool lays wiring for one
+    -- junction out to runReach - a tie-in at ~1.5 turn radii plus a kickout's late tail - which is
+    -- routinely 35-40 m from the middle, far outside a 15 m scope circle. Judging that wiring by the
+    -- circle meant the tool built connectors it then refused to recognise as its own, and they survived
+    -- every clear ("5 point(s) ... nearest 25.1 m ... no node inside the search circle + tolerance").
+    -- The tight `isOwn` stays in use for run-following, where it is what stops a run walking into the
+    -- junction next door.
+    -- OWNERSHIP FOR CLEARING, by NEAREST CROSSING rather than by any radius.
+    --
+    -- A radius cannot answer "which junction does this wiring belong to". Tried at the lay reach
+    -- (45 m) it destroyed the junction 20 m away; tried at the search circle it destroyed it AND broke
+    -- group detection; tried at 12 m it was safe but cleared only a fifth of a junction locked dead
+    -- centre. Same knob, three wrong answers, because the right question is not "how far" but "closer
+    -- to WHICH crossing".
+    --
+    -- So: find the crossings in the region (nodes with 3+ distinct neighbours, single-link clustered
+    -- at 12 m so one junction's many tie-in forks count once), take the one nearest the lock as the
+    -- one being cleared, and assign every node to its nearest crossing. Wiring is cleared only where
+    -- the lock's crossing is the nearest one - a Voronoi boundary. A tight pair 20 m apart splits down
+    -- the middle; an isolated sprawling junction keeps everything that is closer to it than to
+    -- anything else, with no tuning either way.
+    local crossings = {}
+    do
+        -- Scanned at a FIXED reach, deliberately NOT the work region (which is sized from the search
+        -- radius). Sizing it from the radius made the tool's answer depend on the circle: at r=20 it
+        -- saw 3 crossings, at r=40 it saw 8, so a WIDER search cleared LESS - the extra crossings
+        -- carved the locked one's Voronoi cell smaller. Which junctions exist near a point is a fact
+        -- about the network, not about how big the user set the circle.
+        local CROSSING_SCAN = 70
+        local scan2 = CROSSING_SCAN * CROSSING_SCAN
+        local cand = {}
+        for _, w in pairs(ADGraphManager:getWayPoints()) do
+            if w ~= nil and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= scan2 then
+            local nb, deg = {}, 0
+            for _, t in ipairs(w.out or {}) do nb[t] = true end
+            for _, f in ipairs(w.incoming or {}) do nb[f] = true end
+            for _ in pairs(nb) do deg = deg + 1 end
+            if deg >= 3 then cand[#cand + 1] = w end
+            end
+        end
+        local used = {}
+        for i, w in ipairs(cand) do
+            if not used[i] then
+                used[i] = true
+                local sx, sz, n = w.x, w.z, 1
+                local grew = true
+                while grew do
+                    grew = false
+                    for j, v in ipairs(cand) do
+                        if not used[j] then
+                            local ax, az = sx / n, sz / n
+                            if (v.x - ax) ^ 2 + (v.z - az) ^ 2 <= 144 then
+                                used[j] = true
+                                sx, sz, n = sx + v.x, sz + v.z, n + 1
+                                grew = true
+                            end
+                        end
+                    end
+                end
+                crossings[#crossings + 1] = { x = sx / n, z = sz / n, n = n }
+            end
+        end
+    end
+    local lockedCrossing, bestLockD = nil, math.huge
+    for _, c in ipairs(crossings) do
+        local d = (c.x - cx) ^ 2 + (c.z - cz) ^ 2
+        if d < bestLockD then bestLockD, lockedCrossing = d, c end
+    end
+    -- Fallback only if the region somehow holds no crossing at all: the old core radius.
+    local clearReach = math.max(12, selectR)
+    local coreR = math.max(8, selectR * 0.6)
+    local function isOwnForClear(wp)
+        if lockedCrossing == nil then
+            return (wp.x - cx) ^ 2 + (wp.z - cz) ^ 2 <= coreR * coreR
+        end
+        local best, bestC = math.huge, nil
+        for _, c in ipairs(crossings) do
+            local d = (wp.x - c.x) ^ 2 + (wp.z - c.z) ^ 2
+            if d < best then best, bestC = d, c end
+        end
+        return bestC == lockedCrossing
+    end
+    if logSite2 and clearMode then
+        roadNote(string.format("clearVoronoi:%d:%d", math.floor(cx * 2), math.floor(cz * 2)),
+            "junction clear - %d crossing(s) in the region; clearing the one at %.1f, %.1f (wiring nearer another crossing is left to it).",
+            #crossings, lockedCrossing and lockedCrossing.x or cx, lockedCrossing and lockedCrossing.z or cz)
+    end
+    -- The flood stops at the SAME lay reach. Set wider than this (it was runReach + R) it never binds
+    -- before the work-region edge, so a cluster that runs off down an unselected road to the next
+    -- junction still 'leaks' and is discarded whole - taking with it the part sitting on this crossing
+    -- (measured: 28-node cluster, 18 of them within reach, nearest 19.6 m, all left behind). Stopping
+    -- at the reach makes that near part its own cluster, which then qualifies and clears.
+    -- Flood boundary: stops a runaway walk down a road, nothing more. Ownership is decided by
+    -- nearest crossing (isOwnForClear), not by this.
+    local reachR2 = runReach * runReach
+    local debris, staleLinks = {}, {}
+    -- Split of `debris` by clear mode's through/turn test (see below); declared here so it survives
+    -- past the `if rebuildOn` block that fills it.
+    local turnDebris, throughDebris = {}, {}
+    if rebuildOn then
+        -- STRUCTURAL, not a radius flood. The work region is a fixed 60 m - big enough to hold a
+        -- neighbouring junction, a siding, a yard entrance - so "everything off the road skeleton
+        -- within reach" (the old rule, at 1.3x the search circle) would now eat all of those. Old
+        -- junction wiring is instead recognised by what it IS: a connected cluster of off-skeleton
+        -- nodes that
+        --   * touches road nodes of at least TWO different lane groups (it joins one lane to another
+        --     - a siding or a bay hangs off a single lane and is left alone), and
+        --   * never LEAKS - no node of it links to anything outside the work region, and it is not
+        --     so large that it is plainly a road network rather than a handful of connectors
+        --     (a neighbouring junction's connector runs on into that junction's other roads, which
+        --     carry on out of the region, so its cluster leaks and is left alone).
+        -- Direct road-to-road bridges with no interior node are collected as stale links the same
+        -- way: only between nodes of two DIFFERENT groups, never along one lane.
+        -- THROUGH vs TURN is decided by CONNECTIVITY, not geometry: a cluster is through wiring iff it
+        -- carries part of a route that currently runs through this junction (protectedNodes, computed
+        -- above). `debris`/`staleLinks` stay the full set (every existing rebuild caller is
+        -- unaffected); `turnDebris`/`throughDebris` split it for clear mode alone.
+        local seen, staleSeen = {}, {}
+        for id in pairs(skeleton) do
+            local w = inside[id] or ADGraphManager:getWayPointById(id)
+            if w ~= nil then
+                local gHere = owner[id] and findGroup(owner[id]) or nil
+                for _, nid in pairs(w.out or {}) do
+                    if skeleton[nid] and not roadLink[linkKey(id, nid)] and not staleSeen[linkKey(id, nid)] then
+                        local gThere = owner[nid] and findGroup(owner[nid]) or nil
+                        local o0 = ADGraphManager:getWayPointById(nid)
+                        if gHere ~= nil and gThere ~= nil and gHere ~= gThere
+                            and (isOwnForClear(w) or (o0 ~= nil and isOwnForClear(o0))) then
+                            staleSeen[linkKey(id, nid)] = true
+                            local o = ADGraphManager:getWayPointById(nid)
+                            if o ~= nil then
+                                -- THROUGH = the two approach bearings point the SAME way (both
+                                -- "heading west" through a T, say), not opposite - travel direction
+                                -- is recorded at both ends (entry: direction INTO the circle; exit:
+                                -- direction OUT of it), so a road running straight across shows near-
+                                -- identical bearings at its two ends, and a genuine turn a large one.
+                                -- A direct bridge both of whose ends carry a protected through route is
+                                -- part of that route: severing it is exactly what must not happen.
+                                local isThrough = protectedNodes[id] == true and protectedNodes[nid] == true
+                                staleLinks[#staleLinks + 1] = { w, o, isThrough = isThrough }
+                            end
+                        end
+                    end
+                end
+                for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                    for _, startId in pairs(lst) do
+                        if not skeleton[startId] and not seen[startId] and inside[startId] ~= nil then
+                            -- Flood this off-skeleton cluster.
+                            local cluster, groups, groupRepAi, groupTouchNode, nGroups, leaks, ours = {}, {}, {}, {}, 0, false, false
+                            local nearest = math.huge   -- squared until the flood finishes
+                            local stack = { startId }
+                            seen[startId] = true
+                            while #stack > 0 do
+                                local cid = table.remove(stack)
+                                local cw = inside[cid]
+                                cluster[#cluster + 1] = cw
+                                local d2 = (cw.x - cx) ^ 2 + (cw.z - cz) ^ 2
+                                if d2 < nearest then nearest = d2 end
+                                if #cluster > 400 then leaks = true end
+                                if isOwnForClear(cw) then ours = true end
+                                for _, clst in ipairs({ cw.out or {}, cw.incoming or {} }) do
+                                    for _, x in pairs(clst) do
+                                        if skeleton[x] then
+                                            local g = owner[x] and findGroup(owner[x]) or nil
+                                            if g ~= nil and not groups[g] then
+                                                groups[g] = true
+                                                groupRepAi[g] = owner[x]
+                                                groupTouchNode[g] = x
+                                                nGroups = nGroups + 1
+                                            end
+                                        elseif inside[x] == nil then
+                                            leaks = true
+                                        elseif (inside[x].x - cx) ^ 2 + (inside[x].z - cz) ^ 2 > reachR2 then
+                                            -- BOUNDARY, not a leak. This tool never lays wiring for one
+                                            -- junction further out than runReach (tie-in distance plus a
+                                            -- kickout's tail), so anything past that is not ours and the
+                                            -- flood simply stops - it does not condemn the whole cluster.
+                                            -- Rejecting wholesale is what left connectors behind: an
+                                            -- unselected road leaving the site is not skeleton, so the
+                                            -- flood walked down it to the NEXT junction, and the 28-node
+                                            -- cluster that produced was thrown away along with the four
+                                            -- of its nodes that were sitting on this crossing.
+                                        elseif not seen[x] then
+                                            seen[x] = true
+                                            stack[#stack + 1] = x
+                                        end
+                                    end
+                                end
+                            end
+                            -- OURS: some node of the cluster lies in the search circle (+ tolerance). Wiring
+                            -- between two of these runs further up the road - where tracks diverge and
+                            -- reconverge, or at the junction next door - never enters the circle and is
+                            -- not this rebuild's to clear. A cluster that IS ours goes whole, kickout
+                            -- tails beyond the circle included.
+                            -- THE SEARCH RADIUS NOW BOUNDS THE CLEAR, not just the selection. It used
+                            -- to pick which tracks counted as approaches and nothing more: ownership
+                            -- then decided what to take across the whole 60 m work region, so a wheel
+                            -- set to 10 still cleared wiring 25 m out and turning it down changed
+                            -- nothing. A cluster has to REACH the lock to be this site's to clear.
+                            nearest = (nearest < math.huge) and math.sqrt(nearest) or -1
+                            if logSite2 and not (not leaks and ours and nGroups >= 2 and nearest <= clearReach) then
+                                -- A cluster that DID NOT qualify: log why, once per cluster (keyed by its
+                                -- first node, which is stable across re-locks at the same spot). This is
+                                -- what a "some connections aren't clearing" report needs - the accepted
+                                -- ones are visible as red spheres already, the REJECTED ones are not
+                                -- visible at all otherwise.
+                                local mx, mz, mcount = 0, 0, 0
+                                -- Also: how many of this cluster's nodes are INSIDE the circle, and how
+                                -- close the nearest one gets. The average position alone is misleading -
+                                -- a cluster stretching from THIS junction out to a neighbour averages to
+                                -- somewhere in between and reads as "far away", while its near end is
+                                -- sitting right on the crossing the user is trying to clear.
+                                local nInside = 0
+                                for _, cw in ipairs(cluster) do
+                                    mx, mz, mcount = mx + cw.x, mz + cw.z, mcount + 1
+                                    if isOwnForClear(cw) then nInside = nInside + 1 end
+                                end
+                                if mcount > 0 then mx, mz = mx / mcount, mz / mcount end
+                                local why
+                                if leaks then why = "leaks outside the work region (too large, or wired to something the circle did not select)"
+                                elseif not ours then why = "every node of it is nearer another crossing - it belongs to that junction; lock onto that one instead"
+                                elseif nGroups < 2 then why = string.format("touches only %d lane group - looks like a siding or a dead stub, not turn wiring", nGroups)
+                                elseif nearest > clearReach then why = string.format("nearest point is %.0f m from the lock, outside the %.0f m search radius - turn the wheel up to take it", nearest, clearReach)
+                                else why = "rejected" end
+                                roadNote(string.format("clearReject:%d", cluster[1] and cluster[1].id or 0),
+                                    "junction clear - %d point(s) near %.1f, %.1f (%d of them within lay reach, nearest %.1f m) NOT cleared: %s.",
+                                    #cluster, mx, mz, nInside, nearest, why)
+                            end
+                            if not leaks and ours and nGroups >= 2 and nearest <= clearReach then
+                                -- Protection is PER NODE, not per cluster. Sparing a whole cluster the
+                                -- moment any part of it carried a through route was too coarse: once
+                                -- the junction's interior is treated as one region (skeleton stops at
+                                -- the search circle), its turn wiring and its through wiring are
+                                -- frequently the SAME connected cluster, and sparing all of it cleared
+                                -- almost nothing. Sparing exactly the nodes that carry a through route
+                                -- leaves those routes whole and takes the rest.
+                                local nProt = 0
+                                for _, cw in ipairs(cluster) do
+                                    if protectedNodes[cw.id] then nProt = nProt + 1 end
+                                end
+                                local diagWhy = string.format("%d group(s), %d of its %d point(s) carry a through route (spared individually)",
+                                    nGroups, nProt, #cluster)
+                                if logSite2 then
+                                    local mx, mz, mcount = 0, 0, 0
+                                    for _, cw in ipairs(cluster) do mx, mz, mcount = mx + cw.x, mz + cw.z, mcount + 1 end
+                                    if mcount > 0 then mx, mz = mx / mcount, mz / mcount end
+                                    roadNote(string.format("clearAccept:%.0f:%.0f", mx, mz),
+                                        "junction clear - %d point(s) near %.1f, %.1f: %s -> %d cleared, %d spared.",
+                                        #cluster, mx, mz, diagWhy, #cluster - nProt, nProt)
+                                end
+                                -- Node level: spare what carries a through route, spare what belongs to
+                                -- another crossing, clear the rest. A cluster straddling two junctions
+                                -- is therefore split between them instead of going wholly to whichever
+                                -- was locked first.
+                                --
+                                -- OWNERSHIP IS NOT NEGOTIABLE. A node nearer another crossing belongs
+                                -- to that junction and is never cleared from here, whatever "leave
+                                -- through paths" is set to - so it goes in NEITHER list. It used to be
+                                -- put in debris and merely kept out of turnDebris, which meant turning
+                                -- that toggle off (debris, not turnDebris) deleted the neighbour's
+                                -- wiring: the "we killed another junction" failure, back through a
+                                -- different door. The toggle governs through ROUTES, not ownership.
+                                for _, cw in ipairs(cluster) do
+                                    if isOwnForClear(cw) then
+                                        debris[#debris + 1] = cw
+                                        if protectedNodes[cw.id] then
+                                            throughDebris[#throughDebris + 1] = cw
+                                        else
+                                            turnDebris[#turnDebris + 1] = cw
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- THE CROSSING'S OWN WIRING, whatever it is labelled. The cluster pass can only offer up nodes
+    -- the lane chains did not already claim as road - and at a junction the chains walk right up to
+    -- the crossing, so most of its wiring is claimed and only a handful ever reach the debris set
+    -- (measured: 6, at a junction holding ~30 nodes of wiring). Clearing therefore also takes every
+    -- node in the LOCKED crossing's Voronoi cell, within the crossing's own extent, that is not
+    -- carrying a route through the junction AND IS NOT ON A RUN.
+    --
+    -- That last condition is what keeps the parent roads. This sweep is a distance rule, and a
+    -- distance rule cannot tell a T's stem from a connector: the stem is on no through route (it only
+    -- ever connects by turning), so without the run test its road was eaten out to the full extent -
+    -- 16 to 29 m of it, measured. Note it is the RUN that is spared and not the whole skeleton:
+    -- skeleton reaches past the fork and onto the connector tails, which are exactly what this sweep
+    -- is here to take. Sparing all of it leaves turns joined.
+    if clearMode and lockedCrossing ~= nil then
+        local extentR2 = math.max(12, turnR * 1.5) ^ 2
+        local already = {}
+        for _, w in ipairs(turnDebris) do already[w.id] = true end
+        for _, w in ipairs(throughDebris) do already[w.id] = true end
+        local extra = 0
+        for _, w in pairs(work) do
+            if not already[w.id] and not protectedNodes[w.id] and not runNode[w.id]
+                and (w.x - lockedCrossing.x) ^ 2 + (w.z - lockedCrossing.z) ^ 2 <= extentR2
+                and isOwnForClear(w) then
+                turnDebris[#turnDebris + 1] = w
+                debris[#debris + 1] = w
+                extra = extra + 1
+            end
+        end
+        if logSite2 and extra > 0 then
+            roadNote(string.format("clearExtent:%d:%d", math.floor(cx * 2), math.floor(cz * 2)),
+                "junction clear - %d further point(s) inside the crossing's own extent (%.0f m) and not on a through route.",
+                extra, math.sqrt(extentR2))
         end
     end
 
@@ -6600,6 +7340,15 @@ function ADFlyoverEditor:updateJunctionPreview()
                         end
                     else
                         local exists, path = connectedInside(e.wp.id, x.wp.id)
+                        -- Entry and exit on the SAME lane (their chains share nodes - one lane group)
+                        -- is that lane running through: a through movement, there by definition,
+                        -- however the path search judged it (a lane that doubles back inside the
+                        -- region reads as a "detour"). Without this the solver is asked to join a
+                        -- lane to itself and refuses it as "neither curve engine fit (delta 0)".
+                        if not exists and apIndex[e] ~= nil and apIndex[x] ~= nil
+                            and findGroup(apIndex[e]) == findGroup(apIndex[x]) then
+                            exists, path = true, nil
+                        end
                         -- Rebuild option: an existing connection whose path runs through nodes OFF
                         -- the road skeleton is an old connector. With rebuild on, that movement is
                         -- re-solved like a new one and its old off-skeleton nodes are queued for
@@ -6620,7 +7369,13 @@ function ADFlyoverEditor:updateJunctionPreview()
                         -- fails even at the floor is kept with its refusal reason, drawn red, never laid.
                         local con, usedR, refused = nil, nil, nil
                         if not exists or rebuild then
-                            con, usedR, refused = self:junctionSolveMovement(e, x, cx, cz, R, turnR, sweptRig)
+                            -- Clear mode never builds anything - the (expensive, per-radius-candidate,
+                            -- swept-simulated) solve would be pure waste on a preview that re-runs on
+                            -- every half-metre of cursor travel. debris/staleLinks (clear mode's actual
+                            -- output) were already computed above, independent of this loop.
+                            if not clearMode then
+                                con, usedR, refused = self:junctionSolveMovement(e, x, cx, cz, R, turnR, sweptRig)
+                            end
                         end
                         movements[#movements + 1] = { from = e, to = x, exists = exists, connector = con,
                             usedRadius = usedR, refused = refused, rebuild = rebuild, oldPath = oldPath }
@@ -6693,8 +7448,13 @@ function ADFlyoverEditor:updateJunctionPreview()
         for _, ap in ipairs(approaches) do
             -- Keyed by id AND direction: a two-way point contributes an "in" AND an "out" approach
             -- under the SAME waypoint id, and a key by id alone hid whichever one logged second.
-            roadNote(string.format("approach:%d:%s", ap.wp.id, ap.dir), "junction - approach id=%d %s, bearing %.0f deg.",
-                ap.wp.id, ap.dir, math.deg(ap.bearing))
+            -- Logged with where the RUN was followed to and why it stopped: a run cut short by another
+            -- junction is the usual reason a kickout comes out shortened or a turn steps its radius down.
+            roadNote(string.format("approach:%d:%s:%d", ap.wp.id, ap.dir, math.floor(ap.runLength or 0)),
+                "junction - %s track cut by the circle at id=%d (bearing %.0f deg), run followed %.0f m outward to id=%d%s.",
+                (ap.dir == "in") and "entry" or "exit", (ap.selWp or ap.wp).id, math.deg(ap.bearing),
+                ap.runLength or 0, ap.wp.id,
+                ap.runEnded and (" - stopped at " .. ap.runEnded) or "")
         end
     end
 
@@ -6737,6 +7497,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- the trailer's worst inside cut-in for the card. No gate yet: this is the step where the model's
     -- claims are made visible before anything is allowed to refuse on them.
     local sweptMax, nSweptWide = nil, 0
+    local nSweep, sweepMax = 0, nil
     if self.junctionSwept ~= false and self.junctionArmed ~= nil and SweptSim ~= nil then
         local rig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or SweptSim.EXAMPLE_RIG
         local halfCorr = (self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
@@ -6755,6 +7516,17 @@ function ADFlyoverEditor:updateJunctionPreview()
                     sw.wide = edge > halfCorr
                     if sw.wide then nSweptWide = nSweptWide + 1 end
                     sweptMax = math.max(sweptMax or 0, sw.trailerIn)
+                    if m.connector.sweep ~= nil and m.refused == nil then
+                        nSweep = nSweep + 1
+                        sweepMax = math.max(sweepMax or 0, m.connector.sweep)
+                        if m.connector.kickEarly ~= nil then
+                            Logging.info("[FlyoverEditor]: swept - entry id=%d -> exit id=%d laid with a %.1f m KICKOUT (starts %.0f m before the curve, returns %.0f m after it) so the rig stays on the road / clear.",
+                                m.from.wp.id, m.to.wp.id, m.connector.sweep, m.connector.kickEarly, m.connector.kickLate)
+                        else
+                            Logging.info("[FlyoverEditor]: swept - entry id=%d -> exit id=%d laid %.1f m WIDE inside the curve (no room for a kickout) so the rig stays on the road / clear.",
+                                m.from.wp.id, m.to.wp.id, m.connector.sweep)
+                        end
+                    end
                     Logging.info("[FlyoverEditor]: swept - entry id=%d -> exit id=%d (%s turn): tow cuts %.2f m inside, trailer axle %.2f m inside / %.2f m outside the connector; inside edge %.2f m vs corridor half-width %.1f m -> %s (rig: %s).",
                         m.from.wp.id, m.to.wp.id, sw.leftTurn and "left" or "right", sw.towIn, sw.trailerIn,
                         sw.trailerOut, edge, halfCorr, sw.wide and "PAST CORRIDOR" or "fits", rig.name or "?")
@@ -6768,6 +7540,30 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
     end
 
+    -- The LANE GROUP each approach ended up in, now the union-find has settled. Two tracks the clear
+    -- decided are the same road - the two directions of a carriageway, most often - share a group.
+    -- The lane-end tidy groups tracks into roads by this rather than by guessing from headings: a
+    -- geometric test could not tell a shallow-angle crossing from a parallel neighbour, and got both
+    -- wrong at once, while this is the tool's own answer to the same question, already computed.
+    for ai, ap in ipairs(approaches) do ap.laneGroup = findGroup(ai) end
+
+    -- THE CENTRE OF THE TRACKS coming and going, which is what the lane ends get tidied against. The
+    -- lock is only wherever the cursor happened to be; this is the middle of the junction itself -
+    -- the crossing cluster's centroid, the nodes where tracks actually meet. Failing that (no crossing
+    -- found), the mean of the points where the search circle cut each track. Captured HERE, at preview
+    -- time, because the clear is about to delete most of the nodes it is measured from.
+    local tracksCentre
+    if lockedCrossing ~= nil then
+        tracksCentre = { x = lockedCrossing.x, z = lockedCrossing.z }
+    elseif #approaches > 0 then
+        local sx, sz = 0, 0
+        for _, ap in ipairs(approaches) do
+            local w = ap.selWp or ap.wp
+            sx, sz = sx + w.x, sz + w.z
+        end
+        tracksCentre = { x = sx / #approaches, z = sz / #approaches }
+    end
+
     -- Rough confidence (refined later): a clean crossing has a small, balanced set of approaches.
     local conf = 0
     if #approaches >= 2 then
@@ -6777,14 +7573,58 @@ function ADFlyoverEditor:updateJunctionPreview()
     end
 
     self.junctionPreview = {
-        radius = R, turnRadius = turnR, cx = cx, cz = cz, cy = cy, armed = (self.junctionArmed ~= nil),
+        radius = selectR, workRadius = R, turnRadius = turnR, cx = cx, cz = cz, cy = cy, armed = (self.junctionArmed ~= nil),
         approaches = approaches, movements = movements,
         nIn = nIn, nOut = nOut, nNew = nNew, nExisting = nExisting, nTight = nTight, nOffRoad = nOffRoad,
         nNoCurve = nNoCurve, nUTurn = nUTurn, nFar = nFar, nLane = nLane, nRebuild = nRebuild, nBlocked = nBlocked,
         debris = debris, staleLinks = staleLinks, siteHasTwoWay = siteHasTwoWay,
+        turnDebris = turnDebris, throughDebris = throughDebris, clearMode = clearMode,
+        tracksCentre = tracksCentre, runNodes = runNodeOf,
         usedMin = usedMin, usedMax = usedMax, confidence = conf,
         sweptMax = sweptMax, nSweptWide = nSweptWide, nTrailerRoad = nTrailerRoad, nTrailerHit = nTrailerHit,
+        nSweep = nSweep, sweepMax = sweepMax,
     }
+    -- Run the lane-end tidy in DRY mode and keep what it says: where each end would land, and the
+    -- claim bands it measured against. Drawn below, so the site can be judged on screen before
+    -- right-clicking instead of inferred afterwards from a log. It mutates nothing.
+    if clearMode then
+        tryCall("junction tidy preview", function()
+            local ends, bands = self:junctionTidyLaneEnds(self.junctionPreview, true)
+            self.junctionPreview.tidyEnds, self.junctionPreview.tidyBands = ends, bands
+        end)
+    end
+
+    -- Skeleton INSIDE the circle: if a run-following walk ever diverts off the road and down a
+    -- connector, that connector's nodes are marked road and become permanently unclearable - and it
+    -- leaves no rejection line at all, because it is never even considered as debris. Listing them is
+    -- how that shows up: a survivor whose id appears here is protected-as-road, not rejected.
+    if clearMode and logSite2 then
+        local ids, n = {}, 0
+        for id in pairs(skeleton) do
+            local w = inside[id] or ADGraphManager:getWayPointById(id)
+            if w ~= nil and isOwn(w) then
+                n = n + 1
+                if #ids < 40 then ids[#ids + 1] = tostring(id) end
+            end
+        end
+        roadNote(string.format("clearSkel:%d:%d", math.floor(cx * 2), math.floor(cz * 2)),
+            "junction clear - %d road/skeleton point(s) inside the circle (never clearable): %s%s.",
+            n, table.concat(ids, " "), (n > #ids) and " ..." or "")
+    end
+    -- Clear mode's own summary, on every lock: the card shows the same three numbers, but they are
+    -- not otherwise in the log, and "check the log" is how this tool gets debugged. Keyed by the
+    -- locked point (rounded) so moving the lock prints a fresh line instead of staying silent.
+    if clearMode and logSite2 then
+        roadNote(string.format("clearSummary:%d:%d", math.floor(cx * 2), math.floor(cz * 2)),
+            -- These have to be the numbers for the CURRENT toggle, not always the leave-on pair. They
+            -- were the latter, so with through paths set to clear the log read "51 will clear, 29
+            -- spared" while the apply took all 80 - the line naming as spared the very points it was
+            -- about to delete. That is how a through road died with nothing in the log to show it.
+            "junction clear - %d approach(es) found, %d point(s) will clear, %d through-path point(s) spared.",
+            #approaches,
+            (self.junctionLeaveThrough ~= false) and #turnDebris or #debris,
+            (self.junctionLeaveThrough ~= false) and #throughDebris or 0)
+    end
 end
 
 --- Drive the design rig through one movement with the stock-driver twin (SweptSim) and return the
@@ -6799,7 +7639,7 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
     local path = {}
     -- Entry lane: chain[1] is the boundary, increasing toward the interior; keep the nodes the tie-in
     -- lies AHEAD of (those the rig drives over before the connector starts).
-    for k = 1, #chainA do
+    for k = 1, math.min(#chainA, junctionChainIndexNear(chainA, c.ax, c.az)) do
         local n = chainA[k]
         local dx, dz = junctionSegDir(chainA, k)
         if (c.ax - n.x) * dx + (c.az - n.z) * dz > 0.3 then
@@ -6813,7 +7653,7 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
     local lastConnector = #path
     -- Exit lane: walked from the boundary inward, so travel is index-DEcreasing; keep the nodes that
     -- lie beyond the tie-in in the outward direction, interior first.
-    for k = #chainB, 1, -1 do
+    for k = math.min(#chainB, junctionChainIndexNear(chainB, c.bx, c.bz)), 1, -1 do
         local n = chainB[k]
         local dx, dz = junctionSegDir(chainB, k)
         if (n.x - c.bx) * -dx + (n.z - c.bz) * -dz > 0.3 then
@@ -6868,11 +7708,56 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
         return (px - b.x) * (b.x - con[#con - 1].x) + (pz - b.z) * (b.z - con[#con - 1].z) > 0
     end
     local trailerPt = (rig.trailerLength or 0) > 0
+    -- Offsets are measured against the part of the route the rig is ACTUALLY ON, found from its
+    -- progress along it - not against the nearest segment anywhere. The simulated route is long now
+    -- (lane - connector - lane, ~47 m each way) and on a left turn its two legs pass close to each
+    -- other near the crossing: nearest-segment picked the OTHER leg and reported nonsense (a tow
+    -- "3 m inside", a trailer "2.6 m outside" on a turn that fits).
+    local cumP = { 0 }
+    for i = 2, #path do
+        cumP[i] = cumP[i - 1] + math.sqrt((path[i].x - path[i - 1].x) ^ 2 + (path[i].z - path[i - 1].z) ^ 2)
+    end
+    local function offsetNear(px, pz, sLo, sHi)
+        local best, signed = math.huge, 0
+        for k = 1, #path - 1 do
+            if cumP[k + 1] >= sLo and cumP[k] <= sHi then
+                local a2, b2 = path[k], path[k + 1]
+                local dx, dz = b2.x - a2.x, b2.z - a2.z
+                local l2 = dx * dx + dz * dz
+                if l2 > 1e-9 then
+                    local u = math.max(0, math.min(1, ((px - a2.x) * dx + (pz - a2.z) * dz) / l2))
+                    local qx, qz = a2.x + u * dx, a2.z + u * dz
+                    local d = math.sqrt((px - qx) ^ 2 + (pz - qz) ^ 2)
+                    if d < best then
+                        best = d
+                        signed = (((px - qx) * dz - (pz - qz) * dx) >= 0) and d or -d
+                    end
+                end
+            end
+        end
+        return signed
+    end
+    local rigLen = (rig.trailerLength or 0) + math.abs(rig.hitchOffset or 0)
     for _, s in ipairs(sim) do
-        if not started and insideConnector(s.x, s.z) then started = true end
+        local wpi = math.max(1, math.min(#path, s.wp or 1))
+        local sTow = cumP[wpi] - math.sqrt((s.sx - path[wpi].x) ^ 2 + (s.sz - path[wpi].z) ^ 2)
+        -- Starts a look-ahead distance BEFORE tie-in A: that is where the driver begins steering for
+        -- the curve (so where the entry cut-in begins), and it does not depend on the tow ever
+        -- entering the wedge between the tie-ins, which a hard shortcut can skip entirely.
+        if not started then
+            local tx, tz = con[2].x - a.x, con[2].z - a.z
+            local tl = math.sqrt(tx * tx + tz * tz)
+            if tl > 1e-6 and ((s.x - a.x) * tx + (s.z - a.z) * tz) / tl > -(rig.lookAhead or 6) then
+                started = true
+            end
+        end
         if started and not ended then
-            if insideConnector(s.ax, s.az) then
-                local o = SweptSim.offsetFromPath(con, s.ax, s.az)
+            -- Cut-in is measured against the WHOLE simulated route (lane - connector - lane), not
+            -- only while the axle sits in the wedge between the two tie-ins: on a tight turn the
+            -- trailer shortcuts the corner so hard that it goes from "not yet past A" straight to
+            -- "already past B" and never enters that wedge - every tight right turn reported 0.00 m.
+            if trailerPt then
+                local o = offsetNear(s.ax, s.az, sTow - rigLen - 10, sTow + 2)
                 local inside = leftTurn and o or -o
                 if inside > trailerIn then trailerIn = inside end
                 if -inside > trailerOut then trailerOut = -inside end
@@ -6886,8 +7771,8 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
             elseif pastB(s.x, s.z) and #towTrack > 5 then
                 ended = true
             end
-            if insideConnector(s.x, s.z) then
-                local ot = SweptSim.offsetFromPath(con, s.x, s.z)
+            do
+                local ot = offsetNear(s.x, s.z, sTow - 8, sTow + 4)
                 local insideT = leftTurn and ot or -ot
                 if insideT > towIn then towIn = insideT end
             end
@@ -6983,7 +7868,8 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     -- placement re-walks the real chain itself (junctionTieIn) and never sees this point.
     local function withVirtual(chain, ap)
         if #chain >= 2 then return chain end
-        local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
+        local cb = ap.chainBearing or ap.bearing
+        local wdx, wdz = math.sin(cb), math.cos(cb)
         if ap.dir ~= "in" then wdx, wdz = -wdx, -wdz end
         local p = chain[1]
         return { p, { x = p.x + wdx * 4, y = p.y, z = p.z + wdz * 4, id = p.id, virtual = true } }
@@ -6999,15 +7885,30 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     -- Meeting region: the closest node between the two chains (dense ~4 m nodes make node-to-node a good
     -- proxy for the true closest approach).
     local iA, iB, bestd = 1, 1, math.huge
-    for a = 1, #chainA do
-        for b = 1, #chainB do
-            -- Virtual direction nodes (see withVirtual) never host the meeting: a tie-in walked back
-            -- from one could land ON it, i.e. 4 m into thin air past the real stem tip.
-            if not chainA[a].virtual and not chainB[b].virtual then
-                local d = (chainA[a].x - chainB[b].x) ^ 2 + (chainA[a].z - chainB[b].z) ^ 2
-                if d < bestd then bestd, iA, iB = d, a, b end
+    -- The meeting is looked for INSIDE THE SEARCH CIRCLE (+ tolerance) first: which crossing this is,
+    -- is exactly what the circle is for. The chains run ~47 m out each way and on through the
+    -- junction, and two such lanes can come closer to each other somewhere else entirely (two lanes of
+    -- one road running side by side up the street) than they do at the crossing the user pointed at -
+    -- the tangents there are near-parallel, the projected corner lands 100 m away, and the pair is
+    -- thrown out as "never come close". Only if neither chain has a node in the circle does the
+    -- search fall back to the whole chains.
+    local own = self.junctionOwn
+    local function inCircle(n)
+        return own == nil or ((n.x - own.cx) ^ 2 + (n.z - own.cz) ^ 2 <= own.r2)
+    end
+    for pass = 1, 2 do
+        for a = 1, #chainA do
+            for b = 1, #chainB do
+                -- Virtual direction nodes (see withVirtual) never host the meeting: a tie-in walked
+                -- back from one could land ON it, i.e. 4 m into thin air past the real stem tip.
+                if not chainA[a].virtual and not chainB[b].virtual
+                    and (pass == 2 or (inCircle(chainA[a]) and inCircle(chainB[b]))) then
+                    local d = (chainA[a].x - chainB[b].x) ^ 2 + (chainA[a].z - chainB[b].z) ^ 2
+                    if d < bestd then bestd, iA, iB = d, a, b end
+                end
             end
         end
+        if bestd < math.huge then break end
     end
 
     -- Local travel directions at the meeting: A toward the interior (lower->higher index), B out toward
@@ -7060,10 +7961,10 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     -- original closest-node test in that case too.
     local extend = self.junctionExtendTrim ~= false
     if not extend then
-        local meetCap = math.max(radius * 0.5, turnR * 3, 15)
+        local meetCap = math.max(turnR * 3, 15)   -- the turn's own scale, not the search radius
         if bestd > meetCap * meetCap then return nil, "far" end
     elseif math.abs(det) > 1e-6 then
-        local farCap = math.max(radius, turnR * 6, 20)
+        local farCap = math.max(turnR * 6, 20)    -- the turn's own scale, not the search radius
         if sA > farCap or sB > farCap then return nil, "far" end
     else
         -- Parallel/near-parallel tangents (delta ~ 0) - the MOST common case, a straight-through
@@ -7170,6 +8071,15 @@ local junctionObstacleMask = nil
 local JunctionOverlapProbe = { hits = {} }
 function JunctionOverlapProbe.cb(self, transformId)
     if transformId ~= nil and transformId ~= 0 and transformId ~= g_currentMission.terrainRootNode then
+        -- The mask now includes DYNAMIC objects (knock-over signs and props are dynamic bodies), so
+        -- the things that are dynamic but NOT part of the road's furniture have to be dropped here:
+        -- vehicles and implements (parked or passing), bales, pallets. Anything the mission maps to
+        -- an object with wheels, a root vehicle, or bale/pallet traits is ignored.
+        local obj = g_currentMission.nodeToObject ~= nil and g_currentMission.nodeToObject[transformId] or nil
+        if obj ~= nil and (obj.rootVehicle ~= nil or obj.spec_wheels ~= nil or obj.getRootVehicle ~= nil
+            or obj.isRoundbale ~= nil or obj.baleDiameter ~= nil or obj.spec_pallet ~= nil) then
+            return true
+        end
         local ok, desc = pcall(function()
             local name = getName(transformId) or "?"
             local split = (getHasClassId ~= nil and ClassIds ~= nil and ClassIds.SHAPE ~= nil
@@ -7200,7 +8110,14 @@ function ADFlyoverEditor:junctionObstacleHitsAlong(pts, halfW)
         return 0
     end
     if junctionObstacleMask == nil then
-        junctionObstacleMask = CollisionFlag.STATIC_OBJECT + CollisionFlag.TREE + CollisionFlag.BUILDING
+        -- AutoDrive's OWN object-sensor mask (Sensors/CollSensorSplit.lua maskObjects), minus
+        -- TERRAIN_DELTA (a flat probe box on a slope would hit the terrain it stands on). The first
+        -- mask was static + tree + building only: a trailer clipped something the gate had judged
+        -- clear, with the prediction within a metre of the recorded track - i.e. the object was
+        -- simply not in the mask. Map furniture is very often left in the DEFAULT group, and
+        -- knock-over signs are DYNAMIC bodies; both are what AutoDrive's sensors stop for.
+        junctionObstacleMask = (CollisionFlag.DEFAULT or 0) + CollisionFlag.STATIC_OBJECT
+            + (CollisionFlag.DYNAMIC_OBJECT or 0) + CollisionFlag.TREE + CollisionFlag.BUILDING
     end
     local hits = 0
     for i = 2, #pts do
@@ -7222,12 +8139,19 @@ function ADFlyoverEditor:junctionObstacleHitsAlong(pts, halfW)
                 roadNote("obsProbeOdd", "obstacle probe returned %s (expected a count) - obstacle check is inactive.", type(shapes))
             else
                 roadNote("obsProbeOk", "obstacle probe active (mask %d).", junctionObstacleMask)
+                -- Count what SURVIVED the callback's filter (vehicles, bales, pallets dropped), not
+                -- the raw shape count, which includes them.
+                shapes = #JunctionOverlapProbe.hits
                 if shapes > 0 then
                     hits = hits + 1
                     roadNote("obsFirstHit", "obstacle probe FIRST HIT at %.1f, %.1f (%d shape(s)).", mx, mz, shapes)
                     -- Name every distinct object hit, once each, with where.
                     for _, desc in ipairs(JunctionOverlapProbe.hits) do
-                        roadNote("obsHit:" .. desc, "obstacle probe hit %s at %.1f, %.1f (box half-width %.2f m).", desc, mx, mz, halfW)
+                        -- Keyed by name AND place (4 m grid): "col"/"collision" are generic shape
+                        -- names, and keying on the name alone logged the first one on the map and
+                        -- then stayed silent at every other site.
+                        roadNote(string.format("obsHit:%s:%d:%d", desc, math.floor(mx / 4), math.floor(mz / 4)),
+                            "obstacle probe hit %s at %.1f, %.1f (box half-width %.2f m).", desc, mx, mz, halfW)
                     end
                 end
             end
@@ -7250,6 +8174,178 @@ end
 --- turn is still radius-bound but never refused/shrunk for leaving the road. For a map whose surface
 --- reads wrong (see isRoadAt's logged classifications), or just to place fast on a site you already
 --- know is clear, without waiting on a raycast per candidate radius per curve point.
+--- The sweep-wide reshape: a copy of connector `con` with its interior points pushed `d` metres
+--- toward the OUTSIDE of the turn, perpendicular to the local heading. The push tapers over the first
+--- and last fifth of the curve so the tie-ins stay exactly on their tracks and the curve leaves and
+--- rejoins them smoothly. An outward offset only ever increases the radius, so minRadius stands as a
+--- conservative bound.
+local function junctionSweepWide(con, d, leftTurn)
+    local pts = { { x = con.ax, y = con.ay, z = con.az } }
+    for _, p in ipairs(con.points) do pts[#pts + 1] = p end
+    pts[#pts + 1] = { x = con.bx, y = con.by, z = con.bz }
+    local cum, total = { 0 }, 0
+    for i = 2, #pts do
+        total = total + math.sqrt((pts[i].x - pts[i - 1].x) ^ 2 + (pts[i].z - pts[i - 1].z) ^ 2)
+        cum[i] = total
+    end
+    if total < 1e-3 then return nil end
+    -- A sideways push needs LENGTH to blend in. The first version tapered over a fixed fifth of
+    -- the curve: on a ~16 m connector a 2 m sweep was taken up in ~3 m, i.e. 30-degree kinks at
+    -- both ends (recorded on the first swept turn that was driven). The blend now runs over at
+    -- least 4 m per metre of sweep at each end, eased with a cosine, and a connector too short to
+    -- carry the sweep at all (the two blends would overlap) is not swept - the radius search
+    -- steps down instead.
+    local blend = math.max(0.2, (4 * d) / total)
+    if blend > 0.5 then return nil end
+    local out = {}
+    for i = 2, #pts - 1 do
+        local a, b = pts[i - 1], pts[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l = math.sqrt(dx * dx + dz * dz)
+        local p = pts[i]
+        if l > 1e-6 then
+            -- forward = (dx,dz)/l ; LEFT = (fz, -fx) in this file's convention (forward = (sin h,
+            -- cos h), left = (cos h, -sin h)). Outside of a left turn is the RIGHT, and vice versa.
+            local lx, lz = dz / l, -dx / l
+            local ox, oz = lx, lz
+            if leftTurn then ox, oz = -lx, -lz end
+            local u = cum[i] / total
+            local e = math.min(1, u / blend, (1 - u) / blend)
+            local w = 0.5 - 0.5 * math.cos(math.pi * e)
+            out[#out + 1] = { x = p.x + ox * d * w, y = p.y, z = p.z + oz * d * w }
+        else
+            out[#out + 1] = { x = p.x, y = p.y, z = p.z }
+        end
+    end
+    return { ax = con.ax, ay = con.ay, az = con.az, bx = con.bx, by = con.by, bz = con.bz,
+        points = out, minRadius = con.minRadius, t = con.t, meetDist = con.meetDist, sweep = d }
+end
+
+--- The KICKOUT (docs/swept-path-spec.md §6, "Kickout shape"): the sweep-wide reshape in the form that
+--- actually works - it starts EARLY on the entry lane and ends LATE on the exit lane, and it is
+--- asymmetric (the return is longer than the setup, because the trailer is still cutting inside a
+--- rig-length after the tow has left the curve). Offline it recovers ~3x the trailer clearance per
+--- metre of push that an inside-the-curve blend does, with no kinks.
+---
+--- Construction: the composite route  lane(A' -> A) + connector + lane(B -> B')  is offset toward the
+--- OUTSIDE of the turn by `d`, eased in with a cosine over the entry stretch, held through the curve,
+--- eased out over the exit stretch. The lane stretches follow the lanes' real shape (a straight
+--- S-bend would cut across a curved approach), resampled at 2 m so the ease is smooth. The ease
+--- length is bounded below by  pi * sqrt(d * turnR / 2)  - the length at which a cosine lane-change
+--- of `d` peaks at exactly the turn radius - so the kickout never bends tighter than the turn itself.
+---
+--- It lives INSIDE the scope circle by design: the new tie-ins A' and B' must sit on the lane chains
+--- within the scope, so the junction stays one self-contained site for approach detection, the
+--- already-connected test and rebuild. A cramped scope shortens the kickout, and below the ease
+--- bound refuses it (returns nil, "scope") - the fix is a bigger scope, which the log says. A side
+--- whose lane DEAD-ENDS inside the scope is not kicked out either (its tie-in trims the stem, and
+--- an early tie-in would trim away the other turns' tie-ins): returns nil, "deadend".
+function ADFlyoverEditor:junctionKickout(fromAp, toAp, con, d, leftTurn, rig, cx, cz, radius, turnR)
+    local chainA, deadEndA = self:junctionChain(fromAp, cx, cz, radius)
+    local chainB, deadEndB = self:junctionChain(toAp, cx, cz, radius)
+    if deadEndA or deadEndB then return nil, "deadend" end
+    local early = (rig.lookAhead or 8) + 2
+    local late = (rig.lookAhead or 8) + (rig.trailerLength or 0)
+    local minBlend = math.pi * math.sqrt(d * turnR / 2)
+    early, late = math.max(early, minBlend), math.max(late, minBlend)
+
+    -- Travel-ordered lane points: entry = boundary ... A ; exit = B ... boundary.
+    local entry = {}
+    for k = 1, math.min(#chainA, junctionChainIndexNear(chainA, con.ax, con.az)) do
+        local n = chainA[k]
+        local dx, dz = junctionSegDir(chainA, k)
+        if (con.ax - n.x) * dx + (con.az - n.z) * dz > 0.3 then
+            entry[#entry + 1] = { x = n.x, y = n.y or 0, z = n.z }
+        end
+    end
+    entry[#entry + 1] = { x = con.ax, y = con.ay or 0, z = con.az }
+    local exit = { { x = con.bx, y = con.by or 0, z = con.bz } }
+    for k = math.min(#chainB, junctionChainIndexNear(chainB, con.bx, con.bz)), 1, -1 do
+        local n = chainB[k]
+        local dx, dz = junctionSegDir(chainB, k)
+        if (n.x - con.bx) * -dx + (n.z - con.bz) * -dz > 0.3 then
+            exit[#exit + 1] = { x = n.x, y = n.y or 0, z = n.z }
+        end
+    end
+
+    -- Take `want` metres off one end of a polyline (fromEnd: the LAST `want` metres, else the first),
+    -- resampled at ~2 m, in travel order. Returns the points and the length actually available.
+    local function stretch(poly, want, fromEnd)
+        local src = poly
+        if fromEnd then
+            src = {}
+            for i = #poly, 1, -1 do src[#src + 1] = poly[i] end
+        end
+        local cum = { 0 }
+        for i = 2, #src do
+            cum[i] = cum[i - 1] + math.sqrt((src[i].x - src[i - 1].x) ^ 2 + (src[i].z - src[i - 1].z) ^ 2)
+        end
+        local avail = math.min(want, cum[#src])
+        local function at(s)
+            for i = 2, #src do
+                if cum[i] >= s - 1e-9 then
+                    local l = cum[i] - cum[i - 1]
+                    local f = (l > 1e-9) and (s - cum[i - 1]) / l or 0
+                    local a, b = src[i - 1], src[i]
+                    return { x = a.x + (b.x - a.x) * f, y = a.y + (b.y - a.y) * f, z = a.z + (b.z - a.z) * f }
+                end
+            end
+            local e = src[#src]
+            return { x = e.x, y = e.y, z = e.z }
+        end
+        local out, s = {}, 0
+        while s < avail - 0.5 do
+            out[#out + 1] = at(s)
+            s = s + 2
+        end
+        out[#out + 1] = at(avail)
+        if fromEnd then
+            local rev = {}
+            for i = #out, 1, -1 do rev[#rev + 1] = out[i] end
+            out = rev
+        end
+        return out, avail
+    end
+    local entryPart, earlyGot = stretch(entry, early, true)     -- A' ... A
+    local exitPart, lateGot = stretch(exit, late, false)        -- B ... B'
+    if earlyGot < minBlend - 1e-6 or lateGot < minBlend - 1e-6 then
+        return nil, "scope", earlyGot, lateGot, minBlend
+    end
+
+    -- Composite route and its arc-length marks.
+    local P = {}
+    for _, p in ipairs(entryPart) do P[#P + 1] = p end                 -- ends with A
+    for _, p in ipairs(con.points) do P[#P + 1] = { x = p.x, y = p.y or 0, z = p.z } end
+    for _, p in ipairs(exitPart) do P[#P + 1] = p end                  -- starts with B
+    local iA, iB = #entryPart, #entryPart + #con.points + 1
+    local cum = { 0 }
+    for i = 2, #P do cum[i] = cum[i - 1] + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+    local sA, sB, total = cum[iA], cum[iB], cum[#P]
+    if sA < 1e-3 or total - sB < 1e-3 then return nil, "scope", earlyGot, lateGot, minBlend end
+
+    local pts = {}
+    for i = 2, #P - 1 do
+        local s = cum[i]
+        local w
+        if s < sA then w = 0.5 - 0.5 * math.cos(math.pi * s / sA)
+        elseif s > sB then w = 0.5 - 0.5 * math.cos(math.pi * (total - s) / (total - sB))
+        else w = 1 end
+        local a, b = P[i - 1], P[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l = math.sqrt(dx * dx + dz * dz)
+        local ox, oz = 0, 0
+        if l > 1e-6 then
+            local lx, lz = dz / l, -dx / l          -- LEFT of travel (see junctionSweepWide)
+            ox, oz = lx, lz
+            if leftTurn then ox, oz = -lx, -lz end  -- outside of a left turn is the right
+        end
+        pts[#pts + 1] = { x = P[i].x + ox * d * w, y = P[i].y, z = P[i].z + oz * d * w }
+    end
+    return { ax = P[1].x, ay = P[1].y, az = P[1].z, bx = P[#P].x, by = P[#P].y, bz = P[#P].z,
+        points = pts, minRadius = con.minRadius, t = con.t, meetDist = con.meetDist,
+        sweep = d, kickEarly = earlyGot, kickLate = lateGot }
+end
+
 function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR, rig)
     local floor = AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4
     local checkSurface = self.junctionCheckSurface ~= false
@@ -7289,13 +8385,54 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
                 if ok then sw = res else roadNote("sweptErr", "swept-path prediction failed: %s", tostring(res)) end
                 con.swept = sw
             end
-            if sw ~= nil and checkSurface and self:junctionSweptOffRoad(sw) then
-                last, lastReason = con, "trailerRoad"
-            elseif sw ~= nil and checkObstacles and self:junctionSweptHits(sw, rig) > 0 then
-                last, lastReason = con, "trailerHit"
-            else
+            local function sweptVerdict(s)
+                if s == nil then return nil end
+                if checkSurface and self:junctionSweptOffRoad(s) then return "trailerRoad" end
+                if checkObstacles and self:junctionSweptHits(s, rig) > 0 then return "trailerHit" end
+                return nil
+            end
+            local verdict = sweptVerdict(sw)
+            if verdict == nil then
                 return con, r, nil
             end
+            -- SWEEP WIDE before giving up on this radius: push the curve outward in steps and
+            -- re-judge. A wider line at the SAME radius beats a tighter radius - the rig cuts in
+            -- from wherever the line is, so moving the line out moves the bodies back onto the road
+            -- and away from whatever stands on the inside. Each shifted line must itself stay on the
+            -- road (corridor) and clear of obstacles - that is the outer-edge bound.
+            local accepted = nil
+            if sw ~= nil then
+                local d = AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP or 1.0
+                while d <= (AutoDrive.FLYOVER_JUNCTION_SWEEP_MAX or 3.0) + 1e-6 do
+                    -- The early/late KICKOUT first; the inside-the-curve blend only when the
+                    -- kickout cannot fit (cramped scope, or a dead-end stem) - it recovers about a
+                    -- third as much, but it is better than refusing.
+                    local wide, why, gotE, gotL, need = self:junctionKickout(fromAp, toAp, con, d, sw.leftTurn, rig, cx, cz, radius, r)
+                    if wide == nil then
+                        if why == "scope" then
+                            roadNote(string.format("kickScope:%d_%d", fromAp.wp.id, toAp.wp.id),
+                                "junction - entry id=%d -> exit id=%d: not enough lane for an early/late kickout (%.0f m of lane before / %.0f m after the curve inside the work region, %.0f m needed for a %.0f m kickout) - using the inside-the-curve blend instead.",
+                                fromAp.wp.id, toAp.wp.id, gotE or 0, gotL or 0, need or 0, d)
+                        end
+                        wide = junctionSweepWide(con, d, sw.leftTurn)
+                    end
+                    if wide == nil then break end
+                    local lineOk = not (checkSurface and self:junctionCorridorTooOffRoad(wide))
+                        and not (checkObstacles and self:junctionObstacleHits(wide) > 0)
+                    if lineOk then
+                        local ok, res = pcall(function() return self:junctionSweptPredict(fromAp, toAp, wide, cx, cz, radius, rig) end)
+                        if ok and res ~= nil then
+                            wide.swept = res
+                            if sweptVerdict(res) == nil then accepted = wide; break end
+                        end
+                    end
+                    d = d + (AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP or 1.0)
+                end
+            end
+            if accepted ~= nil then
+                return accepted, r, nil
+            end
+            last, lastReason = con, verdict
         end
         r = r - 1
         if r < rigFloor - 1e-6 and r >= floor - 1e-6 then
@@ -7313,7 +8450,21 @@ end
 --- The lane chain from an approach's boundary node toward the intersection interior (out-edges for an
 --- entry, incoming for an exit), boundary node first, staying within the scope. Also whether that lane
 --- DEAD-ENDS inside the scope (no travel continuation) rather than passing through.
-function ADFlyoverEditor:junctionChain(ap, cx, cz, radius)
+function ADFlyoverEditor:junctionChain(ap, cx, cz, radius, fresh)
+    -- Chains are long now (the work region, not the search circle) and the solve asks for the same
+    -- one for every candidate radius of every turn, so they are cached for the life of one preview
+    -- solve (cleared at the top of updateJunctionPreview). PLACEMENT passes fresh = true: it splices
+    -- tie nodes into the lanes as it goes, so every walk there must see the graph as it is now.
+    local cache = self.junctionChainCache
+    if not fresh and cache ~= nil and cache[ap] ~= nil then
+        return cache[ap][1], cache[ap][2]
+    end
+    local chain, deadEnd = self:junctionChainWalk(ap, cx, cz, radius)
+    if not fresh and cache ~= nil then cache[ap] = { chain, deadEnd } end
+    return chain, deadEnd
+end
+
+function ADFlyoverEditor:junctionChainWalk(ap, cx, cz, radius)
     local useOut = (ap.dir == "in")
     local r2 = radius * radius
     local chain = { ap.wp }
@@ -7324,11 +8475,15 @@ function ADFlyoverEditor:junctionChain(ap, cx, cz, radius)
     -- Taking the first listed neighbour instead could veer the "road chain" down a connector, which
     -- poisons everything downstream (meeting point, tangents, tie-ins). Initial direction: an entry
     -- is walked downstream (its travel bearing); an exit chain is walked UPSTREAM, so opposite.
-    local wdx, wdz = math.sin(ap.bearing), math.cos(ap.bearing)
+    -- The chain starts at the approach's ANCHOR (its node at the edge of the work region), whose own
+    -- travel bearing is chainBearing; ap.bearing stays the bearing where the search circle cut the
+    -- track - near the junction - which is what the turn-angle decisions want.
+    local cb = ap.chainBearing or ap.bearing
+    local wdx, wdz = math.sin(cb), math.cos(cb)
     if not useOut then wdx, wdz = -wdx, -wdz end
-    -- Iteration bound scales with the scope: 16 was fine for small circles but left the MIDDLE of a
-    -- long road unwalked at larger ones - unprotected by the skeleton, i.e. swept as debris.
-    for _ = 1, math.max(16, math.ceil(radius)) do
+    -- Iteration bound scales with the region: the tool's own laid curves are ~1 m apart, so a lane
+    -- crossing a 60 m work region can be a couple of hundred nodes.
+    for _ = 1, math.max(64, math.ceil(radius) * 4) do
         local list = useOut and (node.out or {}) or (node.incoming or {})
         local nextId, bestDot = nil, -math.huge
         for _, nid in pairs(list) do
@@ -7339,12 +8494,31 @@ function ADFlyoverEditor:junctionChain(ap, cx, cz, radius)
                     local l = math.sqrt(dx * dx + dz * dz)
                     if l > 1e-6 then
                         local dot = (dx / l) * wdx + (dz / l) * wdz
-                        if dot > bestDot then bestDot, nextId = dot, nid end
+                        -- Fork tie-break: a KICKOUT leaves its lane almost tangentially (that is the
+                        -- point of it), so at its tie node the lane's continuation and the kickout's
+                        -- first point can be within a degree or two of each other - and on a gently
+                        -- curving lane the kickout can even be the straighter. Waypoint ids are
+                        -- handed out in creation order and deletion compacts them without reordering,
+                        -- so the OLDER node (lower id) is the road and the newer one the wiring laid
+                        -- onto it: within a small margin, the lower id wins.
+                        -- The band is 0.15 (about 30 degrees at small angles): wide enough that a
+                        -- connector carrying STRAIGHT on where the lane itself bends a little at the
+                        -- tie node still loses to the lane; narrow enough that a real fork of two
+                        -- old roads, one clearly straighter, is still decided by bearing.
+                        if dot > bestDot + 0.15 or (dot > bestDot - 0.15 and nextId ~= nil and nid < nextId) then
+                            bestDot, nextId = math.max(dot, bestDot), nid
+                        elseif nextId == nil then
+                            bestDot, nextId = dot, nid
+                        end
                     end
                 end
             end
         end
-        if nextId == nil then break end
+        -- A lane does not turn through 70 degrees at one node. Where the only way on does, this
+        -- track has ENDED against another road (a stem meeting its crossbar with a direct link) and
+        -- walking on would follow that other road - merging two lanes into one lane group and
+        -- putting the meeting point, tangents and tie-ins on the wrong track.
+        if nextId == nil or (#chain > 1 and bestDot < 0.3) then break end
         cameFrom = node.id
         local nxt = ADGraphManager:getWayPointById(nextId)
         local dx, dz = nxt.x - node.x, nxt.z - node.z
@@ -7369,7 +8543,7 @@ end
 --- whether the LOCAL track at the tie-in is itself two-way - the caller uses this (both ends must
 --- agree) to decide whether the new connector should be dual too, instead of always one-way.
 function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
-    local chain, deadEnd = self:junctionChain(ap, cx, cz, radius)
+    local chain, deadEnd = self:junctionChain(ap, cx, cz, radius, true)
     if #chain < 2 then
         -- Only the boundary node here; tie at it. Its own edge (to whatever it still connects to)
         -- tells us if this stub of track is two-way.
@@ -7469,16 +8643,701 @@ function ADFlyoverEditor:junctionClick()
     if self.cursorX == nil then return end
     self.junctionArmed = { cx = self.cursorX, cz = self.cursorZ, cy = self.cursorY }
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction site locked at %.1f, %.1f - wheel = scope, right-click places.",
-        self.cursorX, self.cursorZ)
+    -- A lock is a fresh report: the once-per-key notes start over, so locking the same crossing a
+    -- second time (a different circle, a changed setting) logs every track, refusal and kickout
+    -- again instead of only what differs from the last time.
+    for k in pairs(roadProbeNoted) do roadProbeNoted[k] = nil end
+    -- The radius is in this line because "I set it to 20" and "the solve behaved like 15" are
+    -- otherwise indistinguishable in a log, and that ambiguity cost a whole test cycle.
+    Logging.info("[FlyoverEditor]: junction site locked at %.1f, %.1f - search radius %.0f m, turn radius %.0f m, mode %s. Wheel = scope, right-click %s.",
+        self.cursorX, self.cursorZ, self:junctionRadiusValue(), self.junctionTurnRadius or 12,
+        self.junctionMode or "build", (self.junctionMode == "clear") and "clears" or "places")
 end
 
 --- Place every NEW turn in the preview (behaviour A): tie in at each track's tangent point (insert on a
 --- through-road, trim a dead-end back to it), lay the radius-R arc one-way from entry to exit, priority
 --- matched to the joined (exit) road, all under one undo. Dead-end stubs are consumed at the very end.
+--- Clear mode's placement: sever this junction's stale direct links and remove its debris cluster -
+--- filtered to turns only when "leave through paths" is on - and lay NOTHING. The roads themselves
+--- (skeleton) are never touched by construction (see the debris pass in updateJunctionPreview); this
+--- only ever removes nodes/links that pass were already the debris test.
+--- Tidy the lane ends after a clear: every lane that now DEAD-ENDS at the junction is trimmed back or
+--- run forward so it stops FLYOVER_JUNCTION_STUB_GAP from the centre of the tracks, with anything
+--- added laid at that lane's own spacing and landing exactly on the gap. A cleared T then reads as
+--- three tidy stubs around an even gap instead of three ragged ends at whatever distance the debris
+--- happened to reach.
+---
+--- A lane still running THROUGH the junction does not dead-end, so it is skipped - which is why this
+--- needs no switch of its own. With "leave through paths" on, the through road is left exactly as it
+--- was; turn it off and it dead-ends too, and is tidied like the stem.
+---
+--- Only genuine dangling ends are touched: if the walk stops because the lane turns hard into another
+--- road that it is still LINKED to, that end still "continues" and is left alone. Trimming there
+--- would cut a live connection, not tidy a stub.
+--- Returns points trimmed, points added, lanes touched.
+--- With `dry` set, changes nothing and instead returns where every end WOULD land, plus the claim
+--- bands they are measured against, for the preview to draw. Same code path either way - the preview
+--- cannot drift from the apply, which is where most of this feature's confusion came from. In dry
+--- mode the walk treats the debris as already gone, because that is the graph the real tidy sees.
+function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
+    local skip, cut = {}, {}
+    if dry then
+        local leave = self.junctionLeaveThrough ~= false
+        for _, w in ipairs((leave and jp.turnDebris or jp.debris) or {}) do skip[w.id] = true end
+        -- The apply severs the stale links BEFORE it deletes anything, so a dry run that ignores
+        -- them walks over joins that will not be there. Both directions: severing is unconditional.
+        for _, pair in ipairs(jp.staleLinks or {}) do
+            local a, b = pair[1], pair[2]
+            if a ~= nil and b ~= nil and not (leave and pair.isThrough) then
+                cut[a.id * 100000 + b.id] = true
+                cut[b.id * 100000 + a.id] = true
+            end
+        end
+    end
+    local centre = jp.tracksCentre
+    if centre == nil then return 0, 0, 0 end
+    local gap = AutoDrive.FLYOVER_JUNCTION_STUB_GAP or 4
+    local function dist(w) return math.sqrt((w.x - centre.x) ^ 2 + (w.z - centre.z) ^ 2) end
+    -- Ids are renumbered by every removal, so a held id can silently come to mean a DIFFERENT node.
+    -- Identity is the object; the id is only how the graph is asked for it.
+    local function alive(w)
+        return w ~= nil and w.id ~= nil and w.id >= 0 and ADGraphManager:getWayPointById(w.id) == w
+    end
+    -- Arc-length sampling along a captured alignment, so the run-in can be re-laid at even spacing
+    -- ALONG THE ROAD rather than along a chord across it.
+    local function cumulative(pts)
+        local cum = { 0 }
+        for i = 2, #pts do
+            local a, b = pts[i - 1], pts[i]
+            cum[i] = cum[i - 1] + math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+        end
+        return cum
+    end
+    local function atArc(pts, cum, s)
+        if s <= 0 then return pts[1] end
+        if s >= cum[#cum] then return pts[#pts] end
+        for i = 2, #pts do
+            if cum[i] >= s then
+                local a, b = pts[i - 1], pts[i]
+                local t = (s - cum[i - 1]) / math.max(1e-6, cum[i] - cum[i - 1])
+                return { x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t,
+                    y = (a.y or 0) + ((b.y or 0) - (a.y or 0)) * t }
+            end
+        end
+        return pts[#pts]
+    end
+    -- The arc the lane was ALREADY DESCRIBING, as a polyline out of the tip: its heading there, bent
+    -- at the curvature measured over the last ~20 m of real road. Following the lane's own captured
+    -- geometry instead would be tempting and exact, but past the run's end that geometry IS the
+    -- junction wiring - it would run the lane down a connector and onto another road. Twenty metres
+    -- is long enough to average out waypoint jitter and short enough to still be the corner the lane
+    -- is actually in.
+    -- The arc the lane was ALREADY DESCRIBING, as a polyline out of its end.
+    --
+    -- Curvature is read from THREE POINTS spanning about 10 m, and then read again from triples
+    -- further back, so the RATE of change is known too. A road entering a bend is on a transition
+    -- spiral - its curvature is still growing - and continuing at whatever it happened to be at the
+    -- last node either undershoots the bend or overshoots the straight. Extrapolating the rate
+    -- follows the road in; a single triple assumes the curve has already settled.
+    --
+    -- Following the lane's own captured geometry instead would be exact, but past the end of the
+    -- road that geometry IS the junction wiring - it would run the lane down a connector and onto
+    -- another road.
+    local ARC_SPAN = 10
+    local function laneArc(seq, tip, prev, grade)
+        local hx, hz = tip.x - prev.x, tip.z - prev.z
+        local hl = math.sqrt(hx * hx + hz * hz)
+        if hl < 1e-3 then return nil end
+        hx, hz = hx / hl, hz / hl
+
+        -- Arc length back from the end, so triples can be taken at real distances rather than at
+        -- whatever spacing this lane happens to use.
+        local back = { [#seq] = 0 }
+        for i = #seq - 1, 1, -1 do
+            back[i] = back[i + 1] + math.sqrt((seq[i + 1].x - seq[i].x) ^ 2
+                + (seq[i + 1].z - seq[i].z) ^ 2)
+        end
+        local function atBack(d)
+            for i = #seq, 1, -1 do
+                if back[i] >= d then return seq[i] end
+            end
+            return nil
+        end
+        -- Signed curvature of the circle through three points: twice the triangle's area over the
+        -- product of its sides.
+        local function triple(d)
+            local c, b, a = atBack(d), atBack(d + ARC_SPAN * 0.5), atBack(d + ARC_SPAN)
+            if a == nil or b == nil or c == nil then return nil end
+            local ax, az = b.x - a.x, b.z - a.z
+            local bx, bz = c.x - b.x, c.z - b.z
+            local cx2, cz2 = c.x - a.x, c.z - a.z
+            local la = math.sqrt(ax * ax + az * az)
+            local lb = math.sqrt(bx * bx + bz * bz)
+            local lc = math.sqrt(cx2 * cx2 + cz2 * cz2)
+            if la < 1e-3 or lb < 1e-3 or lc < 1e-3 then return nil end
+            return 2 * (ax * bz - az * bx) / (la * lb * lc)
+        end
+
+        local LIMIT = 1 / 12   -- a road does not turn tighter than a 12 m radius on its own
+        local k0 = triple(0)
+        if k0 == nil then k0 = 0 end
+        k0 = math.max(-LIMIT, math.min(LIMIT, k0))
+        -- Is the bend tightening or easing? Read two more triples further back and take the trend
+        -- per metre. Only trusted when both agree in sign with the step between them, so noise in a
+        -- single reading cannot invent a spiral.
+        local rate = 0
+        local k1, k2 = triple(ARC_SPAN * 0.5), triple(ARC_SPAN)
+        if k1 ~= nil and k2 ~= nil then
+            local d1 = (k0 - k1) / (ARC_SPAN * 0.5)
+            local d2 = (k1 - k2) / (ARC_SPAN * 0.5)
+            if d1 * d2 > 0 then
+                rate = (math.abs(d1) < math.abs(d2)) and d1 or d2
+                rate = math.max(-LIMIT / 20, math.min(LIMIT / 20, rate))
+            end
+        end
+
+        local pts = { { x = tip.x, y = tip.y or 0, z = tip.z } }
+        local px, pz, ds = tip.x, tip.z, 0.25
+        for i = 1, math.floor(30 / ds) do
+            local s = i * ds
+            local k = math.max(-LIMIT, math.min(LIMIT, k0 + rate * s))
+            local dth = k * ds
+            local cs, sn = math.cos(dth), math.sin(dth)
+            hx, hz = hx * cs - hz * sn, hx * sn + hz * cs
+            px, pz = px + hx * ds, pz + hz * ds
+            pts[#pts + 1] = { x = px, y = (tip.y or 0) + grade * s, z = pz }
+        end
+        return pts
+    end
+
+    -- Walk a lane in from its outer anchor on bearing continuity, the same way the chain walk does,
+    -- so a fork at an old tie node takes the ROAD on and not some surviving scrap of wiring.
+    local function walkLane(ap)
+        local useOut = (ap.dir == "in")
+        local node = ap.wp
+        local cb = ap.chainBearing or ap.bearing or 0
+        local wdx, wdz = math.sin(cb), math.cos(cb)
+        if not useOut then wdx, wdz = -wdx, -wdz end
+        local seq, cameFrom = { node }, nil
+        for _ = 1, 400 do
+            local list = useOut and (node.out or {}) or (node.incoming or {})
+            local nextNode, bestDot = nil, -math.huge
+            for _, nid in pairs(list) do
+                -- `skip` is empty for the real run and holds the debris for a dry one, so the
+                -- preview walks the graph the clear is ABOUT to leave rather than the one in front
+                -- of it. Without this the walk crosses the junction over nodes that are about to go.
+                if nid ~= cameFrom and not skip[nid] and not cut[node.id * 100000 + nid] then
+                    local nx = ADGraphManager:getWayPointById(nid)
+                    if nx ~= nil then
+                        local dx, dz = nx.x - node.x, nx.z - node.z
+                        local l = math.sqrt(dx * dx + dz * dz)
+                        if l > 1e-6 then
+                            local dot = (dx / l) * wdx + (dz / l) * wdz
+                            if dot > bestDot then bestDot, nextNode = dot, nx end
+                        end
+                    end
+                end
+            end
+            if nextNode == nil then break end
+            if #seq > 1 and bestDot < 0.3 then break end
+            cameFrom = node.id
+            local dx, dz = nextNode.x - node.x, nextNode.z - node.z
+            local l = math.sqrt(dx * dx + dz * dz)
+            if l > 1e-6 then wdx, wdz = dx / l, dz / l end
+            node = nextNode
+            seq[#seq + 1] = node
+        end
+        -- DOES THIS LANE STILL RUN THROUGH? Asked structurally: can the walk go anywhere from
+        -- here that is not where it came from and not about to be cleared. A lane that runs through
+        -- always can; one that now dead-ends at the junction cannot, and that end is what gets
+        -- tidied.
+        --
+        -- This used to be a proxy - "distance to the centre started increasing while within 16 m" -
+        -- and on a curving approach it tripped about 10 m out, before the lane ever reached the
+        -- junction. Worse, it gave DIFFERENT answers before and after the deletion: the real apply
+        -- walked a graph where the lane genuinely ended first, so it never tripped, while the same
+        -- code run as a preview rejected 7 of 8 lanes. A structural test cannot drift that way.
+        local onward = useOut and (seq[#seq].out or {}) or (seq[#seq].incoming or {})
+        local continues = false
+        for _, nid in pairs(onward) do
+            if nid ~= cameFrom and not skip[nid]
+                and not cut[seq[#seq].id * 100000 + nid] then continues = true break end
+        end
+        return { ap = ap, seq = seq, useOut = useOut, cameFrom = cameFrom,
+            tidy = (not continues) and #seq >= 2,
+            reference = continues }
+    end
+
+    -- PASS 1: walk every lane and sort them into those still running THROUGH the junction and those
+    -- that now dead-end at it. Nothing is changed yet, because the through lanes are the reference
+    -- the dead-ends get measured against and it has to be read before anything moves.
+    local walked = {}
+    for _, ap in ipairs(jp.approaches or {}) do
+        if alive(ap.wp) and not skip[ap.wp.id] then walked[#walked + 1] = walkLane(ap) end
+    end
+
+    -- WHAT A TAIL STOPS AT: the other lanes' centrelines, each carried ACROSS the junction on its
+    -- own arc. The surviving road stops short of the middle, so measuring only to what is left would
+    -- have a tail chase the far side's stub and run straight through where the road used to be.
+    -- Continuing each road over the gap on the curve it was already describing puts the reference
+    -- back where the carriageway actually is.
+    -- Each lane's line is fitted to its PARENT ROAD only, then carried on across the junction by the
+    -- arc that road was already describing. The run set is the tool's own answer to "which of these
+    -- nodes are road" - anchor in to the last fork - so the tie-ins and laid curves past it are
+    -- excluded. Fitting the raw walk instead picked up the connectors: with through paths kept, a
+    -- lane that runs through does so over the tool's OWN laid curve rather than over road, and that
+    -- curve's geometry ended up defining where the road supposedly was.
+    local runSet = jp.runNodes or {}
+    for _, w in ipairs(walked) do
+        local road, k = {}, 0
+        for i, n in ipairs(w.seq) do
+            if runSet[n] then k = i end
+        end
+        if k < 2 then k = math.min(#w.seq, 2) end
+        for i = 1, k do
+            local n = w.seq[i]
+            if (n.x - centre.x) ^ 2 + (n.z - centre.z) ^ 2 <= 35 * 35 then
+                road[#road + 1] = { x = n.x, z = n.z }
+            end
+        end
+        if k >= 2 then
+            local sub = {}
+            for i = 1, k do sub[i] = w.seq[i] end
+            local arc = laneArc(sub, sub[k], sub[k - 1], 0)
+            for i = 2, (arc ~= nil) and #arc or 0 do
+                if (arc[i].x - centre.x) ^ 2 + (arc[i].z - centre.z) ^ 2 <= 35 * 35 then
+                    road[#road + 1] = { x = arc[i].x, z = arc[i].z }
+                end
+            end
+        end
+        if #road >= 2 then w.line = road end
+    end
+
+    local function nearestOn(line, px, pz)
+        local bx, bz, best = nil, nil, math.huge
+        for k = 2, #line do
+            local ax, az = line[k - 1].x, line[k - 1].z
+            local vx, vz = line[k].x - ax, line[k].z - az
+            local L2 = vx * vx + vz * vz
+            if L2 > 1e-9 then
+                local t = math.max(0, math.min(1, ((px - ax) * vx + (pz - az) * vz) / L2))
+                local qx, qz = ax + vx * t, az + vz * t
+                local d = (px - qx) ^ 2 + (pz - qz) ^ 2
+                if d < best then best, bx, bz = d, qx, qz end
+            end
+        end
+        if bx == nil then return nil, math.huge end
+        return { x = bx, z = bz }, math.sqrt(best)
+    end
+    local function lineDist(line, px, pz)
+        local _, d = nearestOn(line, px, pz)
+        return d
+    end
+    local function lineDir(line)
+        local a, b = line[1], line[#line]
+        local vx, vz = b.x - a.x, b.z - a.z
+        local l = math.sqrt(vx * vx + vz * vz)
+        if l < 1e-6 then return nil end
+        return vx / l, vz / l
+    end
+
+    -- THE PARENT ROADS, AND THE BOX THEY MAKE.
+    --
+    -- A road through a junction is normally a PAIR of parallel tracks, one per direction. Pair them,
+    -- measure how far apart they are, and merge them into one line: that merged line is the centre of
+    -- the road. The box is then simply that centre offset either side by the distance the tracks were
+    -- apart. The road states its own width, so there is no margin to tune and nothing that has to be
+    -- told what kind of junction this is.
+    --
+    -- A road with a single track has no separation to measure, so it takes a fixed offset.
+    local SINGLE = AutoDrive.FLYOVER_JUNCTION_TRACK_CLEARANCE or 2.5
+    -- Each track is compared AT THE JUNCTION - the point on it nearest the centre of the tracks, and
+    -- the way it runs there. Comparing whole lines instead compares them at their outer anchors 45 m
+    -- out, where two tracks of one road have long since diverged, and one road comes back as several.
+    for _, w in ipairs(walked) do
+        if w.line ~= nil and #w.line >= 2 then
+            local bi, bd = nil, math.huge
+            for k, pt in ipairs(w.line) do
+                local d = (pt.x - centre.x) ^ 2 + (pt.z - centre.z) ^ 2
+                if d < bd then bd, bi = d, k end
+            end
+            local a = w.line[math.max(1, bi - 3)]
+            local b = w.line[math.min(#w.line, bi + 3)]
+            local vx, vz = b.x - a.x, b.z - a.z
+            local l = math.sqrt(vx * vx + vz * vz)
+            if l > 1e-6 then
+                w.at, w.hx, w.hz = w.line[bi], vx / l, vz / l
+            end
+        end
+    end
+
+    local roads = {}
+    for _, w in ipairs(walked) do
+        if w.at ~= nil then
+            local joined = nil
+            for _, r in ipairs(roads) do
+                -- Same road: running the same way, or the opposite way, which is the other direction
+                -- of the same carriageway. Abreast of each other rather than nose to tail.
+                if math.abs(r.hx * w.hx + r.hz * w.hz) > 0.85 then
+                    local ox, oz = w.at.x - r.at.x, w.at.z - r.at.z
+                    if math.abs(ox * -r.hz + oz * r.hx) < 12
+                        and math.abs(ox * r.hx + oz * r.hz) < 12 then
+                        joined = r break
+                    end
+                end
+            end
+            if joined == nil then
+                roads[#roads + 1] = { hx = w.hx, hz = w.hz, at = w.at,
+                    members = { w.line }, tracks = { w }, lanes = { [w] = true } }
+            else
+                joined.members[#joined.members + 1] = w.line
+                joined.tracks[#joined.tracks + 1] = w
+                joined.lanes[w] = true
+            end
+        end
+    end
+
+    -- Merge each road's tracks into one line, and take the offset from HOW FAR APART THEY ARE: the
+    -- widest gap across the road, measured at the junction. The max and not the mean, because a road
+    -- entered from both ends contributes the same track twice and those duplicates sit on top of
+    -- each other - averaging them in drags the width towards nothing.
+    for _, r in ipairs(roads) do
+        local widest = 0
+        for _, t in ipairs(r.tracks) do
+            local ox, oz = t.at.x - r.at.x, t.at.z - r.at.z
+            local perp = math.abs(ox * -r.hz + oz * r.hx)
+            if perp > widest then widest = perp end
+        end
+        r.offset = math.max(SINGLE, widest)
+        if #r.members == 1 then
+            r.centre = r.members[1]
+        else
+            local base, merged = r.members[1], {}
+            for _, pt in ipairs(base) do
+                local sx, sz, c = pt.x, pt.z, 1
+                for k = 2, #r.members do
+                    local q, d = nearestOn(r.members[k], pt.x, pt.z)
+                    if q ~= nil and d < 25 then sx, sz, c = sx + q.x, sz + q.z, c + 1 end
+                end
+                merged[#merged + 1] = { x = sx / c, z = sz / c }
+            end
+            r.centre = (#merged >= 2) and merged or base
+        end
+    end
+
+    -- Inside the box: within its own road's offset of that road's centre. A lane never measures
+    -- against the road it is itself part of.
+    local function insideBox(px, pz, self_)
+        for _, r in ipairs(roads) do
+            if not r.lanes[self_] and lineDist(r.centre, px, pz) <= r.offset then return true end
+        end
+        return false
+    end
+
+    -- WHERE THE TURN STARTS. Walking a lane in from its anchor, the parent road holds a steady
+    -- curvature, or one that changes slowly; a turn leaves it, and its curvature departs sharply.
+    -- The index where that departure begins is the start of the turn, and everything from there
+    -- inward is junction wiring whatever it happens to be labelled.
+    --
+    -- This is what finally removes a connector the clear left behind. Identifying wiring node by
+    -- node never worked: a connector is laid tangent-continuous onto its lane, so the chain walk runs
+    -- straight onto it and marks it road, and from then on it is protected from clearing. Cutting the
+    -- lane back past the departure and re-laying the road into the box sidesteps the identification
+    -- problem entirely - whatever was inward of the cut is gone, connector or not.
+    --
+    -- The threshold adapts: a road that is itself curving has a spread of its own, so a departure has
+    -- to stand out from THAT rather than from zero, or every bend would read as a turn.
+    local function turnStart(seq)
+        if #seq < 4 then return #seq end
+        local back = { [#seq] = 0 }
+        for i = #seq - 1, 1, -1 do
+            back[i] = back[i + 1] + math.sqrt((seq[i + 1].x - seq[i].x) ^ 2
+                + (seq[i + 1].z - seq[i].z) ^ 2)
+        end
+        local function atBack(d, from)
+            for i = from, 1, -1 do
+                if back[i] - back[from] >= d then return seq[i] end
+            end
+            return nil
+        end
+        -- Signed curvature at each node, read over about 10 m of lane behind it.
+        local k = {}
+        for i = 3, #seq do
+            local c = seq[i]
+            local b = atBack(5, i)
+            local a = atBack(10, i)
+            if a ~= nil and b ~= nil then
+                local ax, az = b.x - a.x, b.z - a.z
+                local bx, bz = c.x - b.x, c.z - b.z
+                local cx2, cz2 = c.x - a.x, c.z - a.z
+                local la = math.sqrt(ax * ax + az * az)
+                local lb = math.sqrt(bx * bx + bz * bz)
+                local lc = math.sqrt(cx2 * cx2 + cz2 * cz2)
+                if la > 1e-3 and lb > 1e-3 and lc > 1e-3 then
+                    k[i] = 2 * (ax * bz - az * bx) / (la * lb * lc)
+                end
+            end
+        end
+        -- The road's own curvature, taken from the OUTER half of the lane where no junction wiring
+        -- can reach. Median and median deviation, so one odd node cannot set the baseline.
+        local outer = {}
+        for i = 3, #seq do
+            if k[i] ~= nil and back[i] > back[1] * 0.5 then outer[#outer + 1] = k[i] end
+        end
+        if #outer < 3 then return #seq end
+        table.sort(outer)
+        local kRoad = outer[math.ceil(#outer / 2)]
+        local devs = {}
+        for _, v in ipairs(outer) do devs[#devs + 1] = math.abs(v - kRoad) end
+        table.sort(devs)
+        local spread = devs[math.ceil(#devs / 2)]
+        local limit = math.max(0.02, spread * 4)
+        -- First departure, walking inward. Two nodes in a row must exceed it, so a single noisy
+        -- reading cannot cut a lane in half.
+        for i = 3, #seq - 1 do
+            if k[i] ~= nil and k[i + 1] ~= nil
+                and math.abs(k[i] - kRoad) > limit and math.abs(k[i + 1] - kRoad) > limit then
+                return math.max(2, i - 1)
+            end
+        end
+        return #seq
+    end
+
+    -- PASS 2: put every dead-end exactly on the box.
+    --
+    -- Trim and extend are ONE operation here, not two: find where this lane's own path first enters
+    -- the box, then make that the end - dropping whatever sat beyond it and laying points up to it
+    -- at the lane's own spacing. The path is the surviving road followed by the arc it was already
+    -- describing, so a lane that was cut short is re-laid along its own alignment and one that pokes
+    -- in is cut back to the same boundary. Two lanes facing each other across the junction land on
+    -- opposite faces of the same box, which is what makes the tails even.
+    -- What the preview draws: each road's claim, as the two lines its edge runs along. Collected
+    -- from the same road objects the box test uses, so the lines on screen ARE the test.
+    local bands = nil
+    if dry then
+        -- The box, drawn: each road's merged centre offset either side by the distance its tracks
+        -- were apart. Offset point by point rather than as a straight line, so the drawn edge
+        -- follows the road round a bend instead of cutting across it.
+        bands = {}
+        for _, r in ipairs(roads) do
+            local line = r.centre
+            for _, sgn in ipairs({ -1, 1 }) do
+                local prev = nil
+                for k = 1, #line do
+                    local a = line[math.max(1, k - 1)]
+                    local b = line[math.min(#line, k + 1)]
+                    local vx, vz = b.x - a.x, b.z - a.z
+                    local l = math.sqrt(vx * vx + vz * vz)
+                    if l > 1e-6 then
+                        local nx, nz = -vz / l * r.offset * sgn, vx / l * r.offset * sgn
+                        local cur = { x = line[k].x + nx, z = line[k].z + nz }
+                        if prev ~= nil then
+                            bands[#bands + 1] = { ax = prev.x, az = prev.z, bx = cur.x, bz = cur.z }
+                        end
+                        prev = cur
+                    end
+                end
+            end
+        end
+    end
+
+    local ends = dry and {} or nil
+    local trimmed, added, lanes = 0, 0, 0
+    for _, w in ipairs(walked) do
+        local ap, seq, useOut = w.ap, w.seq, w.useOut
+        if w.tidy and alive(seq[#seq]) then
+            -- "Normal spacing" is the lane's OWN spacing, read off the segments it already has, not
+            -- a constant: a hand-recorded road at 8 m and a laid curve at 1.5 m each keep their look.
+            local sum, cnt = 0, 0
+            for i = math.max(2, #seq - 5), #seq do
+                local a, b = seq[i - 1], seq[i]
+                sum = sum + math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+                cnt = cnt + 1
+            end
+            local spacing = math.max(1.5, math.min(12, (cnt > 0 and sum > 0) and (sum / cnt) or 4))
+
+            -- The path: the road that is there, then the arc carrying it on across the junction.
+            local tip, prev = seq[#seq], seq[#seq - 1]
+            local vx, vz = tip.x - prev.x, tip.z - prev.z
+            local segLen = math.sqrt(vx * vx + vz * vz)
+            local grade = (segLen > 1e-3)
+                and math.max(-0.15, math.min(0.15, ((tip.y or 0) - (prev.y or 0)) / segLen)) or 0
+            local path = {}
+            for _, n in ipairs(seq) do path[#path + 1] = { x = n.x, y = n.y or 0, z = n.z } end
+            local arc = (segLen > 1e-3) and laneArc(seq, tip, prev, grade) or nil
+            for i = 2, (arc ~= nil) and #arc or 0 do path[#path + 1] = arc[i] end
+            local cum = cumulative(path)
+
+            -- CUT BACK PAST THE TURN before anything else, so whatever the clear left of a
+            -- connector goes with it. The box then decides where the rebuilt road stops.
+            local ts = turnStart(seq)
+            while #seq > 2 and #seq > ts do
+                local doomed = seq[#seq]
+                if not alive(doomed) then break end
+                if dry then
+                    seq[#seq] = nil
+                else
+                    if not tryCall("junction tidy cut", function()
+                        ADGraphManager:removeWayPoint(doomed.id, false)
+                    end) then break end
+                    seq[#seq] = nil
+                    trimmed = trimmed + 1
+                end
+            end
+            -- The cut never goes below two nodes, so the lane always keeps a direction.
+            tip, prev = seq[#seq], seq[#seq - 1]
+            vx, vz = tip.x - prev.x, tip.z - prev.z
+            segLen = math.sqrt(vx * vx + vz * vz)
+            grade = (segLen > 1e-3)
+                and math.max(-0.15, math.min(0.15, ((tip.y or 0) - (prev.y or 0)) / segLen)) or 0
+            path = {}
+            for _, n in ipairs(seq) do path[#path + 1] = { x = n.x, y = n.y or 0, z = n.z } end
+            arc = (segLen > 1e-3) and laneArc(seq, tip, prev, grade) or nil
+            for i = 2, (arc ~= nil) and #arc or 0 do path[#path + 1] = arc[i] end
+            cum = cumulative(path)
+
+            -- Where that path first enters the box. Scanned from 30 m back, so a lane already poking
+            -- into the junction is caught too - its entry point is behind its current end.
+            local atNode = cum[#seq]
+            local target, s = nil, math.max(0, atNode - 30)
+            while s <= cum[#cum] do
+                local pt = atArc(path, cum, s)
+                -- The boundary has to be AT the junction. Scanning back 30 m catches a lane that
+                -- pokes in, but it also catches a slab entry far up the road where this lane happens
+                -- to run near another - which trimmed a tail back to 20 m from the middle.
+                if (pt.x - centre.x) ^ 2 + (pt.z - centre.z) ^ 2 <= 20 * 20
+                    and insideBox(pt.x, pt.z, w) then
+                    target = s break
+                end
+                s = s + 0.25
+            end
+
+            if target ~= nil and dry then
+                local pt = atArc(path, cum, target)
+                ends[#ends + 1] = { x = pt.x, y = pt.y or 0, z = pt.z, dir = ap.dir,
+                    moved = math.abs(target - atNode) }
+            elseif target ~= nil then
+                local touched = false
+                -- Drop whatever is past the boundary. Never below two nodes - a lane with one left
+                -- has no direction and nothing could tie into it.
+                while #seq > 2 and cum[#seq] > target + 0.5 do
+                    local doomed = seq[#seq]
+                    if not alive(doomed) then break end
+                    if not tryCall("junction tidy trim", function()
+                        ADGraphManager:removeWayPoint(doomed.id, false)
+                    end) then break end
+                    seq[#seq] = nil
+                    trimmed, touched = trimmed + 1, true
+                end
+                -- Then run up to it, in even steps that land exactly on the boundary.
+                local travel = target - cum[#seq]
+                if travel > 0.5 then
+                    -- Read two-wayness off the segment that is STILL THERE: the trim above may have
+                    -- taken the node this was originally measured against.
+                    local last, back = seq[#seq], seq[#seq - 1]
+                    local segDual = (alive(last) and back ~= nil and alive(back)
+                        and table.contains(last.out or {}, back.id)
+                        and table.contains(back.out or {}, last.id)) or false
+                    local n = math.min(12, math.max(1, math.floor(travel / spacing + 0.5)))
+                    for i = 1, n do
+                        local pt = atArc(path, cum, cum[#seq] + (travel / n) * i)
+                        local made
+                        if not tryCall("junction tidy extend", function()
+                            made = ADGraphManager:recordWayPoint(pt.x, pt.y or 0, pt.z, false, false,
+                                false, 0, last.flags or AutoDrive.FLAG_NONE, false)
+                        end) or made == nil then break end
+                        if useOut then junctionConnect(seq[#seq], made, segDual)
+                        else junctionConnect(made, seq[#seq], segDual) end
+                        seq[#seq + 1] = made
+                        added, touched = added + 1, true
+                    end
+                end
+                if touched then lanes = lanes + 1 end
+            end
+        end
+    end
+
+    if dry then return ends, bands end
+    return trimmed, added, lanes
+end
+
+function ADFlyoverEditor:applyJunctionClear()
+    local jp = self.junctionPreview
+    if jp == nil then return end
+    local leave = self.junctionLeaveThrough ~= false
+    local nodes = leave and jp.turnDebris or jp.debris
+    local links = jp.staleLinks or {}
+    local nodeCount = nodes ~= nil and #nodes or 0
+    local throughSkippedLinks = 0
+    local linksToSever = {}
+    for _, pair in ipairs(links) do
+        if leave and pair.isThrough then
+            throughSkippedLinks = throughSkippedLinks + 1
+        else
+            linksToSever[#linksToSever + 1] = pair
+        end
+    end
+    if nodeCount == 0 and #linksToSever == 0 then
+        Logging.info("[FlyoverEditor]: junction - nothing here for this site to clear.")
+        return
+    end
+
+    ADEditorHistory:snapshot("clear junction")
+    local staleCut = 0
+    for _, pair in ipairs(linksToSever) do
+        local a, b = pair[1], pair[2]
+        if a ~= nil and b ~= nil and a.id ~= nil and b.id ~= nil and a.id >= 0 and b.id >= 0 then
+            junctionDisconnect(a, b)
+            staleCut = staleCut + 1
+        end
+    end
+
+    -- Highest id first: removeWayPoint renumbers everything above the id it removes, so a pending
+    -- lower id is still valid when its turn comes; a pending higher id would not be.
+    local ids = {}
+    for _, w in ipairs(nodes or {}) do
+        if w ~= nil and w.id ~= nil and w.id >= 0 then ids[#ids + 1] = w.id end
+    end
+    table.sort(ids, function(a, b) return a > b end)
+    local cleared = 0
+    for _, id in ipairs(ids) do
+        if tryCall("junction clear", function() ADGraphManager:removeWayPoint(id, false) end) then
+            cleared = cleared + 1
+        end
+    end
+
+    -- Tidy AFTER the removals: the ends being measured are the ones the clear just created.
+    local tidyTrim, tidyAdd, tidyLanes = 0, 0, 0
+    tryCall("junction tidy lane ends", function()
+        tidyTrim, tidyAdd, tidyLanes = self:junctionTidyLaneEnds(jp)
+    end)
+    if tidyLanes > 0 then
+        Logging.info("[FlyoverEditor]: junction - tidied %d lane end(s) to %.0f m from the centre of the tracks (%.1f, %.1f): %d point(s) trimmed, %d added.",
+            tidyLanes, AutoDrive.FLYOVER_JUNCTION_STUB_GAP or 4,
+            jp.tracksCentre and jp.tracksCentre.x or 0, jp.tracksCentre and jp.tracksCentre.z or 0,
+            tidyTrim, tidyAdd)
+    end
+
+    local throughLeft = leave and (#(jp.throughDebris or {})) or 0
+    if leave and (throughLeft > 0 or throughSkippedLinks > 0) then
+        Logging.info("[FlyoverEditor]: junction cleared %d point(s) and %d stale link(s); left %d through-path point(s) and %d through link(s) in place.",
+            cleared, staleCut, throughLeft, throughSkippedLinks)
+    else
+        Logging.info("[FlyoverEditor]: junction cleared %d point(s) and %d stale link(s). Roads it joined are untouched.",
+            cleared, staleCut)
+    end
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+    self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+end
+
 function ADFlyoverEditor:applyJunction()
     local jp = self.junctionPreview
     if jp == nil then return end
+    if jp.clearMode then
+        self:applyJunctionClear()
+        return
+    end
     local newMoves = {}
     for _, m in ipairs(jp.movements) do
         if (not m.exists or m.rebuild) and m.connector ~= nil and m.refused == nil then
@@ -7524,7 +9383,10 @@ function ADFlyoverEditor:applyJunction()
     end
 
     ADEditorHistory:snapshot("junction")
-    local cx, cz, radius = jp.cx, jp.cz, jp.radius
+    -- The WORK region, not the search circle: tie-ins and kickouts land wherever the geometry puts
+    -- them on the tracks, which is routinely outside the circle that merely found those tracks.
+    local cx, cz, radius = jp.cx, jp.cz, (jp.workRadius or jp.radius)
+    self.junctionChainCache = nil
     local allStubs = {}
     local placed = 0
 
@@ -7647,7 +9509,22 @@ function ADFlyoverEditor:applyJunction()
     -- No degree guard here: a degree-3 debris node is an old connector fork, not road (roads are
     -- skeleton and never in this list). Deleted by object reference, id re-read each time.
     local debrisCleared = 0
-    if placed > 0 and jp.debris ~= nil then
+    -- Clear the old wiring when something was LAID, and ALSO when turns were deliberately REFUSED
+    -- because the design vehicle cannot take them (too tight, off road, blocked, rig off road, rig
+    -- hits something). A refusal is a decision that the turn should not exist - leaving the old
+    -- connector standing keeps an undrivable turn on the network, which is worse than no turn at all:
+    -- AutoDrive will happily route a rig into it. The `placed > 0` guard alone meant a junction whose
+    -- every movement was refused kept ALL of its old wiring and the rebuild silently did nothing.
+    -- Reasons that are NOT a drivability judgement (nFar = two separate crossings in one scope, nLane
+    -- = a redundant lane pairing, nNoCurve = no joinable geometry) deliberately do not trigger this:
+    -- they mean "not this junction's business", not "this turn is undrivable".
+    local nRefusedForVehicle = (jp.nTight or 0) + (jp.nOffRoad or 0) + (jp.nBlocked or 0)
+        + (jp.nTrailerRoad or 0) + (jp.nTrailerHit or 0)
+    if placed == 0 and nRefusedForVehicle > 0 then
+        Logging.info("[FlyoverEditor]: junction - nothing could be laid here, but %d turn(s) were refused as undrivable - clearing their old wiring rather than leaving it.",
+            nRefusedForVehicle)
+    end
+    if (placed > 0 or nRefusedForVehicle > 0) and jp.debris ~= nil then
         for _, s in ipairs(jp.debris) do
             if s ~= nil and not stubSeen[s] and s.id ~= nil and s.id >= 0 then
                 stubSeen[s] = true
@@ -7723,9 +9600,7 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         return true
     elseif t == self.TOOL.JUNCTION then
         -- The wheel is the scope radius - the primary disambiguation lever for what the crossing is.
-        self.junctionRadius = math.max(AutoDrive.FLYOVER_JUNCTION_RADIUS_MIN,
-            math.min(AutoDrive.FLYOVER_JUNCTION_RADIUS_MAX,
-                (self.junctionRadius or 15) + step * AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP))
+        self:setJunctionRadius(self:junctionRadiusValue() + step * AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP)
         return true
     end
     return false
