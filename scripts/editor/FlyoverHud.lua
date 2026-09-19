@@ -503,6 +503,11 @@ function ADFlyoverHud:buildRows(editor)
         addWheelNumber("points", tostring(editor.divideCount))
     elseif editor.tool == editor.TOOL.PARALLEL then
         addWheelNumber("distance", string.format("%.1f m", editor.offsetDistance))
+    elseif editor.tool == editor.TOOL.FIELDLOOP then
+        add("toggle", "priority", editor.fieldLoopSubPrio and "secondary" or "primary", false,
+            function() editor:toggleFieldLoopPriority() end)
+        add("toggle", "track", editor.FIELD_LOOP_DIR_NAMES[editor.fieldLoopDirection], false,
+            function() editor:cycleFieldLoopDirection() end)
     elseif editor.tool == editor.TOOL.CONVERT then
         add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
             function() editor:cycleConvertOp() end)
@@ -526,14 +531,19 @@ function ADFlyoverHud:buildRows(editor)
                 local cleave = editor.junctionLeaveThrough ~= false
                 local doomed = cleave and cjp.turnDebris or cjp.debris
                 add("toggle", "approaches found", tostring(#(cjp.approaches or {})))
-                add("toggle", "will clear", tostring(#(doomed or {})))
+                -- Plus what the box sweep takes: everything inside the roads' own offset lines, which
+                -- the tidy works out in its dry run. Counted here so the number on the card is the
+                -- number that goes.
+                local boxed = (type(cjp.boxSweep) == "table") and #cjp.boxSweep or 0
+                add("toggle", "will clear", tostring(#(doomed or {}) + boxed))
                 if cleave and #(cjp.throughDebris or {}) > 0 then
                     add("toggle", "through points kept", tostring(#(cjp.throughDebris or {})))
                 end
-                -- What happens to the ends the clear leaves behind. Lanes still running through are
-                -- not tidied, so this is a statement of the target, not a count.
-                add("toggle", "tidy lane ends to",
-                    string.format("%.0f m", AutoDrive.FLYOVER_JUNCTION_STUB_GAP or 4))
+                -- What happens to the ends the clear leaves behind: each is brought onto the edge of
+                -- the box - the parent roads' own offset lines, drawn yellow - and the green spheres
+                -- are where. Counted from the same dry run, so it is the number that will move.
+                local nEnds = (type(cjp.tidyEnds) == "table") and #cjp.tidyEnds or 0
+                add("toggle", "lane ends to box edge", tostring(nEnds))
             else
                 add("note", "point at a junction")
             end
@@ -1210,6 +1220,15 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     if overridden then
         push({ kind = "button", text = "clear this colour", action = function() editor:clearEditRole() end })
     end
+
+    push({ kind = "section", text = "LAUNCH BUTTON" })
+    push({ kind = "field", text = "on AutoDrive HUD",
+        value = ADFlyoverSettings.get("launchButtonHidden") and "hidden" or "shown",
+        action = function() ADFlyoverSettings.cycle("launchButtonHidden", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("launchButtonHidden", d) end })
+    push({ kind = "field", text = "position", value = tostring(ADFlyoverSettings.get("launchButtonPosition")),
+        action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
 
     push({ kind = "gap" })
     push({ kind = "button", text = "reset all to default", action = function() editor:resetTheme() end })

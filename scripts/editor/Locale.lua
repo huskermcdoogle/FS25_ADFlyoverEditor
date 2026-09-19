@@ -321,6 +321,7 @@ L.STRINGS = {
         ["will clear"] = "wird entfernt",
         ["through points kept"] = "Durchfahrtspunkte belassen",
         ["tidy lane ends to"] = "Fahrbahnenden bis",
+        ["lane ends to box edge"] = "Fahrbahnenden an Boxkante",
         ["point at a junction"] = "auf eine Kreuzung zeigen",
         ["search radius"] = "Suchradius",
         ["turn radius"] = "Wenderadius",

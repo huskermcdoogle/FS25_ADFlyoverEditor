@@ -42,6 +42,11 @@ S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 5
 -- testing where a fix looked like it had done nothing.
 S.settings.junctionRadius = { values = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 }, default = 10, current = 10 }          -- 6..40 m, default 15
 S.settings.junctionTurnRadius = { values = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }, default = 11, current = 11 }      -- 2..30 m, default 12
+-- The launch button riding on AutoDrive's HUD: whether it shows at all, and which side of the HUD
+-- it anchors to. Not geometry, just a UI preference, but persisted anyway so a player who hides it
+-- or moves it out of a busy corner does not have to redo that every session.
+S.settings.launchButtonHidden = { values = { false, true }, default = 1, current = 1 }
+S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above", "below" }, default = 1, current = 1 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
@@ -87,6 +92,19 @@ function S.setNearest(name, value)
         end
     end
     return S.setIndex(name, bestIndex)
+end
+
+--- Move a setting's index by dir (usually ±1), wrapping around. setNearest assumes numeric values
+--- and a distance between them, which does not mean anything for a toggle or a named position - so
+--- those cycle through their values list instead, the same way the theme preset/accent do.
+function S.cycle(name, dir)
+    local setting = S.settings[name]
+    if setting == nil then
+        return nil
+    end
+    local n = #setting.values
+    local nextIndex = ((setting.current - 1 + (dir >= 0 and 1 or -1)) % n) + 1
+    return S.setIndex(name, nextIndex)
 end
 
 local function settingsPath()
@@ -147,7 +165,7 @@ function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence",
-                            "junctionRadius", "junctionTurnRadius" }) do
+                            "junctionRadius", "junctionTurnRadius", "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
     end
     return table.concat(parts, " ")
