@@ -9484,6 +9484,20 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
         local k0 = triple(0)
         if k0 == nil then k0 = 0 end
         k0 = math.max(-LIMIT, math.min(LIMIT, k0))
+        -- THE CHORD IS NOT THE TANGENT. The heading above is the direction from `prev` to `tip`,
+        -- which on a curving road is where the road pointed HALFWAY between them, not where it
+        -- points at `tip`. The arc then sets off along a line the road has already turned away
+        -- from, and since this line becomes the road's claim band, the box turns with it: at one
+        -- T the side road's band came out 19 degrees off and the whole box sat up the road from
+        -- where the two roads actually meet.
+        --
+        -- For an arc the correction is exact and already to hand: turn the chord on by half the
+        -- angle the arc covers over it. A straight road has k0 = 0 and is untouched.
+        if k0 ~= 0 then
+            local half = k0 * hl * 0.5
+            local cs, sn = math.cos(half), math.sin(half)
+            hx, hz = hx * cs - hz * sn, hx * sn + hz * cs
+        end
         -- Carried STRAIGHT when asked: a side road with no through partner keeps its own heading.
         if straight then k0 = 0 end
         -- Is the bend tightening or easing? Read two more triples further back and take the trend
@@ -11440,6 +11454,39 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 local hx, hz = near.x - far.x, near.z - far.z
                 local hl = math.sqrt(hx * hx + hz * hz)
                 hx, hz = hx / hl, hz / hl
+                -- A CHORD POINTS WHERE THE ROAD WAS HALFWAY ALONG IT, NOT WHERE IT IS POINTING AT THE
+                -- END. On a side road that curves into its junction that is a large error - eleven
+                -- metres of chord came in 19 degrees off the road's real heading at the tie node, and
+                -- since this heading sets the road's claim band, the whole box rotated with it and
+                -- sat up the road from where the two roads actually meet.
+                --
+                -- The correction is exact for an arc and needs no fit: turn the chord on by HALF the
+                -- angle the road turns across it, which is read straight off the lane's own points.
+                -- A straight road turns zero and is unaffected.
+                do
+                    local turn, pv = 0, nil
+                    local started = false
+                    for j = 1, ni do
+                        local m = lane[j]
+                        if m == far then started = true end
+                        if started and pv ~= nil then
+                            local a = math.atan2(m.x - pv.x, m.z - pv.z)
+                            if pv.prevAng ~= nil then
+                                local d = a - pv.prevAng
+                                while d > math.pi do d = d - 2 * math.pi end
+                                while d < -math.pi do d = d + 2 * math.pi end
+                                turn = turn + d
+                            end
+                            m.prevAng = a
+                        end
+                        if started then pv = m end
+                    end
+                    for j = 1, ni do lane[j].prevAng = nil end
+                    turn = math.max(-math.pi / 2, math.min(math.pi / 2, turn))
+                    local half = turn * 0.5
+                    local cs, sn = math.cos(half), math.sin(half)
+                    hx, hz = hx * cs - hz * sn, hx * sn + hz * cs
+                end
                 -- THE ROAD'S OWN CURVE, from the clean stretch. A side road that bends gently on its
                 -- way in came back STRAIGHT over its last 22 m when it was carried on a heading alone,
                 -- which left it pointing off its road. Curvature is read from three clean points - the
