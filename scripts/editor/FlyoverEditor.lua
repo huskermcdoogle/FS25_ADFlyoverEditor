@@ -9314,8 +9314,13 @@ function ADFlyoverEditor:junctionClick()
     for k in pairs(roadProbeNoted) do roadProbeNoted[k] = nil end
     -- The radius is in this line because "I set it to 20" and "the solve behaved like 15" are
     -- otherwise indistinguishable in a log, and that ambiguity cost a whole test cycle.
-    Logging.info("[FlyoverEditor]: junction site locked at %.1f, %.1f - search radius %.0f m, turn radius %.0f m, mode %s. Wheel = scope, right-click %s.",
-        self.cursorX, self.cursorZ, self:junctionRadiusValue(), self.junctionTurnRadius or 12,
+    Logging.info("[FlyoverEditor]: junction site locked at %.1f, %.1f - %s, turn radius %.0f m, mode %s. Right-click %s.",
+        self.cursorX, self.cursorZ,
+        (self.junctionMode == "clear")
+            and string.format("scope %.0f m (fixed: the junction sets it, not the wheel)",
+                AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE or 14)
+            or string.format("search radius %.0f m, wheel = scope", self:junctionRadiusValue()),
+        self.junctionTurnRadius or 12,
         self.junctionMode or "build", (self.junctionMode == "clear") and "clears" or "places")
 end
 
@@ -12116,7 +12121,12 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         end
         return true
     elseif t == self.TOOL.JUNCTION then
-        -- The wheel is the scope radius - the primary disambiguation lever for what the crossing is.
+        -- NOTHING IN CLEAR MODE. The scope radius used to be "the primary disambiguation lever for
+        -- what the crossing is", and that was the trouble: what belongs to a junction is a property
+        -- of the road, and letting a wheel decide it meant the same click gave different answers.
+        -- Clearing takes its scope from the junction now, so there is nothing here to turn. Build
+        -- mode still has one - its tie-in and kickout geometry is laid out around it.
+        if self.junctionMode == "clear" then return false end
         self:setJunctionRadius(self:junctionRadiusValue() + step * AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP)
         return true
     end

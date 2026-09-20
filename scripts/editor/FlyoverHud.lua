@@ -523,7 +523,9 @@ function ADFlyoverHud:buildRows(editor)
         add("toggle", "action", (editor.junctionMode == "clear") and "clear" or "build", false,
             function() editor:toggleJunctionMode() end)
         if editor.junctionMode == "clear" then
-            addWheelNumber("search radius", string.format("%.0f m", editor:junctionRadiusValue()))
+            -- No scope row, and the wheel does nothing here. What belongs to a junction is a
+            -- property of the road; a number the user could turn only meant the same click gave
+            -- different answers each time.
             add("toggle", "leave through paths", (editor.junctionLeaveThrough ~= false) and "on" or "off", false,
                 function() editor:toggleJunctionLeaveThrough() end)
             local cjp = editor.junctionPreview
