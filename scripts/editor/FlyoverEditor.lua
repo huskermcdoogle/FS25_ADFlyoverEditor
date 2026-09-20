@@ -7250,6 +7250,51 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
     end
 
+    -- AN ARM THAT ENDS INSIDE THE CIRCLE IS STILL AN ARM. Approaches were only ever the lanes the
+    -- circle CUTS, and between a close pair that misses a whole road: once the neighbour is cleared,
+    -- the lanes towards it stop at the neighbour's box, a few metres away and well inside this
+    -- junction's circle, so they cross nothing. The junction was then read with an arm missing - a T
+    -- as two roads meeting at a corner, its box laid across the wrong pair. A lane END inside the
+    -- circle is taken as an approach just as a cut lane is: where travel stops it is an exit, where
+    -- travel starts it is an entry.
+    if clearMode0 then
+        -- A loose end in the junction's own wiring is not an arm. What marks a real lane end is
+        -- that it is the OUTER end of a stub of plain road leading INTO the junction: followed
+        -- inward it runs as a plain chain for a few metres and arrives at a fork that lies nearer
+        -- the middle than the end itself does.
+        local function stubInto(wp, dir)
+            local prev, cur, run = nil, wp, 0
+            for _ = 1, 12 do
+                local lst = cur[dir] or {}
+                if #lst ~= 1 then return false end
+                local nxt = ADGraphManager:getWayPointById(lst[1])
+                if nxt == nil or inside[nxt.id] == nil then return false end
+                run = run + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
+                local s2, d = {}, 0
+                for _, l2 in ipairs({ nxt.out or {}, nxt.incoming or {} }) do
+                    for _, id in pairs(l2) do if not s2[id] then s2[id] = true d = d + 1 end end
+                end
+                if d >= 3 then
+                    local dEnd = (wp.x - cx) ^ 2 + (wp.z - cz) ^ 2
+                    local dFork = (nxt.x - cx) ^ 2 + (nxt.z - cz) ^ 2
+                    return run >= 3 and dFork < dEnd
+                end
+                prev, cur = cur, nxt
+            end
+            return false
+        end
+        for _, wp in pairs(inside) do
+            local nOut, nIn = #(wp.out or {}), #(wp.incoming or {})
+            if nOut == 0 and nIn == 1 and stubInto(wp, "incoming") then
+                local p = ADGraphManager:getWayPointById(wp.incoming[1])
+                raw[#raw + 1] = { wp = wp, dir = "out", bearing = math.atan2(wp.x - p.x, wp.z - p.z), laneEnd = true }
+            elseif nIn == 0 and nOut == 1 and stubInto(wp, "out") then
+                local t = ADGraphManager:getWayPointById(wp.out[1])
+                raw[#raw + 1] = { wp = wp, dir = "in", bearing = math.atan2(t.x - wp.x, t.z - wp.z), laneEnd = true }
+            end
+        end
+    end
+
     -- Group the raw approaches: same direction, similar bearing, and close together fold into ONE. This
     -- collapses the near-coincident, stacked one-way nodes the survey found (arms 0.4-0.9 m apart) so a
     -- crossing reads as a handful of approaches instead of a web. First step of "approach grouping".
@@ -8758,17 +8803,70 @@ function ADFlyoverEditor:updateJunctionPreview()
                     -- it sits. (The selection's fork cluster is too tight for this - real tie nodes
                     -- sit 15-18 m out, beyond it - and testing against the cluster alone left lanes
                     -- with no tie node at all and their old connectors standing.)
+                    -- ...AND ITS BRANCH HAS TO BE A CONNECTOR INTO THIS JUNCTION. Ownership goes by the
+                    -- nearest crossing, and once a neighbouring junction has been cleared its crossing
+                    -- is gone: a fork 31 m up a side road - a field entrance, nothing to do with this
+                    -- junction - was then the nearest crossing's, passed as the lane's tie node, and
+                    -- everything inward of it was dug up and re-laid on a straight line that missed the
+                    -- road. What makes a fork a TIE node is what hangs off it: the branch that leaves
+                    -- the lane there is followed, and it must run through the junction.
+                    local onLane = {}
+                    for _, n in ipairs(nodes) do onLane[n] = true end
+                    local function leadsIn(fk)
+                        for _, lst in ipairs({ fk.out or {}, fk.incoming or {} }) do
+                            for _, id in pairs(lst) do
+                                local b = ADGraphManager:getWayPointById(id)
+                                if b ~= nil and not onLane[b] then
+                                    local prev, cur = fk, b
+                                    for _ = 1, 40 do
+                                        if (cur.x - cx) ^ 2 + (cur.z - cz) ^ 2 <= R * R then return true end
+                                        local nxt, cnt = nil, 0
+                                        for _, l2 in ipairs({ cur.out or {}, cur.incoming or {} }) do
+                                            for _, id2 in pairs(l2) do
+                                                local o = ADGraphManager:getWayPointById(id2)
+                                                if o ~= nil and o ~= prev and o ~= cur then
+                                                    cnt = cnt + 1
+                                                    nxt = nxt or o
+                                                end
+                                            end
+                                        end
+                                        if nxt == nil or cnt > 2 then break end
+                                        prev, cur = cur, nxt
+                                    end
+                                end
+                            end
+                        end
+                        return false
+                    end
                     local f = nil
                     for i = 2, #nodes do
                         if deg3(nodes[i]) then
                             if clearMode then
-                                if isOwnForClear(nodes[i]) then f = i break end
+                                if isOwnForClear(nodes[i]) and leadsIn(nodes[i]) then f = i break end
                             elseif (nodes[i].x - cx) ^ 2 + (nodes[i].z - cz) ^ 2 <= 45 * 45 then
                                 f = i break
                             end
                         end
                     end
                     if f ~= nil then
+                        -- TURNING IS MEASURED AGAINST THE ROAD'S OWN STEADY CURVE, NOT AGAINST ZERO. A
+                        -- side road that bends all the way in turns a little at every node; counted
+                        -- from zero that added up to "has swung" and no node ever read as quiet, so
+                        -- the search for where the swing began ran back up the road until it happened
+                        -- on a straight bit - 31 m out at one T, and everything inward was dug up and
+                        -- re-laid straight across the bend. The road's steady turn per node is the
+                        -- middle of its readings; a kickout is what departs from THAT.
+                        local base = 0
+                        do
+                            local ts = {}
+                            for i = 2, f - 1 do ts[#ts + 1] = turnAt(i) end
+                            if #ts >= 3 then
+                                table.sort(ts)
+                                base = ts[math.floor((#ts + 1) / 2)]
+                            end
+                        end
+                        local rawTurnAt = turnAt
+                        turnAt = function(i) return rawTurnAt(i) - base end
                         -- how far the lane has turned by the time it reaches that fork
                         local total = 0
                         for i = 2, f - 1 do total = total + turnAt(i) end
@@ -8792,9 +8890,19 @@ function ADFlyoverEditor:updateJunctionPreview()
                     -- neighbour, and carried off towards a box it never reached - a dangling line, a
                     -- lane trimmed far short, and an arm count of seven on a T. Whose lane it is
                     -- comes from the same ownership the wiring uses, asked of the lane's own end.
+                    -- Asked at the lane's CLOSEST APPROACH to the junction, not at the end of its list:
+                    -- with through paths kept the list runs on round the connector and away down the
+                    -- next road, so its last node can be 40 m off and somebody else's while the lane
+                    -- is plainly this junction's. Testing the last node dropped such a lane from the
+                    -- tidy and left its remains to the loose-end sweep - cut 30 m out, never carried.
                     local mine = true
                     if clearMode and lockedCrossing ~= nil and #nodes >= 1 then
-                        mine = isOwnForClear(nodes[#nodes])
+                        local nb, nd = nodes[1], math.huge
+                        for _, n in ipairs(nodes) do
+                            local d = (n.x - cx) ^ 2 + (n.z - cz) ^ 2
+                            if d < nd then nd, nb = d, n end
+                        end
+                        mine = isOwnForClear(nb)
                     end
                     if #nodes >= 2 and mine then
                         side[#side + 1] = { nodes = nodes, useOut = (ap.dir == "in"), cutNode = cutAt and nodes[cutAt] or nil }
