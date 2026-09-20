@@ -12020,6 +12020,133 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         end
     end
 
+    local function cleanPair(sl, lane)
+        local near, far, ni = nil, nil, nil
+        if sl.cutNode ~= nil then
+            for i, n in ipairs(lane) do if n == sl.cutNode then ni = i break end end
+            -- The tie node was spliced in by the build and can sit a little off the lane; the
+            -- point BEFORE it is original road, so the lane ends there and is laid fresh from it.
+            if ni ~= nil and ni >= 3 then ni = ni - 1 end
+            if ni ~= nil and ni >= 2 then
+                near = lane[ni]
+                for j = ni - 1, 1, -1 do
+                    local m = lane[j]
+                    -- A SHORT baseline, 8 m. The tie node is already out of it (that was what
+                    -- tilted a short baseline before), and on a road that bends steadily all the
+                    -- way in, a long chord points where the road WAS: 25 m read the heading
+                    -- 10 degrees behind the road's heading at its end, and the carry drifted off.
+                    if (m.x - near.x) ^ 2 + (m.z - near.z) ^ 2 >= 8 * 8 then far = m break end
+                end
+                if far == nil then far = lane[1] end
+                if far == near then near, far, ni = nil, nil, nil end
+            else
+                ni = nil
+            end
+        end
+        for i = #lane, 1, -1 do
+            if near ~= nil then break end
+            local n = lane[i]
+            if (n.x - box.centre.x) ^ 2 + (n.z - box.centre.z) ^ 2 >= 22 * 22 then
+                near, ni = n, i
+                for j = i - 1, 1, -1 do
+                    local m = lane[j]
+                    if (m.x - n.x) ^ 2 + (m.z - n.z) ^ 2 >= 15 * 15 then far = m break end
+                end
+                break
+            end
+        end
+        return near, far, ni
+    end
+
+    -- ONE HEADING PER ROAD, NOT ONE PER LANE. Each side lane used to be carried to the box on a
+    -- heading read off its own last few metres, and two lanes of one road never read quite the same:
+    -- a degree apart is 30 cm over the carry, so the pair converged or spread on the way in, and
+    -- where both leaned the same way the whole branch drifted off its road. The lanes of one road are
+    -- parallel by definition, so the road gets ONE heading - the mean of its lanes' inward headings,
+    -- every lane's list running outer end first whichever way it is driven - and each lane is carried
+    -- on that from its own clean node. Parallel by construction: the width at the clean nodes is the
+    -- width at the box.
+    local sharedHeading = {}
+    do
+        local reads = {}
+        for _, sl in ipairs(routes.side or {}) do
+            local lane = {}
+            for _, n in ipairs(sl.nodes) do if live(n) then lane[#lane + 1] = n end end
+            if #lane >= 2 then
+                local near, far = cleanPair(sl, lane)
+                if near ~= nil and far ~= nil then
+                    local hx, hz = near.x - far.x, near.z - far.z
+                    local hl = math.sqrt(hx * hx + hz * hz)
+                    if hl > 0.5 then reads[#reads + 1] = { sl = sl, hx = hx / hl, hz = hz / hl, x = near.x, z = near.z, near = near, lane = lane } end
+                end
+            end
+        end
+        local used = {}
+        for i, r in ipairs(reads) do
+            if not used[i] then
+                local grp, sx, sz = { r }, r.hx, r.hz
+                used[i] = true
+                for j = i + 1, #reads do
+                    local q = reads[j]
+                    -- same road: heading within 20 degrees, and no more than a road's width apart sideways
+                    if not used[j] and (q.hx * r.hx + q.hz * r.hz) >= math.cos(math.rad(20)) then
+                        local side = math.abs((q.x - r.x) * -r.hz + (q.z - r.z) * r.hx)
+                        if side <= 12 then
+                            used[j] = true
+                            grp[#grp + 1] = q
+                            sx, sz = sx + q.hx, sz + q.hz
+                        end
+                    end
+                end
+                local l = math.sqrt(sx * sx + sz * sz)
+                if #grp >= 2 and l > 0 then
+                    for _, g in ipairs(grp) do sharedHeading[g.sl] = { hx = sx / l, hz = sz / l } end
+                end
+                -- AND THE ROAD'S OWN WIDTH, FROM WHERE IT STILL HAS IT. The node before a tie node is
+                -- already on the flare - the lanes spread for their turns before the connectors
+                -- leave them - so a carry that is merely parallel preserves the flare all the way
+                -- to the box: 4.2 m apart at the clean nodes of a road that is 4.0 m wide. The width
+                -- is read well back up the branch (the middle of the readings, as for the box),
+                -- and each lane's carry runs along the centreline offset by half of it. The clean
+                -- node is eased onto that line, a few decimetres at most.
+                if #grp == 2 and l > 0 then
+                    local A, B = grp[1], grp[2]
+                    local hx, hz = sx / l, sz / l
+                    local reads2 = {}
+                    for _, p in ipairs(A.lane) do
+                        local db = (p.x - box.centre.x) ^ 2 + (p.z - box.centre.z) ^ 2
+                        if db >= 14 * 14 and db <= 40 * 40 then
+                            local best = math.huge
+                            for k = 1, #B.lane - 1 do
+                                local u, v = B.lane[k], B.lane[k + 1]
+                                local dx, dz = v.x - u.x, v.z - u.z
+                                local L = dx * dx + dz * dz
+                                local t = (L > 0) and math.max(0, math.min(1, ((p.x - u.x) * dx + (p.z - u.z) * dz) / L)) or 0
+                                local d = math.sqrt((u.x + dx * t - p.x) ^ 2 + (u.z + dz * t - p.z) ^ 2)
+                                if d < best then best = d end
+                            end
+                            if best < 12 then reads2[#reads2 + 1] = best end
+                        end
+                    end
+                    if #reads2 >= 2 then
+                        table.sort(reads2)
+                        local w = reads2[math.floor((#reads2 + 1) / 2)]
+                        local mx, mz = (A.near.x + B.near.x) / 2, (A.near.z + B.near.z) / 2
+                        local px, pz = -hz, hx
+                        for _, g in ipairs(grp) do
+                            local lat = (g.near.x - mx) * px + (g.near.z - mz) * pz
+                            local want = (lat >= 0 and 1 or -1) * w / 2
+                            local delta = want - lat
+                            if math.abs(delta) <= 0.6 then
+                                sharedHeading[g.sl].dx, sharedHeading[g.sl].dz = px * delta, pz * delta
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     -- SIDE-ROAD LANES
     for _, sl in ipairs(routes.side or {}) do
         -- TRIM AND CARRY FIRST, SMOOTH LAST. Smoothing a lane that still has the first swing of an old
@@ -12031,44 +12158,27 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
             -- its own heading, from its clean stretch: the last node 22 m or more from the box (an old
             -- kickout can begin 16-20 m out) and one at least 15 m behind it, so one node's wobble
             -- cannot set the heading
-            local near, far, ni = nil, nil, nil
-            if sl.cutNode ~= nil then
-                for i, n in ipairs(lane) do if n == sl.cutNode then ni = i break end end
-                -- The tie node was spliced in by the build and can sit a little off the lane; the
-                -- point BEFORE it is original road, so the lane ends there and is laid fresh from it.
-                if ni ~= nil and ni >= 3 then ni = ni - 1 end
-                if ni ~= nil and ni >= 2 then
-                    near = lane[ni]
-                    for j = ni - 1, 1, -1 do
-                        local m = lane[j]
-                        -- A SHORT baseline, 8 m. The tie node is already out of it (that was what
-                        -- tilted a short baseline before), and on a road that bends steadily all the
-                        -- way in, a long chord points where the road WAS: 25 m read the heading
-                        -- 10 degrees behind the road's heading at its end, and the carry drifted off.
-                        if (m.x - near.x) ^ 2 + (m.z - near.z) ^ 2 >= 8 * 8 then far = m break end
-                    end
-                    if far == nil then far = lane[1] end
-                    if far == near then near, far, ni = nil, nil, nil end
-                else
-                    ni = nil
-                end
-            end
-            for i = #lane, 1, -1 do
-                if near ~= nil then break end
-                local n = lane[i]
-                if (n.x - box.centre.x) ^ 2 + (n.z - box.centre.z) ^ 2 >= 22 * 22 then
-                    near, ni = n, i
-                    for j = i - 1, 1, -1 do
-                        local m = lane[j]
-                        if (m.x - n.x) ^ 2 + (m.z - n.z) ^ 2 >= 15 * 15 then far = m break end
-                    end
-                    break
-                end
-            end
+            local near, far, ni = cleanPair(sl, lane)
             if near ~= nil and far ~= nil then
                 local hx, hz = near.x - far.x, near.z - far.z
                 local hl = math.sqrt(hx * hx + hz * hz)
                 hx, hz = hx / hl, hz / hl
+                if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG then
+                    Logging.info("[FlyoverEditor]: CARRY lane of %d: own heading %.1f deg, shared %s, clean node #%d (%.1f, %.1f) %.1f m from box, tip %.1f m",
+                        #lane, math.deg(math.atan2(hx, hz)),
+                        sharedHeading[sl] and string.format("%.1f deg", math.deg(math.atan2(sharedHeading[sl].hx, sharedHeading[sl].hz))) or "none",
+                        ni, near.x, near.z, math.sqrt((near.x - box.centre.x) ^ 2 + (near.z - box.centre.z) ^ 2),
+                        math.sqrt((lane[#lane].x - box.centre.x) ^ 2 + (lane[#lane].z - box.centre.z) ^ 2))
+                end
+                if sharedHeading[sl] ~= nil and AutoDrive.FLYOVER_JUNCTION_SHARED_HEADING ~= false then
+                    hx, hz = sharedHeading[sl].hx, sharedHeading[sl].hz
+                    local sh = sharedHeading[sl]
+                    if sh.dx ~= nil and live(near) then
+                        tryCall("junction ease clean node", function()
+                            ADGraphManager:moveWayPoint(near.id, near.x + sh.dx, near.y, near.z + sh.dz, near.flags, false)
+                        end)
+                    end
+                end
                 -- A CHORD POINTS WHERE THE ROAD WAS HALFWAY ALONG IT, NOT WHERE IT IS POINTING AT THE
                 -- END. On a side road that curves into its junction that is a large error - eleven
                 -- metres of chord came in 19 degrees off the road's real heading at the tie node, and
@@ -12117,32 +12227,46 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 -- an arc of that curvature, leaving the clean node on the arc's own tangent. A road
                 -- that is straight reads as (nearly) zero and is carried straight, as before.
                 local kCurve = 0
-                if false then
-                    local third = nil
-                    for j = 1, #lane do
-                        local m = lane[j]
-                        if m == far then break end
-                    end
-                    for j = #lane, 1, -1 do
-                        local m = lane[j]
-                        if third == nil and m ~= far and m ~= near
-                            and (m.x - far.x) ^ 2 + (m.z - far.z) ^ 2 >= 15 * 15
-                            and (m.x - near.x) ^ 2 + (m.z - near.z) ^ 2 > (far.x - near.x) ^ 2 + (far.z - near.z) ^ 2 then
-                            third = m
+                -- THE ROAD'S OWN BEND, BUT ONLY WHERE THE CARRY IS LONG ENOUGH TO NEED IT. A short
+                -- carry is straight to within a few centimetres whatever the road does, and bending
+                -- it on a curvature read from three points made every short one worse. A long one -
+                -- 20 m at a skew T, whose tie nodes sit far back - leaves a bending road altogether
+                -- if it is laid straight. There the bend is read from the WHOLE clean stretch: the
+                -- heading change between its first and last segments over the length between them,
+                -- which one wobbling node cannot swing the way it swings a three-point circle.
+                do
+                    local carryLen = math.sqrt((near.x - box.centre.x) ^ 2 + (near.z - box.centre.z) ^ 2)
+                    local MODE = AutoDrive.FLYOVER_JUNCTION_CARRY_CURVE
+                    if MODE ~= false and carryLen >= (AutoDrive.FLYOVER_JUNCTION_CARRY_CURVE_MIN or 15) then
+                        -- segments of the clean stretch, walking back from the clean node up to 45 m
+                        local segs, acc = {}, 0
+                        for j = ni, 2, -1 do
+                            local p, q = lane[j - 1], lane[j]
+                            local L = math.sqrt((q.x - p.x) ^ 2 + (q.z - p.z) ^ 2)
+                            if L > 0.5 then
+                                segs[#segs + 1] = { ang = math.atan2(q.x - p.x, q.z - p.z), mid = acc + L / 2, len = L }
+                            end
+                            acc = acc + L
+                            if acc >= 45 then break end
                         end
-                    end
-                    if third ~= nil then
-                        local ax, az = far.x - third.x, far.z - third.z
-                        local bx, bz = near.x - far.x, near.z - far.z
-                        local cx2, cz2 = near.x - third.x, near.z - third.z
-                        local la, lb, lc = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz), math.sqrt(cx2 * cx2 + cz2 * cz2)
-                        if la > 1 and lb > 1 and lc > 1 then
-                            kCurve = 2 * (ax * bz - az * bx) / (la * lb * lc)
-                            kCurve = math.max(-1 / 30, math.min(1 / 30, kCurve))
-                            -- the tangent AT the clean node: the chord's direction turned on by half the arc
-                            local half = kCurve * lb * 0.5
-                            local cs, sn = math.cos(half), math.sin(half)
-                            hx, hz = hx * cs - hz * sn, hx * sn + hz * cs
+                        if #segs >= 3 then
+                            local first, last = segs[#segs], segs[1]   -- farthest back, nearest the node
+                            local d = last.ang - first.ang
+                            while d > math.pi do d = d - 2 * math.pi end
+                            while d < -math.pi do d = d + 2 * math.pi end
+                            local span = first.mid - last.mid
+                            if span > 8 then
+                                kCurve = math.max(-1 / 40, math.min(1 / 40, d / span))
+                                -- leave the clean node on the arc's own tangent: the last segment's
+                                -- heading, turned on by the half segment between its middle and the node
+                                local t = last.ang + kCurve * last.len * 0.5
+                                if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG then
+                                    Logging.info("[FlyoverEditor]: CURVE carry %.0f m: turn %.1f deg over %.0f m -> radius %.0f m; heading %.1f -> %.1f deg",
+                                        carryLen, math.deg(d), span, kCurve ~= 0 and math.abs(1 / kCurve) or 0,
+                                        math.deg(math.atan2(hx, hz)), math.deg(t))
+                                end
+                                hx, hz = math.sin(t), math.cos(t)
+                            end
                         end
                     end
                 end
@@ -12203,6 +12327,23 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     end
                     if kBest ~= nil and kBest < #lane then
                         for i = #lane, kBest + 1, -1 do lane[i] = nil end
+                    end
+                end
+                -- PAST A TIE NODE THE LANE IS STILL THE LANE. A tie node is a fork ON the lane: the
+                -- connector peels off there and the lane itself runs on to the junction. Those
+                -- onward points are the only record of what the road does over its last stretch,
+                -- and at a skew T - tie nodes 22 m out - throwing them away replaced 20 m of road
+                -- with a straight guess that sat a metre off it. They are kept, and the carry runs
+                -- from the lane's own end. (With NO tie node there is no telling lane from
+                -- connector, and the old rule stands.)
+                if AutoDrive.FLYOVER_JUNCTION_KEEP_PAST_TIE ~= false and sl.cutNode ~= nil and #lane > ni + 1 then
+                    lastOn = #lane
+                    near = lane[#lane]
+                    arc = { { x = near.x, z = near.z } }
+                    local px2, pz2 = near.x, near.z
+                    for _ = 1, 320 do
+                        px2, pz2 = px2 + hx * 0.25, pz2 + hz * 0.25
+                        arc[#arc + 1] = { x = px2, z = pz2 }
                     end
                 end
                 if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG and #lane - ni > 4 then
