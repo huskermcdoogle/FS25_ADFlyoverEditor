@@ -9145,6 +9145,12 @@ function ADFlyoverEditor:updateJunctionPreview()
                         end
                         mine = isOwnForClear(nb)
                     end
+                    if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG and f ~= nil then
+                        local tot = 0
+                        for i = 2, f - 1 do tot = tot + turnAt(i) end
+                        Logging.info("[FlyoverEditor]: CUTAT lane of %d: own fork #%d at (%.1f, %.1f), turn before it %.1f deg (relative to the road's curve) -> cut at #%s",
+                            #nodes, f, nodes[f].x, nodes[f].z, math.deg(tot), tostring(cutAt))
+                    end
                     if #nodes >= 2 and mine then
                         side[#side + 1] = { nodes = nodes, useOut = (ap.dir == "in"), cutNode = cutAt and nodes[cutAt] or nil }
                     end
@@ -12774,6 +12780,40 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     if gs ~= nil and gs.refLine ~= nil and sh.station > (sh.nearest or 0) + 5
                         and AutoDrive.FLYOVER_JUNCTION_SHARED_HEADING ~= false then
                         local ref = gs.refLine
+                        -- WHERE THIS LANE'S SWEEP BEGINS IS WHERE IT STOPS RUNNING PARALLEL TO ITS
+                        -- PARTNER. Reading it off the lane's own turning fails on a road whose
+                        -- curve changes - it put the start 30 m out, and a second attempt 48 m.
+                        -- Two lanes of one road keep their distance whatever the road does, so the
+                        -- lane is clean for as long as its distance to the partner's line holds,
+                        -- and the clean node is the last point where it still does.
+                        local function toRef(px, pz)
+                            local best = math.huge
+                            for i = 1, #ref - 1 do
+                                local u, v = ref[i], ref[i + 1]
+                                local dx, dz = v.x - u.x, v.z - u.z
+                                local L = dx * dx + dz * dz
+                                local t = (L > 0) and math.max(0, math.min(1, ((px - u.x) * dx + (pz - u.z) * dz) / L)) or 0
+                                local d = math.sqrt((u.x + dx * t - px) ^ 2 + (u.z + dz * t - pz) ^ 2)
+                                if d < best then best = d end
+                            end
+                            return best
+                        end
+                        local ws = {}
+                        for i = 1, ni do ws[#ws + 1] = toRef(lane[i].x, lane[i].z) end
+                        if #ws >= 2 then
+                            local sorted = {}
+                            for _, v in ipairs(ws) do sorted[#sorted + 1] = v end
+                            table.sort(sorted)
+                            local w0 = sorted[math.floor((#sorted + 1) / 2)]
+                            local lastPar = ni
+                            for i = ni + 1, #lane do
+                                if math.abs(toRef(lane[i].x, lane[i].z) - w0) <= 0.4 then lastPar = i else break end
+                            end
+                            if lastPar > ni then
+                                ni, near = lastPar, lane[lastPar]
+                                arc = { { x = near.x, z = near.z } }
+                            end
+                        end
                         -- which side of the partner this lane lies on, and how far, read where this
                         -- lane is still clean
                         local bi, bd = 1, math.huge
