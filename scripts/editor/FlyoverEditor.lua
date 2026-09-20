@@ -12629,6 +12629,27 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
         end
         local flags = (interior[1] or A).flags or AutoDrive.FLAG_NONE
 
+        -- WHOLE RUN OR NONE OF IT - CHECKED BEFORE A SINGLE POINT MOVES.
+        --
+        -- A rebuild moves the points it keeps and removes the ones it does not need. Removing is not
+        -- its decision to make: jxRemove refuses anything outside this junction's own arms, and the
+        -- surplus at the far end of a long run sits exactly where that bound runs out.
+        --
+        -- This check existed already, but it sat INSIDE the surplus branch, after the moves. So it
+        -- did its job - refused the deletions, refused the bridge - on a run whose points had
+        -- already been moved, which is the one outcome it was written to prevent. A point slid down
+        -- to 0.42 m from the neighbour it was meant to replace, and that neighbour then stayed: two
+        -- points on top of each other 48 m from the junction, which is what "lots of short dense
+        -- points" looked like on screen.
+        --
+        -- Nothing is touched until the whole run is known to be ours. A run half-rebuilt is worse
+        -- than a run left at its old spacing.
+        if #interior > want then
+            for j = want + 1, #interior do
+                if live(interior[j]) and not jxMayDelete(interior[j].x, interior[j].z) then return end
+            end
+        end
+
         -- Move what can be moved, so ids survive wherever they can.
         local keepN = math.min(#interior, want)
         for j = 1, keepN do
@@ -12640,21 +12661,6 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
         if #interior > want then
             -- Surplus: bridge over it first, then take it out. Objects, not ids - every removal
             -- renumbers the ids above it.
-            -- THE BRIDGE IS ONLY LAID IF THE SURPLUS ACTUALLY GOES. Removing a point is not the
-            -- rebuild's decision to make: jxRemove refuses anything outside this junction's arms,
-            -- and the surplus at the far end of a run sits exactly where that bound runs out. The
-            -- bridge used to be laid first and unconditionally, so when the refusal came the link
-            -- stayed and the chain it was meant to replace stayed with it - a second line running
-            -- beside the road, laid whichever way round the run as a whole happened to be travelled.
-            -- On a bend that is a connector across the corner pointing against the traffic, which is
-            -- what it looked like on screen.
-            --
-            -- So the run is checked BEFORE anything is touched, and if any of the surplus is not
-            -- ours to take, the whole run is left exactly as it is. A run half-rebuilt is worse than
-            -- a run with its old spacing.
-            for j = want + 1, #interior do
-                if live(interior[j]) and not jxMayDelete(interior[j].x, interior[j].z) then return end
-            end
             link(last, B)
             for j = #interior, want + 1, -1 do
                 local w = interior[j]
