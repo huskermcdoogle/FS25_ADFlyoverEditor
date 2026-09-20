@@ -8274,6 +8274,15 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- decides how far out the junction's OWN wiring is followed. Held back to the wheel's old value
     -- it left tails behind that then read as loose points once the box was emptied.
     local clearReach = math.max(12, selectR)
+    -- WHERE THE JUNCTION WAS FOUND FROM ITS ROADS, OWNERSHIP IS THE WHOLE TEST. This radius was the
+    -- last distance gate on a junction's OWN wiring: a kickout that leaves the through lane 14 m
+    -- back belonged to the junction, lay within reach, and was refused for starting 2 m outside a
+    -- 12 m circle - with a message telling the user to turn a wheel that clear mode ignores. Whose
+    -- wiring it is now comes from where the roads meet, and what may be deleted is bounded arm by
+    -- arm at the gate, so the circle has nothing left to decide.
+    if clearMode and self.junctionSite ~= nil and self.junctionSite.fromRoads then
+        clearReach = math.max(clearReach, runReach)
+    end
     local coreR = math.max(8, selectR * 0.6)
     local function crossingOf(wp)
         local best, bestC = math.huge, nil
@@ -9089,6 +9098,29 @@ function ADFlyoverEditor:updateJunctionPreview()
                             end
                         end
                     end
+                    -- A FORK ON THE FAR SIDE OF THE JUNCTION IS NOT THIS LANE'S TIE NODE. A lane that
+                    -- sweeps straight into the through road has no tie fork of its own: the first fork
+                    -- on its list is where it MERGES, beyond the middle of the junction. Taking that
+                    -- for the tie node and then hunting back up the road for where "the swing" began
+                    -- cut the lane 16 to 30 m out and re-laid it - while the very same lane, met
+                    -- after the junction next door had already cut it off at the box, was simply
+                    -- run to the junction and ended there, which is right, and is what the user
+                    -- picked out as the one correct result of six. So that is the rule for all six:
+                    -- with no tie fork BEFORE the junction, the lane runs to the junction and ends.
+                    if f ~= nil then
+                        local k, kd = 1, math.huge
+                        for i = 1, #nodes do
+                            local d = (nodes[i].x - cx) ^ 2 + (nodes[i].z - cz) ^ 2
+                            if d < kd then kd, k = d, i end
+                        end
+                        if f > k then
+                            cutAt = k
+                            for i = 2, k do
+                                if (nodes[i].x - cx) ^ 2 + (nodes[i].z - cz) ^ 2 <= 4.5 * 4.5 then cutAt = i break end
+                            end
+                            f = nil
+                        end
+                    end
                     if f ~= nil then
                         -- TURNING IS MEASURED AGAINST THE ROAD'S OWN STEADY CURVE, NOT AGAINST ZERO. A
                         -- side road that bends all the way in turns a little at every node; counted
@@ -9144,6 +9176,15 @@ function ADFlyoverEditor:updateJunctionPreview()
                             if d < nd then nd, nb = d, n end
                         end
                         mine = isOwnForClear(nb)
+                    end
+                    if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG and clearMode then
+                        for i = 2, #nodes do
+                            if deg3(nodes[i]) then
+                                Logging.info("[FlyoverEditor]: FORKONLANE lane of %d: #%d (%.1f, %.1f) %.0f m from centre, own=%s leadsIn=%s",
+                                    #nodes, i, nodes[i].x, nodes[i].z, math.sqrt((nodes[i].x - cx) ^ 2 + (nodes[i].z - cz) ^ 2),
+                                    tostring(isOwnForClear(nodes[i])), tostring(leadsIn(nodes[i])))
+                            end
+                        end
                     end
                     if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG and f ~= nil then
                         local tot = 0
@@ -12559,7 +12600,21 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 end
                 local l = math.sqrt(sx * sx + sz * sz)
                 if #grp >= 2 and l > 0 then
-                    for _, g in ipairs(grp) do sharedHeading[g.sl] = { hx = sx / l, hz = sz / l } end
+                    -- THE HEADING OF THE LANE CUT NEAREST THE JUNCTION, NOT THE MEAN. Headings read at
+                    -- different stations on a bend are not the same quantity: one lane read 106
+                    -- degrees 11 m out, its partner 98 degrees 30 m back where the road still
+                    -- pointed that way, and their mean - 102 - was wrong for both. Both lanes were
+                    -- carried 4 degrees off and arrived 1.2 m to one side of their box. The mean
+                    -- is kept only where the lanes were read at about the same place.
+                    local gx, gz = sx / l, sz / l
+                    local nearG, nearD, farD = nil, math.huge, 0
+                    for _, g in ipairs(grp) do
+                        local d = math.sqrt((g.near.x - box.centre.x) ^ 2 + (g.near.z - box.centre.z) ^ 2)
+                        if d < nearD then nearD, nearG = d, g end
+                        if d > farD then farD = d end
+                    end
+                    if nearG ~= nil and farD - nearD > 5 then gx, gz = nearG.hx, nearG.hz end
+                    for _, g in ipairs(grp) do sharedHeading[g.sl] = { hx = gx, hz = gz } end
                     -- THE LANES OF ONE ROAD ARE CUT AT THE SAME PLACE. Each lane finds its own clean
                     -- node, and on a bend they disagree wildly: one lane of a side road had a plain
                     -- tie node 11 m out while the search for where its partner's swing began ran back
@@ -12700,7 +12755,13 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     -- 1.75 m, and changed nothing whatever at the junction next door. The turn is
                     -- still worked out above because it is what says whether there is anything to
                     -- correct; acting on it here is what was wrong.
-                    turn = 0
+                    -- ...AND NOW IT IS APPLIED AGAIN. What over-rotated was each lane correcting its
+                    -- OWN heading, so the pair splayed. Both lanes now take the heading of the lane
+                    -- cut nearest the junction, and on a road that keeps bending in, that chord
+                    -- lags the road by a few degrees over the last 11 m - both lanes arrived 1.2 m
+                    -- to one side of their box. Corrected, they arrive within 0.3 m; at junctions
+                    -- that were already right it costs 0.15 m at most.
+                    if AutoDrive.FLYOVER_JUNCTION_CARRY_TANGENT == false then turn = 0 end
                     local half = turn * 0.5
                     local cs, sn = math.cos(half), math.sin(half)
                     hx, hz = hx * cs - hz * sn, hx * sn + hz * cs
@@ -12807,7 +12868,12 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                             local w0 = sorted[math.floor((#sorted + 1) / 2)]
                             local lastPar = ni
                             for i = ni + 1, #lane do
-                                if math.abs(toRef(lane[i].x, lane[i].z) - w0) <= 0.4 then lastPar = i else break end
+                                local dv = toRef(lane[i].x, lane[i].z) - w0
+                                if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG then
+                                    Logging.info("[FlyoverEditor]: PARALLEL #%d (%.1f, %.1f): %.2f m from partner, road width %.2f -> off by %+.2f",
+                                        i, lane[i].x, lane[i].z, dv + w0, w0, dv)
+                                end
+                                if math.abs(dv) <= 0.4 then lastPar = i else break end
                             end
                             if lastPar > ni then
                                 ni, near = lastPar, lane[lastPar]
