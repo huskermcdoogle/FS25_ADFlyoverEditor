@@ -6519,10 +6519,13 @@ end
 -- was ever this junction's to take - with a cap for an arm that runs on across the map, and a core
 -- around the middle that is always allowed so the box itself is never gated.
 local jxBound, jxBlocked, jxTook, jxFarthest = nil, 0, 0, 0
+local jxWired = 0
+local jxForeignForks   -- defined below, used by jxBegin
 
 --- Begin a clear: nothing may be deleted outside `site` until jxEnd.
 local function jxBegin(site)
-    jxBound, jxBlocked, jxTook, jxFarthest = site, 0, 0, 0
+    jxBound, jxBlocked, jxTook, jxFarthest, jxWired = site, 0, 0, 0, 0
+    jxForeignForks(site)
 end
 
 --- End a clear, and say how much was held back. Anything blocked is worth knowing about: it is
@@ -6571,6 +6574,10 @@ local function jxMayDelete(x, z)
     return d <= lim
 end
 
+--- Does this point belong to the junction being worked on? The same question the deletions ask,
+--- asked by anything else that must not wander into the junction next door.
+local function jxInSite(x, z) return jxMayDelete(x, z) end
+
 --- The one way a clear removes a waypoint. Takes an id or the node itself; the node is safer, since
 --- every removal renumbers the ids above it.
 local function jxRemove(which, why)
@@ -6592,7 +6599,52 @@ local function jxRemove(which, why)
     end) == true
 end
 
+--- NO CLEAR MAY WIRE UP A JUNCTION THAT IS NOT THE ONE IT WAS ASKED TO WORK ON. Several stages make
+--- links - a chain being tied back to the road, two doubled points being folded together, a lane end
+--- run out to the box, the respacing bridging over what it removes - and NONE of them can tell a
+--- deliberate cut from damage. At a junction already cleared, every severed branch looks like
+--- something to join up, so clearing one of a close pair put the other one back together. Fixing
+--- those stages one at a time fixed nothing: there was always another one.
+---
+--- So link-making is gated in one place, exactly as deleting is. During a clear, no link may be made
+--- at a point belonging to ANOTHER junction - that junction's wiring is not this one's business.
+local jxForeign = nil
+local function jxMayLink(a, b)
+    if jxBound == nil or jxForeign == nil then return true end
+    for _, f in ipairs(jxForeign) do
+        if (f.x - a.x) ^ 2 + (f.z - a.z) ^ 2 <= 64
+            or (f.x - b.x) ^ 2 + (f.z - b.z) ^ 2 <= 64 then
+            jxWired = (jxWired or 0) + 1
+            return false
+        end
+    end
+    return true
+end
+
+--- The fork points near this site that are NOT its own: the junctions next door. Worked out once per
+--- clear, from the site's own fork list, so it does not depend on how the survey happens to group
+--- them - it numbers a close pair as one, which is exactly the case this has to tell apart.
+function jxForeignForks(site)
+    jxForeign = {}
+    if site == nil or site.forks == nil then return end
+    local mine = {}
+    for _, f in ipairs(site.forks) do mine[f] = true end
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and not mine[w] and (w.x - site.x) ^ 2 + (w.z - site.z) ^ 2 <= 80 * 80 then
+            local nb, deg = {}, 0
+            for _, t in ipairs(w.out or {}) do nb[t] = true end
+            for _, fid in ipairs(w.incoming or {}) do nb[fid] = true end
+            for _ in pairs(nb) do deg = deg + 1 end
+            -- far enough from this junction's middle that it cannot be one of its own tie points
+            if deg >= 3 and (w.x - site.x) ^ 2 + (w.z - site.z) ^ 2 > 13 * 13 then
+                jxForeign[#jxForeign + 1] = { x = w.x, z = w.z }
+            end
+        end
+    end
+end
+
 local function junctionConnect(a, b, dual)
+    if a ~= nil and b ~= nil and not jxMayLink(a, b) then return end
     if a == nil or b == nil or a.id == b.id then return end
     if not table.contains(a.out, b.id) then table.insert(a.out, b.id) end
     if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) end
@@ -12154,9 +12206,15 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
         end
     end
 
+    -- ONLY THIS JUNCTION. A radius takes in whatever happens to be within it, and a junction that
+    -- has ALREADY been cleared looks, from here, exactly like damage: its branches were cut from the
+    -- road on purpose and now lead nowhere. Cleaning one of a close pair over a flat radius tied the
+    -- other one's branches straight back to the road - clear the right hand junction, then the left,
+    -- and the right one is joined up again. So the same bound the deletions use applies here: what
+    -- belongs to the junction in hand, and nothing beyond its arms.
     local site = {}
     for _, w in pairs(ADGraphManager:getWayPoints()) do
-        if near(w) then site[#site + 1] = w end
+        if near(w) and jxInSite(w.x, w.z) then site[#site + 1] = w end
     end
 
     -- DOUBLES. Everything wired to the spare is re-wired to the keeper first, so folding the two
@@ -12247,17 +12305,19 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
                             end
                         end
                     end
-                    if best ~= nil then
+                    -- NOTHING IS TIED BACK. A chain leading nowhere is not reliably damage: at a
+                    -- junction that has already been cleared it is the work - the branches were cut
+                    -- from the road on purpose - and there is no way to tell the two apart from the
+                    -- shape of the graph, because a cleared junction has no forks left to recognise
+                    -- it by. Joining them up put a cleared neighbour back together every time one of
+                    -- a close pair was done after the other, six different ways as each route into
+                    -- it was closed off. Reported and left alone.
+                    if false then
                         rep.repaired = rep.repaired + 1
-                        note("a chain of %d led nowhere at (%.1f, %.1f) - tied back to the road %.1f m away",
-                            #chain, w.x, w.z, math.sqrt(bestD))
-                        if not dry then
-                            if headless then
-                                junctionConnect(best, w, false)
-                            else
-                                junctionConnect(w, best, false)
-                            end
-                        end
+                    elseif best ~= nil then
+                        rep.unjoined = (rep.unjoined or 0) + 1
+                        note("a chain of %d leads nowhere at (%.1f, %.1f) - left as it is; it may have been cut on purpose",
+                            #chain, w.x, w.z)
                     else
                         -- NOTHING IS REMOVED HERE. A one-way dead-end lane is indistinguishable from
                         -- a dangling tail by shape alone: both are wired at one end, both walk back
@@ -12443,7 +12503,7 @@ function ADFlyoverEditor:applyJunctionClear()
     do
         local site = self.junctionSite
         local c0 = site or jp._boxCentre or jp.tracksCentre
-        if c0 ~= nil then
+        if c0 ~= nil and AutoDrive.FLYOVER_JUNCTION_CLEAN_FIRST ~= false then
             local notes, touched = {}, 0
             local tot = { doubles = 0, repaired = 0, removed = 0, reversals = 0, unjoined = 0 }
             -- Repeated until the site settles: taking a chain out can leave the next point along
