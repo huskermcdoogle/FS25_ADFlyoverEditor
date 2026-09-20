@@ -6506,6 +6506,86 @@ end
 -- bug that minted two-way ("blue") links on one-way roads. These two are idempotent and explicit:
 -- calling them twice is the same as calling them once, and the resulting state is exactly what the
 -- arguments say, regardless of what was there before.
+-- WHERE THE JUNCTION ENDS, IN ONE PLACE. Every deletion a clear makes goes through jxRemove, and
+-- jxRemove is the only thing that decides whether a point belongs to the junction being worked on.
+--
+-- Before this there were fourteen places that removed a waypoint, at three different stages, each
+-- with its own idea of how far the junction reached - which is why the reach came out at 12, 45, 50
+-- or 75 m depending which one was asked, and why a clear at one site took thirty points out to 73 m.
+--
+-- The bound is not a radius. A junction is not round: its arms reach different distances, and a
+-- circle big enough for the longest one swallows the neighbours of the shortest. So each ARM is
+-- allowed out to its own first fork - that is where the next junction starts, and nothing past it
+-- was ever this junction's to take - with a cap for an arm that runs on across the map, and a core
+-- around the middle that is always allowed so the box itself is never gated.
+local jxBound, jxBlocked, jxTook, jxFarthest = nil, 0, 0, 0
+
+--- Begin a clear: nothing may be deleted outside `site` until jxEnd.
+local function jxBegin(site)
+    jxBound, jxBlocked, jxTook, jxFarthest = site, 0, 0, 0
+end
+
+--- End a clear, and say how much was held back. Anything blocked is worth knowing about: it is
+--- either the bound doing its job, or the bound being wrong, and both want looking at.
+--- Returns what was held back, what was actually taken, and how far out the farthest one was.
+--- COUNTED HERE BECAUSE NOWHERE ELSE CAN COUNT IT. Comparing the graph before and against after
+--- cannot: asking whether an id still points at the same node counts survivors as deleted, because
+--- every removal renumbers the ids above it; and asking whether anything still stands in a node's
+--- old place counts points the respacing MOVED. Both were tried, and both put the reach of a clear
+--- at 75 m where the truth is a couple of dozen points inside the junction. This is the one place a
+--- deletion happens, so it is the one place the number is real.
+local function jxEnd()
+    local held, took, far = jxBlocked, jxTook, jxFarthest
+    jxBound, jxBlocked, jxTook, jxFarthest = nil, 0, 0, 0
+    return held, took, far
+end
+
+local function jxMayDelete(x, z)
+    local site = jxBound
+    -- No site means this is not a bounded clear (build mode, the console, a tool that never had a
+    -- site). Unbounded, exactly as before - this gate only ever tightens a clear.
+    if site == nil or site.roads == nil or #site.roads == 0 then return true end
+    local dx, dz = x - site.x, z - site.z
+    local d2 = dx * dx + dz * dz
+    local core = AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE or 12
+    if d2 <= core * core then return true end
+    local d = math.sqrt(d2)
+    -- The arm this point lies along, and how far that arm runs before the next junction.
+    local b = math.deg(math.atan2(dx, dz)) % 360
+    local best, bestSep = nil, math.huge
+    for _, r in ipairs(site.roads) do
+        local rb = math.deg(r.bearing) % 360
+        local s = math.abs(b - rb) % 360
+        if s > 180 then s = 360 - s end
+        if s < bestSep then bestSep, best = s, r end
+    end
+    -- Nowhere near any arm of this junction: not ours.
+    if best == nil or bestSep > 60 then return false end
+    -- A little past the fork, because a road has width and its far lane sits off the arm's bearing.
+    return d <= (best.len or 0) + 4
+end
+
+--- The one way a clear removes a waypoint. Takes an id or the node itself; the node is safer, since
+--- every removal renumbers the ids above it.
+local function jxRemove(which, why)
+    local w = which
+    if type(w) ~= "table" then w = ADGraphManager:getWayPointById(which) end
+    if w == nil or w.id == nil then return false end
+    if not jxMayDelete(w.x, w.z) then
+        jxBlocked = jxBlocked + 1
+        return false
+    end
+    local site = jxBound
+    if site ~= nil then
+        local d = math.sqrt((w.x - site.x) ^ 2 + (w.z - site.z) ^ 2)
+        if d > jxFarthest then jxFarthest = d end
+    end
+    jxTook = jxTook + 1
+    return tryCall(why or "junction remove", function()
+        ADGraphManager:removeWayPoint(w.id, false)
+    end) == true
+end
+
 local function junctionConnect(a, b, dual)
     if a == nil or b == nil or a.id == b.id then return end
     if not table.contains(a.out, b.id) then table.insert(a.out, b.id) end
@@ -6687,7 +6767,10 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                     end
                     arms[#arms + 1] = {
                         bearing = math.atan2(w.x - best.x, w.z - best.z),
-                        len = len, node = w,
+                        -- Clamped, because the walk adds a whole segment before it re-tests the cap:
+                        -- a 10 m hop at the end of a 39 m arm had the arm reported as 49 m, and the
+                        -- bound is only ever as tight as the arm it is told about.
+                        len = math.min(len, WALK), node = w,
                     }
                 end
             end
@@ -10249,7 +10332,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                 -- Highest id first: every removal renumbers the ids above it.
                 table.sort(ids, function(a, b) return a > b end)
                 for _, id in ipairs(ids) do
-                    tryCall("junction box sweep", function() ADGraphManager:removeWayPoint(id, false) end)
+                    jxRemove(id, "junction box sweep")
                 end
             end
             for _, w in ipairs(walked) do
@@ -10700,9 +10783,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                                         skip[doomed.id] = true
                                         seq[#seq] = nil
                                     else
-                                        if not tryCall("junction tidy trim", function()
-                                            ADGraphManager:removeWayPoint(doomed.id, false)
-                                        end) then break end
+                                        if not jxRemove(doomed, "junction tidy trim") then break end
                                         seq[#seq] = nil
                                         trimmed = trimmed + 1
                                     end
@@ -10814,9 +10895,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                     skip[doomed.id] = true
                     seq[#seq] = nil
                 else
-                    if not tryCall("junction tidy cut", function()
-                        ADGraphManager:removeWayPoint(doomed.id, false)
-                    end) then break end
+                    if not jxRemove(doomed, "junction tidy cut") then break end
                     seq[#seq] = nil
                     trimmed = trimmed + 1
                 end
@@ -10879,9 +10958,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                     budget = budget - step
                     local doomed = seq[#seq]
                     if not alive(doomed) then break end
-                    if not tryCall("junction tidy trim", function()
-                        ADGraphManager:removeWayPoint(doomed.id, false)
-                    end) then break end
+                    if not jxRemove(doomed, "junction tidy trim") then break end
                     seq[#seq] = nil
                     trimmed, touched = trimmed + 1, true
                 end
@@ -11101,9 +11178,7 @@ function ADFlyoverEditor:junctionClearStubs(jp)
     table.sort(ids, function(a, b) return a > b end)
     local gone = 0
     for _, id in ipairs(ids) do
-        if tryCall("junction clear stub", function()
-            ADGraphManager:removeWayPoint(id, false)
-        end) then gone = gone + 1 end
+        if jxRemove(id, "junction clear stub") then gone = gone + 1 end
     end
     return gone
 end
@@ -11248,8 +11323,7 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
             link(last, B)
             for j = #interior, want + 1, -1 do
                 local w = interior[j]
-                if live(w) then
-                    ADGraphManager:removeWayPoint(w.id, false)
+                if live(w) and jxRemove(w, "junction respace surplus") then
                     removed = removed + 1
                 end
             end
@@ -11731,7 +11805,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 for i = #lane, lastOn + 1, -1 do
                     local n = lane[i]
                     if live(n) then
-                        tryCall("junction side trim", function() ADGraphManager:removeWayPoint(n.id, false) end)
+                        jxRemove(n.id, "junction side trim")
                         removed = removed + 1
                     end
                     lane[i] = nil
@@ -11775,7 +11849,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     end
     table.sort(doomed, function(a, b) return a > b end)
     for _, id in ipairs(doomed) do
-        tryCall("junction box sweep", function() ADGraphManager:removeWayPoint(id, false) end)
+        jxRemove(id, "junction box sweep")
         removed = removed + 1
     end
 
@@ -11822,7 +11896,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         for c in pairs(spur) do if live(c) then ids[#ids + 1] = c.id end end
         table.sort(ids, function(a, b) return a > b end)
         for _, id in ipairs(ids) do
-            tryCall("junction spur", function() ADGraphManager:removeWayPoint(id, false) end)
+            jxRemove(id, "junction spur")
             removed = removed + 1
         end
     end
@@ -11897,7 +11971,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         end
         table.sort(loose, function(a, b) return a > b end)
         for _, id in ipairs(loose) do
-            tryCall("junction loose end", function() ADGraphManager:removeWayPoint(id, false) end)
+            jxRemove(id, "junction loose end")
             removed = removed + 1
         end
     end
@@ -12096,9 +12170,7 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
         table.sort(doomed, function(a, b) return (a.id or 0) > (b.id or 0) end)
         for _, n in ipairs(doomed) do
             if n.id ~= nil then
-                tryCall("integrity sweep remove", function()
-                    ADGraphManager:removeWayPoint(n.id, false)
-                end)
+                jxRemove(n, "integrity sweep remove")
             end
         end
     end
@@ -12228,6 +12300,8 @@ end
 function ADFlyoverEditor:applyJunctionClear()
     local jp = self.junctionPreview
     if jp == nil then return end
+    -- From here until jxEnd, nothing is deleted outside the junction that was selected. See jxRemove.
+    jxBegin(self.junctionSite)
 
     -- STEP 2: CLEAN THE SITE BEFORE ANYTHING MEASURES IT. This used to run last of all, which meant
     -- the box, the road widths and the answer to which lanes are parent road were all worked out on
@@ -12397,7 +12471,7 @@ function ADFlyoverEditor:applyJunctionClear()
     table.sort(ids, function(a, b) return a > b end)
     local cleared = 0
     for _, id in ipairs(ids) do
-        if tryCall("junction clear", function() ADGraphManager:removeWayPoint(id, false) end) then
+        if jxRemove(id, "junction clear") then
             cleared = cleared + 1
         end
     end
@@ -12488,7 +12562,7 @@ function ADFlyoverEditor:applyJunctionClear()
         end
         table.sort(stranded, function(a, b) return a > b end)
         for _, id in ipairs(stranded) do
-            tryCall("junction stranded point", function() ADGraphManager:removeWayPoint(id, false) end)
+            jxRemove(id, "junction stranded point")
         end
         if #stranded > 0 then
             Logging.info("[FlyoverEditor]: junction - removed %d point(s) left joined to nothing.", #stranded)
@@ -12511,6 +12585,9 @@ function ADFlyoverEditor:applyJunctionClear()
         Logging.info("[FlyoverEditor]: junction cleared %d point(s) and %d stale link(s). Roads it joined are untouched.",
             cleared, staleCut)
     end
+    local held, took, farOut = jxEnd()
+    Logging.info("[FlyoverEditor]: junction - took %d point(s) in all, the farthest %.0f m out; %d left alone as belonging to a neighbouring junction rather than this one.",
+        took, farOut, held)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
@@ -12684,7 +12761,7 @@ function ADFlyoverEditor:applyJunction()
         if s ~= nil and not stubSeen[s] and s.id ~= nil and s.id >= 0
             and #(s.out or {}) + #(s.incoming or {}) <= 2 then
             stubSeen[s] = true
-            tryCall("junction removeWayPoint", function() ADGraphManager:removeWayPoint(s.id, false) end)
+            jxRemove(s.id, "junction removeWayPoint")
         end
     end
 
@@ -12713,7 +12790,7 @@ function ADFlyoverEditor:applyJunction()
         for _, s in ipairs(jp.debris) do
             if s ~= nil and not stubSeen[s] and s.id ~= nil and s.id >= 0 then
                 stubSeen[s] = true
-                if tryCall("junction clear debris", function() ADGraphManager:removeWayPoint(s.id, false) end) then
+                if jxRemove(s.id, "junction clear debris") then
                     debrisCleared = debrisCleared + 1
                 end
             end
