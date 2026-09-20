@@ -95,23 +95,31 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
     return points, fieldLabel, nil
 end
 
--- Synchronous tree-overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
--- (Sensors/CollSensor.lua) but filtered to CollisionFlag.TREE only.
+-- Synchronous overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
+-- (Sensors/CollSensor.lua). Named for trees because that is the common case, but the mask below
+-- also catches everything the junction tool's own obstacle check does (junctionObstacleMask) -
+-- telephone poles, fences, signs and small buildings are CollisionFlag.STATIC_OBJECT, not TREE,
+-- and TREE-only silently drove the loop straight through a pole line. Widened rather than renamed:
+-- every caller already reads "tree" as "the thing along the boundary I have to detour around".
+AutoDrive.FIELD_LOOP_OBSTACLE_MASK = (CollisionFlag.DEFAULT or 0) + CollisionFlag.TREE
+    + CollisionFlag.STATIC_OBJECT + (CollisionFlag.DYNAMIC_OBJECT or 0) + CollisionFlag.BUILDING
+
 function AutoDrive:fieldLoopTreeOverlapCallback(transformId)
     self.fieldLoopTreeHit = true
 end
 
--- Box spans from ground level up to the vehicle height, so canopy/branches that flare out wider
--- higher up are caught - but only as high as anything actually drives. Checking higher than the
--- tallest machine detours around branches that pass clear over it, and since a mature crown
--- flares widest near its top, every extra metre of height costs real width. For reference:
--- tractors ~2.8-3.5m, combines ~3.9-4m (built to clear the 4m road limit), trucks 4.0-4.1m,
--- folded implements up to ~4.5m - hence a 4m default, adjustable to suit the tallest machine.
+-- Box spans from ground level up to the vehicle height, so canopy/branches - and a pole's crossarm
+-- or transformer - that flare out wider higher up are caught, but only as high as anything actually
+-- drives. Checking higher than the tallest machine detours around branches (or wires) that pass
+-- clear over it, and since a mature crown flares widest near its top, every extra metre of height
+-- costs real width. For reference: tractors ~2.8-3.5m, combines ~3.9-4m (built to clear the 4m road
+-- limit), trucks 4.0-4.1m, folded implements up to ~4.5m - hence a 4m default, adjustable to suit
+-- the tallest machine.
 function AutoDrive:hasTreeNear(x, z, halfExtent)
     self.fieldLoopTreeHit = false
     local y = AutoDrive:getTerrainHeightAtWorldPos(x, z)
     local halfHeight = (ADFlyoverSettings.get("fieldLoopVehicleHeight") or 4.0) / 2
-    overlapBox(x, y + halfHeight, z, 0, 0, 0, halfExtent, halfHeight, halfExtent, "fieldLoopTreeOverlapCallback", AutoDrive, CollisionFlag.TREE, true, true, true, true)
+    overlapBox(x, y + halfHeight, z, 0, 0, 0, halfExtent, halfHeight, halfExtent, "fieldLoopTreeOverlapCallback", AutoDrive, AutoDrive.FIELD_LOOP_OBSTACLE_MASK, true, true, true, true)
     return self.fieldLoopTreeHit == true
 end
 

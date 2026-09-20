@@ -275,6 +275,11 @@ AutoDrive.FLYOVER_JUNCTION_TRACK_CLEARANCE = 2.5
 -- damage anywhere between 12 m and 90 m - and a clear that trimmed eight off each of three lanes
 -- took 30 to 50 m of road. A tidy adjusts the last few metres of a lane; wanting more than this
 -- means the boundary is wrong, and a ragged end is recoverable where a dug-up road is not.
+-- Clear mode's own scope. It is NOT a setting: what belongs to a junction is a property of the
+-- road, and a wheel that changed it only made the same click give different answers. Wide enough to
+-- cut every arm of the junctions on a real map, and fixed so that it always cuts them in the same
+-- place.
+AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE = 12
 AutoDrive.FLYOVER_JUNCTION_TRIM_BUDGET = 8.0
 -- After a clear, each approach is RE-SPACED over this many metres leading to the junction. Years of
 -- tie-ins, re-laid ends and trims leave an approach with 0.9 m hops next to 12 m ones. The step is
@@ -6588,10 +6593,62 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
         cx, cz, cy = self.cursorX, self.cursorZ, self.cursorY
     end
+    local clearMode0 = (self.junctionMode == "clear")
     local R = self:junctionRadiusValue()
     -- NB: a DIFFERENT name from the scope radius R - shadowing it once made the scope circle render
     -- at the turn radius instead of the search radius.
     local turnR = self.junctionTurnRadius or 12
+
+    -- THE CLICK PICKS THE JUNCTION, AND THEN IT IS DONE WITH.
+    --
+    -- Everything below used to be measured from wherever the cursor happened to be: the circle that
+    -- selects the tracks sat on it, so each click cut every track at a different waypoint and handed
+    -- the whole solve a different set of bearings. Five clicks within two and a half metres of one
+    -- junction produced five different clears - at one of them the point count swung by fifteen.
+    -- That is not a tolerance, it is the tool doing a different job each time it is asked.
+    --
+    -- So the click is used once, to say WHICH junction is meant, and from there the junction's own
+    -- middle is the origin for all of it. Two clicks that pick the same junction now run identical
+    -- arithmetic. The scope radius goes with it: it was the other thing the answer moved with, and
+    -- clear mode has no use for it - what belongs to a junction is a property of the road, not of a
+    -- number on a wheel.
+    local clickX, clickZ = cx, cz
+    if clearMode0 then
+        local cand = {}
+        for _, w in pairs(ADGraphManager:getWayPoints()) do
+            if w ~= nil and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= 70 * 70 then
+                local nb, deg = {}, 0
+                for _, t in ipairs(w.out or {}) do nb[t] = true end
+                for _, fid in ipairs(w.incoming or {}) do nb[fid] = true end
+                for _ in pairs(nb) do deg = deg + 1 end
+                if deg >= 3 then cand[#cand + 1] = w end
+            end
+        end
+        -- the same 12 m centroid clustering the ownership pass uses, so both see one junction alike
+        local used, best, bestD = {}, nil, math.huge
+        for i, w in ipairs(cand) do
+            if not used[i] then
+                used[i] = true
+                local sx, sz, n, grew = w.x, w.z, 1, true
+                while grew do
+                    grew = false
+                    for j, v in ipairs(cand) do
+                        if not used[j] and (v.x - sx / n) ^ 2 + (v.z - sz / n) ^ 2 <= 144 then
+                            used[j] = true
+                            sx, sz, n, grew = sx + v.x, sz + v.z, n + 1, true
+                        end
+                    end
+                end
+                local mx, mz = sx / n, sz / n
+                local d = (mx - cx) ^ 2 + (mz - cz) ^ 2
+                if d < bestD then bestD, best = d, { x = mx, z = mz } end
+            end
+        end
+        -- Only snap when the click really is at a junction; too far and there is nothing to lock onto
+        -- and the cursor stands for itself, as it does while scouting.
+        if best ~= nil and bestD <= 40 * 40 then cx, cz = best.x, best.z end
+        R = AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE or 14
+    end
     -- The solve raycasts the road surface for every candidate radius of every turn, so it is only
     -- redone when something it depends on changed: the cursor (to half a metre), a setting, or the
     -- graph. Between those the last preview stands.
@@ -7318,6 +7375,10 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- to WHICH crossing".
     --
     -- Fallback only if the region somehow holds no crossing at all: the old core radius.
+    -- With no wheel, this is no longer the user dialling a clear down: ownership (nearest crossing,
+    -- and whose side road the wiring joins) is what keeps a clear off its neighbour, and this only
+    -- decides how far out the junction's OWN wiring is followed. Held back to the wheel's old value
+    -- it left tails behind that then read as loose points once the box was emptied.
     local clearReach = math.max(12, selectR)
     local coreR = math.max(8, selectR * 0.6)
     local function crossingOf(wp)
@@ -11739,6 +11800,31 @@ function ADFlyoverEditor:applyJunctionClear()
         Logging.info("[FlyoverEditor]: junction - respaced the approaches like the smooth tool's rebuild - up to %.0f m apart, closer through bends - over the last %.0f m: %d point(s) moved, %d removed, %d added. Ends, forks and marker points stay put.",
             AutoDrive.FLYOVER_JUNCTION_RESPACE_STEP or 5, AutoDrive.FLYOVER_JUNCTION_RESPACE_LEN or 50,
             rsMoved or 0, rsRemoved or 0, rsCreated or 0)
+    end
+
+    -- LAST OF ALL, ANYTHING LEFT JOINED TO NOTHING. Every stage before this can strand a point: the
+    -- box sweep takes a connector's middle, the stub sweep takes its far end, the respace bridges
+    -- over one and deletes it. Whatever is standing near the junction with no link left on it is
+    -- not road by any reading, so it goes - but only if it is genuinely alone, so a real dead-end
+    -- lane (which still has the link back up its own road) is untouched.
+    do
+        local c0 = jp._boxCentre or jp.tracksCentre
+        local stranded = {}
+        if c0 ~= nil then
+            for _, w in pairs(ADGraphManager:getWayPoints()) do
+                if w ~= nil and w.id ~= nil and (w.x - c0.x) ^ 2 + (w.z - c0.z) ^ 2 <= 45 * 45
+                    and #(w.out or {}) == 0 and #(w.incoming or {}) == 0 then
+                    stranded[#stranded + 1] = w.id
+                end
+            end
+        end
+        table.sort(stranded, function(a, b) return a > b end)
+        for _, id in ipairs(stranded) do
+            tryCall("junction stranded point", function() ADGraphManager:removeWayPoint(id, false) end)
+        end
+        if #stranded > 0 then
+            Logging.info("[FlyoverEditor]: junction - removed %d point(s) left joined to nothing.", #stranded)
+        end
     end
     if tidyLanes > 0 then
         Logging.info("[FlyoverEditor]: junction - tidied %d lane end(s) onto the box edge: %d point(s) trimmed, %d added.",
