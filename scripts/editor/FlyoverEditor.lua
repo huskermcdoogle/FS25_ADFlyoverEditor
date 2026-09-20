@@ -7331,7 +7331,12 @@ function ADFlyoverEditor:junctionRegistry()
             if #grp >= 4 then
                 local sx, sz = 0, 0
                 for _, g in ipairs(grp) do sx, sz = sx + g.x, sz + g.z end
-                found[#found + 1] = { x = sx / #grp, z = sz / #grp, forks = #grp }
+                local mx, mz = sx / #grp, sz / #grp
+                local dup = false
+                for _, f in ipairs(found) do
+                    if (f.x - mx) ^ 2 + (f.z - mz) ^ 2 <= 15 * 15 then dup = true break end
+                end
+                if not dup then found[#found + 1] = { x = mx, z = mz, forks = #grp } end
             end
         end
     end
