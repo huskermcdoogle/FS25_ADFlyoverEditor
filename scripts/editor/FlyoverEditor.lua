@@ -7463,8 +7463,16 @@ function ADFlyoverEditor:junctionRegistry()
     -- clusters (centroid linkage, any size), not from the four-fork groups above: a lone fork at a
     -- field entrance is enough to make the ends beside it that entrance's debris, and the point is
     -- to see a virgin junction exactly where a click would lock one.
+    -- ...AND ONLY IF A CLICK WOULD ACTUALLY LOCK IT. A ring of lane ends says something was cleared
+    -- here; it does not say a junction was. Three ends facing each other across a GAP in a road is a
+    -- ring too, and the selection refuses it outright - "only 2 roads meet here". Naming a site the
+    -- tool then declines to work on is worse than leaving it unnamed: the number is a promise that
+    -- there is something there to clear. One such site on the survey map, at (7.5, -212.3), read as
+    -- a junction by the ring rule alone.
     for _, s in ipairs(junctionVirginSites(junctionCentroidClusters(forks, JUNCTION_FORK_LINK), ends)) do
-        found[#found + 1] = { x = s.x, z = s.z, ends = #s.nodes, virgin = true }
+        if self:junctionSelect(s.x, s.z) ~= nil then
+            found[#found + 1] = { x = s.x, z = s.z, ends = #s.nodes, virgin = true }
+        end
     end
 
     -- What was numbered before: the last build, or - the first time in a session - the file.
