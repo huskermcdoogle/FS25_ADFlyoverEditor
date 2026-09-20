@@ -12266,6 +12266,21 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
         if #interior > want then
             -- Surplus: bridge over it first, then take it out. Objects, not ids - every removal
             -- renumbers the ids above it.
+            -- THE BRIDGE IS ONLY LAID IF THE SURPLUS ACTUALLY GOES. Removing a point is not the
+            -- rebuild's decision to make: jxRemove refuses anything outside this junction's arms,
+            -- and the surplus at the far end of a run sits exactly where that bound runs out. The
+            -- bridge used to be laid first and unconditionally, so when the refusal came the link
+            -- stayed and the chain it was meant to replace stayed with it - a second line running
+            -- beside the road, laid whichever way round the run as a whole happened to be travelled.
+            -- On a bend that is a connector across the corner pointing against the traffic, which is
+            -- what it looked like on screen.
+            --
+            -- So the run is checked BEFORE anything is touched, and if any of the surplus is not
+            -- ours to take, the whole run is left exactly as it is. A run half-rebuilt is worse than
+            -- a run with its old spacing.
+            for j = want + 1, #interior do
+                if live(interior[j]) and not jxMayDelete(interior[j].x, interior[j].z) then return end
+            end
             link(last, B)
             for j = #interior, want + 1, -1 do
                 local w = interior[j]
@@ -12396,7 +12411,14 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
 
     -- Smooth a whole lane with the respacing (the smooth tool's rebuild), then hand back the lane as
     -- it now is: walked from its first node along travel links, hugging the old polyline.
+    --
+    -- `lastStep` is the spacing the LAST lane smoothed was rebuilt at - read off that lane's own
+    -- points, not a constant - and the legs cut at the box edge are rebuilt at the same spacing so a
+    -- road comes back looking like itself. It has to be declared HERE, above the function that
+    -- writes it: declared below, `lastStep = own` inside smoothLane bound to a global instead, the
+    -- local stayed nil for the whole clear, and every leg was respaced at the default spacing.
     local n0 = nil
+    local lastStep = nil
     local function smoothLane(nodes, useOut)
         -- ONLY AS FAR AS THE FIRST FORK. Smoothing deletes and re-creates the points between the
         -- nodes it pins, and over 50 m of road that reaches into whatever else is tied in along the
@@ -12473,7 +12495,6 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
 
     local made, cutN, removed = 0, 0, 0
     local ends = {}
-    local lastStep = nil
     local keep = {}
 
     -- Put a point at (x, z) between a and b (a before b along `fwd` travel), and return it.
