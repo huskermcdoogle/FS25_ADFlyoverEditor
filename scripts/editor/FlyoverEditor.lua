@@ -12637,31 +12637,33 @@ function ADFlyoverEditor:applyJunctionClear()
             rsMoved or 0, rsRemoved or 0, rsCreated or 0)
     end
 
-    -- A SECOND SWEEP, AND WHAT IT REPAIRS IS A DEFECT COUNT. The site was already cleaned before
-    -- anything measured it (step 2); anything broken by the time we get here was broken by the
-    -- stages in between - the connector removal, the tidy, the stub sweep, the respace. Moving the
-    -- single sweep to the front proved that: the map went from 1 broken connector to 25, because
-    -- this pass at the end had never been a cleanup step at all, only a bandage over the stages
-    -- before it.
+    -- A SECOND SWEEP, AND IT ONLY EVER COUNTS. The site was cleaned before anything measured it
+    -- (step 2); anything broken by the time we get here was broken by the stages in between, and
+    -- that number is worth knowing - moving the single sweep to the front took the map from 1 broken
+    -- connector to 25, because this pass at the end had never been a cleanup step at all, only a
+    -- bandage over the stages before it.
     --
-    -- So it stays, and it says how much it had to put right. That number is the measure of how much
-    -- damage those stages do, and when it reaches zero this whole block can go.
+    -- IT MUST NOT REPAIR. A clear's whole job is to cut the branches away from the road they joined,
+    -- and a branch end left hanging afterwards is not damage - it is the work. Repairing it tied
+    -- every branch straight back to its parent: two or three links running back across the box at
+    -- every junction on the map, and a clear that visibly did nothing. So it reports and changes
+    -- nothing, and the number belongs at zero.
     do
         local c0 = self.junctionSite or jp._boxCentre or jp.tracksCentre
-        if c0 ~= nil then
-            local fixed = 0
-            for _ = 1, 3 do
-                local ok, r = pcall(function()
-                    return self:networkIntegritySweep(c0.x, c0.z, 45, false)
-                end)
-                if not ok or r == nil then break end
-                local did = r.doubles + r.repaired + r.removed
-                fixed = fixed + did
-                if did == 0 then break end
-            end
-            if fixed > 0 then
-                Logging.warning("[FlyoverEditor]: junction - the stages after the site was cleaned broke %d thing(s), put right again here. This is a defect count, not a tidy: it belongs at zero.",
-                    fixed)
+        if c0 ~= nil and AutoDrive.FLYOVER_JUNCTION_FINAL_SWEEP ~= false then
+            local ok, r = pcall(function()
+                return self:networkIntegritySweep(c0.x, c0.z, 45, true)
+            end)
+            if ok and r ~= nil then
+                local n = r.doubles + r.repaired + r.removed
+                if n > 0 then
+                    Logging.warning("[FlyoverEditor]: junction - the stages after the site was cleaned left %d thing(s) needing attention. Reported, not touched: at this point a loose branch end is the job, not a fault. This count belongs at zero.",
+                        n)
+                end
+                if r.reversals > 0 then
+                    Logging.warning("[FlyoverEditor]: junction - %d point(s) where the road doubles back on itself.",
+                        r.reversals)
+                end
             end
         end
     end
