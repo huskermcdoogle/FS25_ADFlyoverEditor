@@ -549,6 +549,11 @@ function ADFlyoverHud:buildRows(editor)
                 if cjp.junctionSituation ~= nil then
                     add("toggle", "situation", tostring(cjp.junctionSituation))
                 end
+                -- Said plainly, because without a box the clear cannot empty the middle of the
+                -- junction and the result looks like it half worked.
+                if cjp._box == nil then
+                    add("toggle", "no box here", "its roads do not cross at an angle a box can be made from")
+                end
                 local cleave = editor.junctionLeaveThrough ~= false
                 local doomed = cleave and cjp.turnDebris or cjp.debris
                 add("toggle", "approaches found", tostring(#(cjp.approaches or {})))

@@ -13776,6 +13776,14 @@ function ADFlyoverEditor:applyJunctionClear()
                     Logging.info("[FlyoverEditor]: junction - cleaning the site changed it enough that it no longer reads as a junction; carrying on with the site as first found.")
                 end
             end
+            -- NO BOX IS A RESULT, AND IT HAS TO BE SAID. The box is the overlap of two roads' claim
+            -- bands, and it needs two roads that actually cross: where the roads here run nearly
+            -- parallel, or meet at a shallow merge, no pair qualifies and no box is built. The clear
+            -- then trims what it can and leaves whatever lies between the roads standing - which
+            -- looks exactly like a clear that half worked, with nothing anywhere saying why.
+            if jp._box == nil then
+                Logging.warning("[FlyoverEditor]: junction - NO BOX could be built here: no two of its roads cross at an angle the box can be made from (they run nearly parallel, or meet at a shallow merge). What lies between them is left alone; the lanes are still tidied.")
+            end
             local kind = jp.junctionType or "?"
             if kind == "?" then
                 tryCall("junction classify", function() kind = self:junctionClassify(jp) end)
