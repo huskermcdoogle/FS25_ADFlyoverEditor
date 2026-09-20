@@ -6609,6 +6609,12 @@ end
 --- asked by anything else that must not wander into the junction next door.
 local function jxInSite(x, z) return jxMayDelete(x, z) end
 
+--- Did THIS clear cut this point off from something? The gate marks every point it severs on
+--- purpose, so anything else lying loose nearby was already like that when the clear began.
+local function jxWasCutByUs(w)
+    return jxCut ~= nil and w ~= nil and jxCut[w] == true
+end
+
 --- The one way a clear removes a waypoint. Takes an id or the node itself; the node is safer, since
 --- every removal renumbers the ids above it.
 local function jxRemove(which, why)
@@ -6816,6 +6822,67 @@ end
 --- It cannot see a junction with no connectors (a cleared one - the ring of lane ends finds those)
 --- nor a shallow merge, whose branches leave at 15 degrees and cut no corner. Where it finds
 --- nothing the selection falls back to the fork clusters, exactly as before.
+--- WHERE A JUNCTION USED TO BE. A cleared junction has no connectors left to point at its middle,
+--- so junctionCentres cannot see it - and everything around it then belongs to whatever wired
+--- junction is nearest, which at a close pair is its neighbour. Clearing one of a pair and then the
+--- other therefore ate the first one's road. What a cleared junction DOES have is a ring of lane
+--- ends facing each other across where the roads met, and that ring is as good a marker as the
+--- connectors were. Three or more, away from any fork, and their middle is the junction.
+function ADFlyoverEditor:junctionVirginCentres()
+    local count = ADGraphManager:getWayPointsCount()
+    if self._jxVirgin ~= nil and self._jxVirginCount == count then return self._jxVirgin end
+    local forks, ends = {}, {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil then
+            local s2, d = {}, 0
+            for _, id in ipairs(w.out or {}) do if not s2[id] then s2[id] = true d = d + 1 end end
+            for _, id in ipairs(w.incoming or {}) do if not s2[id] then s2[id] = true d = d + 1 end end
+            if d >= 3 then forks[#forks + 1] = w elseif d == 1 then ends[#ends + 1] = w end
+        end
+    end
+    local loose = {}
+    for _, e in ipairs(ends) do
+        -- Only a fork that is NOT itself a cut lane end's neighbour counts as "this end belongs to a
+        -- wired junction": at a close pair the cleared branch's ends sit a few metres from the other
+        -- junction's forks, and excluding them left the cleared junction invisible.
+        local nearFork = false
+        for _, f in ipairs(forks) do
+            if (f.x - e.x) ^ 2 + (f.z - e.z) ^ 2 <= 4 * 4 then nearFork = true break end
+        end
+        if not nearFork then loose[#loose + 1] = e end
+    end
+    local used, out = {}, {}
+    for i = 1, #loose do
+        if not used[i] then
+            used[i] = true
+            local grp, sx, sz, grew = { loose[i] }, loose[i].x, loose[i].z, true
+            while grew do
+                grew = false
+                for j = 1, #loose do
+                    if not used[j] then
+                        local mx, mz = sx / #grp, sz / #grp
+                        if (loose[j].x - mx) ^ 2 + (loose[j].z - mz) ^ 2 <= 14 * 14 then
+                            used[j] = true
+                            grp[#grp + 1] = loose[j]
+                            sx, sz, grew = sx + loose[j].x, sz + loose[j].z, true
+                        end
+                    end
+                end
+            end
+            -- TWO IS ENOUGH TO OWN A ROAD. A junction cleared with through paths kept loses only its
+            -- branch, so it shows just the two ends of that branch - not the three or more a fully
+            -- cleared one shows. For SELECTION that is too little to call a junction; for saying
+            -- whose road is whose it is plenty, and without it a cleared neighbour owns nothing and
+            -- its road is eaten by the next clear along.
+            if #grp >= 2 then
+                out[#out + 1] = { x = sx / #grp, z = sz / #grp, n = #grp, virgin = true }
+            end
+        end
+    end
+    self._jxVirgin, self._jxVirginCount = out, count
+    return out
+end
+
 function ADFlyoverEditor:junctionCentres()
     local count = ADGraphManager:getWayPointsCount()
     local merge = AutoDrive.FLYOVER_JUNCTION_MERGE or 10
@@ -7856,6 +7923,16 @@ function ADFlyoverEditor:updateJunctionPreview()
             for _, c in ipairs(self:junctionCentres() or {}) do
                 if (c.x - cx) ^ 2 + (c.z - cz) ^ 2 <= scan2 then
                     byRoads[#byRoads + 1] = { x = c.x, z = c.z, n = c.n }
+                end
+            end
+            -- ...and a junction that has already been cleared still owns its road.
+            for _, c in ipairs(self:junctionVirginCentres() or {}) do
+                if (c.x - cx) ^ 2 + (c.z - cz) ^ 2 <= scan2 then
+                    local dup = false
+                    for _, b in ipairs(byRoads) do
+                        if (b.x - c.x) ^ 2 + (b.z - c.z) ^ 2 <= 12 * 12 then dup = true break end
+                    end
+                    if not dup then byRoads[#byRoads + 1] = { x = c.x, z = c.z, n = c.n } end
                 end
             end
             if #byRoads > 0 then
@@ -13221,14 +13298,23 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     end
                     if not small then break end
                 end
-                -- NOT IF IT WAS LIKE THIS BEFORE WE STARTED. A scrap that already held a loose end
-                -- when this clear began is not something this clear left behind - at a close pair it
-                -- is the finished lane end of the junction next door, cleared a minute ago, and
-                -- taking it blew that lane back 25 m from its own intersection.
+                -- ...AND ONLY IF THIS CLEAR IS WHY IT IS LOOSE. Two ways a scrap can be none of our
+                -- business: it already held a loose end when we began - the finished lane end of the
+                -- junction next door - or this clear cut nothing in it at all, and it simply came
+                -- adrift when something else went. Both were taken; at a close pair the second click
+                -- ate three points of the first junction's road, 31 m away. A scrap is this clear's
+                -- leftover only if this clear severed one of its points.
                 if small and jxWasLoose ~= nil then
                     for _, w in ipairs(comp) do
                         if jxWasLoose[w] then small = false break end
                     end
+                end
+                if small then
+                    local ours = false
+                    for _, w in ipairs(comp) do
+                        if jxWasCutByUs(w) then ours = true break end
+                    end
+                    if not ours then small = false end
                 end
                 if small then for _, w in ipairs(comp) do loose[#loose + 1] = w.id end end
             end
