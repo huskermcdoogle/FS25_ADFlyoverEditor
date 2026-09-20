@@ -6764,6 +6764,69 @@ local function junctionLayChain(NA, points, NB, dual, flags)
     return true
 end
 
+-- How far a fork may sit from the middle of its group and still belong to it, for the SELECTION's
+-- fork clusters. Named, and up here, because the registry below has to hold lane ends away from
+-- exactly the same clusters the selection does: two copies of a 12 would drift apart the first time
+-- one of them was tuned, and the two would then disagree about which lane ends are loose.
+local JUNCTION_FORK_LINK = 12
+
+-- Group points by CENTROID linkage: a point joins a group while it lies within `link` of the
+-- group's running middle, and the group is swept again whenever it grows, because its middle has
+-- moved. Returns { x, z, nodes } per group, in the order their first members were met - so the
+-- same list in the same order always comes back as the same groups.
+local function junctionCentroidClusters(list, link)
+    local used, out = {}, {}
+    for i = 1, #list do
+        if not used[i] then
+            used[i] = true
+            local grp, sx, sz, grew = { list[i] }, list[i].x, list[i].z, true
+            while grew do
+                grew = false
+                for j = 1, #list do
+                    if not used[j] then
+                        local mx, mz = sx / #grp, sz / #grp
+                        if (list[j].x - mx) ^ 2 + (list[j].z - mz) ^ 2 <= link * link then
+                            used[j] = true
+                            grp[#grp + 1] = list[j]
+                            sx, sz, grew = sx + list[j].x, sz + list[j].z, true
+                        end
+                    end
+                end
+            end
+            out[#out + 1] = { x = sx / #grp, z = sz / #grp, nodes = grp }
+        end
+    end
+    return out
+end
+
+-- THE VIRGIN FORM OF A JUNCTION, found ONE way for everyone who asks. The selection needs it to
+-- lock onto a cleared junction and the registry needs it to keep that junction's name, and if the
+-- two each had their own idea of it, the card would sooner or later name a site the tool refuses
+-- to lock, or lock one it cannot name.
+--
+-- Lane ends only form clusters of their OWN, away from any fork cluster - an end dangling beside a
+-- wired junction is that junction's debris, not a second junction - and it takes three of them,
+-- since two lane ends facing each other is a gap in a road. `forkSites` are centroid clusters of
+-- forks (JUNCTION_FORK_LINK); `ends` are the points with exactly one neighbour.
+local function junctionVirginSites(forkSites, ends)
+    local loose = {}
+    for _, e in ipairs(ends) do
+        local nearFork = false
+        for _, s in ipairs(forkSites) do
+            if (s.x - e.x) ^ 2 + (s.z - e.z) ^ 2 <= 15 * 15 then nearFork = true break end
+        end
+        if not nearFork then loose[#loose + 1] = e end
+    end
+    local out = {}
+    for _, s in ipairs(junctionCentroidClusters(loose, 14)) do
+        if #s.nodes >= 3 then
+            s.virgin = true
+            out[#out + 1] = s
+        end
+    end
+    return out
+end
+
 --- STEP 1 OF A CLEAR: pick ONE junction from a click, and say whether it is a junction at all.
 ---
 --- The cluster of forks nearest the cursor is the site. What it does NOT do is decide how much road
@@ -6783,7 +6846,7 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
     if cx == nil or cz == nil then return nil, "no cursor" end
     local SELECT = AutoDrive.FLYOVER_JUNCTION_SELECT_RADIUS or 20
     local MINARM = AutoDrive.FLYOVER_JUNCTION_MIN_ARM or 15
-    local GATHER, LINK = 70, 12
+    local GATHER, LINK = 70, JUNCTION_FORK_LINK
     local WALK = 40
 
     local function neighbours(w)
@@ -6812,49 +6875,12 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
         end
     end
 
-    local function cluster(list, link)
-        local used, out = {}, {}
-        for i = 1, #list do
-            if not used[i] then
-                used[i] = true
-                local grp, sx, sz, grew = { list[i] }, list[i].x, list[i].z, true
-                while grew do
-                    grew = false
-                    for j = 1, #list do
-                        if not used[j] then
-                            local mx, mz = sx / #grp, sz / #grp
-                            if (list[j].x - mx) ^ 2 + (list[j].z - mz) ^ 2 <= link * link then
-                                used[j] = true
-                                grp[#grp + 1] = list[j]
-                                sx, sz, grew = sx + list[j].x, sz + list[j].z, true
-                            end
-                        end
-                    end
-                end
-                out[#out + 1] = { x = sx / #grp, z = sz / #grp, nodes = grp }
-            end
-        end
-        return out
-    end
-
     -- Forks are clustered exactly as they always were, so a wired junction is found just where it
-    -- was found before. Lane ends only form clusters of their OWN, away from any fork cluster - an
-    -- end dangling beside a wired junction is that junction's debris, not a second junction - and it
-    -- takes three of them, since two lane ends facing each other is a gap in a road.
-    local sites = cluster(forks, LINK)
-    local loose = {}
-    for _, e in ipairs(ends) do
-        local nearFork = false
-        for _, s in ipairs(sites) do
-            if (s.x - e.x) ^ 2 + (s.z - e.z) ^ 2 <= 15 * 15 then nearFork = true break end
-        end
-        if not nearFork then loose[#loose + 1] = e end
-    end
-    for _, s in ipairs(cluster(loose, 14)) do
-        if #s.nodes >= 3 then
-            s.virgin = true
-            sites[#sites + 1] = s
-        end
+    -- was found before. The virgin sites come from the helper the registry shares (above), which
+    -- holds the rule for them: clusters of lane ends, away from every fork cluster, three or more.
+    local sites = junctionCentroidClusters(forks, LINK)
+    for _, s in ipairs(junctionVirginSites(sites, ends)) do
+        sites[#sites + 1] = s
     end
     if #sites == 0 then return nil, "no junction near the cursor" end
 
@@ -6949,19 +6975,118 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
     return nil, firstWhy or "no junction near the cursor"
 end
 
+-- Where the numbers live between sessions: beside AutoDrive's own route file, in the savegame's
+-- folder, because they name the junctions of THIS network and a second savegame on the same map
+-- carries a different one. The folder is worked out the way AutoDrive works out its own
+-- (XML.lua, getXMLFile_new), so the two files cannot end up in different places.
+local JUNCTION_REGISTRY_FILE = "ADFlyoverEditor_junctions.xml"
+
+local function junctionRegistryFolder()
+    local info = g_currentMission ~= nil and g_currentMission.missionInfo or nil
+    if info == nil then return nil end
+    if info.savegameDirectory ~= nil then return info.savegameDirectory .. "/" end
+    if info.savegameIndex ~= nil and getUserProfileAppPath ~= nil then
+        return getUserProfileAppPath() .. "savegame" .. info.savegameIndex .. "/"
+    end
+    return nil
+end
+
+--- The numbers as they were last written: a list of { n, x, z } and the path it came from, or nil
+--- when this savegame has no file yet or it cannot be read. Only number and position are kept,
+--- because position is all a junction can be recognised by after a restart - its node ids are
+--- reissued by every removal, and a clear replaces the nodes outright.
+local function junctionRegistryLoad()
+    local folder = junctionRegistryFolder()
+    if folder == nil or fileExists == nil then return nil end
+    local path = folder .. JUNCTION_REGISTRY_FILE
+    if not fileExists(path) then return nil end
+    local list, seen = {}, {}
+    local ok, err = pcall(function()
+        local xml = loadXMLFile("ADFlyoverJunctions", path)
+        local i = 0
+        while true do
+            local key = string.format("flyoverEditor.junctions.junction(%d)", i)
+            if not hasXMLProperty(xml, key) then break end
+            local n = getXMLInt(xml, key .. "#n")
+            local x, z = getXMLFloat(xml, key .. "#x"), getXMLFloat(xml, key .. "#z")
+            -- Skip an entry that is not whole rather than trusting the file: a number with no
+            -- position can never be matched, so it would sit on that number for good; and the same
+            -- number twice would put one name on two junctions, which is the very thing the file
+            -- exists to prevent. The first one read wins.
+            if n ~= nil and n >= 1 and x ~= nil and z ~= nil and not seen[n] then
+                seen[n] = true
+                list[#list + 1] = { n = n, x = x, z = z }
+            end
+            i = i + 1
+        end
+        delete(xml)
+    end)
+    if not ok then
+        Logging.warning("[FlyoverEditor]: junction - could not read the saved numbers (%s): %s",
+            path, tostring(err))
+        return nil
+    end
+    return list, path
+end
+
+--- Write every numbered junction, found or not: the ones the scan no longer sees are exactly the
+--- ones whose numbers would otherwise be handed out again after a restart. Returns true when the
+--- file was written.
+local function junctionRegistrySave(reg)
+    local folder = junctionRegistryFolder()
+    if folder == nil or createXMLFile == nil or fileExists == nil then return false end
+    -- A career that has never been saved has no folder yet, and making one here would leave a
+    -- savegame slot holding nothing but this file for the game to trip over. The numbers stay in
+    -- memory, the registry stays marked unsaved, and the next build tries again.
+    if not fileExists(folder .. "careerSavegame.xml") then return false end
+    local path = folder .. JUNCTION_REGISTRY_FILE
+    local byNumber = {}
+    for _, f in ipairs(reg) do
+        if f.n ~= nil then byNumber[#byNumber + 1] = f end
+    end
+    -- In number order, so the file reads as the survey does and two saves of the same registry
+    -- are the same file.
+    table.sort(byNumber, function(a, b) return a.n < b.n end)
+    local ok, err = pcall(function()
+        local xml = createXMLFile("ADFlyoverJunctions", path, "flyoverEditor")
+        for i, f in ipairs(byNumber) do
+            local key = string.format("flyoverEditor.junctions.junction(%d)", i - 1)
+            setXMLInt(xml, key .. "#n", f.n)
+            setXMLFloat(xml, key .. "#x", f.x)
+            setXMLFloat(xml, key .. "#z", f.z)
+        end
+        saveXMLFile(xml)
+        delete(xml)
+    end)
+    if not ok then
+        Logging.warning("[FlyoverEditor]: junction - could not save the numbers (%s): %s",
+            path, tostring(err))
+        return false
+    end
+    return true
+end
+
 --- EVERY JUNCTION ON THE MAP, NUMBERED, so a site can be named out loud. Without a number, talking
 --- about a particular junction means quoting coordinates at each other and hoping we mean the same
 --- one, and a survey done on Tuesday cannot be compared with a run done on Thursday.
 ---
---- The rules are the ones the survey was built with: a fork is a point with three or more
---- neighbours, forks within 15 m of each other are one junction, and it takes four of them to count
---- - which is what a junction of two two-lane roads comes to. Deliberately NOT the same test the
---- clear uses to decide whether to work on a site: this one only has to name things, and a name
---- that changes when the rule is tuned is worse than no name.
+--- The rules for a WIRED junction are the ones the survey was built with: a fork is a point with
+--- three or more neighbours, forks within 15 m of each other are one junction, and it takes four of
+--- them to count - which is what a junction of two two-lane roads comes to. Deliberately NOT the
+--- same test the clear uses to decide whether to work on a site: this one only has to name things,
+--- and a name that changes when the rule is tuned is worse than no name.
 ---
---- Numbers are carried over from the last build by POSITION, so adding a junction does not renumber
---- the ones already there - a new one takes the next free number and is logged, so it can be added
---- to the survey rather than silently shifting everything by one.
+--- A VIRGIN junction - cleared, or never built - has no forks at all, so that rule alone cannot see
+--- it. It is found the way the selection finds it (junctionVirginSites, above) and listed AFTER the
+--- wired ones, so that on a map numbered from nothing the wired junctions take exactly the numbers
+--- the fork rule always gave them, and whatever is virgin takes the numbers after.
+---
+--- A NUMBER, ONCE GIVEN, IS KEPT - across builds and across restarts. Scan order cannot do that: it
+--- follows the lowest node id in each junction, and a clear replaces a junction's nodes, so every
+--- edit reshuffles it. So numbers are matched by POSITION against what was numbered before - the
+--- last build, or on the first build of a session the file saved with the savegame - and only a
+--- junction that matches nothing takes the next free number. It is logged when it does, so it can
+--- be added to the survey rather than silently shifting everything by one.
 function ADFlyoverEditor:junctionRegistry()
     local count = ADGraphManager:getWayPointsCount()
     if self._jxReg ~= nil and self._jxRegCount == count then return self._jxReg end
@@ -6974,7 +7099,7 @@ function ADFlyoverEditor:junctionRegistry()
     end
     table.sort(ids)
 
-    local forks = {}
+    local forks, ends = {}, {}
     for _, id in ipairs(ids) do
         local w = ADGraphManager:getWayPointById(id)
         if w ~= nil then
@@ -6982,7 +7107,8 @@ function ADFlyoverEditor:junctionRegistry()
             for _, t in ipairs(w.out or {}) do nb[t] = true end
             for _, f in ipairs(w.incoming or {}) do nb[f] = true end
             for _ in pairs(nb) do deg = deg + 1 end
-            if deg >= 3 then forks[#forks + 1] = w end
+            if deg >= 3 then forks[#forks + 1] = w
+            elseif deg == 1 then ends[#ends + 1] = w end
         end
     end
 
@@ -7009,46 +7135,102 @@ function ADFlyoverEditor:junctionRegistry()
             end
         end
     end
+    -- The virgin ones, after every wired one. Lane ends are held away from the SELECTION's fork
+    -- clusters (centroid linkage, any size), not from the four-fork groups above: a lone fork at a
+    -- field entrance is enough to make the ends beside it that entrance's debris, and the point is
+    -- to see a virgin junction exactly where a click would lock one.
+    for _, s in ipairs(junctionVirginSites(junctionCentroidClusters(forks, JUNCTION_FORK_LINK), ends)) do
+        found[#found + 1] = { x = s.x, z = s.z, ends = #s.nodes, virgin = true }
+    end
 
-    -- Carry the numbers across from the last build.
-    local prev = self._jxReg or {}
-    local taken, added = {}, {}
-    for _, f in ipairs(found) do
-        for _, p in ipairs(prev) do
-            if p.n ~= nil and not taken[p.n]
-                and (p.x - f.x) ^ 2 + (p.z - f.z) ^ 2 <= 20 * 20 then
-                f.n = p.n
-                taken[p.n] = true
-                break
+    -- What was numbered before: the last build, or - the first time in a session - the file.
+    local prev, fromFile = self._jxReg, nil
+    if prev == nil then
+        prev, fromFile = junctionRegistryLoad()
+        prev = prev or {}
+    end
+
+    -- Carry the numbers across, NEAREST PAIR FIRST. Taking the first old entry within reach was
+    -- good enough while the old entries were last build's and in the same order; read from a file,
+    -- against a scan whose order a clear has reshuffled, it is not - two junctions closer together
+    -- than the reach (j55 and j56 are 28 m apart, and two T's on one road can sit closer still)
+    -- are each inside the other's circle, and whichever was scanned first would take the other's
+    -- number. Closest pairs settle first, so each keeps its own.
+    local MATCH = 20
+    local pairings = {}
+    for fi, f in ipairs(found) do
+        for pi, p in ipairs(prev) do
+            if p.n ~= nil then
+                local d2 = (p.x - f.x) ^ 2 + (p.z - f.z) ^ 2
+                if d2 <= MATCH * MATCH then
+                    pairings[#pairings + 1] = { f = f, p = p, d2 = d2, fi = fi, pi = pi }
+                end
             end
         end
     end
-    -- A JUNCTION THAT HAS BEEN CLEARED KEEPS ITS NUMBER. The scan only finds the wired form - fork
-    -- clusters - so a junction vanishes from it the moment it is cleared, and dropping it here would
-    -- hand its number to the next new one. Whatever was numbered before and was not found again is
-    -- carried forward as it stood.
-    for _, p in ipairs(prev) do
-        if p.n ~= nil and not taken[p.n] then
-            found[#found + 1] = { x = p.x, z = p.z, forks = p.forks, n = p.n, cleared = true }
-            taken[p.n] = true
+    -- Ties broken by list order, so the same two lists always pair the same way.
+    table.sort(pairings, function(a, b)
+        if a.d2 ~= b.d2 then return a.d2 < b.d2 end
+        if a.fi ~= b.fi then return a.fi < b.fi end
+        return a.pi < b.pi
+    end)
+    local taken, added, nKept = {}, {}, 0
+    for _, m in ipairs(pairings) do
+        if m.f.n == nil and not taken[m.p.n] then
+            m.f.n = m.p.n
+            taken[m.p.n] = true
         end
     end
-    local next_ = 1
+    -- A JUNCTION THE SCAN HAS LOST KEEPS ITS NUMBER. The scan knows both forms now, but a junction
+    -- can still drop out of it: cleared with its through road left in, all that remains is the side
+    -- road's two lane ends, and two lane ends are a gap in a road, not a junction. Dropping it here
+    -- would hand its number to the next new one. Whatever was numbered before and was not found
+    -- again is carried forward as it stood - and written to the file with the rest.
+    for _, p in ipairs(prev) do
+        if p.n ~= nil and not taken[p.n] then
+            found[#found + 1] = { x = p.x, z = p.z, forks = p.forks, ends = p.ends, n = p.n,
+                                  cleared = true }
+            taken[p.n] = true
+            nKept = nKept + 1
+        end
+    end
+    local next_, gained = 1, false
     for _, f in ipairs(found) do
         if f.n == nil then
             while taken[next_] do next_ = next_ + 1 end
             f.n, taken[next_] = next_, true
+            gained = true
             if #prev > 0 then added[#added + 1] = f end
         end
     end
 
     for _, f in ipairs(added) do
-        Logging.info("[FlyoverEditor]: junction j%02d is new, at %.1f, %.1f (%d fork points). Worth adding to the survey.",
-            f.n, f.x, f.z, f.forks)
+        if f.virgin then
+            Logging.info("[FlyoverEditor]: junction j%02d is new, at %.1f, %.1f (%d lane ends, nothing joining them). Worth adding to the survey.",
+                f.n, f.x, f.z, f.ends)
+        else
+            Logging.info("[FlyoverEditor]: junction j%02d is new, at %.1f, %.1f (%d fork points). Worth adding to the survey.",
+                f.n, f.x, f.z, f.forks)
+        end
     end
     if #prev == 0 then
         Logging.info("[FlyoverEditor]: junction - %d junction(s) on this map, numbered j01 to j%02d.",
             #found, #found)
+    elseif fromFile ~= nil then
+        -- Said once a session, and with the path: when a number on the card looks wrong, the first
+        -- question is whether the file was read at all, and from which savegame.
+        Logging.info("[FlyoverEditor]: junction - %d number(s) read from %s: %d found on the map, %d not found and kept, %d new.",
+            #prev, fromFile, #found - nKept - #added, nKept, #added)
+    end
+
+    -- Saved when the registry GAINS a number, and only then: a number is the one thing that cannot
+    -- be worked out again after a restart. Positions drift a little as a junction is cleared and
+    -- rebuilt, but every form of it sits round the same crossing, well inside the match radius of
+    -- where it was first written, so they are not worth a write. A save that fails (a career not
+    -- yet saved has no folder) leaves the registry marked, and the next build tries again.
+    if gained then self._jxRegUnsaved = true end
+    if self._jxRegUnsaved and junctionRegistrySave(found) then
+        self._jxRegUnsaved = false
     end
 
     self._jxReg, self._jxRegCount = found, count
