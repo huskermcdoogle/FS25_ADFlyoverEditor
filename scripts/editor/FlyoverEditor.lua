@@ -10871,7 +10871,8 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
     --
     -- So it is sampled at intervals along the road and the MIDDLE reading is kept. The middle, not
     -- the average: a pinch at one end drags an average, and cannot move the middle.
-    local WNEAR, WFAR = 4, 25
+    local WNEAR, WFAR = 8, 30
+    local jctX, jctZ = centre.x, centre.z
     for _, r in ipairs(roads) do
         -- The road's own first track is the spine. Every OTHER track is measured against it, at each
         -- of its vertices that lies between WNEAR and WFAR from the junction - so the reading follows
@@ -10881,7 +10882,12 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
         local reads = {}
         if spine ~= nil and #r.members >= 2 then
             for _, p in ipairs(spine) do
-                local dj = math.sqrt((p.x - r.at.x) ^ 2 + (p.z - r.at.z) ^ 2)
+                -- MEASURED OUT FROM THE MIDDLE OF THE JUNCTION, not from the road's anchor. A road's
+                -- line runs THROUGH the junction, so "4 to 25 m from the anchor" also catches the
+                -- stretch on the far side of it - and near the middle the lanes converge into their
+                -- connectors. Half of one road's 95 readings fell below 2.5 m that way and its width
+                -- came out on the single-track floor, giving a box far too narrow for a two-lane road.
+                local dj = math.sqrt((p.x - jctX) ^ 2 + (p.z - jctZ) ^ 2)
                 if dj >= WNEAR and dj <= WFAR then
                     local widestHere = 0
                     for k = 2, #r.members do
@@ -10906,10 +10912,15 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
         end
         local widest = 0
         if #reads >= 3 then
-            -- the MIDDLE reading, not the average: a pinch at one end drags an average and cannot
-            -- move the middle
+            -- HIGH UP THE READINGS, NOT THE MIDDLE OF THEM. A road's line runs both ways from the
+            -- junction and the two halves need not be the same road: at one site it is two lanes
+            -- 3.8 m apart to the south-east and a pair merging into one - 2.3 m, then 1.4 m - to the
+            -- north-west. The middle of all of them came out on the single-track floor and the box
+            -- was built far too narrow for the lanes it had to cover. The claim band has to cover
+            -- the road where it is WIDEST near the junction, so the reading four fifths of the way
+            -- up is taken: a merging half cannot drag it down, and one wide stray cannot lift it.
             table.sort(reads)
-            widest = reads[math.floor((#reads + 1) / 2)]
+            widest = reads[math.max(1, math.floor(#reads * 0.8))]
         else
             for _, t in ipairs(r.tracks) do
                 local ox, oz = t.at.x - r.at.x, t.at.z - r.at.z
