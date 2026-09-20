@@ -6962,7 +6962,13 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
             return nil, string.format("only %d road%s meets here - not a junction",
                 #roads, #roads == 1 and "" or "s")
         end
-        if going < 3 then
+        -- The arm-length test polices STRAYS - a lone fork, a field gate, a lay-by. A proper cluster
+        -- of forks is a junction by the survey's own definition and is not asked to prove it: at a
+        -- close pair, once the neighbour is cleared, the arm towards it ends at the neighbour's box
+        -- 13 m away, and a junction with seven forks of wiring in it was refused as "a turning or
+        -- an entrance" for having only two long arms.
+        local proper = (not best.virgin) and #best.nodes >= 4
+        if going < 3 and not proper then
             return nil, string.format("%d of the %d arms here go anywhere (the rest stop within %d m) - a turning or an entrance, not a junction",
                 going, #roads, MINARM)
         end
@@ -6970,12 +6976,19 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                  virgin = (best.virgin == true) }
     end
 
+    -- ...BUT NEVER PAST A REAL JUNCTION. Trying the next candidate is for stepping over a stray -
+    -- three lane ends at a field gate. When the nearest candidate is itself a proper cluster of
+    -- forks, that IS what was clicked on, and its verdict stands whether it passes or not: carrying
+    -- on past it answered a click on a wired junction with the state of the one next door, 17 m
+    -- away and already cleared - "this junction is already clear", said of a junction with seven
+    -- forks still in it.
     local firstWhy = nil
     for _, s in ipairs(sites) do
         if s.d2 > SELECT * SELECT then break end
         local site, why = evaluate(s)
         if site ~= nil then return site end
         firstWhy = firstWhy or why
+        if not s.virgin and #s.nodes >= 4 then break end
     end
     return nil, firstWhy or "no junction near the cursor"
 end
@@ -7834,6 +7847,81 @@ function ADFlyoverEditor:updateJunctionPreview()
                     end
                 end
             end
+        end
+        -- THE SAME-ROAD RULE. A route is a THROUGH route only if it joins the two ends of ONE road,
+        -- and a road has two ends: each arm of the junction pairs with at most one other arm. Judging
+        -- lane against lane by bearing let one arm be "through" to two others at once - where the main
+        -- road bends through a T, the side road lines up with the far arm nearly as well as the main
+        -- road does, so a right turn counted as a through path, a T read as a Y, and the turn was
+        -- protected with through paths on and the wrong links cut with them off. So the ARMS are
+        -- paired first - best continuation first, each arm used once - and a lane route only counts
+        -- when its two arms are partners.
+        if AutoDrive.FLYOVER_JUNCTION_SAME_ROAD ~= false then
+            local arms = {}
+            local function outward(ap)
+                local b = ap.chainBearing or ap.bearing
+                if ap.dir == "in" then b = b + math.pi end
+                return b
+            end
+            local armOf = {}
+            for _, ap in ipairs(approaches) do
+                local b, hit = outward(ap), nil
+                for _, a in ipairs(arms) do
+                    if junctionAngDiff(b, a.b) <= math.rad(35) then hit = a break end
+                end
+                if hit == nil then
+                    hit = { b = b, sx = 0, sz = 0 }
+                    arms[#arms + 1] = hit
+                end
+                hit.sx, hit.sz = hit.sx + math.sin(b), hit.sz + math.cos(b)
+                hit.b = math.atan2(hit.sx, hit.sz)
+                armOf[ap] = hit
+            end
+            -- PAIRED ON THE LANES' OWN EVIDENCE, NOT ON HOW STRAIGHT THE ARMS LOOK. A main road can
+            -- bend 53 degrees through a T while its side road runs nearly dead straight into the far
+            -- arm; pairing by straightness there gave the side road the main road's partner and
+            -- threw the real through routes away. What says two arms are one road is that lanes RUN
+            -- between them - the walks that pair an entry with an exit without ever turning away -
+            -- and the more of them, and in both directions, the surer. Straightness only settles a
+            -- tie.
+            local cand = {}
+            for i = 1, #arms do
+                for j = i + 1, #arms do
+                    local walks, other = 0, 0
+                    for _, rt in ipairs(routes) do
+                        local ae, ax = armOf[rt.e], armOf[rt.x]
+                        if (ae == arms[i] and ax == arms[j]) or (ae == arms[j] and ax == arms[i]) then
+                            if (rt.ang or 0) == 0 then walks = walks + 1 else other = other + 1 end
+                        end
+                    end
+                    if walks + other > 0 then
+                        cand[#cand + 1] = { a = arms[i], b = arms[j], score = walks * 10 + other,
+                            dev = math.abs(math.pi - junctionAngDiff(arms[i].b, arms[j].b)) }
+                    end
+                end
+            end
+            table.sort(cand, function(p, q)
+                if p.score ~= q.score then return p.score > q.score end
+                return p.dev < q.dev
+            end)
+            for _, c in ipairs(cand) do
+                if c.a.partner == nil and c.b.partner == nil then c.a.partner, c.b.partner = c.b, c.a end
+            end
+            if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG then
+                for i, a in ipairs(arms) do
+                    Logging.info("[FlyoverEditor]: ARM %d outward %.0f deg, partner %s", i, math.deg(a.b) % 360,
+                        a.partner and string.format("%.0f deg", math.deg(a.partner.b) % 360) or "none")
+                end
+                for _, rt in ipairs(routes) do
+                    Logging.info("[FlyoverEditor]: ROUTE in-arm %.0f -> out-arm %.0f", math.deg(armOf[rt.e].b) % 360, math.deg(armOf[rt.x].b) % 360)
+                end
+            end
+            local kept = {}
+            for _, rt in ipairs(routes) do
+                local ae, ax = armOf[rt.e], armOf[rt.x]
+                if ae ~= nil and ax ~= nil and ae ~= ax and ae.partner == ax then kept[#kept + 1] = rt end
+            end
+            routes = kept
         end
         self._jxRoutes = routes
         for _, rt in ipairs(routes) do
@@ -8698,7 +8786,17 @@ function ADFlyoverEditor:updateJunctionPreview()
                             end
                         end
                     end
-                    if #nodes >= 2 then
+                    -- A SIDE LANE OF THIS JUNCTION ENDS AT THIS JUNCTION. The scope circle also cuts
+                    -- lanes that are only passing on their way to the junction next door, and one of
+                    -- those was being tidied as this junction's own: cut 31 m out, down by the
+                    -- neighbour, and carried off towards a box it never reached - a dangling line, a
+                    -- lane trimmed far short, and an arm count of seven on a T. Whose lane it is
+                    -- comes from the same ownership the wiring uses, asked of the lane's own end.
+                    local mine = true
+                    if clearMode and lockedCrossing ~= nil and #nodes >= 1 then
+                        mine = isOwnForClear(nodes[#nodes])
+                    end
+                    if #nodes >= 2 and mine then
                         side[#side + 1] = { nodes = nodes, useOut = (ap.dir == "in"), cutNode = cutAt and nodes[cutAt] or nil }
                     end
                 end
@@ -12336,7 +12434,35 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 -- with a straight guess that sat a metre off it. They are kept, and the carry runs
                 -- from the lane's own end. (With NO tie node there is no telling lane from
                 -- connector, and the old rule stands.)
-                if AutoDrive.FLYOVER_JUNCTION_KEEP_PAST_TIE ~= false and sl.cutNode ~= nil and #lane > ni + 1 then
+                -- ...PROVIDED IT RUNS STRAIGHT ON. Where the side road ENDS at the junction, what lies
+                -- past its tie node is not lane at all but one of its connectors, swinging away for
+                -- its turn - and keeping that left a stub of old connector hanging beside the fresh
+                -- lane end. A lane that continues holds its heading; a connector does not. The turn
+                -- from the clean node to the tip is added up, and only a run that stays within a few
+                -- degrees of straight is kept.
+                local straightOn = false
+                if sl.cutNode ~= nil and #lane > ni + 1 then
+                    local cum, prevAng, worst = 0, nil, 0
+                    for i = ni + 1, #lane do
+                        local a = math.atan2(lane[i].x - lane[i - 1].x, lane[i].z - lane[i - 1].z)
+                        if prevAng ~= nil then
+                            local d = a - prevAng
+                            while d > math.pi do d = d - 2 * math.pi end
+                            while d < -math.pi do d = d + 2 * math.pi end
+                            cum = cum + d
+                            if math.abs(cum) > worst then worst = math.abs(cum) end
+                        end
+                        prevAng = a
+                    end
+                    -- and against the clean heading itself, so a lane that leaves at an angle from
+                    -- the very first step does not pass for having no turn between its own steps
+                    local a0 = math.atan2(lane[ni + 1].x - lane[ni].x, lane[ni + 1].z - lane[ni].z)
+                    local d0 = a0 - math.atan2(hx, hz)
+                    while d0 > math.pi do d0 = d0 - 2 * math.pi end
+                    while d0 < -math.pi do d0 = d0 + 2 * math.pi end
+                    straightOn = (worst <= math.rad(10)) and (math.abs(d0) <= math.rad(10))
+                end
+                if AutoDrive.FLYOVER_JUNCTION_KEEP_PAST_TIE ~= false and straightOn then
                     lastOn = #lane
                     near = lane[#lane]
                     arc = { { x = near.x, z = near.z } }
