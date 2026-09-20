@@ -285,6 +285,9 @@ AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE = 12
 -- about the cursor. It was 40 m, at which distance the click is no longer choosing anything - three
 -- junctions sat inside that range at one site on the test map.
 AutoDrive.FLYOVER_JUNCTION_SELECT_RADIUS = 20
+-- How close two road-meeting points must be to count as ONE junction: 10 reads a staggered crossing
+-- as two T's, 20 as one offset 4-way. See junctionCentres.
+AutoDrive.FLYOVER_JUNCTION_MERGE = 10
 -- An arm has to go SOMEWHERE for the thing it leaves to be a junction. Below this a third arm is a
 -- field entrance, a lay-by or the stub of something long since removed, and clearing around it does
 -- damage for no gain.
@@ -6795,6 +6798,108 @@ local function junctionLayChain(NA, points, NB, dual, flags)
     return true
 end
 
+--- WHERE THE ROADS MEET, found from the roads and not from the forks. A cluster of forks is where
+--- CONNECTORS START, and at a wide junction the tie forks sit 15-20 m out along every arm: clustering
+--- them finds several "junctions" around one, puts the chosen one's middle on one end of it, and
+--- leaves every later step - scope, arms, box, whose wiring is whose - working from the wrong place.
+---
+--- A turn connector bends from one road into another, so its two END TANGENTS, carried on, meet at
+--- the corner it cuts - which is where those two roads cross. Every connector of a junction points
+--- at the same spot, a kickout that starts 20 m up an arm included, so a junction's own far tie
+--- forks need no rule to be recognised as its own; and a genuine neighbour is a different spot.
+--- Checked against 34 hand labels of "separate junction" / "part of this one": all 34.
+---
+--- FLYOVER_JUNCTION_MERGE is how close two meeting points must be to count as ONE junction, and
+--- it is the whole of the difference between reading a staggered crossing as two T's (10 m) or as
+--- one offset 4-way (20 m).
+---
+--- It cannot see a junction with no connectors (a cleared one - the ring of lane ends finds those)
+--- nor a shallow merge, whose branches leave at 15 degrees and cut no corner. Where it finds
+--- nothing the selection falls back to the fork clusters, exactly as before.
+function ADFlyoverEditor:junctionCentres()
+    local count = ADGraphManager:getWayPointsCount()
+    local merge = AutoDrive.FLYOVER_JUNCTION_MERGE or 10
+    if self._jxCentres ~= nil and self._jxCentresCount == count and self._jxCentresMerge == merge then
+        return self._jxCentres
+    end
+    local wps = ADGraphManager:getWayPoints()
+    local deg = {}
+    for _, w in pairs(wps) do
+        if w ~= nil and w.id ~= nil then
+            local s, n = {}, 0
+            for _, id in ipairs(w.out or {}) do if not s[id] then s[id] = true n = n + 1 end end
+            for _, id in ipairs(w.incoming or {}) do if not s[id] then s[id] = true n = n + 1 end end
+            deg[w] = n
+        end
+    end
+    local function wrap(d)
+        while d > math.pi do d = d - 2 * math.pi end
+        while d < -math.pi do d = d + 2 * math.pi end
+        return d
+    end
+    local corners = {}
+    for _, f in pairs(wps) do
+        if f ~= nil and (deg[f] or 0) >= 3 then
+            for _, oid in ipairs(f.out or {}) do
+                local o = ADGraphManager:getWayPointById(oid)
+                if o ~= nil then
+                    local chain, prev, cur, len = { f, o }, f, o, math.sqrt((o.x - f.x) ^ 2 + (o.z - f.z) ^ 2)
+                    while (deg[cur] or 0) == 2 and #chain < 200 and len <= 60 do
+                        local nxt = nil
+                        for _, nid in ipairs(cur.out or {}) do
+                            local w = ADGraphManager:getWayPointById(nid)
+                            if w ~= nil and w ~= prev then nxt = w break end
+                        end
+                        if nxt == nil then break end
+                        len = len + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
+                        prev, cur = cur, nxt
+                        chain[#chain + 1] = cur
+                    end
+                    local last = chain[#chain]
+                    if #chain >= 3 and (deg[last] or 0) >= 3 and len <= 60 then
+                        local a0 = math.atan2(chain[2].x - chain[1].x, chain[2].z - chain[1].z)
+                        local a1 = math.atan2(last.x - chain[#chain - 1].x, last.z - chain[#chain - 1].z)
+                        local turn = math.abs(wrap(a1 - a0))
+                        if turn >= math.rad(30) and turn <= math.rad(150) then
+                            local d1x, d1z, d2x, d2z = math.sin(a0), math.cos(a0), math.sin(a1), math.cos(a1)
+                            local den = d1x * d2z - d1z * d2x
+                            if math.abs(den) > 1e-6 then
+                                local t = ((last.x - f.x) * d2z - (last.z - f.z) * d2x) / den
+                                local px, pz = f.x + d1x * t, f.z + d1z * t
+                                if (px - f.x) ^ 2 + (pz - f.z) ^ 2 <= 60 * 60 then
+                                    corners[#corners + 1] = { x = px, z = pz, chain = chain }
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    local groups = {}
+    for _, c in ipairs(corners) do
+        local hit = nil
+        for _, g in ipairs(groups) do
+            if (c.x - g.x) ^ 2 + (c.z - g.z) ^ 2 <= merge * merge then hit = g break end
+        end
+        if hit == nil then
+            hit = { x = c.x, z = c.z, sx = 0, sz = 0, n = 0, forks = {}, wiring = {} }
+            groups[#groups + 1] = hit
+        end
+        hit.sx, hit.sz, hit.n = hit.sx + c.x, hit.sz + c.z, hit.n + 1
+        hit.x, hit.z = hit.sx / hit.n, hit.sz / hit.n
+        hit.forks[c.chain[1]] = true
+        hit.forks[c.chain[#c.chain]] = true
+        for i = 2, #c.chain - 1 do hit.wiring[c.chain[i]] = true end
+    end
+    local out = {}
+    for _, g in ipairs(groups) do
+        if g.n >= 2 then out[#out + 1] = g end
+    end
+    self._jxCentres, self._jxCentresCount, self._jxCentresMerge = out, count, merge
+    return out
+end
+
 --- STEP 1 OF A CLEAR: pick ONE junction from a click, and say whether it is a junction at all.
 ---
 --- The cluster of forks nearest the cursor is the site. What it does NOT do is decide how much road
@@ -6909,6 +7014,8 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
             for id in pairs(nb) do
                 if not inCluster[id] then
                     local w = ADGraphManager:getWayPointById(id)
+                    -- a way on that is one of this junction's own connectors is not an arm of it
+                    if w ~= nil and best.wiring ~= nil and best.wiring[w] then w = nil end
                     if w ~= nil then
                         local len, prev, cur, hitFork = 0, f, w, false
                         local seen = { [f.id] = true }
@@ -6977,13 +7084,13 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
         -- close pair, once the neighbour is cleared, the arm towards it ends at the neighbour's box
         -- 13 m away, and a junction with seven forks of wiring in it was refused as "a turning or
         -- an entrance" for having only two long arms.
-        local proper = (not best.virgin) and #best.nodes >= 4
+        local proper = ((not best.virgin) and #best.nodes >= 4) or best.fromRoads == true
         if going < 3 and not proper then
             return nil, string.format("%d of the %d arms here go anywhere (the rest stop within %d m) - a turning or an entrance, not a junction",
                 going, #roads, MINARM)
         end
         return { x = best.x, z = best.z, forks = best.nodes, roads = roads, nArms = #roads,
-                 virgin = (best.virgin == true) }
+                 virgin = (best.virgin == true), fromRoads = (best.fromRoads == true) }
     end
 
     -- ...BUT NEVER PAST A REAL JUNCTION. Trying the next candidate is for stepping over a stray -
@@ -6992,6 +7099,31 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
     -- on past it answered a click on a wired junction with the state of the one next door, 17 m
     -- away and already cleared - "this junction is already clear", said of a junction with seven
     -- forks still in it.
+    -- ROADS FIRST. Where the roads themselves say there is a junction near the click, that is the
+    -- junction: its middle is where they meet, and its forks are the ends of the connectors that
+    -- point there - however far up the arms those sit. The fork clusters below are only the
+    -- fallback, for what the roads cannot show: a cleared junction (no connectors left to point
+    -- anywhere) and a shallow merge (no corner cut). A cleared junction that is NEARER the click
+    -- than any wired one still wins, so a virgin site beside a wired one can be picked.
+    if AutoDrive.FLYOVER_JUNCTION_ROADS_FIRST ~= false then
+        local bestC, bd = nil, SELECT * SELECT
+        for _, c in ipairs(self:junctionCentres() or {}) do
+            local d = (c.x - cx) ^ 2 + (c.z - cz) ^ 2
+            if d < bd then bd, bestC = d, c end
+        end
+        local virginNearer = false
+        for _, s in ipairs(sites) do
+            if s.virgin and s.d2 < bd then virginNearer = true break end
+        end
+        if bestC ~= nil and not virginNearer then
+            local nodes = {}
+            for fk in pairs(bestC.forks) do
+                if fk.id ~= nil then nodes[#nodes + 1] = fk end
+            end
+            local site = evaluate({ x = bestC.x, z = bestC.z, nodes = nodes, wiring = bestC.wiring, fromRoads = true })
+            if site ~= nil then return site end
+        end
+    end
     local firstWhy = nil
     for _, s in ipairs(sites) do
         if s.d2 > SELECT * SELECT then break end
@@ -7709,6 +7841,32 @@ function ADFlyoverEditor:updateJunctionPreview()
                     end
                 end
                 crossings[#crossings + 1] = { x = sx / n, z = sz / n, n = n }
+            end
+        end
+        -- THE CROSSINGS ARE WHERE THE ROADS MEET, where the roads can say. Fork clusters stand in
+        -- for junctions badly: one wide junction makes several, and the cluster a kickout makes
+        -- 13 m up a side road was taken for the junction next door - its lane was handed to it and
+        -- both connectors joining that lane were spared as "that junction's wiring". With the
+        -- road-meeting points as the crossings every fork simply goes to the nearest place roads
+        -- actually meet, and a junction's far tie forks are its own without any rule saying so.
+        -- A fork cluster survives as a crossing only where no meeting point accounts for it - a
+        -- shallow merge, which cuts no corner for the roads-first finder to see.
+        if AutoDrive.FLYOVER_JUNCTION_ROADS_FIRST ~= false then
+            local byRoads = {}
+            for _, c in ipairs(self:junctionCentres() or {}) do
+                if (c.x - cx) ^ 2 + (c.z - cz) ^ 2 <= scan2 then
+                    byRoads[#byRoads + 1] = { x = c.x, z = c.z, n = c.n }
+                end
+            end
+            if #byRoads > 0 then
+                for _, old in ipairs(crossings) do
+                    local claimed = false
+                    for _, c in ipairs(byRoads) do
+                        if (c.x - old.x) ^ 2 + (c.z - old.z) ^ 2 <= 25 * 25 then claimed = true break end
+                    end
+                    if not claimed then byRoads[#byRoads + 1] = old end
+                end
+                crossings = byRoads
             end
         end
     end
@@ -12396,6 +12554,24 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 local l = math.sqrt(sx * sx + sz * sz)
                 if #grp >= 2 and l > 0 then
                     for _, g in ipairs(grp) do sharedHeading[g.sl] = { hx = sx / l, hz = sz / l } end
+                    -- THE LANES OF ONE ROAD ARE CUT AT THE SAME PLACE. Each lane finds its own clean
+                    -- node, and on a bend they disagree wildly: one lane of a side road had a plain
+                    -- tie node 11 m out while the search for where its partner's swing began ran back
+                    -- up the curve to 30 m - eight points of road dug up and re-laid as an arc beside
+                    -- a lane left almost untouched, and the pair 0.6 m wider at the box than up the
+                    -- road. The lane cut NEAREST the junction is the evidence that the road is clean
+                    -- from there, so its station is every lane's station.
+                    local nearest = math.huge
+                    for _, g in ipairs(grp) do
+                        local d = math.sqrt((g.near.x - box.centre.x) ^ 2 + (g.near.z - box.centre.z) ^ 2)
+                        if d < nearest then nearest = d end
+                    end
+                    local grpState = { width = nil }
+                    for _, g in ipairs(grp) do
+                        local sh = sharedHeading[g.sl]
+                        sh.station = math.sqrt((g.near.x - box.centre.x) ^ 2 + (g.near.z - box.centre.z) ^ 2)
+                        sh.nearest, sh.group = nearest, grpState
+                    end
                 end
                 -- AND THE ROAD'S OWN WIDTH, FROM WHERE IT STILL HAS IT. The node before a tie node is
                 -- already on the flare - the lanes spread for their turns before the connectors
@@ -12442,8 +12618,16 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         end
     end
 
-    -- SIDE-ROAD LANES
-    for _, sl in ipairs(routes.side or {}) do
+    -- SIDE-ROAD LANES - the lane cut nearest the junction first: it is the clean one, and its
+    -- finished line is what its partner is laid beside.
+    local sideOrder = {}
+    for _, sl in ipairs(routes.side or {}) do sideOrder[#sideOrder + 1] = sl end
+    table.sort(sideOrder, function(p, q)
+        local a1 = sharedHeading[p] and sharedHeading[p].station or math.huge
+        local b1 = sharedHeading[q] and sharedHeading[q].station or math.huge
+        return a1 < b1
+    end)
+    for _, sl in ipairs(sideOrder) do
         -- TRIM AND CARRY FIRST, SMOOTH LAST. Smoothing a lane that still has the first swing of an old
         -- kickout on its end bakes that swing into the lane; the clean line has to be read off the
         -- lane as it was recorded, and the off-line nodes gone, before anything is smoothed.
@@ -12575,6 +12759,66 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                         ax2, az2 = ax2 * cs - az2 * sn, ax2 * sn + az2 * cs
                         px, pz = px + ax2 * 0.25, pz + az2 * 0.25
                         arc[#arc + 1] = { x = px, z = pz }
+                    end
+                end
+                -- A LANE CUT FAR BACK IS LAID BESIDE ITS PARTNER, NOT ON A GUESS. On a bend the two
+                -- lanes of a road find very different clean nodes - one a plain tie node 11 m out,
+                -- the other 30 m back, because its last 20 m already carry the old kickout's swing.
+                -- Carrying that one 30 m on a heading or a fitted arc is a guess at a road whose
+                -- true line is lying right beside it: the partner, already finished. So it is laid
+                -- as that line moved sideways by the road's own width - parallel by construction,
+                -- round whatever bend the road makes.
+                do
+                    local sh = sharedHeading[sl]
+                    local gs = sh and sh.group or nil
+                    if gs ~= nil and gs.refLine ~= nil and sh.station > (sh.nearest or 0) + 5
+                        and AutoDrive.FLYOVER_JUNCTION_SHARED_HEADING ~= false then
+                        local ref = gs.refLine
+                        -- which side of the partner this lane lies on, and how far, read where this
+                        -- lane is still clean
+                        local bi, bd = 1, math.huge
+                        for i = 1, #ref do
+                            local d = (ref[i].x - near.x) ^ 2 + (ref[i].z - near.z) ^ 2
+                            if d < bd then bd, bi = d, i end
+                        end
+                        local i2 = math.min(#ref, bi + 1)
+                        local i1 = math.max(1, i2 - 1)
+                        local tx, tz = ref[i2].x - ref[i1].x, ref[i2].z - ref[i1].z
+                        local tl = math.sqrt(tx * tx + tz * tz)
+                        if tl > 0.01 then
+                            tx, tz = tx / tl, tz / tl
+                            local lat = (near.x - ref[bi].x) * -tz + (near.z - ref[bi].z) * tx
+                            local off = {}
+                            for i = bi, #ref do
+                                local j2 = math.min(#ref, i + 1)
+                                local j1 = math.max(1, j2 - 1)
+                                local ux, uz = ref[j2].x - ref[j1].x, ref[j2].z - ref[j1].z
+                                local ul = math.sqrt(ux * ux + uz * uz)
+                                if ul > 0.01 then
+                                    ux, uz = ux / ul, uz / ul
+                                    off[#off + 1] = { x = ref[i].x + -uz * lat, z = ref[i].z + ux * lat }
+                                end
+                            end
+                            if #off >= 2 then
+                                -- resampled every quarter metre, and run on straight past the end
+                                local fine = { { x = near.x, z = near.z } }
+                                for i = 1, #off do
+                                    local p = fine[#fine]
+                                    local dx, dz = off[i].x - p.x, off[i].z - p.z
+                                    local L = math.sqrt(dx * dx + dz * dz)
+                                    local n = math.floor(L / 0.25)
+                                    for k = 1, n do fine[#fine + 1] = { x = p.x + dx * k / n, z = p.z + dz * k / n } end
+                                end
+                                local p, q = fine[#fine - 1] or fine[#fine], fine[#fine]
+                                local ex, ez = q.x - p.x, q.z - p.z
+                                local el = math.sqrt(ex * ex + ez * ez)
+                                if el > 0.001 then
+                                    ex, ez = ex / el, ez / el
+                                    for k = 1, 120 do fine[#fine + 1] = { x = q.x + ex * 0.25 * k, z = q.z + ez * 0.25 * k } end
+                                end
+                                arc = fine
+                            end
+                        end
                     end
                 end
                 -- NOTHING PAST THE CLEAN NODE SURVIVES. Keeping the nodes that still sat "on the line"
@@ -12719,6 +12963,14 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     end
                 end
                 ends[#ends + 1] = lane[#lane]
+                do
+                    local sh = sharedHeading[sl]
+                    if sh ~= nil and sh.group ~= nil and sh.group.refLine == nil then
+                        local ref = {}
+                        for _, n2 in ipairs(lane) do ref[#ref + 1] = { x = n2.x, z = n2.z } end
+                        sh.group.refLine = ref
+                    end
+                end
             end
             lane = smoothLane(lane, sl.useOut)
         end
