@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.31.0.2 — Hotfix: the mouse wheel freeze this line had already fixed once (2026-09-20)
+
+Ports forward one fix that predates the junction-placement work and was never part of this
+0.31.0.x line: AutoDrive's `mouseWheelActive` flag could freeze true - most commonly from a
+destination list left expanded when the editor opened - which silently blocked camera zoom in
+both the editor and, after closing it, the vehicle too. The editor now collapses any expanded
+AutoDrive pull-down list and clears the flag on both opening and closing, instead of only
+clearing it once on close. Unrelated to 0.31.0.1's AutoDrive-version compatibility fixes - this
+one affects every AutoDrive version.
+
+## 0.31.0.1 — Hotfix: older AutoDrive compatibility, menu safety, field loop (2026-09-20)
+
+A targeted patch on top of 0.31.0.0 for players on an older AutoDrive install. If you are already
+on a current AutoDrive (3.0.0.8 or newer) this release only adds the field loop and launch-button
+items below - the compatibility fixes are no-ops for you.
+
+**Older AutoDrive compatibility (3.0.0.6 and earlier)**
+
+- **Mouse wheel dead in the editor** — every wheel-driven control (spline curvature, siding length,
+  parallel distance, divide count, and more) silently did nothing, because AutoDrive only wired its
+  side of the hook (`GuiTopDownCamera.onZoom`) up from version 3.0.0.8 onward. The editor now hooks
+  the camera directly, so it works whether or not the installed AutoDrive ever wired that up itself.
+- **Random "proxy draw failed" errors, and a flooded log** — AutoDrive's own preview-drawing function
+  had no protection against an empty spline preview before 3.0.0.8, which crashed almost every frame
+  once the editor was open. The editor now guards that call itself, and a failure - from this or
+  anything else - now genuinely stops retrying instead of repeating the same error hundreds of times
+  per session.
+
+**Safety**
+
+- The editor could be opened on top of certain in-game menus (for example the AI job / map-overview
+  screen used to assign a vehicle job), leaving both the menu and the editor fighting over the mouse
+  and camera with no clean way back out short of the debug console. Opening now refuses cleanly
+  while a menu has the screen, and the launch button beside AutoDrive's HUD hides itself in the same
+  situation instead of sitting there as a dead click target.
+
+**Field loop**
+
+- Regained its own **priority** (primary/secondary) and **track** (clockwise / counter-clockwise /
+  two-way) controls on the tool card, the way draw and convert already have theirs.
+- Its obstacle check now also catches **telephone poles, fences, signs and small buildings** - it was
+  checking only for trees, so a loop could route straight through a pole line.
+
+**Launch button**
+
+- Can now be **hidden**, or **repositioned** (left / right / above / below AutoDrive's HUD instead of
+  the default auto-placement), from the settings dialog under **LAUNCH BUTTON**.
+
+**Junction tool**
+
+- Disconnected for this release - removed from the tool panel, and refused outright if anything else
+  tries to select it. The auto-junction-placement work this line shipped with is still under active
+  development on the main branch and is not part of this hotfix; it is unaffected under the hood and
+  will return in a future release once that work is ready.
+
 ## 0.30.20.0 — Full German manual, and a feedback link (2026-09-17)
 
 - **Full German manual** — the in-game manual and the contextual **?** help are now fully localized:

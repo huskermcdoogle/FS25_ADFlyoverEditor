@@ -40,6 +40,13 @@ X.draws = 0
 X.drewThisFrame = false
 X.lastError = nil
 X.showMarker = true
+-- Latched true by a draw failure (see run()). "disabled" in the log message next to lastError used
+-- to be aspirational: X.clear() only touched X.enabled, and run()'s own "wanted" check is
+-- `X.enabled or ADFlyoverEditor.active` - true regardless of X.enabled for as long as the editor
+-- stays open - so a genuine per-frame error retried and re-failed on every single frame, 910 times
+-- in one measured session for one underlying fault. This is the actual latch: checked before any
+-- work is attempted, and the one thing run() clears back to false on a fresh enable().
+X.failed = false
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, X.MOD_NAME, ...)
@@ -76,6 +83,15 @@ function X.clear()
     X.enabled = false
     X.drewThisFrame = false
     ADFlyoverWrappers.proxyOwnsNetwork = false
+end
+
+--- Give the proxy a fresh chance next time it is asked to draw. Called from
+--- ADFlyoverEditor:enable(), so a failure in one session (an AutoDrive version gap, say) does not
+--- follow the player into every session for the rest of the game - but also does not retry within
+--- the same session, which is what turned one fault into hundreds of identical log lines.
+function X.resetFailure()
+    X.failed = false
+    X.lastError = nil
 end
 
 --- Any vehicle carrying AutoDrive state will do: the stand-in borrows its .ad tables and its
@@ -134,6 +150,12 @@ function X.willDraw()
 end
 
 function X.run()
+    if X.failed then
+        -- Already logged once, in detail, when it happened. Retrying every frame only turns that
+        -- one fault into a log full of identical lines - see X.failed's own comment.
+        ADFlyoverWrappers.proxyOwnsNetwork = false
+        return
+    end
     local cx, cz = activeCursor()
     local wanted = X.enabled or (ADFlyoverEditor ~= nil and ADFlyoverEditor.active)
     if not wanted or cz == nil then
@@ -197,7 +219,19 @@ function X.run()
             -- onDrawPreviews, under the same condition. Suppressing onDrawUIInfo takes both away, so
             -- calling only the first left the spline tool placing curves that were never drawn, and a
             -- curvature wheel with nothing on screen to show its effect. Same stand-in, same reason.
-            if type(AD.onDrawPreviews) == "function" then
+            --
+            -- The AutoDrive.splineInterpolation check here is OURS, not just belt-and-braces: AutoDrive's
+            -- own onDrawPreviews only grew "if splineInterpolation == nil or not .valid then return end"
+            -- at 3.0.0.8. On 3.0.0.6 and earlier it goes straight to
+            -- AutoDrive.splineInterpolation.startNode.y with nothing guarding it - which is nil every
+            -- frame there is no live spline preview, i.e. almost always - so calling it unconditionally
+            -- crashed on the very first draw on those versions ("attempt to index nil with 'startNode'",
+            -- reported from Specialization.lua) and disabled the proxy for the rest of the session. This
+            -- mirrors the check newer AutoDrive already does internally, so it is a no-op there and the
+            -- one thing that makes this safe on every version regardless of whether AutoDrive's own copy
+            -- of it exists.
+            if type(AD.onDrawPreviews) == "function"
+                and AutoDrive.splineInterpolation ~= nil and AutoDrive.splineInterpolation.valid then
                 AD.onDrawPreviews(standIn)
             end
         end
@@ -209,6 +243,7 @@ function X.run()
     if not ok then
         X.lastError = tostring(err)
         X.clear()
+        X.failed = true
         Logging.error("[%s] proxy draw failed, disabled: %s", X.MOD_NAME, X.lastError)
     end
 end
@@ -223,8 +258,9 @@ function X.drawMarker()
 end
 
 function X.describe()
-    return string.format("proxy enabled=%s cursor=%s/%s draws=%d%s",
+    return string.format("proxy enabled=%s failed=%s cursor=%s/%s draws=%d%s",
         tostring(X.enabled),
+        tostring(X.failed),
         X.cursorX and string.format("%.1f", X.cursorX) or "-",
         X.cursorZ and string.format("%.1f", X.cursorZ) or "-",
         X.draws,

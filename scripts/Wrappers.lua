@@ -34,6 +34,8 @@ W.counts = {
                         -- wrapper 2b is carrying the HUD suppression alone.
     editorShowForced = 0,
     wheelOffered = 0,
+    topDownZoomOffered = 0,
+    oldAutoDriveCurvature = 0,
 }
 
 W.hudWrapped = false
@@ -141,6 +143,14 @@ function W.install(AD)
     -- Note the editor gets first refusal, not unconditional ownership: when it declines, or when
     -- there is no editor yet as in stage 3, the wheel falls through and still zooms.
     local originalHandleSplineCurvature = AD.handleSplineCurvature
+    -- Captured BEFORE the overwrite two lines down, which is unconditional and runs regardless of
+    -- AutoDrive's version - so by the time wrapper 5 below would otherwise ask "does
+    -- AD.handleSplineCurvature exist", the answer is always yes, because THIS assignment just put
+    -- it there. That is not "does AutoDrive support this", it is "did wrapper 4 run" - always true -
+    -- and it is exactly why the old-AutoDrive curvature fallback never fired even though wrapper 5
+    -- was installed correctly: it was checking its own sibling wrapper's handiwork. This flag is the
+    -- real answer, fixed at install time from what AD.handleSplineCurvature was BEFORE we touched it.
+    local hadRealHandleSplineCurvature = (originalHandleSplineCurvature ~= nil)
     AD.handleSplineCurvature = function(selfArg, offset, ...)
         if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
             W.counts.wheelOffered = W.counts.wheelOffered + 1
@@ -156,6 +166,56 @@ function W.install(AD)
             AD.mouseWheelActive = false
         end
         return originalHandleSplineCurvature(selfArg, offset, ...)
+    end
+
+    -- 5. GuiTopDownCamera.onZoom, wrapped DIRECTLY - not just trusted to reach wrapper 4 above.
+    --
+    -- Wrapper 4 patches AD.handleSplineCurvature and relies entirely on AutoDrive itself calling it
+    -- by name from GuiTopDownCamera.onZoom (AutoDrive.onZoomTopDownCamera). Checked across every
+    -- AutoDrive release from 3.0.0.0 to 3.0.1.2: that wiring - onZoomTopDownCamera, and
+    -- handleSplineCurvature itself - was only ADDED at 3.0.0.8. On 3.0.0.6 and earlier, AutoDrive
+    -- never touches GuiTopDownCamera.onZoom at all (only VehicleCamera.zoomSmoothly, for the
+    -- in-vehicle camera, which the flyover camera is not), so wrapper 4 patches a function nothing
+    -- ever calls, ADFlyoverEditor:handleWheel is never reached through the flyover camera's own
+    -- zoom, and EVERY tool's wheel behaviour - not just spline curvature - goes dead the moment our
+    -- own top-down camera is the one doing the zooming. This is what a customer on an old AutoDrive
+    -- reported as "the wheel isn't working on the spline tool" and a fresh install (3.0.0.8+) could
+    -- not reproduce.
+    --
+    -- Hooking the base-game method ourselves removes that dependency: ADFlyoverEditor:handleWheel
+    -- gets first refusal here regardless of what AutoDrive did or did not wire up. When AutoDrive's
+    -- own handleSplineCurvature exists (3.0.0.8+, wrapped or not), a decline here just falls through
+    -- to it exactly as before - wrapper 4 still does the real work, this is a no-op alongside it.
+    -- Only when handleSplineCurvature does not exist at all (old AutoDrive) does this do the
+    -- curvature math itself, using AutoDrive's own formula and clamp - unchanged across every
+    -- release checked - so the feature works instead of silently depending on a hook that was never
+    -- there.
+    if GuiTopDownCamera ~= nil and type(GuiTopDownCamera.onZoom) == "function"
+        and type(Utils) == "table" and type(Utils.overwrittenFunction) == "function" then
+        GuiTopDownCamera.onZoom = Utils.overwrittenFunction(GuiTopDownCamera.onZoom,
+            function(cameraSelf, superFunc, action, offset, ...)
+                if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
+                    W.counts.topDownZoomOffered = W.counts.topDownZoomOffered + 1
+                    -- onZoomTopDownCamera calls handleSplineCurvature(-offset); match that sign so
+                    -- curvature turns the same way here as it does on a version new enough to reach
+                    -- wrapper 4's copy of this same math.
+                    if ADFlyoverEditor:handleWheel(-offset) then
+                        return
+                    end
+                    if not hadRealHandleSplineCurvature then
+                        if AutoDrive.splineInterpolation ~= nil and AutoDrive.splineInterpolation.valid then
+                            W.counts.oldAutoDriveCurvature = W.counts.oldAutoDriveCurvature + 1
+                            AutoDrive.splineInterpolationUserCurvature = math.clamp(
+                                (AutoDrive.splineInterpolationUserCurvature or AutoDrive.FLYOVER_DEFAULT_CURVATURE or 1.5)
+                                    - offset / 12, 0.49, 3.5)
+                            return
+                        end
+                        AD.mouseWheelActive = false
+                    end
+                end
+                return superFunc(cameraSelf, action, offset, ...)
+            end)
+        W.topDownZoomWrapped = true
     end
 
     -- 6. The proxy's ride. AutoDrive.draw is a mod event listener, so the engine looks it up by
@@ -294,15 +354,16 @@ function W.install(AD)
     end
 
     W.installed = true
-    log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature, draw%s",
-        W.hudWrapped and "Hud.drawHud, " or "", W.dialogWrapped and ", EnterTargetNameGui" or "")
+    log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature, %sdraw%s",
+        W.hudWrapped and "Hud.drawHud, " or "", W.topDownZoomWrapped and "GuiTopDownCamera.onZoom, " or "",
+        W.dialogWrapped and ", EnterTargetNameGui" or "")
     return true
 end
 
 function W.describe()
     return string.format(
-        "installed=%s hudWrapped=%s active=%s proxyOwnsNetwork=%s | mouse %d, onDrawUIInfo %d, drawHud %d, editorShow %d, wheel %d",
-        tostring(W.installed), tostring(W.hudWrapped), tostring(editorActive()), tostring(W.proxyOwnsNetwork),
+        "installed=%s hudWrapped=%s topDownZoomWrapped=%s active=%s proxyOwnsNetwork=%s | mouse %d, onDrawUIInfo %d, drawHud %d, editorShow %d, wheel %d, topDownZoom %d, oldADCurvature %d",
+        tostring(W.installed), tostring(W.hudWrapped), tostring(W.topDownZoomWrapped), tostring(editorActive()), tostring(W.proxyOwnsNetwork),
         W.counts.mouseSuppressed, W.counts.onDrawUIInfo, W.counts.drawHud,
-        W.counts.editorShowForced, W.counts.wheelOffered)
+        W.counts.editorShowForced, W.counts.wheelOffered, W.counts.topDownZoomOffered, W.counts.oldAutoDriveCurvature)
 end

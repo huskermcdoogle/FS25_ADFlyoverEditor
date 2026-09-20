@@ -292,7 +292,9 @@ function ADFlyoverHud:buildRows(editor)
         { "MODE", { T.NONE } },
         { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
-        { "CONNECT", { T.CONVERT, T.MERGE, T.JUNCTION } },
+        -- JUNCTION is disconnected in this release (see the 0.31.0.1 patch notes) - left out of
+        -- this group entirely so there is no button for it, on top of setTool's own refusal.
+        { "CONNECT", { T.CONVERT, T.MERGE } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
     -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.

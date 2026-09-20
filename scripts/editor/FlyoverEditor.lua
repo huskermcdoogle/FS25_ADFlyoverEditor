@@ -751,7 +751,6 @@ function ADFlyoverEditor:enable()
         return
     end
     Logging.info("[FlyoverEditor]: GuiTopDownCamera and GuiTopDownCursor are both present.")
-
     -- AutoDrive's wheel hook ends in `return AutoDrive.mouseWheelActive` - a flag its HUD sets while
     -- the cursor is over a scrollable element, and RE-ASSERTS on every mouse event for as long as a
     -- pull-down list is expanded. The mouseEvent wrapper mutes AutoDrive's handler while the editor
@@ -760,6 +759,13 @@ function ADFlyoverEditor:enable()
     -- camera could not zoom - and the flag came straight back after exit too, taking the vehicle
     -- camera's zoom with it. Collapse the lists and clear the flag here, on the way in.
     self:releaseAutoDriveWheel()
+    -- A proxy draw failure from an earlier session latches (see ADFlyoverProxy.failed) so one fault
+    -- cannot retry and re-log itself every frame - but that means it also needs a deliberate reset
+    -- somewhere, or it would follow the player into every future session too. Here, on the way in,
+    -- is the natural place: a fresh open is a fresh chance.
+    if ADFlyoverProxy ~= nil and ADFlyoverProxy.resetFailure ~= nil then
+        ADFlyoverProxy.resetFailure()
+    end
     -- Before ANYTHING is touched. Compared against the line printed after teardown, this is the
     -- only pair that says whether a cycle put the input system back as it found it. Logging only
     -- after the push, as the first version did, made a clean cycle indistinguishable from a lossy
@@ -1725,6 +1731,15 @@ function ADFlyoverEditor:menuCancelArmed()
 end
 
 function ADFlyoverEditor:setTool(tool)
+    -- Disconnected in this release (0.31.0.1 patch notes) - the auto-junction-placement tool this
+    -- 0.31.0.0 line shipped with is still mid-rework on the main line and not part of this hotfix.
+    -- Its code is left untouched underneath (see the JUNCTION branches elsewhere in this file and
+    -- in FlyoverHud.lua); this is the one chokepoint every selection path goes through - the panel
+    -- button is already gone (see FlyoverHud's GROUPS table), this is the belt to that braces.
+    if tool == self.TOOL.JUNCTION then
+        Logging.warning("[FlyoverEditor]: the junction tool is disabled in this release.")
+        return
+    end
     if self.tool == tool then
         return
     end
