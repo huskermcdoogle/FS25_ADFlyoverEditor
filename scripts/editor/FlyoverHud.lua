@@ -590,6 +590,15 @@ function ADFlyoverHud:buildRows(editor)
             add("toggle", "no junction here", tostring(editor.junctionRefused))
         end
         if jp ~= nil then
+            -- WHICH junction, and WHAT KIND. The number is the one the survey uses, so a site can be
+            -- named out loud instead of quoted as coordinates; the kind is recorded but nothing
+            -- branches on it yet.
+            if editor.junctionMode == "clear" and (jp.junctionNumber ~= nil or jp.junctionType ~= nil) then
+                add("toggle", "junction", string.format("%s%s%s",
+                    jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered",
+                    (jp.junctionNumber ~= nil and jp.junctionType ~= nil) and "  -  " or "",
+                    jp.junctionType or ""))
+            end
             add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
             add("toggle", "new movements", tostring(jp.nNew))
             if (jp.nRebuild or 0) > 0 then

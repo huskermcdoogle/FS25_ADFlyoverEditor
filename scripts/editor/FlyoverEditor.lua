@@ -6811,6 +6811,113 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
     return { x = best.x, z = best.z, forks = best.forks, roads = roads, nArms = #roads }
 end
 
+--- EVERY JUNCTION ON THE MAP, NUMBERED, so a site can be named out loud. Without a number, talking
+--- about a particular junction means quoting coordinates at each other and hoping we mean the same
+--- one, and a survey done on Tuesday cannot be compared with a run done on Thursday.
+---
+--- The rules are the ones the survey was built with: a fork is a point with three or more
+--- neighbours, forks within 15 m of each other are one junction, and it takes four of them to count
+--- - which is what a junction of two two-lane roads comes to. Deliberately NOT the same test the
+--- clear uses to decide whether to work on a site: this one only has to name things, and a name
+--- that changes when the rule is tuned is worse than no name.
+---
+--- Numbers are carried over from the last build by POSITION, so adding a junction does not renumber
+--- the ones already there - a new one takes the next free number and is logged, so it can be added
+--- to the survey rather than silently shifting everything by one.
+function ADFlyoverEditor:junctionRegistry()
+    local count = ADGraphManager:getWayPointsCount()
+    if self._jxReg ~= nil and self._jxRegCount == count then return self._jxReg end
+
+    local wps = ADGraphManager:getWayPoints()
+    -- By id, so the order is the graph's own and two builds of the same map agree.
+    local ids = {}
+    for _, w in pairs(wps) do
+        if w ~= nil and w.id ~= nil then ids[#ids + 1] = w.id end
+    end
+    table.sort(ids)
+
+    local forks = {}
+    for _, id in ipairs(ids) do
+        local w = ADGraphManager:getWayPointById(id)
+        if w ~= nil then
+            local nb, deg = {}, 0
+            for _, t in ipairs(w.out or {}) do nb[t] = true end
+            for _, f in ipairs(w.incoming or {}) do nb[f] = true end
+            for _ in pairs(nb) do deg = deg + 1 end
+            if deg >= 3 then forks[#forks + 1] = w end
+        end
+    end
+
+    local used, found = {}, {}
+    for i = 1, #forks do
+        if not used[i] then
+            used[i] = true
+            local grp, stack = {}, { i }
+            while #stack > 0 do
+                local k = table.remove(stack)
+                grp[#grp + 1] = forks[k]
+                for j = 1, #forks do
+                    if not used[j]
+                        and (forks[j].x - forks[k].x) ^ 2 + (forks[j].z - forks[k].z) ^ 2 < 15 * 15 then
+                        used[j] = true
+                        stack[#stack + 1] = j
+                    end
+                end
+            end
+            if #grp >= 4 then
+                local sx, sz = 0, 0
+                for _, g in ipairs(grp) do sx, sz = sx + g.x, sz + g.z end
+                found[#found + 1] = { x = sx / #grp, z = sz / #grp, forks = #grp }
+            end
+        end
+    end
+
+    -- Carry the numbers across from the last build.
+    local prev = self._jxReg or {}
+    local taken, added = {}, {}
+    for _, f in ipairs(found) do
+        for _, p in ipairs(prev) do
+            if p.n ~= nil and not taken[p.n]
+                and (p.x - f.x) ^ 2 + (p.z - f.z) ^ 2 <= 20 * 20 then
+                f.n = p.n
+                taken[p.n] = true
+                break
+            end
+        end
+    end
+    local next_ = 1
+    for _, f in ipairs(found) do
+        if f.n == nil then
+            while taken[next_] do next_ = next_ + 1 end
+            f.n, taken[next_] = next_, true
+            if #prev > 0 then added[#added + 1] = f end
+        end
+    end
+
+    for _, f in ipairs(added) do
+        Logging.info("[FlyoverEditor]: junction j%02d is new, at %.1f, %.1f (%d fork points). Worth adding to the survey.",
+            f.n, f.x, f.z, f.forks)
+    end
+    if #prev == 0 then
+        Logging.info("[FlyoverEditor]: junction - %d junction(s) on this map, numbered j01 to j%02d.",
+            #found, #found)
+    end
+
+    self._jxReg, self._jxRegCount = found, count
+    return found
+end
+
+--- The number of the junction nearest (x, z), or nil when there is none close enough to name.
+function ADFlyoverEditor:junctionNumberAt(x, z)
+    if x == nil or z == nil then return nil end
+    local best, bestD = nil, 30 * 30
+    for _, f in ipairs(self:junctionRegistry() or {}) do
+        local d = (f.x - x) ^ 2 + (f.z - z) ^ 2
+        if d < bestD then bestD, best = d, f end
+    end
+    return best and best.n or nil
+end
+
 --- Recompute the junction preview around the cursor: the scope circle, the approaches it cuts, and
 --- which entry->exit movements are new versus already connected. Stored on self.junctionPreview; nil
 --- when there is nothing to show. Pure inspection - it changes no waypoints.
@@ -8394,6 +8501,13 @@ function ADFlyoverEditor:updateJunctionPreview()
             self.junctionPreview.tidyEnds, self.junctionPreview.tidyBands = ends, bands
             self.junctionPreview.boxSweep, self.junctionPreview.tidyRoads = swept, roadsOut
             self.junctionPreview.boxCentre = boxCentre
+        end)
+        -- Named on the card before anything is applied: which junction this is, and what kind.
+        tryCall("junction classify", function()
+            self.junctionPreview.junctionType = self:junctionClassify(self.junctionPreview)
+        end)
+        tryCall("junction number", function()
+            self.junctionPreview.junctionNumber = self:junctionNumberAt(cx, cz)
         end)
     end
 
@@ -12372,8 +12486,10 @@ function ADFlyoverEditor:applyJunctionClear()
                 jp = self.junctionPreview
                 if jp == nil then return end
             end
-            local kind = "?"
-            tryCall("junction classify", function() kind = self:junctionClassify(jp) end)
+            local kind = jp.junctionType or "?"
+            if kind == "?" then
+                tryCall("junction classify", function() kind = self:junctionClassify(jp) end)
+            end
             jp.junctionType = kind
             if self.junctionSite ~= nil then self.junctionSite.kind = kind end
             Logging.info("[FlyoverEditor]: junction - this is a %s. Nothing branches on that yet; it is recorded so rules for each kind have somewhere to attach.",
