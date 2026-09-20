@@ -6525,7 +6525,7 @@ local jxWhy = {}   -- per reason: how many taken, and the farthest of them
 -- between them they say which loose ends are its business. No distance can answer this: a junction
 -- cleared earlier keeps no forks to be recognised by, and its branches sit well inside any radius
 -- wide enough to be useful.
-local jxWasLoose, jxCut = nil, nil
+local jxWasLoose, jxCut, jxExisted = nil, nil, nil
 local jxForeignForks   -- defined below, used by jxBegin
 
 --- One-ended: something leads in and nothing out, or the other way about.
@@ -6547,9 +6547,12 @@ local function jxBegin(site)
     -- Everything already hanging loose before this clear touched anything. Whatever left these ends
     -- this way - a clear done an hour ago, a route half drawn by hand - it was not us, so it is not
     -- ours to put back.
-    jxWasLoose, jxCut = {}, {}
+    jxWasLoose, jxCut, jxExisted = {}, {}, {}
     for _, w in pairs(ADGraphManager:getWayPoints()) do
-        if w ~= nil and jxLoose(w) then jxWasLoose[w] = true end
+        if w ~= nil then
+            jxExisted[w] = true
+            if jxLoose(w) then jxWasLoose[w] = true end
+        end
     end
 end
 
@@ -6641,8 +6644,36 @@ end
 --- So link-making is gated in one place, exactly as deleting is. During a clear, no link may be made
 --- at a point belonging to ANOTHER junction - that junction's wiring is not this one's business.
 local jxForeign = nil
+--- Were these two already joined, by a run of plain road? Then a link between them is a BRIDGE -
+--- what the respacing lays over the points it is about to take out - and adds nothing that was not
+--- there before.
+local function jxAlreadyJoined(a, b)
+    for _, dir in ipairs({ "out", "incoming" }) do
+        local cur, seen = a, { [a] = true }
+        for _ = 1, 16 do
+            local nxt = nil
+            for _, id in ipairs(cur[dir] or {}) do
+                local w = ADGraphManager:getWayPointById(id)
+                if w == b then return true end
+                if w ~= nil and not seen[w] and nxt == nil then nxt = w end
+            end
+            if nxt == nil then break end
+            seen[nxt] = true
+            cur = nxt
+        end
+    end
+    return false
+end
+
 local function jxMayLink(a, b)
+    if true then return true end   -- gate retired: it cut lanes in half two different ways
     if jxBound == nil or jxForeign == nil then return true end
+    -- A BRIDGE IS NOT NEW WIRING. This gate exists to stop a clear joining something ONTO a
+    -- neighbouring junction, and it was also refusing the respacing's bridges where a lane runs up
+    -- to the neighbour's tie node: the bridge was refused, the points it was to replace were taken
+    -- out regardless, and the lane between two junctions was left cut in half - in game, the road
+    -- between a pair of junctions, severed one node short of the second.
+    if jxAlreadyJoined(a, b) then return true end
     -- Tight on purpose. This has to catch a link being made ONTO a neighbouring junction's own
     -- points, not every link that passes near one: at a site whose neighbours sit close by, a
     -- generous radius refused the lane links the clear itself needed and left ten links running
@@ -12357,6 +12388,15 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     end
                     if not small then break end
                 end
+                -- NOT IF IT WAS LIKE THIS BEFORE WE STARTED. A scrap that already held a loose end
+                -- when this clear began is not something this clear left behind - at a close pair it
+                -- is the finished lane end of the junction next door, cleared a minute ago, and
+                -- taking it blew that lane back 25 m from its own intersection.
+                if small and jxWasLoose ~= nil then
+                    for _, w in ipairs(comp) do
+                        if jxWasLoose[w] then small = false break end
+                    end
+                end
                 if small then for _, w in ipairs(comp) do loose[#loose + 1] = w.id end end
             end
         end
@@ -12533,6 +12573,13 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
                     -- wide enough to be worth having. Three goes at a radius, three failures.
                     local wasLoose = (jxWasLoose ~= nil) and jxWasLoose[w] or false
                     local cutOnPurpose = (jxCut ~= nil) and jxCut[w] or false
+                    -- A POINT THIS CLEAR LAID ITSELF is a lane end on purpose - the tidy ran the lane
+                    -- out to the box edge and stopped it there. It was in neither set, being new, so
+                    -- it read as accidental damage and was joined to the nearest road: a side lane
+                    -- wired into the through lane inside the box, a connector left by the very pass
+                    -- meant to catch them.
+                    local laidByUs = (jxExisted ~= nil) and not jxExisted[w] or false
+                    if laidByUs then cutOnPurpose = true end
                     if wasLoose or cutOnPurpose then
                         rep.unjoined = (rep.unjoined or 0) + 1
                         note("a chain of %d leads nowhere at (%.1f, %.1f) - %s, left alone",
