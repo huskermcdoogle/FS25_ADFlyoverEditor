@@ -11471,8 +11471,16 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
         local n = #seq
         while n > 0 and not live(seq[n]) do n = n - 1 end
         if n >= 3 then
+            -- SMOOTH BACK TO THE NEXT JUNCTION, AND NOT ONE POINT PAST IT. The walk used to run a
+            -- flat 50 m regardless of what it passed through. Where the next junction is nearer than
+            -- that - 24 m away at one pair on the test map - it resampled straight through the
+            -- neighbour and out the other side, moving its points and bridging links across it: the
+            -- road far from the junction visibly changing, and clearing one of the pair wiring up the
+            -- other. A fork is where this road stops being this junction's approach, so the walk
+            -- stops there.
             local i0, acc = n, 0
-            while i0 > 1 and acc < (lane.len or LEN) and live(seq[i0 - 1]) do
+            while i0 > 1 and acc < (lane.len or LEN) and live(seq[i0 - 1])
+                and neighbours(seq[i0 - 1]) < 3 do
                 acc = acc + gap(seq[i0], seq[i0 - 1])
                 i0 = i0 - 1
             end
