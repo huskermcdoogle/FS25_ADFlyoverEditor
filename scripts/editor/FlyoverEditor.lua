@@ -6912,9 +6912,11 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                     if w ~= nil then
                         local len, prev, cur, hitFork = 0, f, w, false
                         local seen = { [f.id] = true }
+                        local walked = {}
                         while cur ~= nil and len < WALK do
                             len = len + math.sqrt((cur.x - prev.x) ^ 2 + (cur.z - prev.z) ^ 2)
                             seen[cur.id] = true
+                            walked[#walked + 1] = cur
                             local cnb, cdeg = neighbours(cur)
                             if cdeg >= 3 then hitFork = true break end
                             local nxt = nil
@@ -6930,6 +6932,9 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                             -- cap: a 10 m hop at the end of a 39 m arm had the arm reported as 49 m,
                             -- and the bound is only ever as tight as the arm it is told about.
                             len = math.min(len, WALK), node = w, fork = hitFork,
+                            stop = hitFork and cur or nil,
+                            deadEnd = (not hitFork and len < WALK) and cur or nil,
+                            walked = walked,
                         }
                     end
                 end
@@ -6947,11 +6952,16 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                 if d <= math.rad(30) then joined = r break end
             end
             if joined == nil then
-                roads[#roads + 1] = { bearing = a.bearing, len = a.len, n = 1, fork = a.fork }
+                joined = { bearing = a.bearing, len = a.len, n = 1, fork = a.fork, stops = {}, deadEnds = {} }
+                roads[#roads + 1] = joined
             else
                 joined.n = joined.n + 1
                 if a.len > joined.len then joined.len, joined.fork = a.len, a.fork end
             end
+            if a.stop ~= nil then joined.stops[#joined.stops + 1] = a.stop end
+            if a.deadEnd ~= nil then joined.deadEnds[#joined.deadEnds + 1] = a.deadEnd end
+            joined.walked = joined.walked or {}
+            for _, wn in ipairs(a.walked or {}) do joined.walked[wn] = true end
         end
 
         local going = 0
@@ -7006,6 +7016,79 @@ end
 --- Numbers are carried over from the last build by POSITION, so adding a junction does not renumber
 --- the ones already there - a new one takes the next free number and is logged, so it can be added
 --- to the survey rather than silently shifting everything by one.
+--- THE JUNCTION'S SITUATION - what stands on its arms. Shape says what a junction IS (T, Y, 4-way);
+--- situation says what it is NEXT TO, and the right rule for clearing it depends on both: merging a
+--- second crossing into this one is correct where that crossing is this junction's own kickout, and
+--- wipes out a neighbour where it is the other half of a close pair. One rule for every junction
+--- was tuned four times in a day to fit one of those and broke the other each time.
+---
+--- This only CLASSIFIES. Nothing branches on it yet; it is shown and logged so it can be checked
+--- against the map before any rule is allowed to depend on it.
+---
+---   isolated             - nothing else on any arm within the walk
+---   close pair           - another wired junction, with a road of its own, stands on an arm
+---   neighbour cleared    - an arm ends at the box of a junction that has already been cleared
+---   own far tie forks    - a cluster of forks up one of the arms, all of whose long roads are
+---                          this junction's own roads running on: a kickout merge, not a junction
+function ADFlyoverEditor:junctionSituation(site)
+    if site == nil or site.roads == nil then return nil end
+    local function sep(a, b)
+        local d = math.abs(a - b) % (2 * math.pi)
+        if d > math.pi then d = 2 * math.pi - d end
+        return d
+    end
+    local found = {}
+    for _, r in ipairs(site.roads) do
+        local probes = {}
+        for _, st in ipairs(r.stops or {}) do probes[#probes + 1] = st end
+        for _, de in ipairs(r.deadEnds or {}) do probes[#probes + 1] = de end
+        for _, p in ipairs(probes) do
+            local other = self:junctionSelect(p.x, p.z)
+            -- beyond the arm walk it is just the next junction down the road, not this one's situation
+            if other ~= nil and (other.x - site.x) ^ 2 + (other.z - site.z) ^ 2 > 8 * 8
+                and (other.x - site.x) ^ 2 + (other.z - site.z) ^ 2 <= 45 * 45 then
+                local dist = math.sqrt((other.x - site.x) ^ 2 + (other.z - site.z) ^ 2)
+                local kind
+                if other.virgin then
+                    kind = "neighbour cleared"
+                else
+                    -- A road of its OWN: long, and not PHYSICALLY one of this junction's roads -
+                    -- asked of the nodes, not the bearings. Two T's on one road have side roads
+                    -- that point the same way, and by bearing a genuine neighbour's side road read
+                    -- as "one of mine" and the pair as a kickout.
+                    local myNodes = {}
+                    for _, fk in ipairs(site.forks or {}) do myNodes[fk] = true end
+                    for _, m in ipairs(site.roads) do
+                        for wn in pairs(m.walked or {}) do myNodes[wn] = true end
+                    end
+                    local own = 0
+                    for _, o in ipairs(other.roads or {}) do
+                        if o.len >= 15 then
+                            local shared, total = 0, 0
+                            for wn in pairs(o.walked or {}) do
+                                total = total + 1
+                                if myNodes[wn] then shared = shared + 1 end
+                            end
+                            if total > 0 and shared == 0 then own = own + 1 end
+                        end
+                    end
+                    kind = (own >= 1) and "close pair" or "own far tie forks"
+                end
+                local dup = false
+                for _, f in ipairs(found) do
+                    if (f.x - other.x) ^ 2 + (f.z - other.z) ^ 2 <= 8 * 8 then dup = true break end
+                end
+                if not dup then found[#found + 1] = { kind = kind, dist = dist, x = other.x, z = other.z } end
+            end
+        end
+    end
+    if #found == 0 then return "isolated", found end
+    table.sort(found, function(a, b) return a.dist < b.dist end)
+    local parts = {}
+    for _, f in ipairs(found) do parts[#parts + 1] = string.format("%s %.0f m", f.kind, f.dist) end
+    return table.concat(parts, "; "), found
+end
+
 function ADFlyoverEditor:junctionRegistry()
     local count = ADGraphManager:getWayPointsCount()
     if self._jxReg ~= nil and self._jxRegCount == count then return self._jxReg end
@@ -8941,7 +9024,13 @@ function ADFlyoverEditor:updateJunctionPreview()
         tryCall("junction number", function()
             self.junctionPreview.junctionNumber = self:junctionNumberAt(cx, cz)
         end)
+        tryCall("junction situation", function()
+            self.junctionPreview.junctionSituation = self:junctionSituation(self.junctionSite)
+        end)
     elseif self.junctionPreview ~= nil then
+        tryCall("junction situation", function()
+            self.junctionPreview.junctionSituation = self:junctionSituation(self.junctionSite)
+        end)
         tryCall("junction number", function()
             self.junctionPreview.junctionNumber = self:junctionNumberAt(cx, cz)
         end)
@@ -13233,8 +13322,8 @@ function ADFlyoverEditor:applyJunctionClear()
             end
             jp.junctionType = kind
             if self.junctionSite ~= nil then self.junctionSite.kind = kind end
-            Logging.info("[FlyoverEditor]: junction - this is a %s. Nothing branches on that yet; it is recorded so rules for each kind have somewhere to attach.",
-                kind)
+            Logging.info("[FlyoverEditor]: junction - this is a %s, %s. Nothing branches on that yet; it is recorded so rules for each kind have somewhere to attach.",
+                kind, tostring(jp.junctionSituation or "situation unknown"))
         end
     end
     local leave = self.junctionLeaveThrough ~= false

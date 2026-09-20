@@ -546,6 +546,9 @@ function ADFlyoverHud:buildRows(editor)
                         (cjp.junctionNumber ~= nil and cjp.junctionType ~= nil) and "  -  " or "",
                         cjp.junctionType or ""))
                 end
+                if cjp.junctionSituation ~= nil then
+                    add("toggle", "situation", tostring(cjp.junctionSituation))
+                end
                 local cleave = editor.junctionLeaveThrough ~= false
                 local doomed = cleave and cjp.turnDebris or cjp.debris
                 add("toggle", "approaches found", tostring(#(cjp.approaches or {})))
