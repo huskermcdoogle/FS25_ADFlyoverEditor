@@ -600,6 +600,16 @@ function ADFlyoverHud:buildRows(editor)
         end
         local jp = editor.junctionPreview
         if jp ~= nil then
+            -- The same naming the clear card has: which junction the click resolved to, and whether
+            -- it is wired or virgin. Where the selection found no junction build still works from
+            -- the cursor, and the card says why it is not locked onto one.
+            if jp.junctionNumber ~= nil or jp.junctionState ~= nil then
+                add("toggle", "junction", string.format("%s%s%s",
+                    jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered",
+                    (jp.junctionState ~= nil) and "  -  " or "", jp.junctionState or ""))
+            elseif editor.junctionRefused ~= nil then
+                add("toggle", "free placement", tostring(editor.junctionRefused))
+            end
             add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
             add("toggle", "new movements", tostring(jp.nNew))
             if (jp.nRebuild or 0) > 0 then

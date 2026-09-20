@@ -6520,6 +6520,7 @@ end
 -- around the middle that is always allowed so the box itself is never gated.
 local jxBound, jxBlocked, jxTook, jxFarthest = nil, 0, 0, 0
 local jxWired = 0
+local jxWhy = {}   -- per reason: how many taken, and the farthest of them
 -- WAS IT ALREADY LOOSE, AND DID WE CUT IT ON PURPOSE. Two things the clear knows exactly, and
 -- between them they say which loose ends are its business. No distance can answer this: a junction
 -- cleared earlier keeps no forks to be recognised by, and its branches sit well inside any radius
@@ -6541,6 +6542,7 @@ end
 --- Begin a clear: nothing may be deleted outside `site` until jxEnd.
 local function jxBegin(site)
     jxBound, jxBlocked, jxTook, jxFarthest, jxWired = site, 0, 0, 0, 0
+    jxWhy = {}
     jxForeignForks(site)
     -- Everything already hanging loose before this clear touched anything. Whatever left these ends
     -- this way - a clear done an hour ago, a route half drawn by hand - it was not us, so it is not
@@ -6615,6 +6617,10 @@ local function jxRemove(which, why)
     if site ~= nil then
         local d = math.sqrt((w.x - site.x) ^ 2 + (w.z - site.z) ^ 2)
         if d > jxFarthest then jxFarthest = d end
+        local e = jxWhy[why or "?"] or { n = 0, far = 0 }
+        e.n = e.n + 1
+        if d > e.far then e.far = d end
+        jxWhy[why or "?"] = e
     end
     jxTook = jxTook + 1
     -- Whatever this point was joined to is now an end, and on purpose.
@@ -6791,116 +6797,156 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
         return s, n
     end
 
-    -- Every fork within reach of the cursor.
-    local cand = {}
+    -- A JUNCTION COMES IN TWO FORMS, and both are junctions. WIRED: its roads are joined by turn
+    -- connectors, and it shows as a cluster of forks. VIRGIN: cleared, or never built - the roads
+    -- cross but nothing joins them, and it shows as a ring of LANE ENDS facing each other across the
+    -- crossing. The virgin form is the one a build starts from, and if anything it is the easier to
+    -- recognise; a selection that only knew forks could not see a junction the moment it had been
+    -- cleared.
+    local forks, ends = {}, {}
     for _, w in pairs(ADGraphManager:getWayPoints()) do
         if w ~= nil and w.id ~= nil and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= GATHER * GATHER then
             local _, deg = neighbours(w)
-            if deg >= 3 then cand[#cand + 1] = w end
+            if deg >= 3 then forks[#forks + 1] = w
+            elseif deg == 1 then ends[#ends + 1] = w end
         end
     end
-    if #cand == 0 then return nil, "no junction near the cursor" end
 
-    -- Group them, and keep the group nearest the cursor.
-    local used, best, bestD = {}, nil, math.huge
-    for i = 1, #cand do
-        if not used[i] then
-            used[i] = true
-            local grp, sx, sz, grew = { cand[i] }, cand[i].x, cand[i].z, true
-            while grew do
-                grew = false
-                for j = 1, #cand do
-                    if not used[j] then
-                        local mx, mz = sx / #grp, sz / #grp
-                        if (cand[j].x - mx) ^ 2 + (cand[j].z - mz) ^ 2 <= LINK * LINK then
-                            used[j] = true
-                            grp[#grp + 1] = cand[j]
-                            sx, sz, grew = sx + cand[j].x, sz + cand[j].z, true
+    local function cluster(list, link)
+        local used, out = {}, {}
+        for i = 1, #list do
+            if not used[i] then
+                used[i] = true
+                local grp, sx, sz, grew = { list[i] }, list[i].x, list[i].z, true
+                while grew do
+                    grew = false
+                    for j = 1, #list do
+                        if not used[j] then
+                            local mx, mz = sx / #grp, sz / #grp
+                            if (list[j].x - mx) ^ 2 + (list[j].z - mz) ^ 2 <= link * link then
+                                used[j] = true
+                                grp[#grp + 1] = list[j]
+                                sx, sz, grew = sx + list[j].x, sz + list[j].z, true
+                            end
                         end
                     end
                 end
+                out[#out + 1] = { x = sx / #grp, z = sz / #grp, nodes = grp }
             end
-            local mx, mz = sx / #grp, sz / #grp
-            local d = (mx - cx) ^ 2 + (mz - cz) ^ 2
-            if d < bestD then bestD, best = d, { x = mx, z = mz, forks = grp } end
+        end
+        return out
+    end
+
+    -- Forks are clustered exactly as they always were, so a wired junction is found just where it
+    -- was found before. Lane ends only form clusters of their OWN, away from any fork cluster - an
+    -- end dangling beside a wired junction is that junction's debris, not a second junction - and it
+    -- takes three of them, since two lane ends facing each other is a gap in a road.
+    local sites = cluster(forks, LINK)
+    local loose = {}
+    for _, e in ipairs(ends) do
+        local nearFork = false
+        for _, s in ipairs(sites) do
+            if (s.x - e.x) ^ 2 + (s.z - e.z) ^ 2 <= 15 * 15 then nearFork = true break end
+        end
+        if not nearFork then loose[#loose + 1] = e end
+    end
+    for _, s in ipairs(cluster(loose, 14)) do
+        if #s.nodes >= 3 then
+            s.virgin = true
+            sites[#sites + 1] = s
         end
     end
-    if best == nil then return nil, "no junction near the cursor" end
-    if bestD > SELECT * SELECT then
+    if #sites == 0 then return nil, "no junction near the cursor" end
+
+    for _, s in ipairs(sites) do s.d2 = (s.x - cx) ^ 2 + (s.z - cz) ^ 2 end
+    table.sort(sites, function(a, b) return a.d2 < b.d2 end)
+    if sites[1].d2 > SELECT * SELECT then
         return nil, string.format("the nearest junction is %.0f m away - click closer to it",
-            math.sqrt(bestD))
+            math.sqrt(sites[1].d2))
     end
 
-    -- ARMS. Every way OUT of the cluster, walked until it forks again, ends, or has gone far enough
-    -- to have proved itself. The walk is capped: an arm that runs clear across the map tells us
-    -- nothing more than one that runs MINARM.
-    local inCluster = {}
-    for _, f in ipairs(best.forks) do inCluster[f.id] = true end
-    local arms = {}
-    for _, f in ipairs(best.forks) do
-        local nb = neighbours(f)
-        for id in pairs(nb) do
-            if not inCluster[id] then
-                local w = ADGraphManager:getWayPointById(id)
-                if w ~= nil then
-                    local len, prev, cur, hitFork = 0, f, w, false
-                    local seen = { [f.id] = true }
-                    while cur ~= nil and len < WALK do
-                        len = len + math.sqrt((cur.x - prev.x) ^ 2 + (cur.z - prev.z) ^ 2)
-                        seen[cur.id] = true
-                        local cnb, cdeg = neighbours(cur)
-                        if cdeg >= 3 then hitFork = true break end
-                        local nxt = nil
-                        for nid in pairs(cnb) do
-                            if not seen[nid] then nxt = ADGraphManager:getWayPointById(nid) break end
+    -- REAL OR FAUX, asked of each candidate in turn from the nearest outwards: the first that passes
+    -- is the site. Taking the nearest and stopping there let a stray cluster beside a real junction
+    -- - three lane ends at a field gate - be picked, fail, and refuse the click outright with the
+    -- real junction a few metres further on.
+    local function evaluate(best)
+        local inCluster = {}
+        for _, f in ipairs(best.nodes) do inCluster[f.id] = true end
+        local arms = {}
+        for _, f in ipairs(best.nodes) do
+            local nb = neighbours(f)
+            for id in pairs(nb) do
+                if not inCluster[id] then
+                    local w = ADGraphManager:getWayPointById(id)
+                    if w ~= nil then
+                        local len, prev, cur, hitFork = 0, f, w, false
+                        local seen = { [f.id] = true }
+                        while cur ~= nil and len < WALK do
+                            len = len + math.sqrt((cur.x - prev.x) ^ 2 + (cur.z - prev.z) ^ 2)
+                            seen[cur.id] = true
+                            local cnb, cdeg = neighbours(cur)
+                            if cdeg >= 3 then hitFork = true break end
+                            local nxt = nil
+                            for nid in pairs(cnb) do
+                                if not seen[nid] then nxt = ADGraphManager:getWayPointById(nid) break end
+                            end
+                            if nxt == nil then break end
+                            prev, cur = cur, nxt
                         end
-                        if nxt == nil then break end
-                        prev, cur = cur, nxt
+                        arms[#arms + 1] = {
+                            bearing = math.atan2(w.x - best.x, w.z - best.z),
+                            -- Clamped, because the walk adds a whole segment before it re-tests the
+                            -- cap: a 10 m hop at the end of a 39 m arm had the arm reported as 49 m,
+                            -- and the bound is only ever as tight as the arm it is told about.
+                            len = math.min(len, WALK), node = w, fork = hitFork,
+                        }
                     end
-                    arms[#arms + 1] = {
-                        bearing = math.atan2(w.x - best.x, w.z - best.z),
-                        -- Clamped, because the walk adds a whole segment before it re-tests the cap:
-                        -- a 10 m hop at the end of a 39 m arm had the arm reported as 49 m, and the
-                        -- bound is only ever as tight as the arm it is told about.
-                        len = math.min(len, WALK), node = w, fork = hitFork,
-                    }
                 end
             end
         end
-    end
 
-    -- Fold the lanes of one road together: same bearing, so a two-lane road counts once. The arm
-    -- keeps the LONGEST of its lanes - one lane of a road being stubbed does not shorten the road.
-    local roads = {}
-    for _, a in ipairs(arms) do
-        local joined = nil
+        -- Fold the lanes of one road together: same bearing, so a two-lane road counts once. The arm
+        -- keeps the LONGEST of its lanes - one lane of a road being stubbed does not shorten the road.
+        local roads = {}
+        for _, a in ipairs(arms) do
+            local joined = nil
+            for _, r in ipairs(roads) do
+                local d = math.abs(a.bearing - r.bearing) % (2 * math.pi)
+                if d > math.pi then d = 2 * math.pi - d end
+                if d <= math.rad(30) then joined = r break end
+            end
+            if joined == nil then
+                roads[#roads + 1] = { bearing = a.bearing, len = a.len, n = 1, fork = a.fork }
+            else
+                joined.n = joined.n + 1
+                if a.len > joined.len then joined.len, joined.fork = a.len, a.fork end
+            end
+        end
+
+        local going = 0
         for _, r in ipairs(roads) do
-            local d = math.abs(a.bearing - r.bearing) % (2 * math.pi)
-            if d > math.pi then d = 2 * math.pi - d end
-            if d <= math.rad(30) then joined = r break end
+            if r.len >= MINARM then going = going + 1 end
         end
-        if joined == nil then
-            roads[#roads + 1] = { bearing = a.bearing, len = a.len, n = 1, fork = a.fork }
-        else
-            joined.n = joined.n + 1
-            if a.len > joined.len then joined.len, joined.fork = a.len, a.fork end
+        if #roads < 3 then
+            return nil, string.format("only %d road%s meets here - not a junction",
+                #roads, #roads == 1 and "" or "s")
         end
+        if going < 3 then
+            return nil, string.format("%d of the %d arms here go anywhere (the rest stop within %d m) - a turning or an entrance, not a junction",
+                going, #roads, MINARM)
+        end
+        return { x = best.x, z = best.z, forks = best.nodes, roads = roads, nArms = #roads,
+                 virgin = (best.virgin == true) }
     end
 
-    local going = 0
-    for _, r in ipairs(roads) do
-        if r.len >= MINARM then going = going + 1 end
+    local firstWhy = nil
+    for _, s in ipairs(sites) do
+        if s.d2 > SELECT * SELECT then break end
+        local site, why = evaluate(s)
+        if site ~= nil then return site end
+        firstWhy = firstWhy or why
     end
-    if #roads < 3 then
-        return nil, string.format("only %d road%s meets here - not a junction",
-            #roads, #roads == 1 and "" or "s")
-    end
-    if going < 3 then
-        return nil, string.format("%d of the %d arms here go anywhere (the rest stop within %d m) - a turning or an entrance, not a junction",
-            going, #roads, MINARM)
-    end
-
-    return { x = best.x, z = best.z, forks = best.forks, roads = roads, nArms = #roads }
+    return nil, firstWhy or "no junction near the cursor"
 end
 
 --- EVERY JUNCTION ON THE MAP, NUMBERED, so a site can be named out loud. Without a number, talking
@@ -6975,6 +7021,16 @@ function ADFlyoverEditor:junctionRegistry()
                 taken[p.n] = true
                 break
             end
+        end
+    end
+    -- A JUNCTION THAT HAS BEEN CLEARED KEEPS ITS NUMBER. The scan only finds the wired form - fork
+    -- clusters - so a junction vanishes from it the moment it is cleared, and dropping it here would
+    -- hand its number to the next new one. Whatever was numbered before and was not found again is
+    -- carried forward as it stood.
+    for _, p in ipairs(prev) do
+        if p.n ~= nil and not taken[p.n] then
+            found[#found + 1] = { x = p.x, z = p.z, forks = p.forks, n = p.n, cleared = true }
+            taken[p.n] = true
         end
     end
     local next_ = 1
@@ -7052,6 +7108,13 @@ function ADFlyoverEditor:updateJunctionPreview()
         -- where inside it the click landed - and where it is pointing at nothing, the clear REFUSES
         -- and says why rather than working on whatever happens to be nearby.
         local site, why = self:junctionSelect(cx, cz)
+        -- ALREADY CLEAR IS A REFUSAL TOO. A virgin junction - lane ends facing each other, nothing
+        -- joining them - has no wiring to take out, and what a second clear finds to remove there is
+        -- the lanes' own rebuilt ends. It used to be refused by accident, because the selection
+        -- could not see a junction once it had been cleared; now that it can, it says so on purpose.
+        if site ~= nil and site.virgin then
+            site, why = nil, "this junction is already clear - nothing is wired here (build can start from it)"
+        end
         if site == nil then
             self.junctionSite = nil
             self.junctionRefused = why
@@ -7061,6 +7124,19 @@ function ADFlyoverEditor:updateJunctionPreview()
         self.junctionSite, self.junctionRefused = site, nil
         cx, cz = site.x, site.z
         R = AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE or 14
+    else
+        -- BUILD MODE TAKES THE SAME FRONT END. The click is resolved to a junction and the solve is
+        -- centred on the junction, not on wherever inside it the cursor landed - the same click-
+        -- independence the clear has. Where the selection finds nothing build carries on from the
+        -- cursor exactly as it always did: it is a construction tool and may have business at a
+        -- site that is not a junction yet, so here a refusal is a note on the card, not a stop.
+        local site, why = self:junctionSelect(cx, cz)
+        if site ~= nil then
+            self.junctionSite, self.junctionRefused = site, nil
+            cx, cz = site.x, site.z
+        else
+            self.junctionSite, self.junctionRefused = nil, why
+        end
     end
     -- The solve raycasts the road surface for every candidate radius of every turn, so it is only
     -- redone when something it depends on changed: the cursor (to half a metre), a setting, or the
@@ -8550,9 +8626,28 @@ function ADFlyoverEditor:updateJunctionPreview()
                         while d < -math.pi do d = d + 2 * math.pi end
                         return d
                     end
+                    -- THE TIE NODE HAS TO BE ONE OF THIS JUNCTION'S OWN FORKS. It used to be "the first
+                    -- fork along the lane within 45 m of the centre" - and the lane is walked from its
+                    -- OUTER end inward, so the first fork it meets is the one FARTHEST from this
+                    -- junction: at a close pair, the neighbour's tie node, 24 m away and well inside
+                    -- 45. The lane was cut there, and everything from there in was dug up - the whole
+                    -- run between two junctions, 8 points out to 36 m, in game. Which forks belong to
+                    -- this junction is something the selection already knows exactly.
+                    -- Whose fork it is comes from the ownership the clear already works out for the
+                    -- wiring: each fork goes to its nearest crossing, and a crossing whose wiring all
+                    -- begins and ends on these lanes is this junction's own tie node however far out
+                    -- it sits. (The selection's fork cluster is too tight for this - real tie nodes
+                    -- sit 15-18 m out, beyond it - and testing against the cluster alone left lanes
+                    -- with no tie node at all and their old connectors standing.)
                     local f = nil
                     for i = 2, #nodes do
-                        if deg3(nodes[i]) and (nodes[i].x - cx) ^ 2 + (nodes[i].z - cz) ^ 2 <= 45 * 45 then f = i break end
+                        if deg3(nodes[i]) then
+                            if clearMode then
+                                if isOwnForClear(nodes[i]) then f = i break end
+                            elseif (nodes[i].x - cx) ^ 2 + (nodes[i].z - cz) ^ 2 <= 45 * 45 then
+                                f = i break
+                            end
+                        end
                     end
                     if f ~= nil then
                         -- how far the lane has turned by the time it reaches that fork
@@ -8601,6 +8696,13 @@ function ADFlyoverEditor:updateJunctionPreview()
         tryCall("junction number", function()
             self.junctionPreview.junctionNumber = self:junctionNumberAt(cx, cz)
         end)
+    elseif self.junctionPreview ~= nil then
+        tryCall("junction number", function()
+            self.junctionPreview.junctionNumber = self:junctionNumberAt(cx, cz)
+        end)
+        local st = self.junctionSite
+        self.junctionPreview.junctionState = (st == nil) and nil
+            or (st.virgin and "virgin - ready to build" or "wired")
     end
 
     -- Skeleton INSIDE the circle: if a run-following walk ever diverts off the road and down a
@@ -12016,6 +12118,13 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 -- tolerance, together they leaned the lane's end the way the turn used to go. The
                 -- last 16 m is laid fresh along the clean heading instead.
                 local lastOn = ni
+                if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG then
+                    local tipD = math.sqrt((lane[#lane].x - box.centre.x) ^ 2 + (lane[#lane].z - box.centre.z) ^ 2)
+                    local nearD = math.sqrt((near.x - box.centre.x) ^ 2 + (near.z - box.centre.z) ^ 2)
+                    Logging.info("[FlyoverEditor]: SIDETRIM lane of %d: %s, clean node #%d at %.0f m, tip at %.0f m, keeping to #%d -> removing %d",
+                        #lane, sl.cutNode ~= nil and "TIE NODE path" or "fallback path",
+                        ni, nearD, tipD, lastOn, #lane - lastOn)
+                end
                 for i = #lane, lastOn + 1, -1 do
                     local n = lane[i]
                     if live(n) then
@@ -12843,6 +12952,19 @@ function ADFlyoverEditor:applyJunctionClear()
     else
         Logging.info("[FlyoverEditor]: junction cleared %d point(s) and %d stale link(s). Roads it joined are untouched.",
             cleared, staleCut)
+    end
+    -- WHICH STAGE TOOK WHAT, AND FROM HOW FAR. One total hides the stage that is over-reaching: in
+    -- game a clear reported 29 points taken, the farthest 39 m out, at a junction 12 m across - and
+    -- nothing in the log said which of fourteen removers had gone that far.
+    do
+        local parts = {}
+        for why, e in pairs(jxWhy) do
+            parts[#parts + 1] = string.format("%s %d (to %.0f m)", why:gsub("^junction ", ""), e.n, e.far)
+        end
+        table.sort(parts)
+        if #parts > 0 then
+            Logging.info("[FlyoverEditor]: junction - taken by stage: %s.", table.concat(parts, "; "))
+        end
     end
     local held, took, farOut = jxEnd()
     Logging.info("[FlyoverEditor]: junction - took %d point(s) in all, the farthest %.0f m out; %d left alone as belonging to a neighbouring junction rather than this one.",
