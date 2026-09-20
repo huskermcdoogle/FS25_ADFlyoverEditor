@@ -11482,7 +11482,15 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                         if started then pv = m end
                     end
                     for j = 1, ni do lane[j].prevAng = nil end
-                    turn = math.max(-math.pi / 2, math.min(math.pi / 2, turn))
+                    -- AND HERE IT IS NOT APPLIED. laneArc's chord spans ten metres of a bending
+                    -- road, where the gap between chord and tangent is real and worth correcting.
+                    -- This one is read over a short span at the lane's own clean end, where the two
+                    -- have barely diverged - correcting it only over-rotates. Measured: it pushed
+                    -- the two tracks of one side road from 1.20 m apart within their claim band to
+                    -- 1.75 m, and changed nothing whatever at the junction next door. The turn is
+                    -- still worked out above because it is what says whether there is anything to
+                    -- correct; acting on it here is what was wrong.
+                    turn = 0
                     local half = turn * 0.5
                     local cs, sn = math.cos(half), math.sin(half)
                     hx, hz = hx * cs - hz * sn, hx * sn + hz * cs
