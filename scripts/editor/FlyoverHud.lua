@@ -182,6 +182,42 @@ end
 --- left of them. The buttons overlap the field's full-width box, so isMouseOver scans back-to-front:
 --- the buttons are appended after the field and therefore win the click that lands on them.
 ---
+--- How wide a piece of text renders, or 0 where the engine cannot say. Wrapped so the callers that
+--- only want to know whether something fits do not each have to guard getTextWidth themselves.
+function ADFlyoverHud:measure(fontSize, text)
+    if text == nil or text == "" or getTextWidth == nil then return 0 end
+    local ok, w = pcall(getTextWidth, fontSize, text)
+    return (ok and w) or 0
+end
+
+--- Fit `text` into `maxW`, and say at what size to draw it. Shrunk first, down to three quarters of
+--- the size asked for, because a slightly smaller line that can be read beats a full-size one that
+--- cannot; only then cut short, with an ellipsis so it is obvious something was cut rather than the
+--- reader being left to wonder what the rest of it said.
+---
+--- Returns the text unchanged and the size unchanged whenever it already fits, which is almost
+--- always - nothing is measured twice for the sake of the one row in fifty that overruns.
+function ADFlyoverHud:fitToWidth(text, fontSize, maxW)
+    if text == nil or text == "" then return text, fontSize end
+    if maxW == nil or maxW <= 0 or getTextWidth == nil then return text, fontSize end
+    if self:measure(fontSize, text) <= maxW then return text, fontSize end
+
+    local floorSize = fontSize * 0.75
+    local size = fontSize
+    for _ = 1, 6 do
+        size = size - fontSize * 0.05
+        if size <= floorSize then break end
+        if self:measure(size, text) <= maxW then return text, size end
+    end
+
+    size = floorSize
+    local cut = text
+    while #cut > 1 and self:measure(size, cut .. "...") > maxW do
+        cut = cut:sub(1, #cut - 1)
+    end
+    return cut .. "...", size
+end
+
 --- Appends to self.rows, so the caller's render loop MUST freeze its length first (numeric for over
 --- a frozen count), or it will walk into the buttons it just added.
 function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelRoleName, valueRoleName)
@@ -544,11 +580,18 @@ function ADFlyoverHud:buildRows(editor)
                 -- out loud instead of read out as coordinates. The kind is worked out from the site
                 -- as it stands, BEFORE the clear cleans and smooths it, so it can disagree with the
                 -- line in the log afterwards; the log is the one to believe.
-                if cjp.junctionNumber ~= nil or cjp.junctionType ~= nil then
-                    add("toggle", "junction", string.format("%s%s%s",
-                        cjp.junctionNumber and string.format("j%02d", cjp.junctionNumber) or "unnumbered",
-                        (cjp.junctionNumber ~= nil and cjp.junctionType ~= nil) and "  -  " or "",
-                        cjp.junctionType or ""))
+                --
+                -- ON SEPARATE ROWS. Both on one line made a value long enough to run back through
+                -- its own label - "j60  -  4W offset (14 m stagger)" against a label of "junction" -
+                -- and the number is the one thing on this card that has to be readable at a glance,
+                -- since it is how the site gets named out loud afterwards.
+                if cjp.junctionNumber ~= nil then
+                    add("toggle", "junction", string.format("j%02d", cjp.junctionNumber))
+                else
+                    add("toggle", "junction", "unnumbered")
+                end
+                if cjp.junctionType ~= nil then
+                    add("toggle", "type", tostring(cjp.junctionType))
                 end
                 if cjp.junctionSituation ~= nil then
                     add("toggle", "situation", tostring(cjp.junctionSituation))
@@ -616,12 +659,17 @@ function ADFlyoverHud:buildRows(editor)
             -- The same naming the clear card has: which junction the click resolved to, and whether
             -- it is wired or virgin. Where the selection found no junction build still works from
             -- the cursor, and the card says why it is not locked onto one.
+            -- Number and state on rows of their own, the same as the clear card: together they made
+            -- a value long enough to print back through its own label.
             if jp.junctionNumber ~= nil or jp.junctionState ~= nil then
-                add("toggle", "junction", string.format("%s%s%s",
-                    jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered",
-                    (jp.junctionState ~= nil) and "  -  " or "", jp.junctionState or ""))
+                add("toggle", "junction",
+                    jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered")
+                if jp.junctionState ~= nil then
+                    add("toggle", "state", tostring(jp.junctionState))
+                end
             elseif editor.junctionRefused ~= nil then
-                add("toggle", "free placement", tostring(editor.junctionRefused))
+                add("toggle", "free placement", "")
+                add("note", tostring(editor.junctionRefused))
             end
             add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
             add("toggle", "new movements", tostring(jp.nNew))
@@ -919,8 +967,16 @@ function ADFlyoverHud:draw(editor)
                 -- A wheel-driven number dressed as a toggle: give it steppers and per-field wheel too.
                 self:drawNumberField(row, x, y, width, h, fontSize, mx, my, "bodyText", "valueText")
             else
+                -- A ROW HOLDS WHAT IT HOLDS. The label is drawn from the left and the value from the
+                -- right, and until now nothing checked that the two did not meet: a value of "on"
+                -- always fitted, and a value like "j60  -  4W offset (14 m stagger)" printed straight
+                -- through its own label, leaving both unreadable. Fitted here rather than by
+                -- shortening each value at the point it is built, because every row is one long
+                -- value away from the same fault.
                 labelRole(textX, textY, fontSize, row.text, "bodyText")
-                labelRole(x + width - self.padding * 2, textY, fontSize, row.value, "valueText", 1,
+                local vText, vSize = self:fitToWidth(row.value, fontSize,
+                    (x + width - self.padding * 2) - textX - self:measure(fontSize, row.text) - self.padding * 2)
+                labelRole(x + width - self.padding * 2, textY, vSize, vText, "valueText", 1,
                     RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "action" then
