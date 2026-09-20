@@ -95,23 +95,31 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
     return points, fieldLabel, nil
 end
 
--- Synchronous tree-overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
--- (Sensors/CollSensor.lua) but filtered to CollisionFlag.TREE only.
+-- Synchronous overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
+-- (Sensors/CollSensor.lua). Named for trees because that is the common case, but the mask below
+-- also catches everything the junction tool's own obstacle check does (junctionObstacleMask) -
+-- telephone poles, fences, signs and small buildings are CollisionFlag.STATIC_OBJECT, not TREE,
+-- and TREE-only silently drove the loop straight through a pole line. Widened rather than renamed:
+-- every caller already reads "tree" as "the thing along the boundary I have to detour around".
+AutoDrive.FIELD_LOOP_OBSTACLE_MASK = (CollisionFlag.DEFAULT or 0) + CollisionFlag.TREE
+    + CollisionFlag.STATIC_OBJECT + (CollisionFlag.DYNAMIC_OBJECT or 0) + CollisionFlag.BUILDING
+
 function AutoDrive:fieldLoopTreeOverlapCallback(transformId)
     self.fieldLoopTreeHit = true
 end
 
--- Box spans from ground level up to the vehicle height, so canopy/branches that flare out wider
--- higher up are caught - but only as high as anything actually drives. Checking higher than the
--- tallest machine detours around branches that pass clear over it, and since a mature crown
--- flares widest near its top, every extra metre of height costs real width. For reference:
--- tractors ~2.8-3.5m, combines ~3.9-4m (built to clear the 4m road limit), trucks 4.0-4.1m,
--- folded implements up to ~4.5m - hence a 4m default, adjustable to suit the tallest machine.
+-- Box spans from ground level up to the vehicle height, so canopy/branches - and a pole's crossarm
+-- or transformer - that flare out wider higher up are caught, but only as high as anything actually
+-- drives. Checking higher than the tallest machine detours around branches (or wires) that pass
+-- clear over it, and since a mature crown flares widest near its top, every extra metre of height
+-- costs real width. For reference: tractors ~2.8-3.5m, combines ~3.9-4m (built to clear the 4m road
+-- limit), trucks 4.0-4.1m, folded implements up to ~4.5m - hence a 4m default, adjustable to suit
+-- the tallest machine.
 function AutoDrive:hasTreeNear(x, z, halfExtent)
     self.fieldLoopTreeHit = false
     local y = AutoDrive:getTerrainHeightAtWorldPos(x, z)
     local halfHeight = (ADFlyoverSettings.get("fieldLoopVehicleHeight") or 4.0) / 2
-    overlapBox(x, y + halfHeight, z, 0, 0, 0, halfExtent, halfHeight, halfExtent, "fieldLoopTreeOverlapCallback", AutoDrive, CollisionFlag.TREE, true, true, true, true)
+    overlapBox(x, y + halfHeight, z, 0, 0, 0, halfExtent, halfHeight, halfExtent, "fieldLoopTreeOverlapCallback", AutoDrive, AutoDrive.FIELD_LOOP_OBSTACLE_MASK, true, true, true, true)
     return self.fieldLoopTreeHit == true
 end
 
@@ -465,29 +473,63 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     }, nil
 end
 
-function AutoDrive:createFieldLoopGraph(ring)
+--- True when the ring, as ordered, runs clockwise in world (x, z). Shoelace sign - same convention
+--- OffsetGeometry uses (positive area = counter-clockwise) - so "clockwise" means the same thing
+--- here as it does to the offset math, whichever way buildFieldLoopRing happened to emit the ring.
+local function ringIsClockwise(ring)
+    local area = 0
+    local n = #ring
+    for i = 1, n do
+        local a, b = ring[i], ring[(i % n) + 1]
+        area = area + (a.x * b.z - b.x * a.z)
+    end
+    return area < 0
+end
+
+--- flags: AutoDrive.FLAG_SUBPRIO (secondary, the old always-on default) or AutoDrive.FLAG_NONE
+--- (primary). Defaults to SUBPRIO so a caller that does not pass one - the console command - keeps
+--- behaving exactly as before this was configurable.
+---
+--- direction: "cw", "ccw", or "twoway" (default, also the old always-on behaviour). One-way costs
+--- nothing extra to lay - it is the same ring, just walked one direction and connected with
+--- dual=false instead of true - so "cw"/"ccw" only decide which way the ring is ordered before
+--- that, checked geometrically rather than trusting whatever winding the generator happened to
+--- produce.
+function AutoDrive:createFieldLoopGraph(ring, flags, direction)
+    flags = flags or AutoDrive.FLAG_SUBPRIO
+    direction = direction or "twoway"
+    local dual = direction ~= "cw" and direction ~= "ccw"
+
+    if not dual and ringIsClockwise(ring) ~= (direction == "cw") then
+        local reversed = {}
+        for i = #ring, 1, -1 do
+            reversed[#reversed + 1] = ring[i]
+        end
+        ring = reversed
+    end
+
     local baseCount = ADGraphManager:getWayPointsCount()
     local ringCount = #ring
 
-    -- Two-way secondary route: every ring segment is dual/bidirectional and SUBPRIO-flagged so it
-    -- renders/behaves as a give-way secondary road. Standalone - not connected to any other node.
+    -- Every ring segment dual/bidirectional (two-way) or one-way in the order set above, flagged
+    -- SUBPRIO or not per the caller. Standalone - not connected to any other node.
     for i = 1, ringCount do
         local p = ring[i]
         local previousId = 0
         if i > 1 then
             previousId = baseCount + i - 1
         end
-        ADGraphManager:recordWayPoint(p.x, p.y, p.z, i > 1, true, false, previousId, AutoDrive.FLAG_SUBPRIO, false)
+        ADGraphManager:recordWayPoint(p.x, p.y, p.z, i > 1, dual, false, previousId, flags, false)
     end
 
     local firstRingId = baseCount + 1
     local lastRingId = baseCount + ringCount
 
-    -- Close the loop: last ring node connects back to the first, dual (two-way).
+    -- Close the loop: last ring node connects back to the first, same dual-ness as the rest of it.
     ADGraphManager:toggleConnectionBetween(
         ADGraphManager:getWayPointById(lastRingId),
         ADGraphManager:getWayPointById(firstRingId),
-        false, true, false
+        false, dual, false
     )
 
     ADGraphManager:prepareWayPoints()
@@ -540,8 +582,12 @@ end
 --- flyover tool so the two cannot drift apart; the caller decides where the position comes from
 --- and what to log, this does the work.
 ---
+--- flags/direction are forwarded to createFieldLoopGraph verbatim (nil for either keeps that
+--- function's own defaults - secondary, two-way - so the console command, which has no editor
+--- panel to read them from, is unaffected).
+---
 --- Returns true on success. Everything interesting is already logged here.
-function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source)
+function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
     local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
@@ -554,15 +600,17 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         return false
     end
 
-    local summary = AutoDrive:createFieldLoopGraph(ring)
+    local summary = AutoDrive:createFieldLoopGraph(ring, flags, direction)
 
     Logging.info(
-        "[AD] %s: created %d waypoints (ids %d-%d) around '%s', margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
+        "[AD] %s: created %d waypoints (ids %d-%d) around '%s', %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
         source,
         summary.ringCount,
         summary.idRange[1],
         summary.idRange[2],
         fieldLabel,
+        (flags or AutoDrive.FLAG_SUBPRIO) == AutoDrive.FLAG_SUBPRIO and "secondary" or "primary",
+        direction or "twoway",
         marginDistance,
         treeClearance,
         turningRadius,

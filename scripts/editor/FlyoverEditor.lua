@@ -76,6 +76,13 @@ ADFlyoverEditor = {
     -- Sticky connection options, shown and changed on the panel instead of held as modifier keys.
     connectionMode = 1,
     subPrio = false,
+    -- Field loop's own sticky settings: what kind of track it drops. Kept separate from
+    -- connectionMode/subPrio above - a loop is not laid stroke by stroke, and "clockwise/
+    -- counter-clockwise" (which way to walk the closed ring) answers a different question than
+    -- "one-way/two-way/reverse" (which end of a click the direction runs). Defaults match what
+    -- createFieldLoopGraph always did before these existed: secondary, two-way.
+    fieldLoopSubPrio = true,
+    fieldLoopDirection = 3,
     splineFromId = nil,
     curvatureIndex = 1,
     -- Two separate spline controls, because they answer two different questions: which way the
@@ -638,6 +645,20 @@ function ADFlyoverEditor:enable()
         return false
     end
 
+    -- Refuse while a game menu has the screen. The in-game menu's AI job / map-overview page (used
+    -- to create a vehicle job) is the one that bit: AutoDrive.isMouseActiveForHud() deliberately
+    -- treats its own HUD as active while that page is open (AutoDrive.aiFrameOpen), so our launch
+    -- button keeps rendering and taking clicks right through it. Opening on top pushed a second
+    -- input context and forced the cursor on while the job-creation GUI still owned the screen -
+    -- and isGuiBlocking() being true is exactly what then made onCancelAction refuse to back out on
+    -- Escape, so the only way out was the debug console. Refusing here, before anything is touched,
+    -- is cheap; unwinding a half-entered state under someone else's menu is not.
+    if self:isGuiBlocking() then
+        Logging.warning("[FlyoverEditor]: refusing to open while a game menu has the screen (e.g. "
+            .. "the AI job / map overview screen) - close it first.")
+        return false
+    end
+
     if self.active then
         Logging.info("[FlyoverEditor]: already active.")
         return
@@ -649,6 +670,13 @@ function ADFlyoverEditor:enable()
         return
     end
     Logging.info("[FlyoverEditor]: GuiTopDownCamera and GuiTopDownCursor are both present.")
+    -- A proxy draw failure from an earlier session latches (see ADFlyoverProxy.failed) so one fault
+    -- cannot retry and re-log itself every frame - but that means it also needs a deliberate reset
+    -- somewhere, or it would follow the player into every future session too. Here, on the way in,
+    -- is the natural place: a fresh open is a fresh chance.
+    if ADFlyoverProxy ~= nil and ADFlyoverProxy.resetFailure ~= nil then
+        ADFlyoverProxy.resetFailure()
+    end
     -- Before ANYTHING is touched. Compared against the line printed after teardown, this is the
     -- only pair that says whether a cycle put the input system back as it found it. Logging only
     -- after the push, as the first version did, made a clean cycle indistinguishable from a lossy
@@ -1613,6 +1641,15 @@ function ADFlyoverEditor:menuCancelArmed()
 end
 
 function ADFlyoverEditor:setTool(tool)
+    -- Disconnected in this release (0.31.0.1 patch notes) - the auto-junction-placement tool this
+    -- 0.31.0.0 line shipped with is still mid-rework on the main line and not part of this hotfix.
+    -- Its code is left untouched underneath (see the JUNCTION branches elsewhere in this file and
+    -- in FlyoverHud.lua); this is the one chokepoint every selection path goes through - the panel
+    -- button is already gone (see FlyoverHud's GROUPS table), this is the belt to that braces.
+    if tool == self.TOOL.JUNCTION then
+        Logging.warning("[FlyoverEditor]: the junction tool is disabled in this release.")
+        return
+    end
     if self.tool == tool then
         return
     end
@@ -8401,6 +8438,19 @@ end
 -- vehicle, so the position lookup was split out and this feeds it the cursor instead.
 -- ---------------------------------------------------------------------------------------------
 
+ADFlyoverEditor.FIELD_LOOP_DIR = { CW = 1, CCW = 2, TWOWAY = 3 }
+ADFlyoverEditor.FIELD_LOOP_DIR_NAMES = { "clockwise", "counter-clockwise", "two-way" }
+
+function ADFlyoverEditor:toggleFieldLoopPriority()
+    self.fieldLoopSubPrio = not self.fieldLoopSubPrio
+    Logging.info("[FlyoverEditor]: field loop track will be %s.", self.fieldLoopSubPrio and "secondary" or "primary")
+end
+
+function ADFlyoverEditor:cycleFieldLoopDirection()
+    self.fieldLoopDirection = (self.fieldLoopDirection % #self.FIELD_LOOP_DIR_NAMES) + 1
+    Logging.info("[FlyoverEditor]: field loop track will be %s.", self.FIELD_LOOP_DIR_NAMES[self.fieldLoopDirection])
+end
+
 function ADFlyoverEditor:generateFieldLoopAtCursor()
     if g_server == nil then
         Logging.error("[FlyoverEditor]: field loops can only be generated on the server (host/singleplayer).")
@@ -8417,12 +8467,16 @@ function ADFlyoverEditor:generateFieldLoopAtCursor()
     local treeClearance = ADFlyoverSettings.get("fieldLoopTreeClearance") or 1.25
     local turningRadius = ADFlyoverSettings.get("fieldLoopTurningRadius") or 8
 
+    local flags = self.fieldLoopSubPrio and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+    local direction = ({ [self.FIELD_LOOP_DIR.CW] = "cw", [self.FIELD_LOOP_DIR.CCW] = "ccw",
+        [self.FIELD_LOOP_DIR.TWOWAY] = "twoway" })[self.fieldLoopDirection] or "twoway"
+
     -- A field loop can add hundreds of waypoints in one click, which is exactly the kind of thing
     -- that wants to be undoable in one step.
     ADEditorHistory:snapshot("field loop")
 
     local ok = AutoDrive:generateFieldLoopAt(self.cursorX, self.cursorZ,
-        marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop")
+        marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop", flags, direction)
 
     if ok then
         self:invalidateIdReferences()

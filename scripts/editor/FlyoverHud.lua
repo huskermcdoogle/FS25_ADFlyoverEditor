@@ -256,7 +256,9 @@ function ADFlyoverHud:buildRows(editor)
         { "MODE", { T.NONE } },
         { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
-        { "CONNECT", { T.CONVERT, T.MERGE, T.JUNCTION } },
+        -- JUNCTION is disconnected in this release (see the 0.31.0.1 patch notes) - left out of
+        -- this group entirely so there is no button for it, on top of setTool's own refusal.
+        { "CONNECT", { T.CONVERT, T.MERGE } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
     -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
@@ -503,6 +505,11 @@ function ADFlyoverHud:buildRows(editor)
         addWheelNumber("points", tostring(editor.divideCount))
     elseif editor.tool == editor.TOOL.PARALLEL then
         addWheelNumber("distance", string.format("%.1f m", editor.offsetDistance))
+    elseif editor.tool == editor.TOOL.FIELDLOOP then
+        add("toggle", "priority", editor.fieldLoopSubPrio and "secondary" or "primary", false,
+            function() editor:toggleFieldLoopPriority() end)
+        add("toggle", "track", editor.FIELD_LOOP_DIR_NAMES[editor.fieldLoopDirection], false,
+            function() editor:cycleFieldLoopDirection() end)
     elseif editor.tool == editor.TOOL.CONVERT then
         add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
             function() editor:cycleConvertOp() end)
@@ -1168,6 +1175,15 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     if overridden then
         push({ kind = "button", text = "clear this colour", action = function() editor:clearEditRole() end })
     end
+
+    push({ kind = "section", text = "LAUNCH BUTTON" })
+    push({ kind = "field", text = "on AutoDrive HUD",
+        value = ADFlyoverSettings.get("launchButtonHidden") and "hidden" or "shown",
+        action = function() ADFlyoverSettings.cycle("launchButtonHidden", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("launchButtonHidden", d) end })
+    push({ kind = "field", text = "position", value = tostring(ADFlyoverSettings.get("launchButtonPosition")),
+        action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
 
     push({ kind = "gap" })
     push({ kind = "button", text = "reset all to default", action = function() editor:resetTheme() end })

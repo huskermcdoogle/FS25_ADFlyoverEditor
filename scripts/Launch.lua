@@ -253,6 +253,20 @@ function L.drawHudButton(hud)
     if hud == nil or not ensureIcon() then
         return
     end
+    -- AutoDrive keeps its own HUD "mouse active" while the in-game menu's AI job / map-overview
+    -- page is open (AutoDrive.isMouseActiveForHud honours AutoDrive.aiFrameOpen) - which is exactly
+    -- when the launch button must NOT be there, since ADFlyoverEditor:enable() now refuses under
+    -- that page anyway. Not drawing it, rather than drawing it disabled, reuses the same staleness
+    -- check mouseEvent already applies when AutoDrive's HUD disappears for a mundane reason (the
+    -- player left the vehicle): buttonRect/buttonDrawnAt simply stop being refreshed.
+    if ADFlyoverEditor ~= nil and ADFlyoverEditor.isGuiBlocking ~= nil and ADFlyoverEditor:isGuiBlocking() then
+        return
+    end
+    -- Settings-dialog controlled: a player who does not want the button there at all (or wants it
+    -- somewhere other than the default corner) sets this once, under LAUNCH BUTTON, and it sticks.
+    if ADFlyoverSettings ~= nil and ADFlyoverSettings.get("launchButtonHidden") then
+        return
+    end
     -- Nil-guarded throughout: if AutoDrive ever renames these, the button goes missing rather than
     -- taking their HUD down with it.
     local hx, hy = hud.posX or AutoDrive.HudX, hud.posY or AutoDrive.HudY
@@ -264,15 +278,28 @@ function L.drawHudButton(hud)
     local uiScale = (g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1
     local w, h = getNormalizedScreenValues(44 * uiScale, 44 * uiScale)
     local gapX = getNormalizedScreenValues(6 * uiScale, 0)
+    local _, gapY = getNormalizedScreenValues(0, 6 * uiScale)
 
-    -- Flush to the HUD's left edge and level with its top, so it reads as part of the panel. The
-    -- left side because the HUD defaults to the right-hand edge of the screen - on the right there
-    -- is nowhere to put it.
-    local x = hx - w - gapX
-    local y = hy + hh - h
-    if x < 0 then
-        -- HUD dragged hard against the left edge: go on its right instead of off screen.
-        x = hx + hw + gapX
+    local position = (ADFlyoverSettings ~= nil and ADFlyoverSettings.get("launchButtonPosition")) or "auto"
+    local x, y
+    if position == "left" then
+        x, y = hx - w - gapX, hy + hh - h
+    elseif position == "right" then
+        x, y = hx + hw + gapX, hy + hh - h
+    elseif position == "above" then
+        x, y = hx + (hw - w) * 0.5, hy + hh + gapY
+    elseif position == "below" then
+        x, y = hx + (hw - w) * 0.5, hy - h - gapY
+    else
+        -- "auto" (and anything unrecognised): flush to the HUD's left edge and level with its top,
+        -- so it reads as part of the panel by default. The left side because the HUD defaults to
+        -- the right-hand edge of the screen - on the right there is nowhere to put it - unless the
+        -- HUD has been dragged hard against the left edge, in which case go on its right instead of
+        -- off screen.
+        x, y = hx - w - gapX, hy + hh - h
+        if x < 0 then
+            x = hx + hw + gapX
+        end
     end
 
     L.buttonRect = { x = x, y = y, w = w, h = h }
