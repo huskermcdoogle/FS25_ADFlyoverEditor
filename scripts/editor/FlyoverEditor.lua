@@ -8688,6 +8688,14 @@ function ADFlyoverEditor:updateJunctionPreview()
             self.junctionPreview.tidyEnds, self.junctionPreview.tidyBands = ends, bands
             self.junctionPreview.boxSweep, self.junctionPreview.tidyRoads = swept, roadsOut
             self.junctionPreview.boxCentre = boxCentre
+            -- THE MIDDLE OF A JUNCTION IS WHERE ITS ROADS CROSS, and that is what gets shown. The
+            -- selection finds the junction by its forks, and their centroid sits a few metres off
+            -- the crossing - 3.3 m at one T, where the lock was visibly not on the intersection.
+            -- This is not the old re-aim: nothing is solved again and the selection is not
+            -- reconsidered. The crossing only says where the middle of the chosen junction is.
+            if boxCentre ~= nil then
+                self.junctionPreview.cx, self.junctionPreview.cz = boxCentre.x, boxCentre.z
+            end
         end)
         -- Named on the card before anything is applied: which junction this is, and what kind.
         tryCall("junction classify", function()
@@ -8700,9 +8708,15 @@ function ADFlyoverEditor:updateJunctionPreview()
         tryCall("junction number", function()
             self.junctionPreview.junctionNumber = self:junctionNumberAt(cx, cz)
         end)
+        -- Spelled out, not `a and nil or b`: that idiom falls through to b whenever the middle
+        -- value is nil, so it indexed the very site it had just found to be missing - an error on
+        -- every frame build mode was pointed at open ground.
         local st = self.junctionSite
-        self.junctionPreview.junctionState = (st == nil) and nil
-            or (st.virgin and "virgin - ready to build" or "wired")
+        if st ~= nil then
+            self.junctionPreview.junctionState = st.virgin and "virgin - ready to build" or "wired"
+        else
+            self.junctionPreview.junctionState = nil
+        end
     end
 
     -- Skeleton INSIDE the circle: if a run-following walk ever diverts off the road and down a
@@ -12118,6 +12132,60 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 -- tolerance, together they leaned the lane's end the way the turn used to go. The
                 -- last 16 m is laid fresh along the clean heading instead.
                 local lastOn = ni
+                -- THE LANE'S LIST DOES NOT ALWAYS END AT THE JUNCTION. With through paths kept, the
+                -- walk that builds it carries on past the connector and away down the main road -
+                -- one lane came back 32 nodes long with its "tip" 69 m beyond the box - and "nothing
+                -- past the clean node survives" then took the connector, which is right, and went on
+                -- to take the parent road the user had asked to keep: 13 points out to 34 m, in game,
+                -- at a junction 12 m across. What lies past the clean node is this lane's only as far
+                -- as its connector runs, and a connector ends where it JOINS something: at the first
+                -- fork, or the first point of a protected through route. From there on it is another
+                -- road, and is dropped from this lane's list altogether so nothing below touches it.
+                do
+                    local prot = jp.protectedOf or {}
+                    local stop = nil
+                    for i = ni + 1, #lane do
+                        local n = lane[i]
+                        local seen, d = {}, 0
+                        for _, lst in ipairs({ n.out or {}, n.incoming or {} }) do
+                            for _, id in pairs(lst) do
+                                if not seen[id] then seen[id] = true d = d + 1 end
+                            end
+                        end
+                        if d >= 3 or prot[n] then stop = i break end
+                    end
+                    if stop ~= nil then
+                        for i = #lane, stop, -1 do lane[i] = nil end
+                    end
+                    -- AND A LANE ENDS AT THE JUNCTION. By the time this runs the clear has usually cut
+                    -- the connector's far link, so there is no fork left to stop at, and the list
+                    -- carries straight on down the road the connector used to join: in from the
+                    -- west, round the connector, and away to the south for 40 m, every point of it
+                    -- plain two-link road. So the list is cut at its own closest approach to the
+                    -- middle of the box. Up to there it is coming IN, and is this lane's; past there
+                    -- it is going OUT, and is some other road's. No distance is involved - only
+                    -- which way the lane is heading.
+                    local kBest, dBest = nil, math.huge
+                    for i = ni, #lane do
+                        local d = (lane[i].x - box.centre.x) ^ 2 + (lane[i].z - box.centre.z) ^ 2
+                        if d < dBest then dBest, kBest = d, i end
+                    end
+                    if kBest ~= nil and kBest < #lane then
+                        for i = #lane, kBest + 1, -1 do lane[i] = nil end
+                    end
+                end
+                if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG and #lane - ni > 4 then
+                    for i = 1, #lane do
+                        local n = lane[i]
+                        local seen, d = {}, 0
+                        for _, lst in ipairs({ n.out or {}, n.incoming or {} }) do
+                            for _, id in pairs(lst) do if not seen[id] then seen[id] = true d = d + 1 end end
+                        end
+                        Logging.info("[FlyoverEditor]: LANE #%02d id=%d (%.1f, %.1f) %.0f m from box, deg %d%s%s",
+                            i, n.id, n.x, n.z, math.sqrt((n.x - box.centre.x) ^ 2 + (n.z - box.centre.z) ^ 2), d,
+                            (jp.protectedOf or {})[n] and " PROTECTED" or "", i == ni and "  <-- clean node" or "")
+                    end
+                end
                 if AutoDrive.FLYOVER_JUNCTION_TRIM_DEBUG then
                     local tipD = math.sqrt((lane[#lane].x - box.centre.x) ^ 2 + (lane[#lane].z - box.centre.z) ^ 2)
                     local nearD = math.sqrt((near.x - box.centre.x) ^ 2 + (near.z - box.centre.z) ^ 2)
@@ -12648,6 +12716,11 @@ end
 function ADFlyoverEditor:applyJunctionClear()
     local jp = self.junctionPreview
     if jp == nil then return end
+    -- The bounds are measured from the crossing too, where there is one, so that "this junction"
+    -- means the same place to the deletions as it does on screen.
+    if self.junctionSite ~= nil and jp.boxCentre ~= nil then
+        self.junctionSite.x, self.junctionSite.z = jp.boxCentre.x, jp.boxCentre.z
+    end
     -- From here until jxEnd, nothing is deleted outside the junction that was selected. See jxRemove.
     jxBegin(self.junctionSite)
 
