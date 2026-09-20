@@ -583,6 +583,12 @@ function ADFlyoverHud:buildRows(editor)
             editor.junctionPreviewKey = nil
         end
         local jp = editor.junctionPreview
+        -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card, which
+        -- reads exactly like the tool having stopped working - and the answer "that is not a
+        -- junction" is a useful one, so it is shown rather than left to be guessed at.
+        if jp == nil and editor.junctionMode == "clear" and editor.junctionRefused ~= nil then
+            add("toggle", "no junction here", tostring(editor.junctionRefused))
+        end
         if jp ~= nil then
             add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
             add("toggle", "new movements", tostring(jp.nNew))
