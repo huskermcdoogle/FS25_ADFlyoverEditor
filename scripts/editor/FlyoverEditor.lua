@@ -7371,8 +7371,13 @@ function ADFlyoverEditor:debugCaptureBegin(what, site, extra)
     jxDebugSeq = jxDebugSeq + 1
     local name
     if site ~= nil and site.x ~= nil then
+        -- The number is in the folder name so a sequence can be talked about, and the COORDINATE is
+        -- in it too because the number is only good for this session - clearing junctions reshuffles
+        -- them, and a capture read back tomorrow would otherwise name a different crossing.
+        local n = self:junctionNumberAt(site.x, site.z)
         name = string.format("%04d_%s_%s%.1f_%.1f", jxDebugSeq, what or "op",
-            site.n ~= nil and string.format("j%02d_", site.n) or "", site.x, site.z)
+            n ~= nil and string.format("j%02d_", n) or "", site.x, site.z)
+        site = { x = site.x, z = site.z, n = n }
     else
         name = string.format("%04d_%s", jxDebugSeq, what or "op")
     end
@@ -7401,7 +7406,11 @@ function ADFlyoverEditor:debugCaptureEnd(cap)
     jxDebugWriteGraph(cap.dir .. "post.xml")
 
     local meta = {
-        string.format("build          %s", tostring(ADFlyoverEditor.VERSION or (ADFlyoverPrelude and ADFlyoverPrelude.BUILD) or "?")),
+        -- Both versions, the way the card reports them: if the Lua and the modDesc disagree, the
+        -- game was reloaded without a restart, and a capture that did not say so would have someone
+        -- reading it against the wrong source.
+        string.format("build          %s", (ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD) or "?"),
+        string.format("modDesc        %s", (ADFlyoverPrelude ~= nil and ADFlyoverPrelude.MODDESC_VERSION) or "?"),
         string.format("tool           %s", tostring(cap.what)),
         string.format("started        %s", tostring(cap.t0)),
         string.format("finished       %s", getDate ~= nil and getDate("%H:%M:%S") or ""),
