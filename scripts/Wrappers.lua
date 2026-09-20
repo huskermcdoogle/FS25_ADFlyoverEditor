@@ -157,6 +157,13 @@ function W.install(AD)
             if ADFlyoverEditor:handleWheel(offset) then
                 return true
             end
+            -- The editor declined, so this wheel is the camera's. The original ends in
+            -- `return AutoDrive.mouseWheelActive` - AutoDrive's HUD flag, which is frozen at its
+            -- entry value while the editor mutes AutoDrive's mouse handler (wrapper 1). A stale true
+            -- there made every declined wheel "handled" and the flyover camera unzoomable. The flag
+            -- is meaningless while the editor owns the mouse, so clear it before delegating; the
+            -- spline-curvature path inside the original still gets its turn.
+            AD.mouseWheelActive = false
         end
         return originalHandleSplineCurvature(selfArg, offset, ...)
     end

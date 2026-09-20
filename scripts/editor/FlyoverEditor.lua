@@ -634,6 +634,23 @@ function ADFlyoverEditor:isAvailable()
     return GuiTopDownCamera ~= nil and GuiTopDownCursor ~= nil
 end
 
+--- Give the mouse wheel back to the cameras: collapse any expanded AutoDrive pull-down list (the one
+--- state that keeps re-asserting mouseWheelActive) and clear the flag. Used on enable and disable.
+function ADFlyoverEditor:releaseAutoDriveWheel()
+    local hud = AutoDrive.Hud
+    local vehicle = AutoDrive.getControlledVehicle and AutoDrive.getControlledVehicle() or nil
+    if hud ~= nil and hud.closeAllPullDownLists ~= nil and (AutoDrive.pullDownListExpanded or 0) ~= 0 then
+        local ok, err = pcall(hud.closeAllPullDownLists, hud, vehicle)
+        if ok then
+            Logging.info("[FlyoverEditor]: collapsed an expanded AutoDrive pull-down list (it was holding the mouse wheel).")
+        else
+            Logging.warning("[FlyoverEditor]: could not collapse AutoDrive's pull-down list: %s", tostring(err))
+            AutoDrive.pullDownListExpanded = 0
+        end
+    end
+    AutoDrive.mouseWheelActive = false
+end
+
 function ADFlyoverEditor:enable()
     -- COMPANION EDIT: refuse on a multiplayer client. Every graph write here passes
     -- sendEvent = false, and AutoDrive only writes the route file when g_server is present - so a
@@ -670,6 +687,14 @@ function ADFlyoverEditor:enable()
         return
     end
     Logging.info("[FlyoverEditor]: GuiTopDownCamera and GuiTopDownCursor are both present.")
+    -- AutoDrive's wheel hook ends in `return AutoDrive.mouseWheelActive` - a flag its HUD sets while
+    -- the cursor is over a scrollable element, and RE-ASSERTS on every mouse event for as long as a
+    -- pull-down list is expanded. The mouseEvent wrapper mutes AutoDrive's handler while the editor
+    -- is open, so whatever that flag was at the moment of entry is frozen for the whole session: opened
+    -- with a destination list still dropped down, every wheel event was "handled" and the flyover
+    -- camera could not zoom - and the flag came straight back after exit too, taking the vehicle
+    -- camera's zoom with it. Collapse the lists and clear the flag here, on the way in.
+    self:releaseAutoDriveWheel()
     -- A proxy draw failure from an earlier session latches (see ADFlyoverProxy.failed) so one fault
     -- cannot retry and re-log itself every frame - but that means it also needs a deliberate reset
     -- somewhere, or it would follow the player into every future session too. Here, on the way in,
@@ -909,8 +934,9 @@ function ADFlyoverEditor:disable()
         end)
     end
 
-    -- Leaving this set makes the mod swallow wheel events after the editor has gone.
-    AutoDrive.mouseWheelActive = false
+    -- Leaving this set makes the mod swallow wheel events after the editor has gone - and clearing the
+    -- flag alone is not enough: an expanded pull-down list re-sets it on the next mouse event.
+    self:releaseAutoDriveWheel()
     Logging.info("[FlyoverEditor]: mouse cursor set to %s on exit (showHUD=%s, was %s on entry).",
         tostring(wantCursor), tostring(okHud and hudOn or "unreadable"), tostring(self.previousShowMouseCursor))
     if self.contextPushed then
