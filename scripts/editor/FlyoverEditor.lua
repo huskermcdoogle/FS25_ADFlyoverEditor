@@ -6561,8 +6561,14 @@ local function jxMayDelete(x, z)
     end
     -- Nowhere near any arm of this junction: not ours.
     if best == nil or bestSep > 60 then return false end
-    -- A little past the fork, because a road has width and its far lane sits off the arm's bearing.
-    return d <= (best.len or 0) + 4
+    -- WHERE THE ARM RAN INTO ANOTHER JUNCTION, STOP SHORT OF IT. The walk reports the distance TO
+    -- that fork, and a margin on top of it reaches past the fork and into the junction beyond - which
+    -- is how clearing one of a close pair took the other one's points while reporting that it had
+    -- held nothing back. The margin is only for an arm that ran out of walk without meeting
+    -- anything: there a road's far lane really does sit off the arm's bearing and wants the room.
+    local lim = best.len or 0
+    if best.fork then lim = math.max(0, lim - 2) else lim = lim + 4 end
+    return d <= lim
 end
 
 --- The one way a clear removes a waypoint. Takes an id or the node itself; the node is safer, since
@@ -6751,13 +6757,13 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
             if not inCluster[id] then
                 local w = ADGraphManager:getWayPointById(id)
                 if w ~= nil then
-                    local len, prev, cur = 0, f, w
+                    local len, prev, cur, hitFork = 0, f, w, false
                     local seen = { [f.id] = true }
                     while cur ~= nil and len < WALK do
                         len = len + math.sqrt((cur.x - prev.x) ^ 2 + (cur.z - prev.z) ^ 2)
                         seen[cur.id] = true
                         local cnb, cdeg = neighbours(cur)
-                        if cdeg >= 3 then break end
+                        if cdeg >= 3 then hitFork = true break end
                         local nxt = nil
                         for nid in pairs(cnb) do
                             if not seen[nid] then nxt = ADGraphManager:getWayPointById(nid) break end
@@ -6770,7 +6776,7 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                         -- Clamped, because the walk adds a whole segment before it re-tests the cap:
                         -- a 10 m hop at the end of a 39 m arm had the arm reported as 49 m, and the
                         -- bound is only ever as tight as the arm it is told about.
-                        len = math.min(len, WALK), node = w,
+                        len = math.min(len, WALK), node = w, fork = hitFork,
                     }
                 end
             end
@@ -6788,10 +6794,10 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
             if d <= math.rad(30) then joined = r break end
         end
         if joined == nil then
-            roads[#roads + 1] = { bearing = a.bearing, len = a.len, n = 1 }
+            roads[#roads + 1] = { bearing = a.bearing, len = a.len, n = 1, fork = a.fork }
         else
             joined.n = joined.n + 1
-            if a.len > joined.len then joined.len = a.len end
+            if a.len > joined.len then joined.len, joined.fork = a.len, a.fork end
         end
     end
 
