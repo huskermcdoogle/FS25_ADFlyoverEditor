@@ -529,7 +529,23 @@ function ADFlyoverHud:buildRows(editor)
             add("toggle", "leave through paths", (editor.junctionLeaveThrough ~= false) and "on" or "off", false,
                 function() editor:toggleJunctionLeaveThrough() end)
             local cjp = editor.junctionPreview
+            -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card,
+            -- which reads exactly like the tool having stopped working - and "that is not a
+            -- junction" is a useful answer, so it is shown rather than left to be guessed at.
+            if cjp == nil and editor.junctionRefused ~= nil then
+                add("toggle", "no junction here", tostring(editor.junctionRefused))
+            end
             if cjp ~= nil then
+                -- WHICH junction, and WHAT KIND. The number is the survey's, so a site can be named
+                -- out loud instead of read out as coordinates. The kind is worked out from the site
+                -- as it stands, BEFORE the clear cleans and smooths it, so it can disagree with the
+                -- line in the log afterwards; the log is the one to believe.
+                if cjp.junctionNumber ~= nil or cjp.junctionType ~= nil then
+                    add("toggle", "junction", string.format("%s%s%s",
+                        cjp.junctionNumber and string.format("j%02d", cjp.junctionNumber) or "unnumbered",
+                        (cjp.junctionNumber ~= nil and cjp.junctionType ~= nil) and "  -  " or "",
+                        cjp.junctionType or ""))
+                end
                 local cleave = editor.junctionLeaveThrough ~= false
                 local doomed = cleave and cjp.turnDebris or cjp.debris
                 add("toggle", "approaches found", tostring(#(cjp.approaches or {})))
@@ -583,22 +599,7 @@ function ADFlyoverHud:buildRows(editor)
             editor.junctionPreviewKey = nil
         end
         local jp = editor.junctionPreview
-        -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card, which
-        -- reads exactly like the tool having stopped working - and the answer "that is not a
-        -- junction" is a useful one, so it is shown rather than left to be guessed at.
-        if jp == nil and editor.junctionMode == "clear" and editor.junctionRefused ~= nil then
-            add("toggle", "no junction here", tostring(editor.junctionRefused))
-        end
         if jp ~= nil then
-            -- WHICH junction, and WHAT KIND. The number is the one the survey uses, so a site can be
-            -- named out loud instead of quoted as coordinates; the kind is recorded but nothing
-            -- branches on it yet.
-            if editor.junctionMode == "clear" and (jp.junctionNumber ~= nil or jp.junctionType ~= nil) then
-                add("toggle", "junction", string.format("%s%s%s",
-                    jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered",
-                    (jp.junctionNumber ~= nil and jp.junctionType ~= nil) and "  -  " or "",
-                    jp.junctionType or ""))
-            end
             add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
             add("toggle", "new movements", tostring(jp.nNew))
             if (jp.nRebuild or 0) > 0 then
