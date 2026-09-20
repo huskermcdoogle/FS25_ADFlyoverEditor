@@ -532,8 +532,12 @@ function ADFlyoverHud:buildRows(editor)
             -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card,
             -- which reads exactly like the tool having stopped working - and "that is not a
             -- junction" is a useful answer, so it is shown rather than left to be guessed at.
+            -- The REASON goes on a line of its own. A toggle row puts its label at the left and its
+            -- value hard against the right, which is fine for "on" and hopeless for a sentence: the
+            -- two ran into each other and printed on top of one another, so neither could be read.
             if cjp == nil and editor.junctionRefused ~= nil then
-                add("toggle", "no junction here", tostring(editor.junctionRefused))
+                add("toggle", "no junction here", "")
+                add("note", tostring(editor.junctionRefused))
             end
             if cjp ~= nil then
                 -- WHICH junction, and WHAT KIND. The number is the survey's, so a site can be named
@@ -552,7 +556,8 @@ function ADFlyoverHud:buildRows(editor)
                 -- Said plainly, because without a box the clear cannot empty the middle of the
                 -- junction and the result looks like it half worked.
                 if cjp._box == nil then
-                    add("toggle", "no box here", "its roads do not cross at an angle a box can be made from")
+                    add("toggle", "no box here", "")
+                    add("note", "its roads do not cross at an angle a box can be made from")
                 end
                 local cleave = editor.junctionLeaveThrough ~= false
                 local doomed = cleave and cjp.turnDebris or cjp.debris
