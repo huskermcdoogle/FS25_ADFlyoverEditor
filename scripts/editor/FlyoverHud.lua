@@ -564,6 +564,18 @@ function ADFlyoverHud:buildRows(editor)
             -- different answers each time.
             add("toggle", "leave through paths", (editor.junctionLeaveThrough ~= false) and "on" or "off", false,
                 function() editor:toggleJunctionLeaveThrough() end)
+            -- ON THE CARD, not in a menu: it writes a copy of the whole network on every change, so
+            -- it has to be plain that it is running and plain how to stop it. The count is shown
+            -- because "on" alone does not tell you it is actually managing to write anything.
+            do
+                local capOn = AutoDrive.FLYOVER_DEBUG_CAPTURE == true
+                local where, n = editor:debugCaptureWhere()
+                add("toggle", "debug capture", capOn and string.format("on  -  %d saved", n or 0) or "off", false,
+                    function() editor:toggleJunctionDebugCapture() end)
+                if capOn and where == nil then
+                    add("note", "nowhere to write yet - save the game once")
+                end
+            end
             local cjp = editor.junctionPreview
             -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card,
             -- which reads exactly like the tool having stopped working - and "that is not a

@@ -3401,6 +3401,26 @@ end
 --- across shows near-identical bearings at its two ends) is continuing the road nearly straight, not
 --- turning, and is left alone when this is on. Off clears
 --- everything the site owns, the same as before this option existed.
+--- Turn the debug capture on or off. Deliberately a toggle on the junction card rather than a
+--- setting buried in a menu: it writes a copy of the whole network on every change, so it must be
+--- obvious that it is running and obvious how to stop it.
+function ADFlyoverEditor:toggleJunctionDebugCapture()
+    AutoDrive.FLYOVER_DEBUG_CAPTURE = not (AutoDrive.FLYOVER_DEBUG_CAPTURE == true)
+    -- Asked of the capture itself, through a method, because everything it knows is a file-local
+    -- declared further down this file - and a file-local named from above binds to a GLOBAL, which
+    -- is a fault this file has already shipped once.
+    local where, n = self:debugCaptureWhere()
+    if AutoDrive.FLYOVER_DEBUG_CAPTURE then
+        Logging.info("[FlyoverEditor]: debug capture ON. Every junction change writes the network before and after, plus this tool's log, into %s",
+            where or "<nowhere yet>")
+        if where == nil then
+            Logging.warning("[FlyoverEditor]: debug capture - there is no savegame folder to write into yet. Save the game once, then it will record.")
+        end
+    else
+        Logging.info("[FlyoverEditor]: debug capture OFF after %d change(s) recorded this session.", n or 0)
+    end
+end
+
 function ADFlyoverEditor:toggleJunctionLeaveThrough()
     self.junctionLeaveThrough = not self.junctionLeaveThrough
     self.junctionPreviewKey = nil
@@ -7210,10 +7230,23 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
             if s.virgin and s.d2 < bd then virginNearer = true break end
         end
         if bestC ~= nil and not virginNearer then
+            -- IN A FIXED ORDER. `forks` is a set keyed by the node TABLES, and Lua hashes a table
+            -- key by its address, so pairs() walks it in whatever order the memory happened to fall
+            -- in - a different order in every process. That order reaches the arms, and through them
+            -- the box and what gets cleared: the same clear on the same network took 43 points
+            -- reaching 43 m four runs out of five, and 42 points reaching 17 m on the fifth.
+            --
+            -- Sorted by POSITION, not by id, because ids are reissued by every removal while a
+            -- point's place on the map is its own.
             local nodes = {}
             for fk in pairs(bestC.forks) do
                 if fk.id ~= nil then nodes[#nodes + 1] = fk end
             end
+            table.sort(nodes, function(a, b)
+                if a.x ~= b.x then return a.x < b.x end
+                if a.z ~= b.z then return a.z < b.z end
+                return (a.y or 0) < (b.y or 0)
+            end)
             local site = evaluate({ x = bestC.x, z = bestC.z, nodes = nodes, wiring = bestC.wiring, fromRoads = true })
             if site ~= nil then return site end
         end
@@ -7243,6 +7276,155 @@ local function junctionRegistryFolder()
         return getUserProfileAppPath() .. "savegame" .. info.savegameIndex .. "/"
     end
     return nil
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- DEBUG CAPTURE: THE NETWORK EITHER SIDE OF EVERY CHANGE, PLUS WHAT THE TOOL SAID WHILE MAKING IT.
+--
+-- A fault you can see on your screen and I cannot reproduce on mine is the expensive kind. A whole
+-- day went into one: four offline tests all came back clean because my copy of the network was not
+-- the one the fault was in, and the junction had been renumbered in between, so we were not even
+-- discussing the same crossing. What finally settled it in a single step was a pair of hand-saved
+-- networks from either side of one clear. This does that automatically.
+--
+-- Each change writes a numbered folder under the savegame:
+--
+--     flyoverDebug/0007_clear_j60_-921.9_-46.9/
+--         meta.txt   build, tool, settings, where it was locked, what it was called
+--         pre.xml    the network before
+--         post.xml   the network after
+--         tool.log   every line this tool logged while doing it
+--
+-- The number leads: click through a sequence and the folders read in the order you did them, so a
+-- fault that only appears when one thing follows another can be followed the same way.
+--
+-- pre.xml and post.xml are AutoDrive's OWN route format, written by AutoDrive's own writer. Nothing
+-- new to parse and nothing new to get wrong: the game will load either one straight back in, and it
+-- is the same format as the routes saved by hand that solved this in the first place.
+--
+-- Off unless switched on, and never on by accident - the toggle is on the junction card, it says so
+-- while it is on, and it costs nothing at all while it is off.
+local FLYOVER_DEBUG_DIR = "flyoverDebug/"
+local jxDebugSeq = 0
+
+--- Where the game's log has got to. The tool logs a great deal about what it is doing and all of it
+--- already goes there, so the capture takes the stretch written BETWEEN its two ends rather than
+--- every logging call being taught to report itself. Nothing to keep in step, and it picks up lines
+--- from anything else the change touches on the way through.
+local function jxDebugLogSize()
+    if getUserProfileAppPath == nil then return nil end
+    local f = io.open(getUserProfileAppPath() .. "log.txt", "rb")
+    if f == nil then return nil end
+    local n = f:seek("end")
+    f:close()
+    return n
+end
+
+--- Everything logged since `from`, kept to the lines this mod wrote.
+local function jxDebugLogSince(from)
+    if from == nil or getUserProfileAppPath == nil then return {} end
+    local f = io.open(getUserProfileAppPath() .. "log.txt", "rb")
+    if f == nil then return {} end
+    f:seek("set", from)
+    local text = f:read("*a") or ""
+    f:close()
+    local out = {}
+    for line in text:gmatch("[^\r\n]+") do
+        if line:find("FlyoverEditor", 1, true) ~= nil then out[#out + 1] = line end
+    end
+    return out
+end
+
+--- Write the whole network, as AutoDrive writes its routes. True when the file is there.
+local function jxDebugWriteGraph(path)
+    if createXMLFile == nil or AutoDrive == nil or AutoDrive.writeGraphToXml == nil then return false end
+    local ok = pcall(function()
+        local xml = createXMLFile("flyoverDebug_xml", path, "routeExport")
+        if xml == nil or xml == -1 then return end
+        AutoDrive.writeGraphToXml(xml, "routeExport", ADGraphManager:getWayPoints(),
+            ADGraphManager:getMapMarkers(), ADGraphManager:getGroups())
+        saveXMLFile(xml)
+        delete(xml)
+    end)
+    return ok == true
+end
+
+--- Where captures are being written, and how many have been written this session. A method, so the
+--- card and the toggle can ask without reaching for file-locals declared below them.
+function ADFlyoverEditor:debugCaptureWhere()
+    local root = junctionRegistryFolder()
+    if root == nil then return nil, jxDebugSeq end
+    return root .. FLYOVER_DEBUG_DIR, jxDebugSeq
+end
+
+--- Begin capturing one change. `what` names the operation ("clear", "build"), `site` is where it
+--- was locked and may be nil. Returns the folder it will write into, or nil when capture is off or
+--- there is nowhere to write - and everything after it then does nothing, so no caller needs to ask
+--- whether capture is on.
+---
+--- The pre-state is written HERE, before the change, because there is no getting it back afterwards.
+function ADFlyoverEditor:debugCaptureBegin(what, site, extra)
+    if AutoDrive.FLYOVER_DEBUG_CAPTURE ~= true then return nil end
+    local root = junctionRegistryFolder()
+    if root == nil then return nil end
+
+    jxDebugSeq = jxDebugSeq + 1
+    local name
+    if site ~= nil and site.x ~= nil then
+        name = string.format("%04d_%s_%s%.1f_%.1f", jxDebugSeq, what or "op",
+            site.n ~= nil and string.format("j%02d_", site.n) or "", site.x, site.z)
+    else
+        name = string.format("%04d_%s", jxDebugSeq, what or "op")
+    end
+    local dir = root .. FLYOVER_DEBUG_DIR .. name .. "/"
+    if createFolder ~= nil then
+        pcall(createFolder, root .. FLYOVER_DEBUG_DIR)
+        pcall(createFolder, dir)
+    end
+
+    local cap = {
+        dir = dir, what = what, site = site, extra = extra,
+        t0 = getDate ~= nil and getDate("%H:%M:%S") or "",
+        logFrom = jxDebugLogSize(),
+    }
+    if not jxDebugWriteGraph(dir .. "pre.xml") then
+        Logging.warning("[FlyoverEditor]: debug capture - could not write the network into %s. Capture is on but this change will not be recorded.", dir)
+        return nil
+    end
+    Logging.info("[FlyoverEditor]: debug capture %04d - recording this %s into %s", jxDebugSeq, what or "change", dir)
+    return cap
+end
+
+--- Finish a capture: the network as it now is, and everything the tool said while changing it.
+function ADFlyoverEditor:debugCaptureEnd(cap)
+    if cap == nil then return end
+    jxDebugWriteGraph(cap.dir .. "post.xml")
+
+    local meta = {
+        string.format("build          %s", tostring(ADFlyoverEditor.VERSION or (ADFlyoverPrelude and ADFlyoverPrelude.BUILD) or "?")),
+        string.format("tool           %s", tostring(cap.what)),
+        string.format("started        %s", tostring(cap.t0)),
+        string.format("finished       %s", getDate ~= nil and getDate("%H:%M:%S") or ""),
+        string.format("waypoints now  %d", ADGraphManager:getWayPointsCount()),
+    }
+    if cap.site ~= nil then
+        meta[#meta + 1] = string.format("locked at      %.2f, %.2f", cap.site.x or 0, cap.site.z or 0)
+        if cap.site.n ~= nil then meta[#meta + 1] = string.format("junction       j%02d", cap.site.n) end
+    end
+    for _, line in ipairs(cap.extra or {}) do meta[#meta + 1] = line end
+    -- Positions, never ids: every removal reissues the ids above it, so an id written here would
+    -- name a different point by the time anyone read it back.
+    meta[#meta + 1] = ""
+    meta[#meta + 1] = "pre.xml and post.xml are AutoDrive route exports - loadable in game, and"
+    meta[#meta + 1] = "readable by the offline harness. Points are matched by position, not by id."
+
+    local f = io.open(cap.dir .. "meta.txt", "w")
+    if f ~= nil then f:write(table.concat(meta, "\n") .. "\n") f:close() end
+    local lines = jxDebugLogSince(cap.logFrom)
+    local l = io.open(cap.dir .. "tool.log", "w")
+    if l ~= nil then l:write(table.concat(lines, "\n") .. "\n") l:close() end
+    Logging.info("[FlyoverEditor]: debug capture %04d - written, %d log line(s). %s",
+        jxDebugSeq, #lines, cap.dir)
 end
 
 --- The numbers as they were last written: a list of { n, x, z } and the path it came from, or nil
@@ -13899,6 +14081,13 @@ function ADFlyoverEditor:applyJunctionClear()
     -- From here until jxEnd, nothing is deleted outside the junction that was selected. See jxRemove.
     jxBegin(self.junctionSite)
 
+    -- The network as it stands, before a single point moves, when capture is on. Nil otherwise, and
+    -- every debugCapture call below is a no-op on nil.
+    local cap = self:debugCaptureBegin("clear", self.junctionSite, {
+        string.format("leave through paths  %s", (self.junctionLeaveThrough ~= false) and "on" or "off"),
+        string.format("turn radius          %s m", tostring(self.junctionTurnRadius or 12)),
+    })
+
     -- STEP 2: CLEAN THE SITE BEFORE ANYTHING MEASURES IT. This used to run last of all, which meant
     -- the box, the road widths and the answer to which lanes are parent road were all worked out on
     -- a site that still had points sitting on top of each other and chains leading nowhere in it -
@@ -14227,6 +14416,8 @@ function ADFlyoverEditor:applyJunctionClear()
         took, farOut, held)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
+    -- After markChanges, so what is written is the network as the game now holds it.
+    self:debugCaptureEnd(cap)
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
 end
 
@@ -14237,6 +14428,13 @@ function ADFlyoverEditor:applyJunction()
         self:applyJunctionClear()
         return
     end
+    -- A build changes the network just as a clear does, so it is captured the same way: the point of
+    -- the numbered folders is to follow a SEQUENCE, and a sequence with the builds missing from it
+    -- cannot be replayed.
+    local cap = self:debugCaptureBegin("build", self.junctionSite, {
+        string.format("turn radius          %s m", tostring(self.junctionTurnRadius or 12)),
+    })
+
     local newMoves = {}
     for _, m in ipairs(jp.movements) do
         if (not m.exists or m.rebuild) and m.connector ~= nil and m.refused == nil then
@@ -14445,6 +14643,7 @@ function ADFlyoverEditor:applyJunction()
         placed, dualPlaced, rebuiltPlaced, #allStubs)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
+    self:debugCaptureEnd(cap)
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
 end
 
