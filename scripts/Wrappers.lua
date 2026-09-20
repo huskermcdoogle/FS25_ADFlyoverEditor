@@ -143,6 +143,14 @@ function W.install(AD)
     -- Note the editor gets first refusal, not unconditional ownership: when it declines, or when
     -- there is no editor yet as in stage 3, the wheel falls through and still zooms.
     local originalHandleSplineCurvature = AD.handleSplineCurvature
+    -- Captured BEFORE the overwrite two lines down, which is unconditional and runs regardless of
+    -- AutoDrive's version - so by the time wrapper 5 below would otherwise ask "does
+    -- AD.handleSplineCurvature exist", the answer is always yes, because THIS assignment just put
+    -- it there. That is not "does AutoDrive support this", it is "did wrapper 4 run" - always true -
+    -- and it is exactly why the old-AutoDrive curvature fallback never fired even though wrapper 5
+    -- was installed correctly: it was checking its own sibling wrapper's handiwork. This flag is the
+    -- real answer, fixed at install time from what AD.handleSplineCurvature was BEFORE we touched it.
+    local hadRealHandleSplineCurvature = (originalHandleSplineCurvature ~= nil)
     AD.handleSplineCurvature = function(selfArg, offset, ...)
         if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
             W.counts.wheelOffered = W.counts.wheelOffered + 1
@@ -187,7 +195,7 @@ function W.install(AD)
                     if ADFlyoverEditor:handleWheel(-offset) then
                         return
                     end
-                    if type(AD.handleSplineCurvature) ~= "function" then
+                    if not hadRealHandleSplineCurvature then
                         if AutoDrive.splineInterpolation ~= nil and AutoDrive.splineInterpolation.valid then
                             W.counts.oldAutoDriveCurvature = W.counts.oldAutoDriveCurvature + 1
                             AutoDrive.splineInterpolationUserCurvature = math.clamp(
