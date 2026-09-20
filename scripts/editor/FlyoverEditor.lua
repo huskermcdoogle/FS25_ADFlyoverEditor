@@ -11110,11 +11110,41 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     -- it now is: walked from its first node along travel links, hugging the old polyline.
     local n0 = nil
     local function smoothLane(nodes, useOut)
-        local seq = {}
-        -- Only the stretch within 50 m of the junction: the road beyond is not this clear's business.
-        for _, n in ipairs(nodes) do
-            if live(n) and (n.x - box.centre.x) ^ 2 + (n.z - box.centre.z) ^ 2 <= 50 * 50 then seq[#seq + 1] = n end
+        -- ONLY AS FAR AS THE FIRST FORK. Smoothing deletes and re-creates the points between the
+        -- nodes it pins, and over 50 m of road that reaches into whatever else is tied in along the
+        -- way - which is how a clear came to break a neighbouring junction's connection. A fork is
+        -- where something else joins, so the fairing stops there; it is also pinned, so where a fork
+        -- sits right against the box (nothing would be smoothed at all) the span carries on past it
+        -- to a MINIMUM of 15 m and the fork itself still never moves.
+        local live0 = {}
+        for _, n in ipairs(nodes) do if live(n) then live0[#live0 + 1] = n end end
+        if #live0 < 3 then return live0 end
+        local function isFork(w)
+            local seen, d = {}, 0
+            for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                for _, id in pairs(lst) do if not seen[id] then seen[id] = true d = d + 1 end end
+            end
+            return d >= 3
         end
+        local mid, md = 1, math.huge
+        for i, n in ipairs(live0) do
+            local d = (n.x - box.centre.x) ^ 2 + (n.z - box.centre.z) ^ 2
+            if d < md then md, mid = d, i end
+        end
+        local function reach(from, step)
+            local i, run = from, 0
+            while true do
+                local j = i + step
+                if j < 1 or j > #live0 then return i end
+                run = run + math.sqrt((live0[j].x - live0[i].x) ^ 2 + (live0[j].z - live0[i].z) ^ 2)
+                i = j
+                if run >= 50 then return i end
+                if isFork(live0[i]) and run >= 15 then return i end
+            end
+        end
+        local lo, hi = reach(mid, -1), reach(mid, 1)
+        local seq = {}
+        for i = lo, hi do seq[#seq + 1] = live0[i] end
         if #seq < 3 then return seq end
         local old = {}
         for i, n in ipairs(seq) do old[i] = { x = n.x, z = n.z } end
