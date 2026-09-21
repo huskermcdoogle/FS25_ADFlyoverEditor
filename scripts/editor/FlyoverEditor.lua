@@ -13049,9 +13049,20 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 end
                 i = i + 1
             end
-            -- AND SMOOTHED AGAIN AFTER THE TRIM: each half now ends on the box edge at a point that
-            -- was dropped onto it, so the spacing up to that point is whatever was left over. Each
-            -- half is rebuilt once more, outer end to new end, at the same spacing as before.
+        end
+
+        -- AND EACH APPROACH REBUILT AT THE DENSITY IT HAD - WHETHER THE THROUGH PATHS WERE CUT OR
+        -- LEFT. This decides the spacing on the run into the junction, and it used to sit inside the
+        -- "not leave" branch above purely because it was written alongside the trimming. It does not
+        -- depend on the trimming: it splits the lane where it meets the box and rebuilds each side
+        -- at the density that side had before anything moved, which is as true of a lane left whole
+        -- as of one cut in two.
+        --
+        -- Left where it was, a clear with through paths kept never restored the density of a through
+        -- approach at all - those roads came back with whatever spacing the old junction's connector
+        -- hookups had left them, which is the pairs a metre or two apart still sitting a few metres
+        -- off the box after everything else had been tidied.
+        if #lane >= 2 then
             local half, nHalves = {}, 0
             for _, n in ipairs(lane) do
                 if live(n) and not inBox(n.x, n.z) then
@@ -14534,10 +14545,15 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     local throughLeft = leave and (#(jp.throughDebris or {})) or 0
     if leave and (throughLeft > 0 or throughSkippedLinks > 0) then
-        Logging.info("[FlyoverEditor]: junction cleared %d point(s) and %d stale link(s); left %d through-path point(s) and %d through link(s) in place.",
+        -- SAYS WHICH STAGE IT IS COUNTING. `cleared` is the turn wiring and nothing else - not the
+        -- box sweep, not the respace - so on a junction that has been cleared once already it is
+        -- legitimately 0 while the stage line beneath reports 18 taken. Phrased as though it were
+        -- the total, those two lines flatly contradict each other, and the total is on the next line
+        -- anyway.
+        Logging.info("[FlyoverEditor]: junction - removed %d point(s) of old turn wiring and %d stale link(s); left %d through-path point(s) and %d through link(s) in place.",
             cleared, staleCut, throughLeft, throughSkippedLinks)
     else
-        Logging.info("[FlyoverEditor]: junction cleared %d point(s) and %d stale link(s). Roads it joined are untouched.",
+        Logging.info("[FlyoverEditor]: junction - removed %d point(s) of old turn wiring and %d stale link(s). Roads it joined are untouched.",
             cleared, staleCut)
     end
     -- WHICH STAGE TOOK WHAT, AND FROM HOW FAR. One total hides the stage that is over-reaching: in
