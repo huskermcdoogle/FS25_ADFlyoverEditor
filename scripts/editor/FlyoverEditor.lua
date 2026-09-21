@@ -84,6 +84,10 @@ ADFlyoverEditor = {
     boxActive = false,
     boxStartX = nil,
     boxStartZ = nil,
+    circleArmed = false,
+    circleActive = false,
+    circleStartX = nil,
+    circleStartZ = nil,
     -- Sticky connection options, shown and changed on the panel instead of held as modifier keys.
     connectionMode = 1,
     subPrio = false,
@@ -1133,6 +1137,19 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return
     end
 
+    -- C arms circle-select for the next drag, in every tool - the same "selection is a shared
+    -- substrate" reasoning that makes Ctrl+drag box global rather than move-tool-specific. A plain
+    -- discrete keypress rather than a held modifier (unlike Ctrl, which AutoDrive itself tracks as
+    -- a held state): nothing in this file has ever needed to track a held key of its OWN, and
+    -- guessing at that plumbing risks a silent no-op if the guess is wrong. Pressing C again while
+    -- already armed just cancels the arm.
+    if isKey("KEY_c") then
+        self.circleArmed = not self.circleArmed
+        Logging.info("[FlyoverEditor]: circle select %s.",
+            self.circleArmed and "armed - drag once to pick a circle" or "cancelled")
+        return
+    end
+
     -- Hide/show the floating tool card. A keyboard key rather than middle mouse, which is the camera.
     if isKey("KEY_h") then
         self:toggleCard()
@@ -1710,6 +1727,8 @@ function ADFlyoverEditor:setTool(tool)
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
     self.dragId = nil
     self.boxActive = false
+    self.circleArmed, self.circleActive = false, false
+    self.circleStartX, self.circleStartZ = nil, nil
     self.ctxMenu = nil
     -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
     -- the card was in the way, and re-jumping it on every tool change undid the player's own
@@ -1834,6 +1853,57 @@ function ADFlyoverEditor:finishBoxSelect()
     Logging.info("[FlyoverEditor]: box %s %d waypoint(s) over %.0fm x %.0fm, view-aligned (%d selected).",
         additive and "added" or "selected", added,
         frame.maxU - frame.minU, frame.maxV - frame.minV, self.selectionCount)
+end
+
+--- Finish a circle drag armed by C. The two clicked points are a DIAMETER, not a centre and a
+--- radius - the centre is their midpoint, the radius is half the distance between them - so the
+--- gesture stays "click one edge, drag to the other", the same shape as box's two corners, rather
+--- than needing to eyeball a centre point first. A circle has no orientation, so unlike box this
+--- needs no view-alignment at all.
+function ADFlyoverEditor:finishCircleSelect()
+    self.circleActive = false
+
+    local x0, z0 = self.circleStartX, self.circleStartZ
+    local x1, z1 = self.cursorX, self.cursorZ
+    self.circleStartX, self.circleStartZ = nil, nil
+    if x0 == nil or x1 == nil then
+        return
+    end
+
+    local dx, dz = x1 - x0, z1 - z0
+    local diameter = math.sqrt(dx * dx + dz * dz)
+    if diameter < AutoDrive.FLYOVER_BOX_MIN_SIZE then
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            Logging.info("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
+        end
+        return
+    end
+
+    -- Shift adds, same as box - a mis-aimed circle should be as cheap to correct as a mis-aimed box.
+    local additive = AutoDrive.leftLSHIFTmodifierKeyPressed == true or AutoDrive.rightSHIFTmodifierKeyPressed == true
+    if not additive then
+        self:clearSelection()
+    end
+
+    local centreX, centreZ = (x0 + x1) / 2, (z0 + z1) / 2
+    local radiusSq = (diameter / 2) * (diameter / 2)
+
+    local added = 0
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        local ex, ez = wp.x - centreX, wp.z - centreZ
+        if (ex * ex + ez * ez) <= radiusSq and not self.selection[wp.id] then
+            self.selection[wp.id] = true
+            self.selectionCount = self.selectionCount + 1
+            added = added + 1
+        end
+    end
+
+    Logging.info("[FlyoverEditor]: circle %s %d waypoint(s), %.0fm across (%d selected).",
+        additive and "added" or "selected", added, diameter, self.selectionCount)
 end
 
 --- Ids shift whenever a waypoint is removed (GraphManager.lua:288), so anything holding an id has
@@ -2232,6 +2302,29 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    -- The circle being dragged - drawn as a ring the same way the falloff ring is, from the two
+    -- points as a diameter rather than a centre and radius, matching finishCircleSelect.
+    if self.circleActive and self.circleStartX ~= nil then
+        local x0, z0 = self.circleStartX, self.circleStartZ
+        local x1, z1 = self.cursorX, self.cursorZ
+        local centreX, centreZ = (x0 + x1) / 2, (z0 + z1) / 2
+        local radius = MathUtil.vector2Length(x1 - x0, z1 - z0) / 2
+        local segments = 32
+        local prevX, prevZ
+        for i = 0, segments do
+            local angle = (i / segments) * 2 * math.pi
+            local px = centreX + math.cos(angle) * radius
+            local pz = centreZ + math.sin(angle) * radius
+            if prevX ~= nil then
+                ADDrawingManager:addLineTask(
+                    prevX, AutoDrive:getTerrainHeightAtWorldPos(prevX, prevZ) + 0.5, prevZ,
+                    px, AutoDrive:getTerrainHeightAtWorldPos(px, pz) + 0.5, pz,
+                    lw, 0, 1, 0.2)
+            end
+            prevX, prevZ = px, pz
+        end
+    end
+
     -- Falloff ring, so the reach of a proportional move is visible before committing to it
     -- rather than being discovered from the result. Point only - Run's taper has no radius, it
     -- follows the run's own ends, so a ring here would just be wrong.
@@ -2432,6 +2525,16 @@ function ADFlyoverEditor:onLeftPress()
         self.toolCardY = math.max(0, math.min(1, g_lastMousePosY + oy))
     end
 
+    -- A circle armed by C claims this drag, the same way Ctrl claims one for box - decided here on
+    -- the press, before the move tool can grab a waypoint, or the drag would move it instead of
+    -- selecting. Consumed immediately: only the next drag is a circle, not every drag from now on.
+    if self.circleArmed then
+        self.circleArmed = false
+        self.circleActive = true
+        self.circleStartX, self.circleStartZ = self.cursorX, self.cursorZ
+        return
+    end
+
     -- Ctrl claims the drag for box selection, in every tool. It has to be decided here on the
     -- press, before the move tool can grab a waypoint, or a Ctrl+drag starting on top of one
     -- would move it instead of selecting.
@@ -2469,6 +2572,11 @@ function ADFlyoverEditor:onLeftRelease()
     -- leaving the tool you are working with.
     if self.boxActive then
         self:finishBoxSelect()
+        return
+    end
+
+    if self.circleActive then
+        self:finishCircleSelect()
         return
     end
 
@@ -4469,6 +4577,16 @@ function ADFlyoverEditor:getNextStepLines()
     local t = self.TOOL
     local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
     local function side() return (self.offsetSide or 1) >= 0 and L("left") or L("right") end
+
+    -- Circle-select is tool-agnostic (selection is a shared substrate, same as Ctrl+drag box), so
+    -- this overrides whatever the current tool would otherwise say - the armed/mid-drag state is
+    -- what the player actually needs telling right now, regardless of which tool is active.
+    if self.circleActive then
+        return L("Release to select everything inside the circle.")
+    end
+    if self.circleArmed then
+        return L("Circle select armed. Drag once to pick a circle, or press C again to cancel.")
+    end
 
     if self.tool == t.NONE then
         return L("No tool selected. Pick one above, or press 1-9 / 0.")
