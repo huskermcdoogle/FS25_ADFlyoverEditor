@@ -427,6 +427,10 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleMoveFalloff() end)
         add("toggle", "copy", editor.moveCopyOn and "on" or "off", false,
             function() editor:toggleMoveCopy() end)
+        if editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN then
+            add("toggle", "offset", editor.moveOffsetOn and "on" or "off", false,
+                function() editor:toggleMoveOffset() end)
+        end
     end
 
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then

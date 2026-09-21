@@ -81,6 +81,16 @@ ADFlyoverEditor = {
     -- around until the NEXT drag starts so a copy toggled on after release can still replay it.
     moveCopyOn = false,
     lastMoveRecord = nil,
+    -- Offset (item 5): Run/Span only, slides the existing chain sideways in place rather than
+    -- creating a new parallel track. moveOffsetBase is the chain's position at grab time - ids and
+    -- points stay in that same order for the whole adjust session, everything else re-derives from
+    -- it (see applyMoveOffset). moveOffsetChainIds ~= nil is what distinguishes "no offset session"
+    -- from "grabbed, cursor-drag phase" (dragId also set) from "released, wheel/typed-entry phase"
+    -- (dragId nil, chain still live) until a right-click commits it - see stopCurrentAction.
+    moveOffsetOn = false,
+    moveOffsetChainIds = nil,
+    moveOffsetBase = nil,
+    moveOffsetDistance = 0,
     -- Span's own picked ends, separate from offsetFromId/offsetToId (Parallel/Siding's own span) so
     -- the two tools cannot stomp on each other's pick.
     moveSpanFromId = nil,
@@ -1763,6 +1773,10 @@ function ADFlyoverEditor:setTool(tool)
     self.freehandPoints = nil
     self.moveCopyOn = false
     self.lastMoveRecord = nil
+    -- Abandons a pending offset rather than committing it - switching tools mid-adjustment is not
+    -- the deliberate right-click this feature otherwise requires to commit.
+    self.moveOffsetOn = false
+    self:cancelMoveOffset()
     self.ctxMenu = nil
     -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
     -- the card was in the way, and re-jumping it on every tool change undid the player's own
@@ -2017,6 +2031,10 @@ function ADFlyoverEditor:invalidateIdReferences()
     -- see node-keyed-pairs-is-nondeterministic / junction-numbers-do-not-persist in project memory
     -- for the general rule this follows.
     self.lastMoveRecord = nil
+    -- Same reasoning: moveOffsetChainIds holds waypoint ids too. A pending offset is abandoned
+    -- rather than committed here, same as setTool - this fires mid-edit, not at a deliberate
+    -- right-click.
+    self:cancelMoveOffset()
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
@@ -2113,6 +2131,13 @@ function ADFlyoverEditor:drawNetwork()
             if id ~= self.moveSpanFromId and id ~= self.moveSpanToId then
                 accent(id, 0.2, 0.7, 1, 2.5)
             end
+        end
+    end
+    -- The chain currently being offset - amber, distinct from span's blue, for the whole time it
+    -- is live (both the cursor-drag phase and the released-but-still-pending-commit phase).
+    if self.moveOffsetChainIds ~= nil then
+        for _, id in ipairs(self.moveOffsetChainIds) do
+            accent(id, 1, 0.65, 0, 3)
         end
     end
 
@@ -2672,6 +2697,30 @@ function ADFlyoverEditor:onLeftPress()
     -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
     -- exists AND the hovered point is actually a member of it.
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
+        -- An offset already awaiting its right-click commit owns this press: resume cursor-driven
+        -- adjustment if the point is part of that SAME chain, otherwise ignore the press entirely
+        -- rather than silently starting a different grab and abandoning the pending one without
+        -- committing OR explicitly cancelling it.
+        if self.moveOffsetChainIds ~= nil then
+            local inChain = false
+            for _, id in ipairs(self.moveOffsetChainIds) do
+                if id == self.hoverId then inChain = true break end
+            end
+            if inChain then
+                -- dragStartX/Z are not actually read by the offset path (offsetDistanceFromCursor
+                -- only needs the cursor and moveOffsetBase), but updateDrag's very first line
+                -- bails out whenever dragStartX is nil - set for that guard alone, same values
+                -- beginDrag itself would set.
+                local wp = ADGraphManager:getWayPointById(self.hoverId)
+                self.dragId = self.hoverId
+                self.dragStartX, self.dragStartZ = wp ~= nil and wp.x or self.cursorX,
+                    wp ~= nil and wp.z or self.cursorZ
+            else
+                Logging.info("[FlyoverEditor]: an offset is still pending - right-click to finish it first.")
+            end
+            return
+        end
+
         if self.moveSelectMode ~= self.MOVE_SELECT.SPAN
             or (self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId]) then
             self:beginDrag(self.hoverId)
@@ -2822,6 +2871,11 @@ function ADFlyoverEditor:stopCurrentAction()
     elseif tool == self.TOOL.SIDING then
         if self.sidingAnchorId ~= nil then
             self:commitSiding()
+            return true
+        end
+    elseif tool == self.TOOL.MOVE then
+        if self.moveOffsetChainIds ~= nil then
+            self:commitMoveOffset()
             return true
         end
     elseif tool == self.TOOL.PARALLEL then
@@ -3031,12 +3085,20 @@ function ADFlyoverEditor:gatherDragNeighbours()
                 .. "a junction, or the run closes on itself.", tostring(self.dragId))
             return
         end
+        if self.moveOffsetOn then
+            self:gatherOffsetChain(fromId, toId, run)
+            return
+        end
         self:gatherChainFollowers(fromId, toId, run)
         return
     end
 
     if self.moveSelectMode == self.MOVE_SELECT.SPAN then
         if self.moveSpanIds == nil or not self.moveSpanIds[self.dragId] then
+            return
+        end
+        if self.moveOffsetOn then
+            self:gatherOffsetChain(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds)
             return
         end
         self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds)
@@ -3066,11 +3128,13 @@ end
 
 --- Order a simple run (resolveWholeRun guarantees at most 2 in-run connections per member, so it
 --- is a plain chain, not a branching graph) from `fromId` outward, giving each member's distance
---- travelled to get there. Walked fresh rather than trusting `run`'s pairs() order, which is
---- address order and has nothing to do with the run's actual shape - see
---- node-keyed-pairs-is-nondeterministic in project memory.
+--- travelled to get there, AND the walk order itself (offset's gatherOffsetChain needs the order,
+--- falloff's gatherChainFollowers only ever needed the distances). Walked fresh rather than
+--- trusting `run`'s pairs() order, which is address order and has nothing to do with the run's
+--- actual shape - see node-keyed-pairs-is-nondeterministic in project memory.
 function ADFlyoverEditor:orderRunDistances(run, fromId)
     local dist = { [fromId] = 0 }
+    local orderedIds = { fromId }
     local prevId, currentId = nil, fromId
     while true do
         local wp = ADGraphManager:getWayPointById(currentId)
@@ -3087,9 +3151,10 @@ function ADFlyoverEditor:orderRunDistances(run, fromId)
         local nwp = ADGraphManager:getWayPointById(nextId)
         if nwp == nil then break end
         dist[nextId] = dist[currentId] + MathUtil.vector2Length(nwp.x - wp.x, nwp.z - wp.z)
+        table.insert(orderedIds, nextId)
         prevId, currentId = currentId, nextId
     end
-    return dist
+    return dist, orderedIds
 end
 
 --- Run and Span's shared followers: every other member of a simple chain (a whole run, or a picked
@@ -3100,6 +3165,126 @@ end
 --- towards, using ITS side's own distance to that end as the falloff reach - not a shared radius,
 --- since a run's ends are structural and a span's ends are what the user just picked, either way
 --- not a separate distance to dial in on top.
+--- Offset's own chain setup, in place of gatherChainFollowers - it does not use the weighted
+--- follower/dragNeighbours mechanism at all (dragNeighbours is left empty; updateDrag special-cases
+--- offset before it ever reaches the normal per-follower loop). Captures the ORDERED chain, ids and
+--- points both in walk order, ONCE at grab time - this is moveOffsetBase, and it stays fixed for
+--- the whole adjust session (drag AND the wheel/typed-entry phase after release) so repeated
+--- offsetOpenChain calls all measure from the same original shape rather than compounding onto
+--- whatever the previous adjustment already produced.
+function ADFlyoverEditor:gatherOffsetChain(fromId, toId, run)
+    local _, orderedIds = self:orderRunDistances(run, fromId)
+    if orderedIds[#orderedIds] ~= toId then
+        Logging.warning("[FlyoverEditor]: could not walk the chain from id=%s to id=%s to offset it.",
+            tostring(fromId), tostring(toId))
+        return
+    end
+
+    local points = {}
+    for _, id in ipairs(orderedIds) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp == nil then
+            return
+        end
+        table.insert(points, { x = wp.x, y = wp.y, z = wp.z })
+    end
+
+    self.moveOffsetChainIds = orderedIds
+    self.moveOffsetBase = points
+    self.moveOffsetDistance = 0
+end
+
+--- Signed perpendicular distance from the cursor to the chain's nearest segment - same nearest-
+--- segment-then-cross-product shape as offsetSideFromCursor (PARALLEL's own side picker), but
+--- returning the actual magnitude too, not just the sign, since offset here is cursor-DRIVEN
+--- (dynamic slide) rather than a typed magnitude with only its side read from the cursor.
+local function offsetDistanceFromCursor(cx, cz, pts)
+    if cx == nil or cz == nil or pts == nil or #pts < 2 then
+        return nil
+    end
+
+    local bestIndex, bestDistance = 1, math.huge
+    for i = 1, #pts - 1 do
+        local a, b = pts[i], pts[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local lengthSquared = dx * dx + dz * dz
+        local t = 0
+        if lengthSquared > 1e-9 then
+            t = math.max(0, math.min(1, ((cx - a.x) * dx + (cz - a.z) * dz) / lengthSquared))
+        end
+        local d = MathUtil.vector2Length(cx - (a.x + t * dx), cz - (a.z + t * dz))
+        if d < bestDistance then
+            bestIndex, bestDistance = i, d
+        end
+    end
+
+    local a, b = pts[bestIndex], pts[bestIndex + 1]
+    local cross = (b.x - a.x) * (cz - a.z) - (b.z - a.z) * (cx - a.x)
+    return cross >= 0 and bestDistance or -bestDistance
+end
+
+--- Re-slide the chain from its fixed base to the current moveOffsetDistance. The one place both
+--- the live cursor-drag and the wheel/typed-entry phase end up writing through - offsetOpenChain
+--- takes the base and a signed distance and returns one point per input point, in the same order,
+--- which is what keeps this an in-place SLIDE (existing ids, existing connections) rather than
+--- PARALLEL's own use of the same function to grow a brand new track.
+function ADFlyoverEditor:applyMoveOffset()
+    if self.moveOffsetChainIds == nil or self.moveOffsetBase == nil then
+        return
+    end
+
+    local track, err = ADOffsetGeometry.offsetOpenChain(self.moveOffsetBase, self.moveOffsetDistance)
+    if track == nil then
+        Logging.warning("[FlyoverEditor]: could not offset - %s", tostring(err))
+        return
+    end
+
+    for i, id in ipairs(self.moveOffsetChainIds) do
+        local p = track[i]
+        if p ~= nil then
+            self:moveTo(id, p.x, p.z)
+        end
+    end
+end
+
+--- Set the offset distance directly - the wheel/typed-entry path, usable both mid-drag (where it
+--- is immediately overwritten by the next frame's cursor-driven update - the user's own call: drag
+--- drives it live, wheel only takes over once the button is up) and after release, while the chain
+--- is still awaiting its right-click commit.
+function ADFlyoverEditor:setMoveOffsetDistance(value)
+    if self.moveOffsetChainIds == nil then
+        return
+    end
+    self.moveOffsetDistance = math.max(-AutoDrive.FLYOVER_OFFSET_MAX, math.min(AutoDrive.FLYOVER_OFFSET_MAX, value))
+    self:applyMoveOffset()
+end
+
+--- Right-click commit for a pending offset (dragId already nil - see onLeftRelease/stopCurrentAction).
+--- Re-grounds the chain at its final positions with the accurate raycast, same reasoning finishDrag
+--- already gives for every other move: the last live-preview frame is not necessarily where the
+--- distance was actually left.
+function ADFlyoverEditor:commitMoveOffset()
+    for _, id in ipairs(self.moveOffsetChainIds or {}) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            self:regroundTo(id, wp.x, wp.z, wp.y)
+        end
+    end
+    Logging.info("[FlyoverEditor]: offset %.1fm applied to %d waypoint(s).",
+        self.moveOffsetDistance, #(self.moveOffsetChainIds or {}))
+    self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetDistance = nil, nil, 0
+    ADGraphManager:markChanges()
+end
+
+--- Abandon a pending offset without committing - the waypoints stay wherever the last live
+--- adjustment left them (this mirrors every other move: the position write already happened
+--- frame-by-frame, same as a normal drag, not a separate preview overlay - see gatherOffsetChain).
+--- Undo (Q, snapshotted at the original beginDrag) is what actually reverts the positions; this
+--- just stops treating the chain as still adjustable.
+function ADFlyoverEditor:cancelMoveOffset()
+    self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetDistance = nil, nil, 0
+end
+
 function ADFlyoverEditor:gatherChainFollowers(fromId, toId, run)
     if not self.moveFalloffOn then
         for id in pairs(run) do
@@ -3188,6 +3373,20 @@ end
 
 function ADFlyoverEditor:updateDrag()
     if self.cursorX == nil or self.dragStartX == nil then
+        return
+    end
+
+    -- Offset: the cursor drives the signed distance directly (dynamic slide), not a delta applied
+    -- to a per-follower weight - see gatherOffsetChain/applyMoveOffset. Only while still actively
+    -- held; once released the wheel/typed-entry phase takes over (setMoveOffsetDistance), and this
+    -- function stops being called at all until the next grab.
+    if self.moveOffsetChainIds ~= nil then
+        local d = offsetDistanceFromCursor(self.cursorX, self.cursorZ, self.moveOffsetBase)
+        if d ~= nil then
+            self.moveOffsetDistance = math.max(-AutoDrive.FLYOVER_OFFSET_MAX,
+                math.min(AutoDrive.FLYOVER_OFFSET_MAX, d))
+            self:applyMoveOffset()
+        end
         return
     end
 
@@ -3320,6 +3519,15 @@ end
 
 function ADFlyoverEditor:finishDrag()
     if self.dragId == nil then
+        return
+    end
+
+    -- Offset: releasing the mouse does NOT commit here - see gatherOffsetChain/commitMoveOffset.
+    -- Only the "actively held, cursor is driving the distance" bookkeeping ends; the chain itself
+    -- stays live for the wheel/typed-entry phase until a right-click commits it
+    -- (stopCurrentAction).
+    if self.moveOffsetChainIds ~= nil then
+        self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours = nil, nil, nil, nil
         return
     end
 
@@ -3685,6 +3893,19 @@ function ADFlyoverEditor:toggleMoveCopy()
     Logging.info("[FlyoverEditor]: move copy %s.", self.moveCopyOn and "on" or "off")
 end
 
+--- Run/Span only - see gatherDragNeighbours/gatherOffsetChain. Blocked while an offset is already
+--- pending (moveOffsetChainIds ~= nil): flipping the toggle off then would leave the panel saying
+--- "off" while a chain is still live and awaiting its right-click commit, which is exactly the
+--- kind of stale-looking-inactive-but-still-armed state the rest of this feature works to avoid.
+function ADFlyoverEditor:toggleMoveOffset()
+    if self.moveOffsetChainIds ~= nil then
+        Logging.info("[FlyoverEditor]: an offset is still pending - right-click to finish it first.")
+        return
+    end
+    self.moveOffsetOn = not self.moveOffsetOn
+    Logging.info("[FlyoverEditor]: move offset %s.", self.moveOffsetOn and "on" or "off")
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Typed numeric entry.
 --
@@ -3757,6 +3978,24 @@ function ADFlyoverEditor:getEditableNumbers()
             settingEntry("divergence", "flyoverMergeDivergence")
         }
     elseif self.tool == self.TOOL.MOVE then
+        -- A live offset chain owns the field while one is pending - it is a different value
+        -- (signed distance, Run/Span only) from falloff's radius, and the two never apply at once
+        -- (offset replaces the weighted-follower mechanism entirely - see gatherDragNeighbours).
+        if self.moveOffsetChainIds ~= nil then
+            return { {
+                label = "sideways offset",
+                unit = "m",
+                get = function() return editor.moveOffsetDistance end,
+                apply = function(value)
+                    editor:setMoveOffsetDistance(value)
+                    return editor.moveOffsetDistance
+                end,
+                step = function(dir)
+                    editor:setMoveOffsetDistance(editor.moveOffsetDistance + dir * AutoDrive.FLYOVER_OFFSET_STEP)
+                end
+            } }
+        end
+
         -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
         -- no radius for it to set - so the field would just be a dead number sitting on the panel.
         if self.moveSelectMode ~= self.MOVE_SELECT.POINT or not self.moveFalloffOn then
@@ -4847,6 +5086,14 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Click to start a run, or a waypoint to draw on from it.")
     elseif self.tool == t.MOVE then
+        if self.moveOffsetChainIds ~= nil then
+            if self.dragId ~= nil then
+                return string.format(L("Dragging sets the offset (%.1fm). Release, then wheel to fine-tune."),
+                    self.moveOffsetDistance)
+            end
+            return string.format(L("Offset %.1fm - wheel to adjust, right-click to finish."),
+                self.moveOffsetDistance)
+        end
         if self.dragId ~= nil then
             local verb = self.moveCopyOn and L("copy") or L("drop")
             if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
