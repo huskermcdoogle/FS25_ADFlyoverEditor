@@ -28,7 +28,8 @@ TOOLS = [
             "Click a waypoint to open its POINT menu (name, move, connect, convert, delete).",
             "Click again on the same point, or double-click, to grab the SPAN either side of it.",
             "A further click grabs the whole RUN between the two nearest junctions.",
-            "Drag a box across the map to multi-select points.",
+            "Ctrl+drag a box, Alt+drag a circle, or Ctrl+Alt+drag freehand to multi-select points - "
+            "works in every tool, not just Select, and a plain Ctrl-click toggles one point at a time.",
             "The clicked point/span/run is highlighted in the world while its menu is open.",
             "Right-click closes the menu without doing anything.",
         ],
@@ -127,18 +128,30 @@ TOOLS = [
     },
     {
         "key": "move", "name": "Move", "group": "Shape",
-        "summary": "Drag a waypoint, optionally carrying its neighbours with it.",
-        "what": "Move drags a waypoint to a new spot and re-seats it on the real ground there. A "
-                "falloff can spread the move to nearby points along the track so a whole stretch "
-                "shifts smoothly instead of one point jumping.",
+        "summary": "Drag a waypoint, a run, or a span, optionally carrying neighbours with it.",
+        "what": "Move drags one or more waypoints to a new spot and re-seats them on the real "
+                "ground there. Picks decide WHAT moves - a single point, the whole run it belongs "
+                "to, or a span you pick the two ends of - and falloff decides whether that tapers "
+                "smoothly or moves as one rigid piece. Copy leaves the originals in place and "
+                "creates the move as a new, disconnected piece instead.",
         "how": [
             "Point at a waypoint and drag it; release to drop it.",
+            "\"picks\" cycles Point / Run / Span. Span needs its two ends clicked first; once "
+            "picked, click near either end again to replace it, or drag the span to move it.",
+            "\"falloff\" toggles the taper. On Point it spreads along the track by the falloff "
+            "radius (wheel over the card, the +/- steppers, or , and .); on Run/Span it tapers to "
+            "the run or span's own two ends automatically, with no radius to set.",
+            "A ctrl-click / box / circle (Alt+drag) / freehand (Ctrl+Alt+drag) selection, if one "
+            "exists, always wins over picks - grab any point IN it to drag the whole set, rigid.",
+            "\"copy\" toggles whether the drag creates a new, disconnected copy instead of moving "
+            "the originals. It can be turned on before, during, or even just after a drag - "
+            "toggling it on right after releasing still converts that move into a copy.",
             "The tool card auto-hides while you drag, so it is never in the way.",
-            "Set the falloff first (wheel over the card, the +/- steppers, or , and .) to carry "
-            "neighbours along.",
         ],
         "controls": [
-            ("falloff along track", "how far along the run the move spreads to neighbours."),
+            ("picks", "what a plain drag grabs: Point, Run, or Span."),
+            ("falloff", "on/off; Point also gets a settable radius when on."),
+            ("copy", "on/off; leaves the originals and creates a new, disconnected piece."),
             ("snap to", "surface or terrain for the dropped point."),
         ],
     },
@@ -290,6 +303,10 @@ GENERAL = {
             "Right-click - end a run, cancel a menu, or apply an armed tool.",
             "Middle-mouse - orbit / spin the camera. WASD moves it.",
             "Wheel - camera zoom, or adjust the numeric field the cursor is over.",
+            "Ctrl+drag - box-select (aligned to the current camera view, not north). Shift adds to "
+            "an existing selection instead of replacing it. Works in every tool.",
+            "Alt+drag - circle-select; the two dragged points are a diameter, not a centre and radius.",
+            "Ctrl+Alt+drag - freehand-select; trace a shape and release to close it.",
         ]),
         ("The tool card", [
             "The floating card carries the active tool's settings. It jumps out BESIDE the first "
