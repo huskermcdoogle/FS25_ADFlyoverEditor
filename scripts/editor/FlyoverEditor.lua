@@ -76,6 +76,11 @@ ADFlyoverEditor = {
     -- (self.selection) are always rigid regardless of this flag.
     moveSelectMode = 1,
     moveFalloffOn = true,
+    -- Span's own picked ends, separate from offsetFromId/offsetToId (Parallel/Siding's own span) so
+    -- the two tools cannot stomp on each other's pick.
+    moveSpanFromId = nil,
+    moveSpanToId = nil,
+    moveSpanIds = nil,
     boxActive = false,
     boxStartX = nil,
     boxStartZ = nil,
@@ -1700,6 +1705,7 @@ function ADFlyoverEditor:setTool(tool)
     end
     self.mergeFromId = nil
     self.mergeToId = nil
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
     self.dragId = nil
@@ -1792,6 +1798,7 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.mergeFromId = nil
     self.mergeToId = nil
     self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
@@ -1881,6 +1888,15 @@ function ADFlyoverEditor:drawNetwork()
     accent(self.splineFromId, 0, 0.6, 1, 4)
     accent(self.mergeFromId, 1, 0.4, 0.9, 4)
     accent(self.mergeToId, 1, 0.4, 0.9, 4)
+    accent(self.moveSpanFromId, 0.2, 0.7, 1, 4)
+    accent(self.moveSpanToId, 0.2, 0.7, 1, 4)
+    if self.moveSpanIds ~= nil then
+        for id in pairs(self.moveSpanIds) do
+            if id ~= self.moveSpanFromId and id ~= self.moveSpanToId then
+                accent(id, 0.2, 0.7, 1, 2.5)
+            end
+        end
+    end
 
     -- Move falloff preview: the waypoints the falloff would carry, measured ALONG THE TRACK (not a
     -- circle - the reach follows the run through junctions, so a ring would lie about it). The centre
@@ -2378,9 +2394,15 @@ function ADFlyoverEditor:onLeftPress()
     end
 
     -- Only the move tool cares about the press itself; every other tool acts on release, so that
-    -- a click that turns out to be a camera drag does not commit an edit.
+    -- a click that turns out to be a camera drag does not commit an edit. Span is the exception:
+    -- picking its two ends (and later replacing one) is a plain click, not a drag, so it is left
+    -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
+    -- exists AND the hovered point is actually a member of it.
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
-        self:beginDrag(self.hoverId)
+        if self.moveSelectMode ~= self.MOVE_SELECT.SPAN
+            or (self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId]) then
+            self:beginDrag(self.hoverId)
+        end
     end
 end
 
@@ -2405,7 +2427,11 @@ function ADFlyoverEditor:onLeftRelease()
     if self.tool == self.TOOL.DRAW then
         self:drawClick()
     elseif self.tool == self.TOOL.MOVE then
-        self:finishDrag()
+        if self.dragId ~= nil then
+            self:finishDrag()
+        elseif self.moveSelectMode == self.MOVE_SELECT.SPAN then
+            self:moveSpanClick()
+        end
     elseif self.tool == self.TOOL.DELETE then
         self:deleteAtCursor()
     elseif self.tool == self.TOOL.SMOOTH then
@@ -2711,7 +2737,21 @@ function ADFlyoverEditor:gatherDragNeighbours()
     end
 
     if self.moveSelectMode == self.MOVE_SELECT.RUN then
-        self:gatherRunFollowers()
+        local fromId, toId, run = self:resolveWholeRun(self.dragId)
+        if fromId == nil then
+            Logging.warning("[FlyoverEditor]: no clear run through id=%s to move as a run - it is "
+                .. "a junction, or the run closes on itself.", tostring(self.dragId))
+            return
+        end
+        self:gatherChainFollowers(fromId, toId, run)
+        return
+    end
+
+    if self.moveSelectMode == self.MOVE_SELECT.SPAN then
+        if self.moveSpanIds == nil or not self.moveSpanIds[self.dragId] then
+            return
+        end
+        self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds)
         return
     end
 
@@ -2764,20 +2804,15 @@ function ADFlyoverEditor:orderRunDistances(run, fromId)
     return dist
 end
 
---- Run mode's followers: every other member of the whole run the grab belongs to.
+--- Run and Span's shared followers: every other member of a simple chain (a whole run, or a picked
+--- span) the grab belongs to, from one end (fromId) to the other (toId).
 ---
---- With falloff off, every member moves exactly as far as the grab - "whole run" as one rigid
---- piece. With falloff on, each member tapers to 0 at whichever of the run's own two ends it sits
+--- With falloff off, every member moves exactly as far as the grab - the whole chain as one rigid
+--- piece. With falloff on, each member tapers to 0 at whichever of the chain's own two ends it sits
 --- towards, using ITS side's own distance to that end as the falloff reach - not a shared radius,
---- since the run's ends are a structural fact, not something the user picked.
-function ADFlyoverEditor:gatherRunFollowers()
-    local fromId, toId, run = self:resolveWholeRun(self.dragId)
-    if fromId == nil then
-        Logging.warning("[FlyoverEditor]: no clear run through id=%s to move as a run - it is a "
-            .. "junction, or the run closes on itself.", tostring(self.dragId))
-        return
-    end
-
+--- since a run's ends are structural and a span's ends are what the user just picked, either way
+--- not a separate distance to dial in on top.
+function ADFlyoverEditor:gatherChainFollowers(fromId, toId, run)
     if not self.moveFalloffOn then
         for id in pairs(run) do
             if id ~= self.dragId then
@@ -3152,11 +3187,90 @@ ADFlyoverEditor.DELETE_SCOPE_NAMES = { "one waypoint", "whole run" }
 
 -- Move's own pick, separate from DELETE_SCOPE even though Point/Run overlap it: move additionally
 -- has Span (and, later, Box/Circle/Freehand), none of which delete has any use for.
-ADFlyoverEditor.MOVE_SELECT = { POINT = 1, RUN = 2 }
-ADFlyoverEditor.MOVE_SELECT_NAMES = { "point", "run" }
+ADFlyoverEditor.MOVE_SELECT = { POINT = 1, RUN = 2, SPAN = 3 }
+ADFlyoverEditor.MOVE_SELECT_NAMES = { "point", "run", "span" }
+
+--- Span mode's click handling. Point/Run grab and move in one press-drag-release gesture; Span is
+--- built up first with plain clicks, and only once both ends exist does pressing on a MEMBER of it
+--- become an actual grab (onLeftPress/beginDrag - see there).
+---
+--- Same gesture ("click the new one") whichever end is being set: with fewer than two ends picked,
+--- a click fills in the next one; once both exist, a click that lands on neither end nor a member
+--- replaces whichever existing end it is geometrically closer to. This is deliberately NOT a
+--- separate "reselect" mode - there is only ever one thing a click does here, so nothing needs
+--- cancelling to redo an end, and there is no ambiguity to guess between "replace" and "start over"
+--- (see junction-crossing-detection-self-destructs in project memory for why a proximity GUESS
+--- between two different actions is the wrong shape here).
+function ADFlyoverEditor:moveSpanClick()
+    if self.hoverId == nil then
+        return
+    end
+
+    if self.moveSpanFromId == nil then
+        self.moveSpanFromId = self.hoverId
+        self.moveSpanToId, self.moveSpanIds = nil, nil
+        Logging.info("[FlyoverEditor]: move span from id=%s; click the far end.", tostring(self.hoverId))
+        return
+    end
+
+    if self.moveSpanToId == nil then
+        if self.hoverId == self.moveSpanFromId then
+            return
+        end
+        local span = self:runPathBetween(self.moveSpanFromId, self.hoverId)
+        if span == nil then
+            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
+                tostring(self.hoverId), tostring(self.moveSpanFromId))
+            return
+        end
+        self.moveSpanToId = self.hoverId
+        self.moveSpanIds = {}
+        for _, id in ipairs(span) do self.moveSpanIds[id] = true end
+        Logging.info("[FlyoverEditor]: move span of %d waypoint(s) picked. Grab and drag any point "
+            .. "on it to move; click elsewhere on the network to replace whichever end is closer.", #span)
+        return
+    end
+
+    -- Both ends exist and the click was not on a member (onLeftPress would have begun a drag
+    -- instead of reaching here) - replace whichever end sits closer to this click.
+    if self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId] then
+        return
+    end
+    local wp = ADGraphManager:getWayPointById(self.hoverId)
+    local fromWp = ADGraphManager:getWayPointById(self.moveSpanFromId)
+    local toWp = ADGraphManager:getWayPointById(self.moveSpanToId)
+    if wp == nil or fromWp == nil or toWp == nil then
+        return
+    end
+    local dFrom = MathUtil.vector2Length(wp.x - fromWp.x, wp.z - fromWp.z)
+    local dTo = MathUtil.vector2Length(wp.x - toWp.x, wp.z - toWp.z)
+    local replacingFrom = dFrom <= dTo
+    local newFromId = replacingFrom and self.hoverId or self.moveSpanFromId
+    local newToId = replacingFrom and self.moveSpanToId or self.hoverId
+
+    local span = self:runPathBetween(newFromId, newToId)
+    if span == nil then
+        Logging.warning("[FlyoverEditor]: id=%s is not connected to the other end, so the span was not changed.",
+            tostring(self.hoverId))
+        return
+    end
+
+    self.moveSpanFromId, self.moveSpanToId = newFromId, newToId
+    self.moveSpanIds = {}
+    for _, id in ipairs(span) do self.moveSpanIds[id] = true end
+    Logging.info("[FlyoverEditor]: move span of %d waypoint(s) picked.", #span)
+end
+
+function ADFlyoverEditor:cancelMoveSpan()
+    if self.moveSpanFromId ~= nil or self.moveSpanToId ~= nil then
+        Logging.info("[FlyoverEditor]: move span cancelled.")
+    end
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+end
 
 function ADFlyoverEditor:cycleMoveSelectMode()
     self.moveSelectMode = (self.moveSelectMode % #self.MOVE_SELECT_NAMES) + 1
+    self:cancelMoveSpan()
     Logging.info("[FlyoverEditor]: move picks %s.", self.MOVE_SELECT_NAMES[self.moveSelectMode])
     self:refreshActiveDrag()
 end
@@ -4319,7 +4433,22 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click to start a run, or a waypoint to draw on from it.")
     elseif self.tool == t.MOVE then
         if self.dragId ~= nil then
-            return string.format(L("Wheel changes falloff (%.1fm), live. Release to drop."), self.falloffRadius)
+            if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
+                return string.format(L("Wheel changes falloff (%.1fm), live. Release to drop."), self.falloffRadius)
+            end
+            return L("Release to drop.")
+        end
+        if self.moveSelectMode == self.MOVE_SELECT.SPAN then
+            if self.moveSpanFromId == nil then
+                return L("Click a waypoint to start the span.")
+            end
+            if self.moveSpanToId == nil then
+                return L("Click the far end of the span.")
+            end
+            if self.hoverId ~= nil and self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId] then
+                return L("Drag the highlighted span.")
+            end
+            return L("Click to replace whichever end is closer, or drag the span.")
         end
         if self.hoverId ~= nil then
             return L("Drag the highlighted waypoint.")
