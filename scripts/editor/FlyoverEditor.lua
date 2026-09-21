@@ -12753,7 +12753,20 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
             local a = i0
             for b = i0 + 1, n do
                 local w = seq[b]
+                -- WHERE THIS JUNCTION'S REACH RUNS OUT IS A RUN BOUNDARY, exactly like a fork.
+                --
+                -- A run is broken at every point that must not move: the far end, a fork, anything
+                -- already handled. The edge of the junction's own arms belongs on that list. Without
+                -- it a run would start at the box and end 50 m away, and since the rebuild is all or
+                -- nothing it was thrown away whole - so the points it was entitled to tidy, the ones
+                -- a few metres from the box, were left exactly as the old junction had them: pairs
+                -- 1 to 2 m apart on a road otherwise spaced at 5.
+                --
+                -- Clipped here instead, the near part is a run of its own and is rebuilt properly,
+                -- and the far part is simply not this junction's to touch. Neither abandoned nor
+                -- half-done.
                 local fixed = (b == n) or neighbours(w) >= 3 or marker[w] or done[w]
+                    or not jxMayDelete(w.x, w.z)
                 if fixed then
                     -- A run is only worth touching if none of it was handled already.
                     local fresh = not (done[seq[a]] and done[w])
