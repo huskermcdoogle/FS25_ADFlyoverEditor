@@ -327,6 +327,27 @@ end
 --- It is also the sharpest test of the copy: with the fork disabled, ADPolygonUtils genuinely does
 --- not exist in AutoDrive's environment, so a wrong source order fails loudly here instead of
 --- silently borrowing the fork's copy.
+--- Points wired to themselves, network-wide. Reports by default; `FlyoverSelfLinks apply` repairs.
+--- Asking first because it edits the saved network - though a self-link is the one fault where
+--- there is nothing to weigh up: nothing drives it, so nothing can drive differently afterwards.
+function P:consoleSelfLinks(arg)
+    if ADFlyoverEditor == nil or ADFlyoverEditor.repairSelfLinks == nil then
+        return "the flyover editor is not loaded"
+    end
+    local apply = tostring(arg or ""):lower() == "apply"
+    local ok, found, fixed = pcall(function()
+        return ADFlyoverEditor:repairSelfLinks(apply)
+    end)
+    if not ok then return "failed: " .. tostring(found) end
+    if found == 0 then
+        return "no point is wired to itself."
+    end
+    if apply then
+        return string.format("%d point(s) were wired to themselves; %d unwired. Positions are in the log. Save to keep this.", found, fixed)
+    end
+    return string.format("%d point(s) are wired to themselves. Positions are in the log. Nothing changed - run 'FlyoverSelfLinks apply' to unwire them.", found)
+end
+
 function P:consoleGeomTest()
     if ADPolygonUtils == nil then
         return "ADPolygonUtils is nil - PolygonUtils.lua did not publish where this file can see it."
@@ -548,6 +569,7 @@ addConsoleCommand("FlyoverSweptLoad", "Swept path: load a saved run <name> as th
 addConsoleCommand("FlyoverSweptShow", "Swept path: toggle the world overlay", "consoleSweptShow", P)
 addConsoleCommand("FlyoverSweptClear", "Swept path: discard the current run", "consoleSweptClear", P)
 
+addConsoleCommand("FlyoverSelfLinks", "Report points wired to themselves; pass apply to unwire them", "consoleSelfLinks", P)
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
 addConsoleCommand("FlyoverResetTheme", "Reset the editor's colours and scale to default", "consoleResetTheme", P)

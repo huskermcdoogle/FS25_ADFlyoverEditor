@@ -13743,6 +13743,55 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     return #ends, made, removed, cutN
 end
 
+--- Unwire one point from itself. True when there was something to undo. The single implementation:
+--- the integrity sweep calls it for the junction it is working on, and the network-wide pass calls
+--- it for everything - written twice, it would have been tuned once.
+local function jxUnwireSelf(w, apply)
+    if w == nil or w.id == nil then return false, nil end
+    local selfIn = w.incoming ~= nil and table.contains(w.incoming, w.id)
+    local selfOut = w.out ~= nil and table.contains(w.out, w.id)
+    if not selfIn and not selfOut then return false, nil end
+    if apply ~= false then
+        table.removeValue(w.incoming, w.id)
+        table.removeValue(w.out, w.id)
+    end
+    return true, (selfIn and selfOut) and "both ways" or (selfIn and "incoming" or "outgoing")
+end
+
+--- UNWIRE EVERY POINT THAT IS WIRED TO ITSELF, ACROSS THE WHOLE NETWORK.
+---
+--- The integrity sweep only ever looks at the junction being cleared, so the self-wired points
+--- scattered elsewhere are never reached by it. This is the one-shot pass for those.
+---
+--- Deliberately the ONLY thing it repairs. Coincident points and shared-node crossings are left
+--- exactly where they are: at a fifth of a metre apart two points may simply be a tight bend, and
+--- what looks like debris is mostly the network doing its job. A self-link is different in kind -
+--- no road leaves a point and arrives back at that same point without going anywhere, so there is
+--- no case in which it means something, and removing it cannot change a route. Nothing can be
+--- driven differently afterwards; the only difference is that AutoDrive stops counting a road that
+--- was never there.
+---
+--- `apply` false (the default) changes nothing and only reports.
+function ADFlyoverEditor:repairSelfLinks(apply)
+    local found, fixed = {}, 0
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil then
+            local hit, how = jxUnwireSelf(w, apply == true)
+            if hit then
+                found[#found + 1] = string.format("%.1f, %.1f (%s)", w.x, w.z, how)
+                if apply then fixed = fixed + 1 end
+            end
+        end
+    end
+    for _, where in ipairs(found) do
+        Logging.info("[FlyoverEditor]: self-wired point at %s", where)
+    end
+    if apply and fixed > 0 then
+        ADGraphManager:markChanges()
+    end
+    return #found, fixed
+end
+
 --- NETWORK INTEGRITY SWEEP. Three faults a rebuild can leave behind, none of which show on screen
 --- until something drives into one:
 ---
@@ -13812,15 +13861,10 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
     -- does. Counted with the doubles, since it is the same kind of fault: the graph disagreeing with
     -- itself about what is wired to what.
     for _, w in ipairs(site) do
-        local selfIn = w.incoming ~= nil and table.contains(w.incoming, w.id)
-        local selfOut = w.out ~= nil and table.contains(w.out, w.id)
-        if selfIn or selfOut then
+        local hit = jxUnwireSelf(w, not dry)
+        if hit then
             rep.selfLinks = (rep.selfLinks or 0) + 1
             note("a point at (%.1f, %.1f) is wired to itself - nothing drives that, and AutoDrive counts it as a road arriving", w.x, w.z)
-            if not dry then
-                table.removeValue(w.incoming, w.id)
-                table.removeValue(w.out, w.id)
-            end
         end
     end
 
