@@ -7466,6 +7466,36 @@ function ADFlyoverEditor:debugCaptureEnd(cap)
         if cap.site.n ~= nil then meta[#meta + 1] = string.format("junction       j%02d", cap.site.n) end
     end
     for _, line in ipairs(cap.extra or {}) do meta[#meta + 1] = line end
+
+    -- EVERY SETTING THE CLEAR COULD HAVE READ, as it stood at the moment of the clear.
+    --
+    -- The harness runs on the constants' defaults; the game runs on whatever is persisted, and two
+    -- of the junction values are saved between sessions on purpose. That is enough to make the same
+    -- code on the same network give a different answer in each - which it did: one lane finished
+    -- 18.5 m from the middle in game and 5.6 m offline, from the very same pre.xml.
+    --
+    -- Enumerated rather than listed by hand, so a setting added later cannot quietly go unrecorded.
+    -- With these in the capture, a replay can be set up to match the game exactly instead of being
+    -- assumed to.
+    meta[#meta + 1] = ""
+    meta[#meta + 1] = "-- settings as they stood --"
+    do
+        local names = {}
+        for k, v in pairs(AutoDrive or {}) do
+            if type(k) == "string" and k:sub(1, 8) == "FLYOVER_"
+                and (type(v) == "number" or type(v) == "boolean" or type(v) == "string") then
+                names[#names + 1] = k
+            end
+        end
+        table.sort(names)
+        for _, k in ipairs(names) do
+            meta[#meta + 1] = string.format("%-46s %s", k, tostring(AutoDrive[k]))
+        end
+        for _, k in ipairs({ "junctionRadius", "junctionTurnRadius", "junctionLeaveThrough",
+                             "junctionMode", "fieldLoopDirection", "connectionMode", "subPrio" }) do
+            meta[#meta + 1] = string.format("%-46s %s", "editor." .. k, tostring(self[k]))
+        end
+    end
     -- Positions, never ids: every removal reissues the ids above it, so an id written here would
     -- name a different point by the time anyone read it back.
     meta[#meta + 1] = ""
