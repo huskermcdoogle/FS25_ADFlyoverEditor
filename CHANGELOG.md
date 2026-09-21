@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.31.0.3 — Move tool redesign: picks, copy, break, offset, auto-hookup (2026-09-21)
+
+**Not yet tested in-game** - built and reviewed on the `move-tool` branch, first real test
+pending. Flagging here in case this version ships before that happens.
+
+The move tool now has three ways to pick what a drag grabs - **Point** (a single waypoint,
+optionally with a falloff taper along the track), **Run** (the whole run between junctions, one
+click), and **Span** (two clicks marking the ends, click near either one again to replace it) -
+plus a shared multi-point/region selection any of them defer to: Ctrl-click or Ctrl+drag a box
+(aligned to the current camera view, not north), Alt+drag a circle, or Ctrl+Alt+drag freehand -
+all three work in every tool, not just Move.
+
+- **copy** - leaves the originals in place and creates the drag as a new, disconnected piece
+  instead. Can be turned on before, during, or even just after a drag - toggling it on right after
+  releasing still converts that move into a copy.
+- **break** (copy's own sub-option) - also deletes the originals once copied, so a run can be
+  relocated cleanly detached instead of stretching a connection across the map or losing the
+  waypoint outright.
+- **offset** (Run/Span only) - slides an existing run or span sideways IN PLACE, connections and
+  all, rather than creating a new parallel track like Parallel does. An unusual interaction for
+  this editor: drag sets it live, releasing does NOT commit, wheel (or type a value) fine-tunes it,
+  right-click finishes it.
+- **auto-hookup** - optional, off by default; silently reconnects a dangling end left by a move,
+  copy, or break to whatever it lands near, within its own distance/divergence tolerance (separate
+  settings from Merge's own, tighter by default since this fires with no confirmation step).
+
+Also new: a **DEBUG** section on the settings dialog with a verbose-logging toggle, off by
+default. A user reported log.txt bloating badly over hours of normal editing - the mouse-click
+trace and most other routine info-level lines are now gated behind it; warnings and errors always
+log regardless.
+
 ## 0.31.0.2 — Hotfix: the mouse wheel freeze this line had already fixed once (2026-09-20)
 
 Ports forward one fix that predates the junction-placement work and was never part of this
