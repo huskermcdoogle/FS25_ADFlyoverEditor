@@ -1743,6 +1743,52 @@ end
 --- Finish a Ctrl+drag. A drag too small to be a deliberate box is treated as a plain Ctrl+click
 --- on the hovered waypoint, so the two gestures share one modifier without the click becoming a
 --- one-waypoint box that depends on the hand being perfectly still.
+--- The camera's forward direction projected onto the ground plane, normalized. The same lookup
+--- MapMarker's own aimOf() uses to point the minimap airplane icon (duplicated here in miniature
+--- rather than exported - a couple of lines, and this file already owns self.camera). Falls back
+--- to world +Z - the box's old, always-axis-aligned behaviour - if the camera cannot report it, so
+--- a lookup failure degrades gracefully instead of breaking selection outright.
+function ADFlyoverEditor:cameraForwardXZ()
+    local camera = self.camera
+    local node = camera ~= nil and (camera.camera or camera.cameraBaseNode) or nil
+    if node ~= nil and localDirectionToWorld ~= nil then
+        local ok, dx, _, dz = pcall(localDirectionToWorld, node, 0, 0, -1)
+        if ok and dx ~= nil and (dx * dx + dz * dz) > 1e-6 then
+            local len = math.sqrt(dx * dx + dz * dz)
+            return dx / len, dz / len
+        end
+    end
+    return 0, 1
+end
+
+--- Turn two clicked corners into a rectangle ALIGNED WITH THE CURRENT VIEW rather than world X/Z -
+--- orbiting the camera and then boxing something that now runs across the screen should not need
+--- an L-shaped drag to avoid sweeping up everything beside it. One basis (rx/rz = right, fx/fz =
+--- forward) shared by the live preview and the actual hit test below, so the box never selects
+--- something the preview did not show.
+function ADFlyoverEditor:boxFrame(x0, z0, x1, z1)
+    local fx, fz = self:cameraForwardXZ()
+    local rx, rz = -fz, fx
+
+    local u1 = (x1 - x0) * rx + (z1 - z0) * rz
+    local v1 = (x1 - x0) * fx + (z1 - z0) * fz
+    local minU, maxU = math.min(0, u1), math.max(0, u1)
+    local minV, maxV = math.min(0, v1), math.max(0, v1)
+
+    local function toWorld(u, v)
+        return x0 + rx * u + fx * v, z0 + rz * u + fz * v
+    end
+
+    return {
+        rx = rx, rz = rz, fx = fx, fz = fz,
+        minU = minU, maxU = maxU, minV = minV, maxV = maxV,
+        corners = {
+            { toWorld(minU, minV) }, { toWorld(maxU, minV) },
+            { toWorld(maxU, maxV) }, { toWorld(minU, maxV) },
+        },
+    }
+end
+
 function ADFlyoverEditor:finishBoxSelect()
     self.boxActive = false
 
@@ -1769,22 +1815,25 @@ function ADFlyoverEditor:finishBoxSelect()
         self:clearSelection()
     end
 
-    local minX, maxX = math.min(x0, x1), math.max(x0, x1)
-    local minZ, maxZ = math.min(z0, z1), math.max(z0, z1)
+    local frame = self:boxFrame(x0, z0, x1, z1)
 
     local added = 0
     local wayPoints = ADGraphManager:getWayPoints()
     for i = 1, #wayPoints do
         local wp = wayPoints[i]
-        if wp.x >= minX and wp.x <= maxX and wp.z >= minZ and wp.z <= maxZ and not self.selection[wp.id] then
+        local u = (wp.x - x0) * frame.rx + (wp.z - z0) * frame.rz
+        local v = (wp.x - x0) * frame.fx + (wp.z - z0) * frame.fz
+        if u >= frame.minU and u <= frame.maxU and v >= frame.minV and v <= frame.maxV
+            and not self.selection[wp.id] then
             self.selection[wp.id] = true
             self.selectionCount = self.selectionCount + 1
             added = added + 1
         end
     end
 
-    Logging.info("[FlyoverEditor]: box %s %d waypoint(s) over %.0fm x %.0fm (%d selected).",
-        additive and "added" or "selected", added, maxX - minX, maxZ - minZ, self.selectionCount)
+    Logging.info("[FlyoverEditor]: box %s %d waypoint(s) over %.0fm x %.0fm, view-aligned (%d selected).",
+        additive and "added" or "selected", added,
+        frame.maxU - frame.minU, frame.maxV - frame.minV, self.selectionCount)
 end
 
 --- Ids shift whenever a waypoint is removed (GraphManager.lua:288), so anything holding an id has
@@ -2172,9 +2221,8 @@ function ADFlyoverEditor:drawNetwork()
     -- The box being dragged, drawn as four lines on the ground so it reads as a region rather
     -- than a screen overlay floating over the terrain.
     if self.boxActive and self.boxStartX ~= nil then
-        local x0, z0 = self.boxStartX, self.boxStartZ
-        local x1, z1 = self.cursorX, self.cursorZ
-        local corners = { { x0, z0 }, { x1, z0 }, { x1, z1 }, { x0, z1 } }
+        local frame = self:boxFrame(self.boxStartX, self.boxStartZ, self.cursorX, self.cursorZ)
+        local corners = frame.corners
         for i = 1, 4 do
             local a, b = corners[i], corners[(i % 4) + 1]
             ADDrawingManager:addLineTask(
