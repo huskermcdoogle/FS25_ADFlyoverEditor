@@ -7313,32 +7313,46 @@ end
 local FLYOVER_DEBUG_DIR = "flyoverDebug/"
 local jxDebugSeq = 0
 
---- Where the game's log has got to. The tool logs a great deal about what it is doing and all of it
---- already goes there, so the capture takes the stretch written BETWEEN its two ends rather than
---- every logging call being taught to report itself. Nothing to keep in step, and it picks up lines
---- from anything else the change touches on the way through.
-local function jxDebugLogSize()
-    if getUserProfileAppPath == nil then return nil end
-    local f = io.open(getUserProfileAppPath() .. "log.txt", "rb")
-    if f == nil then return nil end
-    local n = f:seek("end")
-    f:close()
-    return n
+--- EVERY LINE THE TOOL SAYS WHILE A CAPTURE IS RUNNING, taken at the source.
+---
+--- The first version read log.txt instead - remembering how long it was at the start and taking
+--- whatever had been added by the end. It came back empty every time: FS25 buffers that file, so at
+--- the moment a clear finishes none of its lines have reached the disk yet. The capture wrote a
+--- one-byte tool.log beside two perfectly good network snapshots.
+---
+--- So the lines are taken where they are made. Logging is wrapped for the length of the capture and
+--- put back afterwards, and each call is passed straight through - nothing is swallowed, and the
+--- game's own log is unchanged.
+local jxDebugLines = nil
+local jxDebugSaved = nil
+
+local function jxDebugLogStart()
+    if Logging == nil or jxDebugSaved ~= nil then return end
+    jxDebugLines = {}
+    jxDebugSaved = { info = Logging.info, warning = Logging.warning, error = Logging.error }
+    local function wrap(level, original)
+        return function(fmt, ...)
+            if jxDebugLines ~= nil and #jxDebugLines < 5000 then
+                local ok, line = pcall(string.format, fmt, ...)
+                jxDebugLines[#jxDebugLines + 1] = level .. (ok and line or tostring(fmt))
+            end
+            if original ~= nil then return original(fmt, ...) end
+        end
+    end
+    Logging.info = wrap("", jxDebugSaved.info)
+    Logging.warning = wrap("WARNING: ", jxDebugSaved.warning)
+    Logging.error = wrap("ERROR: ", jxDebugSaved.error)
 end
 
---- Everything logged since `from`, kept to the lines this mod wrote.
-local function jxDebugLogSince(from)
-    if from == nil or getUserProfileAppPath == nil then return {} end
-    local f = io.open(getUserProfileAppPath() .. "log.txt", "rb")
-    if f == nil then return {} end
-    f:seek("set", from)
-    local text = f:read("*a") or ""
-    f:close()
-    local out = {}
-    for line in text:gmatch("[^\r\n]+") do
-        if line:find("FlyoverEditor", 1, true) ~= nil then out[#out + 1] = line end
+--- Put Logging back and hand over what was said. Always restores, even if nothing was captured.
+local function jxDebugLogStop()
+    local lines = jxDebugLines or {}
+    if jxDebugSaved ~= nil and Logging ~= nil then
+        Logging.info, Logging.warning, Logging.error =
+            jxDebugSaved.info, jxDebugSaved.warning, jxDebugSaved.error
     end
-    return out
+    jxDebugSaved, jxDebugLines = nil, nil
+    return lines
 end
 
 --- Write the whole network, as AutoDrive writes its routes. True when the file is there.
@@ -7396,9 +7410,12 @@ function ADFlyoverEditor:debugCaptureBegin(what, site, extra)
     local cap = {
         dir = dir, what = what, site = site, extra = extra,
         t0 = getDate ~= nil and getDate("%H:%M:%S") or "",
-        logFrom = jxDebugLogSize(),
     }
+    jxDebugLogStart()
     if not jxDebugWriteGraph(dir .. "pre.xml") then
+        -- Put Logging back before leaving. Bailing out with it still wrapped would have left every
+        -- line the game logs for the rest of the session going into a buffer nothing ever reads.
+        jxDebugLogStop()
         Logging.warning("[FlyoverEditor]: debug capture - could not write the network into %s. Capture is on but this change will not be recorded.", dir)
         return nil
     end
@@ -7435,7 +7452,7 @@ function ADFlyoverEditor:debugCaptureEnd(cap)
 
     local f = io.open(cap.dir .. "meta.txt", "w")
     if f ~= nil then f:write(table.concat(meta, "\n") .. "\n") f:close() end
-    local lines = jxDebugLogSince(cap.logFrom)
+    local lines = jxDebugLogStop()
     local l = io.open(cap.dir .. "tool.log", "w")
     if l ~= nil then l:write(table.concat(lines, "\n") .. "\n") l:close() end
     Logging.info("[FlyoverEditor]: debug capture %04d - written, %d log line(s). %s",
