@@ -87,6 +87,8 @@ ADFlyoverEditor = {
     circleActive = false,
     circleStartX = nil,
     circleStartZ = nil,
+    freehandActive = false,
+    freehandPoints = nil,
     -- Our own held-modifier state - see keyEvent. Defaults false until the first keyEvent call.
     leftCtrlHeld = false,
     rightCtrlHeld = false,
@@ -1235,6 +1237,17 @@ function ADFlyoverEditor:update(dt)
         end
     end
 
+    -- Sample the traced path while a freehand drag is live. Only when the cursor has actually
+    -- moved a bit since the last sample - appending every frame regardless would pile up a point
+    -- for every render tick even while the hand is briefly still, for no benefit to the shape.
+    if self.freehandActive and self.freehandPoints ~= nil and self.cursorX ~= nil then
+        local last = self.freehandPoints[#self.freehandPoints]
+        local dx, dz = self.cursorX - last.x, self.cursorZ - last.z
+        if (dx * dx + dz * dz) >= 1 then -- 1m apart, squared
+            table.insert(self.freehandPoints, { x = self.cursorX, z = self.cursorZ })
+        end
+    end
+
     -- Nothing in the world is under the mouse while it is on the panel, so nothing is highlighted.
     self.hoverId = not overPanel and self:findWayPointNearCursor() or nil
     -- Remember the last waypoint pointed at while the move tool is up, so the falloff preview keeps a
@@ -1741,6 +1754,8 @@ function ADFlyoverEditor:setTool(tool)
     self.boxActive = false
     self.circleActive = false
     self.circleStartX, self.circleStartZ = nil, nil
+    self.freehandActive = false
+    self.freehandPoints = nil
     self.ctxMenu = nil
     -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
     -- the card was in the way, and re-jumping it on every tool change undid the player's own
@@ -1916,6 +1931,67 @@ function ADFlyoverEditor:finishCircleSelect()
 
     Logging.info("[FlyoverEditor]: circle %s %d waypoint(s), %.0fm across (%d selected).",
         additive and "added" or "selected", added, diameter, self.selectionCount)
+end
+
+--- Even-odd ray-casting point-in-polygon test. Standalone rather than a method (mirrors
+--- heightAlongChain elsewhere in this file) - it has no need of self, and OffsetGeometry.lua
+--- already has one of these (isPointInsideRing) but keeps it local to that file, unexported.
+local function pointInPolygon(px, pz, poly)
+    local inside = false
+    local j = #poly
+    for i = 1, #poly do
+        local pi, pj = poly[i], poly[j]
+        if (pi.z > pz) ~= (pj.z > pz)
+            and px < (pj.x - pi.x) * (pz - pi.z) / (pj.z - pi.z) + pi.x then
+            inside = not inside
+        end
+        j = i
+    end
+    return inside
+end
+
+--- Finish a Ctrl+Alt freehand drag. The traced path (sampled live in update()) is closed into a
+--- polygon implicitly - pointInPolygon walks it edge i to edge i+1 including the wrap from the
+--- last sampled point back to the first, so releasing anywhere just finishes the loop rather than
+--- needing the hand to return to its own start.
+function ADFlyoverEditor:finishFreehandSelect()
+    self.freehandActive = false
+    local points = self.freehandPoints
+    self.freehandPoints = nil
+    if points == nil then
+        return
+    end
+
+    -- Too few samples to be a deliberate trace (a stationary click only ever gathers the one
+    -- opening point - see the 1m-apart gate in update()) - same single-point toggle fallback box
+    -- and circle both use for a drag too small to be deliberate.
+    if #points < 3 then
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            Logging.info("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
+        end
+        return
+    end
+
+    local additive = self.leftShiftHeld or self.rightShiftHeld
+    if not additive then
+        self:clearSelection()
+    end
+
+    local added = 0
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        if pointInPolygon(wp.x, wp.z, points) and not self.selection[wp.id] then
+            self.selection[wp.id] = true
+            self.selectionCount = self.selectionCount + 1
+            added = added + 1
+        end
+    end
+
+    Logging.info("[FlyoverEditor]: freehand %s %d waypoint(s) over a %d-point trace (%d selected).",
+        additive and "added" or "selected", added, #points, self.selectionCount)
 end
 
 --- Ids shift whenever a waypoint is removed (GraphManager.lua:288), so anything holding an id has
@@ -2337,6 +2413,21 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    -- The freehand trace so far, drawn as the sampled path plus the closing segment back to its
+    -- start - the same implicit close finishFreehandSelect's polygon test uses, so the preview
+    -- never promises a shape the hit test does not actually use.
+    if self.freehandActive and self.freehandPoints ~= nil and #self.freehandPoints >= 2 then
+        local points = self.freehandPoints
+        for i = 1, #points do
+            local a = points[i]
+            local b = points[(i % #points) + 1]
+            ADDrawingManager:addLineTask(
+                a.x, AutoDrive:getTerrainHeightAtWorldPos(a.x, a.z) + 0.5, a.z,
+                b.x, AutoDrive:getTerrainHeightAtWorldPos(b.x, b.z) + 0.5, b.z,
+                lw, 0, 1, 0.2)
+        end
+    end
+
     -- Falloff ring, so the reach of a proportional move is visible before committing to it
     -- rather than being discovered from the result. Point only - Run's taper has no radius, it
     -- follows the run's own ends, so a ring here would just be wrong.
@@ -2537,6 +2628,16 @@ function ADFlyoverEditor:onLeftPress()
         self.toolCardY = math.max(0, math.min(1, g_lastMousePosY + oy))
     end
 
+    -- Ctrl+Alt together claims the drag for freehand selection - checked before either single
+    -- modifier below, or it would never be reached (Ctrl alone and Alt alone both match first).
+    -- Box and Circle are the two simple shapes one modifier each picks; combining them picks the
+    -- free-form one, rather than needing a third, otherwise-unclaimed key.
+    if self.leftCtrlHeld and self.leftAltHeld then
+        self.freehandActive = true
+        self.freehandPoints = { { x = self.cursorX, z = self.cursorZ } }
+        return
+    end
+
     -- Alt claims the drag for circle selection, the same shape as Ctrl claiming one for box just
     -- below - our own tracked leftAltHeld (see keyEvent), not a one-shot armed key.
     if self.leftAltHeld then
@@ -2587,6 +2688,11 @@ function ADFlyoverEditor:onLeftRelease()
 
     if self.circleActive then
         self:finishCircleSelect()
+        return
+    end
+
+    if self.freehandActive then
+        self:finishFreehandSelect()
         return
     end
 
@@ -4594,6 +4700,9 @@ function ADFlyoverEditor:getNextStepLines()
     -- to report any more - Alt+drag starts a circle in one motion, the same as Ctrl+drag does a box.
     if self.circleActive then
         return L("Release to select everything inside the circle.")
+    end
+    if self.freehandActive then
+        return L("Release to select everything inside the traced area.")
     end
 
     if self.tool == t.NONE then
