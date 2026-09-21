@@ -8280,6 +8280,122 @@ function ADFlyoverEditor:updateJunctionPreview()
                 byAnchor[k].count = (byAnchor[k].count or 1) + (ap.count or 1)
             end
         end
+        -- WHAT IS NOT REALLY AN ARM, SAID OUT LOUD.
+        --
+        -- Approaches were gathered by looking around the click: anything close enough and pointing
+        -- roughly the right way counted. Two kinds of thing get in that way, and both were seen at
+        -- one T where the tool read a 4-way that is not there.
+        --
+        --   NOT WIRED ON AT ALL. A pair of free-floating chains, the remains of a two-lane road
+        --   lying 10 to 50 m off and attached to no part of the network, read as an arm on a bearing
+        --   one degree from a real one.
+        --
+        --   THE SAME LANE TWICE. A stub running 13.8 m alongside a lane that runs 167 m, 3.2 m
+        --   across and pointing the other way. Nothing about it in isolation is suspicious - 3.2 m
+        --   is ordinary lane spacing and the opposite bearing is what a second lane does - so only
+        --   the comparison gives it away. Which also makes the test safe: a short spur on its own is
+        --   never touched, because there is nothing for it to duplicate.
+        --
+        -- Nothing is deleted either way. What is not an arm simply stops being counted as one.
+        do
+            local seed = nil
+            for _, ap in ipairs(merged) do
+                if ap.wp ~= nil then seed = ap.wp break end
+            end
+            if seed ~= nil then
+                local REACH = 150
+                local seen, stack = { [seed] = true }, { seed }
+                while #stack > 0 do
+                    local w = table.remove(stack)
+                    for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                        for _, id in ipairs(lst) do
+                            local t = ADGraphManager:getWayPointById(id)
+                            if t ~= nil and not seen[t]
+                                and (t.x - seed.x) ^ 2 + (t.z - seed.z) ^ 2 <= REACH * REACH then
+                                seen[t] = true
+                                stack[#stack + 1] = t
+                            end
+                        end
+                    end
+                end
+
+                local function runsFor(ap)
+                    local w, prev, run, steps = ap.wp, nil, 0, 0
+                    if w == nil then return math.huge end
+                    while steps < 40 do
+                        local nxt, bd = nil, math.huge
+                        local here = (w.x - seed.x) ^ 2 + (w.z - seed.z) ^ 2
+                        for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                            for _, id in ipairs(lst) do
+                                local t = ADGraphManager:getWayPointById(id)
+                                if t ~= nil and t ~= prev then
+                                    local d = (t.x - seed.x) ^ 2 + (t.z - seed.z) ^ 2
+                                    if d > here and d < bd then bd, nxt = d, t end
+                                end
+                            end
+                        end
+                        if nxt == nil then break end
+                        run = run + math.sqrt((nxt.x - w.x) ^ 2 + (nxt.z - w.z) ^ 2)
+                        prev, w = w, nxt
+                        steps = steps + 1
+                    end
+                    return run
+                end
+
+                local shadowed, runs = {}, {}
+                local ACROSS, RATIO = 5.0, 3.0
+                local minArm = AutoDrive.FLYOVER_JUNCTION_MIN_ARM or 15
+                for i, ap in ipairs(merged) do runs[i] = runsFor(ap) end
+                for i = 1, #merged do
+                    for j = 1, #merged do
+                        if i ~= j and not shadowed[i] and not shadowed[j]
+                            and merged[i].wp ~= nil and merged[j].wp ~= nil then
+                            local sep = math.abs(math.deg((merged[i].bearing or 0) - (merged[j].bearing or 0))) % 360
+                            if sep > 180 then sep = 360 - sep end
+                            local parallel = (sep <= 20) or (math.abs(sep - 180) <= 20)
+                            local dx, dz = math.sin(merged[j].bearing or 0), math.cos(merged[j].bearing or 0)
+                            local ex = merged[i].wp.x - merged[j].wp.x
+                            local ez = merged[i].wp.z - merged[j].wp.z
+                            local across = math.abs(ex * dz - ez * dx)
+                            if parallel and across <= ACROSS
+                                and runs[i] < minArm and runs[j] > runs[i] * RATIO then
+                                shadowed[i] = true
+                                Logging.info("[FlyoverEditor]: junction - the branch on bearing %.0f runs %.0f m and lies %.1f m alongside a lane that runs %.0f m - the same lane twice. Noted, not acted on.",
+                                    math.deg(merged[i].bearing or 0) % 360, runs[i], across, runs[j])
+                            end
+                        end
+                    end
+                end
+
+                local kept = {}
+                for k, ap in ipairs(merged) do
+                    if shadowed[k] then
+                        -- already said above
+                    elseif ap.wp == nil or seen[ap.wp] then
+                        kept[#kept + 1] = ap
+                    else
+                        Logging.info("[FlyoverEditor]: junction - the road on bearing %.0f is not wired to this junction. Noted, not acted on.",
+                            math.deg(ap.bearing or 0) % 360)
+                    end
+                end
+                -- REPORTED, NOT ACTED ON - yet.
+                --
+                -- Both tests find what they are meant to find. Dropping those approaches, though,
+                -- makes the clear worse rather than better: at the T above it reached 42 m instead
+                -- of 36, and left a lane stopping 21 m out that the game brings to 8. The approaches
+                -- carry more than "these are the arms" and other passes lean on them.
+                --
+                -- Nor would dropping them fix the reading this was chasing: the junction's TYPE is
+                -- worked out from jp.pathRoutes, which never looks at approaches at all, so no
+                -- filtering here could ever have changed it.
+                --
+                -- So it says what it sees and changes nothing. That is worth having on its own - the
+                -- debris is named, in the capture, at the moment it matters - and it marks the place
+                -- for the fix once it is known where acting is safe.
+                local _ = kept
+            end
+        end
+
         approaches = merged
         nIn, nOut = 0, 0
         for _, ap in ipairs(approaches) do
