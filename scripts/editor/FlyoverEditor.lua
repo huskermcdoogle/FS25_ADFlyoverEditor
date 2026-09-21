@@ -1731,15 +1731,6 @@ function ADFlyoverEditor:menuCancelArmed()
 end
 
 function ADFlyoverEditor:setTool(tool)
-    -- Disconnected in this release (0.31.0.1 patch notes) - the auto-junction-placement tool this
-    -- 0.31.0.0 line shipped with is still mid-rework on the main line and not part of this hotfix.
-    -- Its code is left untouched underneath (see the JUNCTION branches elsewhere in this file and
-    -- in FlyoverHud.lua); this is the one chokepoint every selection path goes through - the panel
-    -- button is already gone (see FlyoverHud's GROUPS table), this is the belt to that braces.
-    if tool == self.TOOL.JUNCTION then
-        Logging.warning("[FlyoverEditor]: the junction tool is disabled in this release.")
-        return
-    end
     if self.tool == tool then
         return
     end
