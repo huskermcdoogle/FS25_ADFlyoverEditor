@@ -70,6 +70,12 @@ ADFlyoverEditor = {
     dragStartZ = nil,
     dragNeighbours = nil,
     falloffRadius = 0,
+    -- Which waypoints a grab picks up, and whether the falloff taper applies to that pick. Falloff
+    -- is a toggle sitting ON TOP of the mode (see gatherDragNeighbours): Point uses falloffRadius
+    -- as today, Run tapers to the run's own two ends with no radius to set, Multi-point/box/etc.
+    -- (self.selection) are always rigid regardless of this flag.
+    moveSelectMode = 1,
+    moveFalloffOn = true,
     boxActive = false,
     boxStartX = nil,
     boxStartZ = nil,
@@ -1882,19 +1888,40 @@ function ADFlyoverEditor:drawNetwork()
     -- card shows its reach live. Sized and brightened by how far each point would actually move.
     if self.tool == self.TOOL.MOVE then
         local centreId = self.dragId or self.moveFocusId
-        local radius = self.falloffRadius or 0
-        if centreId ~= nil and radius > 0 then
+        if centreId ~= nil and self.moveSelectMode == self.MOVE_SELECT.RUN then
+            -- Run mode: highlight the whole run the point belongs to. Not weighted by taper here -
+            -- this fires before a grab even starts, when there is no drag distance yet to weight
+            -- by, so it shows WHAT would move rather than how much.
             local c = ADGraphManager:getWayPointById(centreId)
+            local _, _, run = self:resolveWholeRun(centreId)
             if c ~= nil then
                 ADDrawingManager:addSphereTask(c.x, c.y + 0.7, c.z, 4.5, 1, 0.8, 0.15, 0.95)
-                local reached = self:collectAlongTrack(centreId, radius)
-                for otherId, d in pairs(reached) do
-                    if otherId ~= centreId then
-                        local wp = ADGraphManager:getWayPointById(otherId)
+            end
+            if run ~= nil then
+                for id in pairs(run) do
+                    if id ~= centreId then
+                        local wp = ADGraphManager:getWayPointById(id)
                         if wp ~= nil then
-                            local w = 0.5 * (1 + math.cos(math.pi * math.min(d, radius) / radius))
-                            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z,
-                                2 + 3 * w, 1, 0.82, 0.2, 0.35 + 0.55 * w)
+                            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z, 3.5, 1, 0.82, 0.2, 0.6)
+                        end
+                    end
+                end
+            end
+        elseif centreId ~= nil then
+            local radius = self.moveFalloffOn and (self.falloffRadius or 0) or 0
+            if radius > 0 then
+                local c = ADGraphManager:getWayPointById(centreId)
+                if c ~= nil then
+                    ADDrawingManager:addSphereTask(c.x, c.y + 0.7, c.z, 4.5, 1, 0.8, 0.15, 0.95)
+                    local reached = self:collectAlongTrack(centreId, radius)
+                    for otherId, d in pairs(reached) do
+                        if otherId ~= centreId then
+                            local wp = ADGraphManager:getWayPointById(otherId)
+                            if wp ~= nil then
+                                local w = 0.5 * (1 + math.cos(math.pi * math.min(d, radius) / radius))
+                                ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z,
+                                    2 + 3 * w, 1, 0.82, 0.2, 0.35 + 0.55 * w)
+                            end
                         end
                     end
                 end
@@ -2142,8 +2169,10 @@ function ADFlyoverEditor:drawNetwork()
     end
 
     -- Falloff ring, so the reach of a proportional move is visible before committing to it
-    -- rather than being discovered from the result.
-    if self.tool == self.TOOL.MOVE and self.falloffRadius > 0 then
+    -- rather than being discovered from the result. Point only - Run's taper has no radius, it
+    -- follows the run's own ends, so a ring here would just be wrong.
+    if self.tool == self.TOOL.MOVE and self.moveSelectMode == self.MOVE_SELECT.POINT
+        and self.moveFalloffOn and self.falloffRadius > 0 then
         local centreX = self.cursorX
         local centreZ = self.cursorZ
         if self.dragId ~= nil and self.dragStartX ~= nil then
@@ -2642,19 +2671,52 @@ function ADFlyoverEditor:beginDrag(id)
     -- developing a kink where the influence stops.
     self:gatherDragNeighbours()
 
-    Logging.info("[FlyoverEditor]: grabbed waypoint id=%s (falloff %.1fm along the track, %d waypoint(s) following).",
-        tostring(id), self.falloffRadius, #self.dragNeighbours)
+    local mode = (self.selectionCount > 0 and self.selection[id]) and "selection"
+        or self.MOVE_SELECT_NAMES[self.moveSelectMode]
+    Logging.info("[FlyoverEditor]: grabbed waypoint id=%s (%s, %d waypoint(s) following).",
+        tostring(id), mode, #self.dragNeighbours)
 end
 
 --- Work out which waypoints follow the grab, and how strongly.
 ---
 --- Records each follower's CURRENT position, which the drag then offsets from. It therefore has to
---- be called with everything sitting where it started - see setFalloffRadius, which restores before
---- re-gathering, or the recorded origins would be positions the drag had already moved.
+--- be called with everything sitting where it started - see refreshActiveDrag, which restores
+--- before re-gathering, or the recorded origins would be positions the drag had already moved.
+---
+--- Three sources, checked in order:
+---   1. A pre-built selection (self.selection - ctrl-click, box, later circle/freehand) wins, but
+---      only when the grabbed point is actually IN it - grabbing some unrelated point elsewhere
+---      moves just that point instead of hijacking the click with a stale leftover selection.
+---      Always rigid: there is no single along-track "centre" a scattered set could taper from.
+---   2. Run mode carries the whole run the grab belongs to. Falloff (on: taper to the run's own
+---      two ends: off: rigid) - never a fixed radius, because the run's own ends already are the
+---      natural falloff-to-zero points.
+---   3. Point mode (the default): today's along-track falloff from a single grab, unchanged.
 function ADFlyoverEditor:gatherDragNeighbours()
     self.dragNeighbours = {}
-    local radius = self.falloffRadius
-    if self.dragId == nil or radius <= 0 then
+    if self.dragId == nil then
+        return
+    end
+
+    if self.selectionCount > 0 and self.selection[self.dragId] then
+        for id in pairs(self.selection) do
+            if id ~= self.dragId then
+                local wp = ADGraphManager:getWayPointById(id)
+                if wp ~= nil then
+                    table.insert(self.dragNeighbours, { id = id, x = wp.x, z = wp.z, weight = 1 })
+                end
+            end
+        end
+        return
+    end
+
+    if self.moveSelectMode == self.MOVE_SELECT.RUN then
+        self:gatherRunFollowers()
+        return
+    end
+
+    local radius = self.moveFalloffOn and self.falloffRadius or 0
+    if radius <= 0 then
         return
     end
 
@@ -2672,6 +2734,107 @@ function ADFlyoverEditor:gatherDragNeighbours()
             end
         end
     end
+end
+
+--- Order a simple run (resolveWholeRun guarantees at most 2 in-run connections per member, so it
+--- is a plain chain, not a branching graph) from `fromId` outward, giving each member's distance
+--- travelled to get there. Walked fresh rather than trusting `run`'s pairs() order, which is
+--- address order and has nothing to do with the run's actual shape - see
+--- node-keyed-pairs-is-nondeterministic in project memory.
+function ADFlyoverEditor:orderRunDistances(run, fromId)
+    local dist = { [fromId] = 0 }
+    local prevId, currentId = nil, fromId
+    while true do
+        local wp = ADGraphManager:getWayPointById(currentId)
+        if wp == nil then break end
+        local nextId = nil
+        for _, listName in ipairs({ "out", "incoming" }) do
+            for _, other in pairs(wp[listName] or {}) do
+                if run[other] and other ~= prevId and other ~= currentId then
+                    nextId = other
+                end
+            end
+        end
+        if nextId == nil then break end
+        local nwp = ADGraphManager:getWayPointById(nextId)
+        if nwp == nil then break end
+        dist[nextId] = dist[currentId] + MathUtil.vector2Length(nwp.x - wp.x, nwp.z - wp.z)
+        prevId, currentId = currentId, nextId
+    end
+    return dist
+end
+
+--- Run mode's followers: every other member of the whole run the grab belongs to.
+---
+--- With falloff off, every member moves exactly as far as the grab - "whole run" as one rigid
+--- piece. With falloff on, each member tapers to 0 at whichever of the run's own two ends it sits
+--- towards, using ITS side's own distance to that end as the falloff reach - not a shared radius,
+--- since the run's ends are a structural fact, not something the user picked.
+function ADFlyoverEditor:gatherRunFollowers()
+    local fromId, toId, run = self:resolveWholeRun(self.dragId)
+    if fromId == nil then
+        Logging.warning("[FlyoverEditor]: no clear run through id=%s to move as a run - it is a "
+            .. "junction, or the run closes on itself.", tostring(self.dragId))
+        return
+    end
+
+    if not self.moveFalloffOn then
+        for id in pairs(run) do
+            if id ~= self.dragId then
+                local wp = ADGraphManager:getWayPointById(id)
+                if wp ~= nil then
+                    table.insert(self.dragNeighbours, { id = id, x = wp.x, z = wp.z, weight = 1 })
+                end
+            end
+        end
+        return
+    end
+
+    local dist = self:orderRunDistances(run, fromId)
+    local grabDist, total = dist[self.dragId], dist[toId]
+    if grabDist == nil or total == nil then
+        return
+    end
+
+    for id in pairs(run) do
+        if id ~= self.dragId then
+            local wp = ADGraphManager:getWayPointById(id)
+            local d = dist[id]
+            if wp ~= nil and d ~= nil then
+                local side = d - grabDist
+                local reach = side >= 0 and (total - grabDist) or grabDist
+                local weight = 1
+                if reach > 1e-6 then
+                    local t = math.min(math.abs(side) / reach, 1)
+                    weight = 0.5 * (1 + math.cos(math.pi * t))
+                elseif side ~= 0 then
+                    weight = 0
+                end
+                table.insert(self.dragNeighbours, { id = id, x = wp.x, z = wp.z, weight = weight })
+            end
+        end
+    end
+end
+
+--- Re-run the follower gather live, mid-drag, when the mode or falloff toggle changes underneath
+--- an active grab. Cannot simply re-gather in place: the followers have already been displaced by
+--- the drag so far, so their current positions are not the origins the new set should measure
+--- from - everything is put back first (the grabbed point too, since a run/along-track distance is
+--- measured through its position), then the new set is gathered and the drag re-applied.
+function ADFlyoverEditor:refreshActiveDrag()
+    if self.dragId == nil then
+        return
+    end
+
+    for _, n in ipairs(self.dragNeighbours or {}) do
+        self:moveTo(n.id, n.x, n.z)
+    end
+    if self.dragStartX ~= nil then
+        self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
+    end
+
+    self:gatherDragNeighbours()
+    self:updateDrag()
 end
 
 --- Change the falloff, live during a drag if one is in progress.
@@ -2693,16 +2856,8 @@ function ADFlyoverEditor:setFalloffRadius(value)
         return
     end
 
-    for _, n in ipairs(self.dragNeighbours or {}) do
-        self:moveTo(n.id, n.x, n.z)
-    end
-    if self.dragStartX ~= nil then
-        self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
-    end
-
     self.falloffRadius = value
-    self:gatherDragNeighbours()
-    self:updateDrag()
+    self:refreshActiveDrag()
 
     Logging.info("[FlyoverEditor]: falloff %.1fm along the track, %d waypoint(s) following.",
         value, #self.dragNeighbours)
@@ -2995,6 +3150,23 @@ end
 ADFlyoverEditor.DELETE_SCOPE = { POINT = 1, RUN = 2 }
 ADFlyoverEditor.DELETE_SCOPE_NAMES = { "one waypoint", "whole run" }
 
+-- Move's own pick, separate from DELETE_SCOPE even though Point/Run overlap it: move additionally
+-- has Span (and, later, Box/Circle/Freehand), none of which delete has any use for.
+ADFlyoverEditor.MOVE_SELECT = { POINT = 1, RUN = 2 }
+ADFlyoverEditor.MOVE_SELECT_NAMES = { "point", "run" }
+
+function ADFlyoverEditor:cycleMoveSelectMode()
+    self.moveSelectMode = (self.moveSelectMode % #self.MOVE_SELECT_NAMES) + 1
+    Logging.info("[FlyoverEditor]: move picks %s.", self.MOVE_SELECT_NAMES[self.moveSelectMode])
+    self:refreshActiveDrag()
+end
+
+function ADFlyoverEditor:toggleMoveFalloff()
+    self.moveFalloffOn = not self.moveFalloffOn
+    Logging.info("[FlyoverEditor]: move falloff %s.", self.moveFalloffOn and "on" or "off")
+    self:refreshActiveDrag()
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Typed numeric entry.
 --
@@ -3067,6 +3239,11 @@ function ADFlyoverEditor:getEditableNumbers()
             settingEntry("divergence", "flyoverMergeDivergence")
         }
     elseif self.tool == self.TOOL.MOVE then
+        -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
+        -- no radius for it to set - so the field would just be a dead number sitting on the panel.
+        if self.moveSelectMode ~= self.MOVE_SELECT.POINT or not self.moveFalloffOn then
+            return {}
+        end
         return { {
             label = "falloff along track",
             unit = "m",

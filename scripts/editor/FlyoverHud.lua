@@ -420,6 +420,13 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:cycleOffsetScope() end)
     end
 
+    if editor.tool == editor.TOOL.MOVE then
+        add("toggle", "picks", editor.MOVE_SELECT_NAMES[editor.moveSelectMode], false,
+            function() editor:cycleMoveSelectMode() end)
+        add("toggle", "falloff", editor.moveFalloffOn and "on" or "off", false,
+            function() editor:toggleMoveFalloff() end)
+    end
+
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
             function() editor:toggleSnapToTerrain() end)
