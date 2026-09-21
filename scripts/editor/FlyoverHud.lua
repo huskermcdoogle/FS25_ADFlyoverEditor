@@ -425,6 +425,8 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:cycleMoveSelectMode() end)
         add("toggle", "falloff", editor.moveFalloffOn and "on" or "off", false,
             function() editor:toggleMoveFalloff() end)
+        add("toggle", "copy", editor.moveCopyOn and "on" or "off", false,
+            function() editor:toggleMoveCopy() end)
     end
 
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then

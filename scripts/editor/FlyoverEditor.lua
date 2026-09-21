@@ -76,6 +76,11 @@ ADFlyoverEditor = {
     -- (self.selection) are always rigid regardless of this flag.
     moveSelectMode = 1,
     moveFalloffOn = true,
+    -- Copy toggle and the record it needs to work retroactively (see toggleMoveCopy/finishDrag/
+    -- applyMoveAsCopy): lastMoveRecord is the just-completed move's before/after positions, kept
+    -- around until the NEXT drag starts so a copy toggled on after release can still replay it.
+    moveCopyOn = false,
+    lastMoveRecord = nil,
     -- Span's own picked ends, separate from offsetFromId/offsetToId (Parallel/Siding's own span) so
     -- the two tools cannot stomp on each other's pick.
     moveSpanFromId = nil,
@@ -1756,6 +1761,8 @@ function ADFlyoverEditor:setTool(tool)
     self.circleStartX, self.circleStartZ = nil, nil
     self.freehandActive = false
     self.freehandPoints = nil
+    self.moveCopyOn = false
+    self.lastMoveRecord = nil
     self.ctxMenu = nil
     -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
     -- the card was in the way, and re-jumping it on every tool change undid the player's own
@@ -2006,6 +2013,10 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.mergeToId = nil
     self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+    -- Holds waypoint ids (record.members[i].id), which a destructive edit like this one shifts -
+    -- see node-keyed-pairs-is-nondeterministic / junction-numbers-do-not-persist in project memory
+    -- for the general rule this follows.
+    self.lastMoveRecord = nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
@@ -2958,6 +2969,11 @@ function ADFlyoverEditor:beginDrag(id)
         return
     end
 
+    -- A new drag supersedes any pending retroactive-copy chance from the previous one - moveCopyOn
+    -- itself is left alone, since toggling it on BEFORE this drag (then dragging) is exactly how
+    -- copy is meant to apply to a fresh move.
+    self.lastMoveRecord = nil
+
     ADEditorHistory:snapshot("move waypoint")
 
     self.dragId = id
@@ -3307,6 +3323,15 @@ function ADFlyoverEditor:finishDrag()
         return
     end
 
+    -- Built BEFORE anything below moves further, from the pre-drag positions already tracked
+    -- (dragStartX/Z for the grab, each follower's own recorded origin) - independent of whether
+    -- copy is actually used this time, so a PLAIN move can still be turned into a copy afterward
+    -- (see toggleMoveCopy).
+    local members = { { id = self.dragId, originalX = self.dragStartX, originalZ = self.dragStartZ } }
+    for _, n in ipairs(self.dragNeighbours or {}) do
+        table.insert(members, { id = n.id, originalX = n.x, originalZ = n.z })
+    end
+
     -- Re-ground everything that moved, at its final position and with the accurate raycast. During
     -- the drag the height only has to look right while the point is in flight; where it comes to
     -- rest is what actually matters, and the last frame of a drag is not necessarily where the
@@ -3344,6 +3369,18 @@ function ADFlyoverEditor:finishDrag()
     Logging.info("[FlyoverEditor]: moved %d waypoint(s) ending at id=%s, re-grounded at the drop point.",
         moved, tostring(self.dragId))
     self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours = nil, nil, nil, nil
+
+    -- Copy already toggled on before release: convert this move into a copy right now, and there
+    -- is nothing left to retroactively convert later. Otherwise stash the record - a plain move,
+    -- but one toggleMoveCopy can still turn into a copy afterward.
+    if self.moveCopyOn then
+        self:applyMoveAsCopy({ members = members })
+        self.moveCopyOn = false
+        self.lastMoveRecord = nil
+    else
+        self.lastMoveRecord = { members = members }
+    end
+
     ADGraphManager:markChanges()
 end
 
@@ -3551,6 +3588,101 @@ function ADFlyoverEditor:toggleMoveFalloff()
     self.moveFalloffOn = not self.moveFalloffOn
     Logging.info("[FlyoverEditor]: move falloff %s.", self.moveFalloffOn and "on" or "off")
     self:refreshActiveDrag()
+end
+
+--- Convert a completed move into a copy: every ORIGINAL point restores to where it started, and a
+--- NEW waypoint is created at each one's final (already re-grounded) position instead. Internal
+--- connections among the moved set are replicated onto the clones - walking only wp.out, so each
+--- directed edge is reconstructed exactly once; a dual connection reconstructs itself naturally as
+--- two separate directed edges when both directions were present, no special case needed. Nothing
+--- connects a clone to anything OUTSIDE the moved set - it never had a link there, and a copy
+--- being disconnected by default is the whole point of it (see move-tool-copy-and-break-spec in
+--- project memory).
+---
+--- `record.members` is a plain list of { id, originalX, originalZ } - see finishDrag, which builds
+--- it for every move (not just copies), and toggleMoveCopy, which is what lets a plain move already
+--- released get turned into a copy afterward.
+function ADFlyoverEditor:applyMoveAsCopy(record)
+    if record == nil or record.members == nil then
+        return
+    end
+
+    local movedSet = {}
+    for _, m in ipairs(record.members) do
+        movedSet[m.id] = true
+    end
+
+    local newIds = {}
+    for _, m in ipairs(record.members) do
+        local wp = ADGraphManager:getWayPointById(m.id)
+        if wp ~= nil then
+            -- Final position first - restoring the original below moves THIS waypoint, not the
+            -- clone, so its current x/y/z has to be captured before that happens.
+            local fx, fy, fz, flags = wp.x, wp.y, wp.z, wp.flags
+            self:moveTo(m.id, m.originalX, m.originalZ)
+
+            local newWp = ADGraphManager:recordWayPoint(fx, fy, fz, false, false, false, nil, flags, false)
+            if newWp ~= nil then
+                newIds[m.id] = newWp.id
+            end
+        end
+    end
+
+    local edgeCount = 0
+    for _, m in ipairs(record.members) do
+        local wp = ADGraphManager:getWayPointById(m.id)
+        local newFromId = newIds[m.id]
+        if wp ~= nil and newFromId ~= nil then
+            for _, otherId in pairs(wp.out or {}) do
+                if movedSet[otherId] and newIds[otherId] ~= nil then
+                    local newFrom = ADGraphManager:getWayPointById(newFromId)
+                    local newTo = ADGraphManager:getWayPointById(newIds[otherId])
+                    if newFrom ~= nil and newTo ~= nil then
+                        ADGraphManager:toggleConnectionBetween(newFrom, newTo, false, false, false)
+                        edgeCount = edgeCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    -- The clone becomes the new selection - the natural thing to act on next, the same way a
+    -- freshly picked span or box leaves its own result selected.
+    self:clearSelection()
+    for _, newId in pairs(newIds) do
+        self.selection[newId] = true
+        self.selectionCount = self.selectionCount + 1
+    end
+
+    Logging.info("[FlyoverEditor]: copied %d waypoint(s), %d internal connection(s), now selected.",
+        #record.members, edgeCount)
+    ADGraphManager:markChanges()
+end
+
+--- Copy is a toggle sitting on top of whichever move just happened or is about to, not a mode of
+--- its own - see move-tool-copy-and-break-spec in project memory for the two ways it applies:
+---
+---   1. Toggled on BEFORE or DURING a drag: finishDrag sees moveCopyOn and applies the copy
+---      itself once the drag actually completes.
+---   2. Toggled on AFTER a drag has already finished (self.dragId == nil): there is no pending
+---      drag to wait for, so this converts the just-finished move right now, using the record
+---      finishDrag already stashed in lastMoveRecord for exactly this case.
+---
+--- Auto-clears back to off once actually applied (case 2, and the mirror of it inside finishDrag)
+--- rather than staying on for the next drag too - a defensible default given a copy creates new
+--- waypoints, not just repositions existing ones, so leaving it silently armed risks a drag some
+--- time later cloning when a plain move was intended.
+function ADFlyoverEditor:toggleMoveCopy()
+    self.moveCopyOn = not self.moveCopyOn
+
+    if self.moveCopyOn and self.dragId == nil and self.lastMoveRecord ~= nil then
+        self:applyMoveAsCopy(self.lastMoveRecord)
+        self.lastMoveRecord = nil
+        self.moveCopyOn = false
+        return
+    end
+
+    Logging.info("[FlyoverEditor]: move copy %s.", self.moveCopyOn and "on" or "off")
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -4716,10 +4848,11 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click to start a run, or a waypoint to draw on from it.")
     elseif self.tool == t.MOVE then
         if self.dragId ~= nil then
+            local verb = self.moveCopyOn and L("copy") or L("drop")
             if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
-                return string.format(L("Wheel changes falloff (%.1fm), live. Release to drop."), self.falloffRadius)
+                return string.format(L("Wheel changes falloff (%.1fm), live. Release to %s."), self.falloffRadius, verb)
             end
-            return L("Release to drop.")
+            return string.format(L("Release to %s."), verb)
         end
         if self.moveSelectMode == self.MOVE_SELECT.SPAN then
             if self.moveSpanFromId == nil then
