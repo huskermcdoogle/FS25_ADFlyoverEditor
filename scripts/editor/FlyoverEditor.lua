@@ -80,6 +80,7 @@ ADFlyoverEditor = {
     -- applyMoveAsCopy): lastMoveRecord is the just-completed move's before/after positions, kept
     -- around until the NEXT drag starts so a copy toggled on after release can still replay it.
     moveCopyOn = false,
+    moveBreakOn = false,
     lastMoveRecord = nil,
     -- Offset (item 5): Run/Span only, slides the existing chain sideways in place rather than
     -- creating a new parallel track. moveOffsetBase is the chain's position at grab time - ids and
@@ -1772,6 +1773,7 @@ function ADFlyoverEditor:setTool(tool)
     self.freehandActive = false
     self.freehandPoints = nil
     self.moveCopyOn = false
+    self.moveBreakOn = false
     self.lastMoveRecord = nil
     -- Abandons a pending offset rather than committing it - switching tools mid-adjustment is not
     -- the deliberate right-click this feature otherwise requires to commit.
@@ -3584,6 +3586,7 @@ function ADFlyoverEditor:finishDrag()
     if self.moveCopyOn then
         self:applyMoveAsCopy({ members = members })
         self.moveCopyOn = false
+        self.moveBreakOn = false
         self.lastMoveRecord = nil
     else
         self.lastMoveRecord = { members = members }
@@ -3825,9 +3828,13 @@ function ADFlyoverEditor:applyMoveAsCopy(record)
         local wp = ADGraphManager:getWayPointById(m.id)
         if wp ~= nil then
             -- Final position first - restoring the original below moves THIS waypoint, not the
-            -- clone, so its current x/y/z has to be captured before that happens.
+            -- clone, so its current x/y/z has to be captured before that happens. Skipped
+            -- entirely when breaking: the original is about to be deleted anyway, so there is no
+            -- point writing it back to its start position first.
             local fx, fy, fz, flags = wp.x, wp.y, wp.z, wp.flags
-            self:moveTo(m.id, m.originalX, m.originalZ)
+            if not self.moveBreakOn then
+                self:moveTo(m.id, m.originalX, m.originalZ)
+            end
 
             local newWp = ADGraphManager:recordWayPoint(fx, fy, fz, false, false, false, nil, flags, false)
             if newWp ~= nil then
@@ -3854,16 +3861,46 @@ function ADFlyoverEditor:applyMoveAsCopy(record)
         end
     end
 
+    -- Break (item 4): delete every original NOW, after the clones exist and their internal edges
+    -- are wired, but before anything reads the originals again. This is what turns a copy into a
+    -- relocate - the clone is already disconnected by default (a fresh waypoint never inherited
+    -- the source's links), so deleting the source leaves it moved and cleanly detached rather than
+    -- leaving a stretched connection or a lost waypoint (see move-tool-copy-and-break-spec).
+    if self.moveBreakOn then
+        local toDelete = {}
+        for _, m in ipairs(record.members) do
+            table.insert(toDelete, m.id)
+        end
+        -- Same reasoning deleteSelection already relies on: descending order, so each pending id
+        -- is still valid when its turn comes.
+        table.sort(toDelete, function(a, b) return a > b end)
+        for _, id in ipairs(toDelete) do
+            ADGraphManager:removeWayPoint(id, false)
+        end
+
+        -- Every original has a LOWER id than every clone (clones are always appended strictly
+        -- after this operation starts, never inserted below anything), so deleting #toDelete of
+        -- them shifts every clone's id down by exactly that count - uniformly, regardless of
+        -- which original happened to cause which shift.
+        local shift = #toDelete
+        for oldId, newId in pairs(newIds) do
+            newIds[oldId] = newId - shift
+        end
+        self:invalidateIdReferences()
+    end
+
     -- The clone becomes the new selection - the natural thing to act on next, the same way a
-    -- freshly picked span or box leaves its own result selected.
+    -- freshly picked span or box leaves its own result selected. After invalidateIdReferences
+    -- above (break only), which already cleared it - this still has to run either way, copy or
+    -- break, so it is unconditional rather than duplicated into both branches.
     self:clearSelection()
     for _, newId in pairs(newIds) do
         self.selection[newId] = true
         self.selectionCount = self.selectionCount + 1
     end
 
-    Logging.info("[FlyoverEditor]: copied %d waypoint(s), %d internal connection(s), now selected.",
-        #record.members, edgeCount)
+    Logging.info("[FlyoverEditor]: %s %d waypoint(s), %d internal connection(s), now selected.",
+        self.moveBreakOn and "broke off" or "copied", #record.members, edgeCount)
     ADGraphManager:markChanges()
 end
 
@@ -3887,10 +3924,30 @@ function ADFlyoverEditor:toggleMoveCopy()
         self:applyMoveAsCopy(self.lastMoveRecord)
         self.lastMoveRecord = nil
         self.moveCopyOn = false
+        self.moveBreakOn = false
         return
     end
 
+    -- Break has no meaning without copy - turning copy off takes break with it, so the HUD never
+    -- shows "break: on" once its own row has disappeared.
+    if not self.moveCopyOn then
+        self.moveBreakOn = false
+    end
+
     Logging.info("[FlyoverEditor]: move copy %s.", self.moveCopyOn and "on" or "off")
+end
+
+--- Item 4 - not a standalone mode, a modifier on copy (see move-tool-copy-and-break-spec): break
+--- only has an effect when moveCopyOn is also on, so it is gated off (and its HUD row hidden) by
+--- copy being off, rather than being independently meaningful. "Delete the originals with nothing
+--- left" is not a coherent operation on its own; "copy, then delete the originals" is what breaking
+--- a connection actually means here.
+function ADFlyoverEditor:toggleMoveBreak()
+    if not self.moveCopyOn then
+        return
+    end
+    self.moveBreakOn = not self.moveBreakOn
+    Logging.info("[FlyoverEditor]: move break %s.", self.moveBreakOn and "on" or "off")
 end
 
 --- Run/Span only - see gatherDragNeighbours/gatherOffsetChain. Blocked while an offset is already
@@ -5095,7 +5152,9 @@ function ADFlyoverEditor:getNextStepLines()
                 self.moveOffsetDistance)
         end
         if self.dragId ~= nil then
-            local verb = self.moveCopyOn and L("copy") or L("drop")
+            local verb = (self.moveCopyOn and self.moveBreakOn and L("break off"))
+                or (self.moveCopyOn and L("copy"))
+                or L("drop")
             if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
                 return string.format(L("Wheel changes falloff (%.1fm), live. Release to %s."), self.falloffRadius, verb)
             end
