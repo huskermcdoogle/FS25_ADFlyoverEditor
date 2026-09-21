@@ -175,9 +175,9 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 <a id="move"></a>
 ## Move
 
-*Shape — Drag a waypoint, a run, or a span, optionally carrying neighbours with it.*
+*Shape — Drag a waypoint, a run, or a span - move it, copy it, break it off, or slide it sideways.*
 
-Move drags one or more waypoints to a new spot and re-seats them on the real ground there. Picks decide WHAT moves - a single point, the whole run it belongs to, or a span you pick the two ends of - and falloff decides whether that tapers smoothly or moves as one rigid piece. Copy leaves the originals in place and creates the move as a new, disconnected piece instead.
+Move drags one or more waypoints to a new spot and re-seats them on the real ground there. Picks decide WHAT moves - a single point, the whole run it belongs to, or a span you pick the two ends of - and falloff decides whether that tapers smoothly or moves as one rigid piece. Copy leaves the originals in place and creates the move as a new, disconnected piece instead; break (copy's own sub-option) goes further and deletes the originals too, so the piece ends up relocated and cleanly detached rather than stretching a connection across the map. Offset slides an existing run or span sideways IN PLACE - unlike Parallel, it does not create a new track, the same waypoints just move over, connections and all. Auto-hookup, if turned on, silently reconnects a dangling end (one made by a break, a copy, or just an ordinary move) to whatever it lands near.
 
 **How to use it**
 
@@ -186,6 +186,9 @@ Move drags one or more waypoints to a new spot and re-seats them on the real gro
 1. "falloff" toggles the taper. On Point it spreads along the track by the falloff radius (wheel over the card, the +/- steppers, or , and .); on Run/Span it tapers to the run or span's own two ends automatically, with no radius to set.
 1. A ctrl-click / box / circle (Alt+drag) / freehand (Ctrl+Alt+drag) selection, if one exists, always wins over picks - grab any point IN it to drag the whole set, rigid.
 1. "copy" toggles whether the drag creates a new, disconnected copy instead of moving the originals. It can be turned on before, during, or even just after a drag - toggling it on right after releasing still converts that move into a copy.
+1. With copy on, "break" additionally deletes the originals once the copy is made - the piece ends up relocated, not duplicated.
+1. On Run or Span, "offset" changes what a drag does: instead of a free 2D move, the cursor's distance from the chain slides it sideways, the whole thing at once. Releasing does NOT drop it - wheel (or type a value) to fine-tune the distance, then right-click to finish. A stray click elsewhere is ignored while one is pending.
+1. "auto-hookup", if on, checks any dangling end left by the drag (at most one existing connection) against nearby waypoints and wires it up automatically, no confirmation - its own distance/divergence tolerances appear on the card while it is on.
 1. The tool card auto-hides while you drag, so it is never in the way.
 
 **Controls**
@@ -193,6 +196,9 @@ Move drags one or more waypoints to a new spot and re-seats them on the real gro
 - **picks** — what a plain drag grabs: Point, Run, or Span.
 - **falloff** — on/off; Point also gets a settable radius when on.
 - **copy** — on/off; leaves the originals and creates a new, disconnected piece.
+- **break** — on/off (copy only); also deletes the originals once copied.
+- **offset** — on/off (Run/Span only); drag-then-wheel sideways slide, right-click to finish.
+- **auto-hookup** — on/off; silently reconnects a dangling end within tolerance.
 - **snap to** — surface or terrain for the dropped point.
 
 <a id="smooth"></a>
