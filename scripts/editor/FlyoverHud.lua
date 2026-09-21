@@ -435,6 +435,8 @@ function ADFlyoverHud:buildRows(editor)
             add("toggle", "offset", editor.moveOffsetOn and "on" or "off", false,
                 function() editor:toggleMoveOffset() end)
         end
+        add("toggle", "auto-hookup", editor.moveAutoHookupOn and "on" or "off", false,
+            function() editor:toggleMoveAutoHookup() end)
     end
 
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then

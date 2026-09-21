@@ -81,6 +81,7 @@ ADFlyoverEditor = {
     -- around until the NEXT drag starts so a copy toggled on after release can still replay it.
     moveCopyOn = false,
     moveBreakOn = false,
+    moveAutoHookupOn = false,
     lastMoveRecord = nil,
     -- Offset (item 5): Run/Span only, slides the existing chain sideways in place rather than
     -- creating a new parallel track. moveOffsetBase is the chain's position at grab time - ids and
@@ -3590,6 +3591,14 @@ function ADFlyoverEditor:finishDrag()
         self.lastMoveRecord = nil
     else
         self.lastMoveRecord = { members = members }
+        -- Only the plain-move path - applyMoveAsCopy runs its own auto-hookup on the CLONE's ids,
+        -- not these originals (a copy's whole point is starting disconnected; hookup still applies
+        -- to it, just against its own new ids, not the source's).
+        local ids = {}
+        for _, m in ipairs(members) do
+            table.insert(ids, m.id)
+        end
+        self:autoHookupEndpoints(ids)
     end
 
     ADGraphManager:markChanges()
@@ -3894,10 +3903,17 @@ function ADFlyoverEditor:applyMoveAsCopy(record)
     -- above (break only), which already cleared it - this still has to run either way, copy or
     -- break, so it is unconditional rather than duplicated into both branches.
     self:clearSelection()
+    local finalIds = {}
     for _, newId in pairs(newIds) do
         self.selection[newId] = true
         self.selectionCount = self.selectionCount + 1
+        table.insert(finalIds, newId)
     end
+
+    -- The clone's own ends (item 6) - not the source's, which either still exists (plain copy) or
+    -- is already gone (break). Using newIds' FINAL values here matters: they were already shifted
+    -- above when breaking, so this checks the ids the clone actually has now.
+    self:autoHookupEndpoints(finalIds)
 
     Logging.info("[FlyoverEditor]: %s %d waypoint(s), %d internal connection(s), now selected.",
         self.moveBreakOn and "broke off" or "copied", #record.members, edgeCount)
@@ -3948,6 +3964,115 @@ function ADFlyoverEditor:toggleMoveBreak()
     end
     self.moveBreakOn = not self.moveBreakOn
     Logging.info("[FlyoverEditor]: move break %s.", self.moveBreakOn and "on" or "off")
+end
+
+function ADFlyoverEditor:toggleMoveAutoHookup()
+    self.moveAutoHookupOn = not self.moveAutoHookupOn
+    Logging.info("[FlyoverEditor]: move auto-hookup %s.", self.moveAutoHookupOn and "on" or "off")
+end
+
+--- Item 6. Total distinct out+incoming neighbours <= 1 - the same "an end has at most one inside
+--- connection" idea resolveWholeRun already uses to find a run's own two ends, generalised here to
+--- ALL connections (not just ones inside some particular run/span), since auto-hookup has to catch
+--- a bare copied point (zero connections) just as much as a run's dangling tail (one).
+local function isEndpoint(id)
+    local wp = ADGraphManager:getWayPointById(id)
+    if wp == nil then
+        return false
+    end
+    local seen, count = {}, 0
+    for _, listName in ipairs({ "out", "incoming" }) do
+        for _, other in pairs(wp[listName] or {}) do
+            if not seen[other] then
+                seen[other] = true
+                count = count + 1
+            end
+        end
+    end
+    return count <= 1, seen
+end
+
+--- Auto-hookup for a moved or copied set of ids (item 6) - checked at the tail of finishDrag (a
+--- plain move) and applyMoveAsCopy (copy/break), after positions are settled. Endpoints only (see
+--- isEndpoint) - an interior point already has both its connections, and snapping it elsewhere
+--- would mean REPLACING a link, not adding one; left for later if this ever extends past
+--- endpoints, per move-tool-auto-hookup-spec.
+---
+--- One candidate per endpoint - the single NEAREST other waypoint within tolerance, excluding the
+--- moved/copied set itself (reconnecting to something already there is the point; two ends of the
+--- same set drifting near each other is not what this is for). Divergence is only checked when the
+--- endpoint already has one neighbour to measure a heading from - a bare point (zero connections,
+--- e.g. a lone copied point) has no heading to diverge from, so distance alone decides it.
+function ADFlyoverEditor:autoHookupEndpoints(ids)
+    if not self.moveAutoHookupOn or ids == nil then
+        return 0
+    end
+
+    local movedSet = {}
+    for _, id in ipairs(ids) do
+        movedSet[id] = true
+    end
+
+    local maxDistance = ADFlyoverSettings.get("flyoverAutoHookupDistance") or 3.0
+    local maxDivergence = ADFlyoverSettings.get("flyoverAutoHookupDivergence") or 15
+    local wayPoints = ADGraphManager:getWayPoints()
+    local hooked = 0
+
+    for _, id in ipairs(ids) do
+        local endpoint, neighbours = isEndpoint(id)
+        if endpoint then
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                -- The one existing neighbour (if any) gives the heading this dead end is already
+                -- pointed - the candidate has to roughly continue that, not branch off sideways.
+                local headingX, headingZ = nil, nil
+                for otherId in pairs(neighbours) do
+                    local ow = ADGraphManager:getWayPointById(otherId)
+                    if ow ~= nil then
+                        local hx, hz = wp.x - ow.x, wp.z - ow.z
+                        local len = MathUtil.vector2Length(hx, hz)
+                        if len > 1e-6 then
+                            headingX, headingZ = hx / len, hz / len
+                        end
+                    end
+                end
+
+                local bestId, bestDist = nil, maxDistance
+                for i = 1, #wayPoints do
+                    local other = wayPoints[i]
+                    if not movedSet[other.id] and not neighbours[other.id] then
+                        local dx, dz = other.x - wp.x, other.z - wp.z
+                        local dist = MathUtil.vector2Length(dx, dz)
+                        if dist <= bestDist and dist > 1e-6 then
+                            local ok = true
+                            if headingX ~= nil then
+                                local ux, uz = dx / dist, dz / dist
+                                local cosAngle = math.max(-1, math.min(1, ux * headingX + uz * headingZ))
+                                local angleDeg = math.deg(math.acos(cosAngle))
+                                ok = angleDeg <= maxDivergence
+                            end
+                            if ok then
+                                bestId, bestDist = other.id, dist
+                            end
+                        end
+                    end
+                end
+
+                if bestId ~= nil then
+                    local target = ADGraphManager:getWayPointById(bestId)
+                    if target ~= nil then
+                        ADGraphManager:toggleConnectionBetween(wp, target, false, true, false)
+                        hooked = hooked + 1
+                    end
+                end
+            end
+        end
+    end
+
+    if hooked > 0 then
+        Logging.info("[FlyoverEditor]: auto-hookup connected %d endpoint(s).", hooked)
+    end
+    return hooked
 end
 
 --- Run/Span only - see gatherDragNeighbours/gatherOffsetChain. Blocked while an offset is already
@@ -4035,11 +4160,13 @@ function ADFlyoverEditor:getEditableNumbers()
             settingEntry("divergence", "flyoverMergeDivergence")
         }
     elseif self.tool == self.TOOL.MOVE then
-        -- A live offset chain owns the field while one is pending - it is a different value
+        local fields = {}
+
+        -- A live offset chain owns this field while one is pending - it is a different value
         -- (signed distance, Run/Span only) from falloff's radius, and the two never apply at once
         -- (offset replaces the weighted-follower mechanism entirely - see gatherDragNeighbours).
         if self.moveOffsetChainIds ~= nil then
-            return { {
+            table.insert(fields, {
                 label = "sideways offset",
                 unit = "m",
                 get = function() return editor.moveOffsetDistance end,
@@ -4050,26 +4177,34 @@ function ADFlyoverEditor:getEditableNumbers()
                 step = function(dir)
                     editor:setMoveOffsetDistance(editor.moveOffsetDistance + dir * AutoDrive.FLYOVER_OFFSET_STEP)
                 end
-            } }
+            })
         end
 
         -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
         -- no radius for it to set - so the field would just be a dead number sitting on the panel.
-        if self.moveSelectMode ~= self.MOVE_SELECT.POINT or not self.moveFalloffOn then
-            return {}
+        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
+            table.insert(fields, {
+                label = "falloff along track",
+                unit = "m",
+                get = function() return editor.falloffRadius end,
+                apply = function(value)
+                    editor:setFalloffRadius(value)
+                    return editor.falloffRadius
+                end,
+                step = function(dir)
+                    editor:setFalloffRadius(editor.falloffRadius + dir * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
+                end
+            })
         end
-        return { {
-            label = "falloff along track",
-            unit = "m",
-            get = function() return editor.falloffRadius end,
-            apply = function(value)
-                editor:setFalloffRadius(value)
-                return editor.falloffRadius
-            end,
-            step = function(dir)
-                editor:setFalloffRadius(editor.falloffRadius + dir * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
-            end
-        } }
+
+        -- Persisted settings (unlike the two above, which are ephemeral per-drag state) - same
+        -- settingEntry() shape MERGE already uses for its own distance/divergence pair.
+        if self.moveAutoHookupOn then
+            table.insert(fields, settingEntry("hookup distance", "flyoverAutoHookupDistance"))
+            table.insert(fields, settingEntry("hookup divergence", "flyoverAutoHookupDivergence"))
+        end
+
+        return fields
     end
     return {}
 end
