@@ -13760,7 +13760,7 @@ end
 --- Confined to `reach` metres of (cx, cz). `dry` reports and changes nothing. Returns the counts and
 --- a list of descriptions, so the same pass can back a cleanup tool as well as the end of a clear.
 function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
-    local rep = { doubles = 0, repaired = 0, removed = 0, reversals = 0, unjoined = 0, notes = {} }
+    local rep = { doubles = 0, repaired = 0, removed = 0, reversals = 0, unjoined = 0, selfLinks = 0, notes = {} }
     if cx == nil or cz == nil then return rep end
     reach = reach or 45
     local r2 = reach * reach
@@ -13797,6 +13797,31 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
     local site = {}
     for _, w in pairs(ADGraphManager:getWayPoints()) do
         if near(w) and jxInSite(w.x, w.z) then site[#site + 1] = w end
+    end
+
+    -- SELF-REFERENCES. A point listing itself among its own incoming or outgoing links. There is no
+    -- reading of the graph in which that means anything - no road leaves a point and arrives back at
+    -- the same point without going anywhere - so it is simply removed, with no judgement to make and
+    -- nothing to weigh up.
+    --
+    -- It is not harmless. AutoDrive counts stored incoming to decide what is a merge, so a point
+    -- with one real road in and itself makes two, and 3.0.1.2 paints it as a right-of-way centre:
+    -- a junction drawn on the map where no two roads meet. One at (-927.39, -39.60) had the user
+    -- hunting a connection that was never there; 19 points across that network do it, in the saved
+    -- network BEFORE a clear as much as after, so this is old damage rather than anything a clear
+    -- does. Counted with the doubles, since it is the same kind of fault: the graph disagreeing with
+    -- itself about what is wired to what.
+    for _, w in ipairs(site) do
+        local selfIn = w.incoming ~= nil and table.contains(w.incoming, w.id)
+        local selfOut = w.out ~= nil and table.contains(w.out, w.id)
+        if selfIn or selfOut then
+            rep.selfLinks = (rep.selfLinks or 0) + 1
+            note("a point at (%.1f, %.1f) is wired to itself - nothing drives that, and AutoDrive counts it as a road arriving", w.x, w.z)
+            if not dry then
+                table.removeValue(w.incoming, w.id)
+                table.removeValue(w.out, w.id)
+            end
+        end
     end
 
     -- DOUBLES. Everything wired to the spare is re-wired to the keeper first, so folding the two
