@@ -46,9 +46,26 @@ S.settings.flyoverAutoHookupDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 
 -- or moves it out of a busy corner does not have to redo that every session.
 S.settings.launchButtonHidden = { values = { false, true }, default = 1, current = 1 }
 S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above", "below" }, default = 1, current = 1 }
+-- Off by default: a user reported hours of normal editing bloating log.txt, and the overwhelming
+-- majority of it is routine per-click/per-action info lines (see FlyoverEditor.lua's debugLog
+-- call sites) that only matter while actively diagnosing something, not on every session.
+S.settings.flyoverDebugLogging = { values = { false, true }, default = 1, current = 1 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
+end
+
+--- Gate for routine info-level logging (click traces, per-action confirmations, etc.) - NOT for
+--- Logging.warning/Logging.error, which stay on unconditionally regardless of this setting; those
+--- indicate an actual problem, not a bloat source. Deliberately reads Logging.info directly rather
+--- than wrapping/overriding the global itself - Logging is base-game, not this mod's, and every
+--- other mod plus the base game itself calls it too, so patching it globally would affect far more
+--- than this mod's own log lines. Call sites across the editor were switched from Logging.info(...)
+--- to ADFlyoverSettings.debugLog(...) instead - a one-word rename, not a global override.
+function S.debugLog(fmt, ...)
+    if S.get("flyoverDebugLogging") then
+        Logging.info(fmt, ...)
+    end
 end
 
 --- Fallthrough is deliberate here and ONLY here: a name we do not own goes to AutoDrive, so the one
@@ -165,6 +182,7 @@ function S.describe()
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
+                            "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
     end

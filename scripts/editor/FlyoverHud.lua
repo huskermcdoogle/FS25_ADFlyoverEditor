@@ -1204,6 +1204,14 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
 
+    push({ kind = "section", text = "DEBUG" })
+    push({ kind = "field", text = "verbose logging",
+        value = ADFlyoverSettings.get("flyoverDebugLogging") and "on" or "off",
+        action = function() ADFlyoverSettings.cycle("flyoverDebugLogging", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("flyoverDebugLogging", d) end })
+    push({ kind = "note", text = "off by default - routine click/action lines bloat log.txt over a "
+        .. "long session; warnings and errors always log regardless" })
+
     push({ kind = "gap" })
     push({ kind = "button", text = "reset all to default", action = function() editor:resetTheme() end })
     push({ kind = "button", text = "close", style = "accent", action = function() editor:closeSettingsDialog() end })
