@@ -84,10 +84,15 @@ ADFlyoverEditor = {
     boxActive = false,
     boxStartX = nil,
     boxStartZ = nil,
-    circleArmed = false,
     circleActive = false,
     circleStartX = nil,
     circleStartZ = nil,
+    -- Our own held-modifier state - see keyEvent. Defaults false until the first keyEvent call.
+    leftCtrlHeld = false,
+    rightCtrlHeld = false,
+    leftShiftHeld = false,
+    rightShiftHeld = false,
+    leftAltHeld = false,
     -- Sticky connection options, shown and changed on the panel instead of held as modifier keys.
     connectionMode = 1,
     subPrio = false,
@@ -1064,6 +1069,25 @@ function ADFlyoverEditor:isGuiBlocking()
 end
 
 function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
+    -- Our own held-modifier state, read directly off the SAME modifier bitmask every keyEvent
+    -- callback receives (base game Input.MOD_* flags) - not AutoDrive's own leftCTRLmodifierKeyPressed
+    -- etc. globals, which this file used to read. AutoDrive computes those the identical way
+    -- (AutoDrive.lua, AutoDrive:keyEvent) - this is base-game plumbing, not anything specific to it.
+    --
+    -- Captured UNCONDITIONALLY, before every early return below, on every call - not just isDown.
+    -- A held key is only correctly tracked if its release (isDown == false) is seen too: gating
+    -- this on isDown the way the rest of this function is gated would see Ctrl go down and then
+    -- never see it come back up, leaving the flag stuck true. Left/right Alt is deliberately NOT
+    -- tracked here - AutoDrive itself never reads Input.MOD_RALT anywhere, so there is no confirmed
+    -- evidence that constant exists to test against.
+    if Input ~= nil then
+        self.leftCtrlHeld = bit32.band(modifier, Input.MOD_LCTRL) > 0
+        self.rightCtrlHeld = bit32.band(modifier, Input.MOD_RCTRL) > 0
+        self.leftShiftHeld = bit32.band(modifier, Input.MOD_LSHIFT) > 0
+        self.rightShiftHeld = bit32.band(modifier, Input.MOD_RSHIFT) > 0
+        self.leftAltHeld = bit32.band(modifier, Input.MOD_LALT) > 0
+    end
+
     if not self.active or not isDown or self:isGuiBlocking() then
         return
     end
@@ -1137,18 +1161,6 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return
     end
 
-    -- C arms circle-select for the next drag, in every tool - the same "selection is a shared
-    -- substrate" reasoning that makes Ctrl+drag box global rather than move-tool-specific. A plain
-    -- discrete keypress rather than a held modifier (unlike Ctrl, which AutoDrive itself tracks as
-    -- a held state): nothing in this file has ever needed to track a held key of its OWN, and
-    -- guessing at that plumbing risks a silent no-op if the guess is wrong. Pressing C again while
-    -- already armed just cancels the arm.
-    if isKey("KEY_c") then
-        self.circleArmed = not self.circleArmed
-        Logging.info("[FlyoverEditor]: circle select %s.",
-            self.circleArmed and "armed - drag once to pick a circle" or "cancelled")
-        return
-    end
 
     -- Hide/show the floating tool card. A keyboard key rather than middle mouse, which is the camera.
     if isKey("KEY_h") then
@@ -1727,7 +1739,7 @@ function ADFlyoverEditor:setTool(tool)
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
     self.dragId = nil
     self.boxActive = false
-    self.circleArmed, self.circleActive = false, false
+    self.circleActive = false
     self.circleStartX, self.circleStartZ = nil, nil
     self.ctxMenu = nil
     -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
@@ -1829,7 +1841,7 @@ function ADFlyoverEditor:finishBoxSelect()
 
     -- Shift adds to what is already selected; without it the box replaces the selection, which is
     -- the behaviour that makes a mis-aimed box cheap to correct.
-    local additive = AutoDrive.leftLSHIFTmodifierKeyPressed == true or AutoDrive.rightSHIFTmodifierKeyPressed == true
+    local additive = self.leftShiftHeld or self.rightShiftHeld
     if not additive then
         self:clearSelection()
     end
@@ -1855,7 +1867,7 @@ function ADFlyoverEditor:finishBoxSelect()
         frame.maxU - frame.minU, frame.maxV - frame.minV, self.selectionCount)
 end
 
---- Finish a circle drag armed by C. The two clicked points are a DIAMETER, not a centre and a
+--- Finish an Alt+drag circle. The two clicked points are a DIAMETER, not a centre and a
 --- radius - the centre is their midpoint, the radius is half the distance between them - so the
 --- gesture stays "click one edge, drag to the other", the same shape as box's two corners, rather
 --- than needing to eyeball a centre point first. A circle has no orientation, so unlike box this
@@ -1882,7 +1894,7 @@ function ADFlyoverEditor:finishCircleSelect()
     end
 
     -- Shift adds, same as box - a mis-aimed circle should be as cheap to correct as a mis-aimed box.
-    local additive = AutoDrive.leftLSHIFTmodifierKeyPressed == true or AutoDrive.rightSHIFTmodifierKeyPressed == true
+    local additive = self.leftShiftHeld or self.rightShiftHeld
     if not additive then
         self:clearSelection()
     end
@@ -2525,11 +2537,9 @@ function ADFlyoverEditor:onLeftPress()
         self.toolCardY = math.max(0, math.min(1, g_lastMousePosY + oy))
     end
 
-    -- A circle armed by C claims this drag, the same way Ctrl claims one for box - decided here on
-    -- the press, before the move tool can grab a waypoint, or the drag would move it instead of
-    -- selecting. Consumed immediately: only the next drag is a circle, not every drag from now on.
-    if self.circleArmed then
-        self.circleArmed = false
+    -- Alt claims the drag for circle selection, the same shape as Ctrl claiming one for box just
+    -- below - our own tracked leftAltHeld (see keyEvent), not a one-shot armed key.
+    if self.leftAltHeld then
         self.circleActive = true
         self.circleStartX, self.circleStartZ = self.cursorX, self.cursorZ
         return
@@ -2538,7 +2548,7 @@ function ADFlyoverEditor:onLeftPress()
     -- Ctrl claims the drag for box selection, in every tool. It has to be decided here on the
     -- press, before the move tool can grab a waypoint, or a Ctrl+drag starting on top of one
     -- would move it instead of selecting.
-    if AutoDrive.leftCTRLmodifierKeyPressed == true then
+    if self.leftCtrlHeld then
         self.boxActive = true
         self.boxStartX, self.boxStartZ = self.cursorX, self.cursorZ
         return
@@ -4579,13 +4589,11 @@ function ADFlyoverEditor:getNextStepLines()
     local function side() return (self.offsetSide or 1) >= 0 and L("left") or L("right") end
 
     -- Circle-select is tool-agnostic (selection is a shared substrate, same as Ctrl+drag box), so
-    -- this overrides whatever the current tool would otherwise say - the armed/mid-drag state is
-    -- what the player actually needs telling right now, regardless of which tool is active.
+    -- this overrides whatever the current tool would otherwise say - the mid-drag state is what the
+    -- player actually needs telling right now, regardless of which tool is active. No "armed" state
+    -- to report any more - Alt+drag starts a circle in one motion, the same as Ctrl+drag does a box.
     if self.circleActive then
         return L("Release to select everything inside the circle.")
-    end
-    if self.circleArmed then
-        return L("Circle select armed. Drag once to pick a circle, or press C again to cancel.")
     end
 
     if self.tool == t.NONE then
