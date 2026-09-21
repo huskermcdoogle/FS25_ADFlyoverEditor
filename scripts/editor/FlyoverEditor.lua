@@ -11798,6 +11798,13 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
     local ends = dry and {} or nil
     local handled = {}
     local trimmed, added, lanes = 0, 0, 0
+    -- WHAT HAPPENED TO EACH LANE, SAID OUT LOUD. A lane whose path never meets the box was skipped
+    -- in silence: no trim, no extension, no mention - so a road left stopping fifteen metres short
+    -- looked exactly like a road the tool had decided to leave. One lane at j33 ended 18.5 m from
+    -- the middle while its partner reached 5.1 m, and nothing in the log said which pass had
+    -- declined it or why. Every lane now reports its outcome, and the capture picks these up with
+    -- everything else, so the game answers the question without the offline harness in the loop.
+    local laneReport = {}
     -- A ROAD THROUGH A JUNCTION ARRIVES FROM BOTH ENDS, and each end is tidied on its own.
     --
     -- Everything below measures along one centreline, running in from one end of the road. Tracks
@@ -12351,8 +12358,27 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                     end
                 end
                 if touched then lanes = lanes + 1 end
+                if centre ~= nil then
+                    local tip = seq[#seq]
+                    laneReport[#laneReport + 1] = string.format(
+                        "%s lane on bearing %3.0f: %d trimmed, %d added, now ends %.1f m from the middle",
+                        tostring(ap.dir), math.deg(math.atan2(tip.x - centre.x, -(tip.z - centre.z))) % 360,
+                        trimmed, added, math.sqrt((tip.x - centre.x) ^ 2 + (tip.z - centre.z) ^ 2))
+                end
+            elseif centre ~= nil and seq ~= nil and #seq > 0 then
+                -- target is nil: this lane's path never crosses the box edge, so there is nothing to
+                -- trim back to and nothing to run out to. Left exactly as it is - which is the right
+                -- thing to do and the wrong thing to do quietly.
+                local tip = seq[#seq]
+                laneReport[#laneReport + 1] = string.format(
+                    "%s lane on bearing %3.0f: LEFT ALONE - its path does not reach the box edge; nearest point is %.1f m from the middle",
+                    tostring(ap.dir), math.deg(math.atan2(tip.x - centre.x, -(tip.z - centre.z))) % 360,
+                    math.sqrt((tip.x - centre.x) ^ 2 + (tip.z - centre.z) ^ 2))
             end
         end
+    end
+    for _, line in ipairs(laneReport) do
+        Logging.info("[FlyoverEditor]: junction - %s", line)
     end
 
     if dry then
@@ -14457,6 +14483,68 @@ function ADFlyoverEditor:applyJunctionClear()
             tidyTrim, tidyAdd, tidyLanes, boxSwept, boxSevered = self:junctionTidyLaneEnds(jp)
         end
     end)
+    -- WHERE EVERY LANE ENDS, AND WHETHER A ROAD'S TWO LANES AGREE.
+    --
+    -- Asked of the finished network rather than of whichever tidy ran, so it reports the same thing
+    -- however the lane was handled - and reports a lane that no pass touched at all, which is the
+    -- case that used to pass in silence.
+    --
+    -- The pair check is the one the eye makes first. At j33 one lane of a road ended 18.5 m from the
+    -- middle and its partner 5.1 m: obvious on screen, invisible to every count the tool kept, and
+    -- it took a capture and an hour to find. Two lanes of one road should stop together.
+    do
+        local c = jp._boxCentre or jp.tracksCentre
+        if c ~= nil then
+            local lanes = {}
+            for _, ap in ipairs(jp.approaches or {}) do
+                local b = math.deg(ap.bearing or 0) % 360
+                local nearest = nil
+                for _, w in pairs(ADGraphManager:getWayPoints()) do
+                    if w ~= nil and w.id ~= nil then
+                        local dx, dz = w.x - c.x, w.z - c.z
+                        local d = math.sqrt(dx * dx + dz * dz)
+                        if d <= 45 then
+                            local wb = math.deg(math.atan2(dx, dz)) % 360
+                            local sep = math.abs(wb - b) % 360
+                            if sep > 180 then sep = 360 - sep end
+                            if sep <= 12 and (nearest == nil or d < nearest) then nearest = d end
+                        end
+                    end
+                end
+                if nearest ~= nil then
+                    lanes[#lanes + 1] = { b = b, d = nearest, dir = ap.dir }
+                end
+            end
+            -- Pair the lanes of a road: same bearing within 20 degrees, opposite travel.
+            local said = {}
+            for i = 1, #lanes do
+                for j = i + 1, #lanes do
+                    if not said[i] and not said[j] then
+                        local sep = math.abs(lanes[i].b - lanes[j].b) % 360
+                        if sep > 180 then sep = 360 - sep end
+                        if sep <= 20 then
+                            local gap = math.abs(lanes[i].d - lanes[j].d)
+                            said[i], said[j] = true, true
+                            if gap > 3 then
+                                Logging.warning("[FlyoverEditor]: junction - the two lanes of the road on bearing %.0f do not stop together: one ends %.1f m from the middle, the other %.1f m. A lane no pass could reach is left where it was.",
+                                    lanes[i].b, lanes[i].d, lanes[j].d)
+                            else
+                                Logging.info("[FlyoverEditor]: junction - road on bearing %.0f: both lanes end %.1f and %.1f m from the middle.",
+                                    lanes[i].b, lanes[i].d, lanes[j].d)
+                            end
+                        end
+                    end
+                end
+            end
+            for i = 1, #lanes do
+                if not said[i] then
+                    Logging.info("[FlyoverEditor]: junction - single lane on bearing %.0f ends %.1f m from the middle.",
+                        lanes[i].b, lanes[i].d)
+                end
+            end
+        end
+    end
+
     if (boxSwept or 0) + (boxSevered or 0) > 0 then
         Logging.info("[FlyoverEditor]: junction - the box (the roads' own offset lines, centred %.1f, %.1f): removed %d point(s) inside it and cut %d link(s) running across it; lanes now end on its edge.",
             jp._boxCentre and jp._boxCentre.x or 0, jp._boxCentre and jp._boxCentre.z or 0,
