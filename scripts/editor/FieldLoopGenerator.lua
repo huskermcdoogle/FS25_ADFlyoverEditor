@@ -473,9 +473,15 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     }, nil
 end
 
---- True when the ring, as ordered, runs clockwise in world (x, z). Shoelace sign - same convention
---- OffsetGeometry uses (positive area = counter-clockwise) - so "clockwise" means the same thing
---- here as it does to the offset math, whichever way buildFieldLoopRing happened to emit the ring.
+--- True when the ring, as ordered, runs clockwise AS SEEN ON THE MAP - north up, east right, which
+--- is the only sense in which "clockwise" means anything to whoever set the toggle.
+---
+--- The shoelace sign alone does not answer that, because in FS25 z increases SOUTHWARD. The plane
+--- you are looking at is (x, -z), not (x, z), and flipping one axis flips the handedness with it:
+--- the usual "positive area = counter-clockwise" is inverted here. Worked through on a square taken
+--- NW -> NE -> SE -> SW, which is clockwise on screen and comes out at +200.
+---
+--- Read the other way round, the toggle laid every one-way loop the wrong way about.
 local function ringIsClockwise(ring)
     local area = 0
     local n = #ring
@@ -483,7 +489,7 @@ local function ringIsClockwise(ring)
         local a, b = ring[i], ring[(i % n) + 1]
         area = area + (a.x * b.z - b.x * a.z)
     end
-    return area < 0
+    return area > 0
 end
 
 --- flags: AutoDrive.FLAG_SUBPRIO (secondary, the old always-on default) or AutoDrive.FLAG_NONE
