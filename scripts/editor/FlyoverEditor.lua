@@ -766,6 +766,28 @@ function ADFlyoverEditor:enable()
     if ADFlyoverProxy ~= nil and ADFlyoverProxy.resetFailure ~= nil then
         ADFlyoverProxy.resetFailure()
     end
+    -- SELF-WIRED POINTS GO ON THE WAY IN, EVERY TIME, WITHOUT BEING ASKED.
+    --
+    -- A point listing its own id among its links has no valid reading: no road leaves a point and
+    -- arrives back at that same point without going anywhere. Nothing drives it, so removing it
+    -- cannot change a route - there is no judgement to make and nothing to weigh up, which is
+    -- exactly why it should not have needed a console command.
+    --
+    -- It DID need one, and only reached the junction being cleared otherwise: the integrity sweep
+    -- is bounded to that site, and the 19 in this network were scattered across the whole map,
+    -- nowhere near anything anyone would clear. They would have sat there for good. Worse, a repair
+    -- the user has to remember to run is one undo away from being silently lost, which is what
+    -- happened within the hour of it being written.
+    --
+    -- Cheap enough to do on every open - one pass over the waypoints, no geometry - and silent when
+    -- there is nothing to do. It only ever says something when it found something.
+    if self.repairSelfLinks ~= nil then
+        local ok, found, fixed = pcall(function() return self:repairSelfLinks(true) end)
+        if ok and (found or 0) > 0 then
+            Logging.info("[FlyoverEditor]: %d point(s) were wired to themselves and have been unwired. Positions are above. Save to keep this.",
+                fixed or 0)
+        end
+    end
     -- Before ANYTHING is touched. Compared against the line printed after teardown, this is the
     -- only pair that says whether a cycle put the input system back as it found it. Logging only
     -- after the push, as the first version did, made a clean cycle indistinguishable from a lossy
