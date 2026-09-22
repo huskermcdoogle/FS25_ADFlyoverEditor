@@ -31,12 +31,15 @@ S.settings.fieldLoopMargin = { values = { -10.0, -9.75, -9.50, -9.25, -9.0, -8.7
 S.settings.fieldLoopTreeClearance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0 }, default = 4, current = 4 }
 S.settings.fieldLoopVehicleHeight = { values = { 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0 }, default = 4, current = 4 }
 S.settings.fieldLoopTurningRadius = { values = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 6, current = 6 }
--- On by default: g_customFieldManager (Courseplay only) is what finds one of ITS custom fields -
--- a boundary the player recorded, often bridging several map fields joined by tilled ground -
--- which the farmland-based lookup below can never find; it is answering "what map field owns this
--- spot", a different question. No effect without Courseplay. A toggle rather than a silent
--- always-on change so a report of it misbehaving on a particular map/save can be isolated by
--- switching back to the map-field-only path without a rollback.
+-- On by default: gates two Courseplay-only lookups, tried before the base-game farmland one.
+-- The one that matters is g_fieldScanner:findContour(), which traces the LIVE tilled-ground edge
+-- rather than a map field's static boundary - so ground plowed to connect two separate map fields
+-- scans as one contour, exactly what the farmland-based lookup below can never see (it can only
+-- ever answer "what map field owns this spot"). g_customFieldManager (a boundary the player
+-- explicitly recorded in Courseplay) is also tried first as a cheap exact match if one exists, but
+-- is not the common case. No effect without Courseplay. A toggle rather than a silent always-on
+-- change so a report of it misbehaving on a particular map/save can be isolated by switching back
+-- to the map-field-only path without a rollback.
 S.settings.fieldLoopDetectCustomField = { values = { false, true }, default = 2, current = 2 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }

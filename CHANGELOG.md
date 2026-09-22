@@ -1,16 +1,18 @@
 # Changelog
 
-## 1.0.1.1 — Hotfix: field loop ignored Courseplay's custom fields (2026-09-22)
+## 1.0.1.1 — Hotfix: field loop ignored ground plowed together into one field (2026-09-22)
 
-Field loop only ever found a *map* field's boundary — by asking `g_farmlandManager` which farmland
-owns the cursor's position, then reading that farmland's field. A **custom field** is
-[Courseplay](https://github.com/Courseplay/Courseplay_FS25)'s own concept, not a base-game one: a
-boundary the player records by driving it, often bridging two or more separate map fields joined
-by tilled ground, saved entirely outside `g_farmlandManager`. So the old lookup could never find
-one — it was answering a different question, not failing at the one it was asked. Field loop now
-checks Courseplay's `g_customFieldManager` first, when Courseplay is active, and falls back to the
-map-field lookup otherwise; a new **detect custom field** toggle on the tool card (on by default)
-switches back to map-field-only for isolating a report. No effect if Courseplay isn't installed.
+Field loop only ever found a *map* field's static boundary — by asking `g_farmlandManager` which
+farmland owns the cursor's position, then reading that farmland's field. Plowing the gap between
+two separate map fields to work them as one — a common [Courseplay](https://github.com/Courseplay/Courseplay_FS25)
+workflow — was invisible to that lookup: it was still answering "what map field owns this spot",
+which doesn't change just because the ground between two of them got tilled. Field loop now also
+tries Courseplay's `g_fieldScanner`, when Courseplay is active, which traces the live tilled-ground
+edge instead of a static boundary and so naturally includes a plowed-together gap in the contour
+(plus a cheap check against any boundary explicitly recorded with Courseplay's custom-field
+recorder, for the rarer case one exists). Falls back to the map-field lookup otherwise. A new
+**detect custom field** toggle on the tool card (on by default) switches back to map-field-only for
+isolating a report. No effect if Courseplay isn't installed.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 

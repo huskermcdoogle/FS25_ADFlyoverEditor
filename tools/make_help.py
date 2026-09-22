@@ -96,11 +96,11 @@ TOOLS = [
             ("tree clearance", "how far the loop keeps from trees before detouring."),
             ("turning radius", "the tightest turn the loop is allowed to make."),
             ("vehicle height", "how tall a machine the tree check clears for."),
-            ("detect custom field", "on by default; when Courseplay is active, also finds one of "
-                                     "ITS custom fields (a boundary you recorded, possibly bridging "
-                                     "several map fields), not just a field shipped with the map. "
-                                     "No effect without Courseplay. Turn it off to fall back to the "
-                                     "map-field-only lookup if it ever misreads a field on your save."),
+            ("detect custom field", "on by default; when Courseplay is active, also finds ground "
+                                     "plowed to connect two separate map fields into one, not just "
+                                     "a field shipped with the map. No effect without Courseplay. "
+                                     "Turn it off to fall back to the map-field-only lookup if it "
+                                     "ever misreads a field on your save."),
         ],
     },
     {

@@ -49,31 +49,61 @@ AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available 
 --- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
 --- position lookup feeding this.
 ---
---- COMPANION FIX: tries Courseplay's custom fields first, if Courseplay is loaded. A "custom
---- field" is a Courseplay concept, not a base-game one - the player drives/records its boundary
---- (often bridging two or more separate map fields joined by tilled ground) and Courseplay saves
---- it as its own polygon in g_customFieldManager, entirely outside g_farmlandManager/g_fieldManager.
---- So the farmland-based lookup below can only ever find the underlying MAP field, never the
---- custom one drawn over it - there is nothing wrong with that lookup to fix, it is just answering
---- a different question. g_customFieldManager exists only when Courseplay is active, hence the
---- nil check rather than an assumption.
+--- COMPANION FIX: two Courseplay-only attempts before falling back to the base-game farmland
+--- lookup, both confirmed by reading Courseplay's own source (scripts/field/CustomField*.lua,
+--- FieldScanner.lua, CpFieldUtil.lua) rather than guessed.
+---
+--- 1. g_customFieldManager: a RECORDED custom field - the player drove its boundary and Courseplay
+---    saved it as its own polygon, entirely outside g_farmlandManager/g_fieldManager. Cheap and
+---    exact when one exists, but most players never record one.
+--- 2. g_fieldScanner:findContour(): what actually answers "plow the ground between two map fields
+---    to connect them" - it walks a probe out from (x, z) and traces the LIVE tilled-ground edge
+---    (Courseplay's own comment: "first ignore field ID as with it we can't handle merged
+---    fields"), so it naturally includes any tilled gap joining separate map fields into one
+---    contour, with no saved boundary needed at all. This is what Courseplay's own course
+---    generator uses, and it is a synchronous walk (up to ~20000 probe steps) so it can take a
+---    moment on a large merged area.
+---
+--- Both need g_customFieldManager/g_fieldScanner, which exist only when Courseplay is active -
+--- nil-checked rather than assumed, and the farmland-based lookup below is what runs without
+--- Courseplay (or if both of these come up empty).
 ---
 --- Gated by the "detect custom field" toggle so a report of it misbehaving on a particular
 --- map/save can be isolated by switching back to the map-field-only path without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
-    if ADFlyoverSettings.get("fieldLoopDetectCustomField") and g_customFieldManager ~= nil then
-        local okCustom, customField = pcall(function()
-            return g_customFieldManager:getCustomField(x, z)
-        end)
-        if okCustom and customField ~= nil then
-            local okVerts, vertices = pcall(function() return customField:getVertices() end)
-            if okVerts and vertices ~= nil and #vertices >= 3 then
-                local points = {}
-                for i = 1, #vertices do
-                    points[i] = { x = vertices[i].x, z = vertices[i].z }
+    if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
+        if g_customFieldManager ~= nil then
+            local okCustom, customField = pcall(function()
+                return g_customFieldManager:getCustomField(x, z)
+            end)
+            if okCustom and customField ~= nil then
+                local okVerts, vertices = pcall(function() return customField:getVertices() end)
+                if okVerts and vertices ~= nil and #vertices >= 3 then
+                    local points = {}
+                    for i = 1, #vertices do
+                        points[i] = { x = vertices[i].x, z = vertices[i].z }
+                    end
+                    local okName, name = pcall(function() return customField:getName() end)
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop found a recorded custom field ('%s').",
+                        (okName and name) or "?")
+                    return points, (okName and name) or "Custom field", nil
                 end
-                local okName, name = pcall(function() return customField:getName() end)
-                return points, (okName and name) or "Custom field", nil
+            end
+        end
+
+        -- Independent of g_customFieldManager above - a save with Courseplay active always has
+        -- g_fieldScanner too, but checking it on its own keeps this working if that ever changes.
+        if g_fieldScanner ~= nil then
+            local okScan, found, scanned = pcall(function()
+                return g_fieldScanner:findContour(x, z)
+            end)
+            if okScan and found and scanned ~= nil and #scanned >= 3 then
+                local points = {}
+                for i = 1, #scanned do
+                    points[i] = { x = scanned[i].x, z = scanned[i].z }
+                end
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanned a %d-point tilled-ground contour.", #points)
+                return points, "Scanned field", nil
             end
         end
     end
