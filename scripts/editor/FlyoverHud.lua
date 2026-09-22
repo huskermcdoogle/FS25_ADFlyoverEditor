@@ -530,9 +530,9 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleFieldLoopPriority() end)
         add("toggle", "track", editor.FIELD_LOOP_DIR_NAMES[editor.fieldLoopDirection], false,
             function() editor:cycleFieldLoopDirection() end)
-        -- Off switches back to the old farmland-only field lookup, which misses a custom field
-        -- (one drawn in-game with Define Field, no purchasable farmland behind it) - here so that
-        -- can be isolated per-site without a settings-dialog trip.
+        -- Off switches back to the map-field-only lookup, which misses one of Courseplay's custom
+        -- fields (a boundary recorded in Courseplay, often bridging several map fields) - here so
+        -- that can be isolated per-site without a settings-dialog trip.
         add("toggle", "detect custom field", ADFlyoverSettings.get("fieldLoopDetectCustomField") and "on" or "off", false,
             function() ADFlyoverSettings.cycle("fieldLoopDetectCustomField", 1) end)
     elseif editor.tool == editor.TOOL.CONVERT then

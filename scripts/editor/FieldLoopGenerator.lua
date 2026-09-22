@@ -49,47 +49,51 @@ AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available 
 --- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
 --- position lookup feeding this.
 ---
---- COMPANION FIX: tries g_fieldManager:getFieldAtWorldPosition() first. A field the player drew
---- in-game with "Define Field" - a custom field, not one shipped with the map - has no purchasable
---- farmland behind it, so the original farmland->getField() path below never finds it: it asks
---- "what farmland owns this spot", and a custom field is not tied to one. FieldManager answers the
---- geometric question instead ("what field polygon is under this spot"), which is what covers both
---- kinds. Kept as a fallback rather than a replacement in case an older/modified g_fieldManager
---- lacks the method - same pcall-guarded, log-and-continue style as the rest of this file.
+--- COMPANION FIX: tries Courseplay's custom fields first, if Courseplay is loaded. A "custom
+--- field" is a Courseplay concept, not a base-game one - the player drives/records its boundary
+--- (often bridging two or more separate map fields joined by tilled ground) and Courseplay saves
+--- it as its own polygon in g_customFieldManager, entirely outside g_farmlandManager/g_fieldManager.
+--- So the farmland-based lookup below can only ever find the underlying MAP field, never the
+--- custom one drawn over it - there is nothing wrong with that lookup to fix, it is just answering
+--- a different question. g_customFieldManager exists only when Courseplay is active, hence the
+--- nil check rather than an assumption.
 ---
 --- Gated by the "detect custom field" toggle so a report of it misbehaving on a particular
---- map/save can be isolated by switching back to the old farmland-only path without a rollback.
+--- map/save can be isolated by switching back to the map-field-only path without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
-    local field = nil
-
-    if ADFlyoverSettings.get("fieldLoopDetectCustomField") and g_fieldManager ~= nil then
-        local okDirect, directField = pcall(function()
-            return g_fieldManager:getFieldAtWorldPosition(x, z)
+    if ADFlyoverSettings.get("fieldLoopDetectCustomField") and g_customFieldManager ~= nil then
+        local okCustom, customField = pcall(function()
+            return g_customFieldManager:getCustomField(x, z)
         end)
-        if okDirect then
-            field = directField
+        if okCustom and customField ~= nil then
+            local okVerts, vertices = pcall(function() return customField:getVertices() end)
+            if okVerts and vertices ~= nil and #vertices >= 3 then
+                local points = {}
+                for i = 1, #vertices do
+                    points[i] = { x = vertices[i].x, z = vertices[i].z }
+                end
+                local okName, name = pcall(function() return customField:getName() end)
+                return points, (okName and name) or "Custom field", nil
+            end
         end
     end
 
-    if field == nil then
-        if g_farmlandManager == nil then
-            return nil, nil, "g_farmlandManager is not available."
-        end
+    if g_farmlandManager == nil then
+        return nil, nil, "g_farmlandManager is not available."
+    end
 
-        local okFarmland, farmland = pcall(function()
-            return g_farmlandManager:getFarmlandAtWorldPosition(x, z)
-        end)
-        if not okFarmland or farmland == nil then
-            return nil, nil, string.format("No farmland at x=%.1f z=%.1f.", x, z)
-        end
+    local okFarmland, farmland = pcall(function()
+        return g_farmlandManager:getFarmlandAtWorldPosition(x, z)
+    end)
+    if not okFarmland or farmland == nil then
+        return nil, nil, string.format("No farmland at x=%.1f z=%.1f.", x, z)
+    end
 
-        local okField, farmlandField = pcall(function()
-            return farmland:getField()
-        end)
-        if not okField or farmlandField == nil then
-            return nil, nil, string.format("No field at x=%.1f z=%.1f - that farmland has no field on it.", x, z)
-        end
-        field = farmlandField
+    local okField, field = pcall(function()
+        return farmland:getField()
+    end)
+    if not okField or field == nil then
+        return nil, nil, string.format("No field at x=%.1f z=%.1f - that farmland has no field on it.", x, z)
     end
 
     local okPolygon, polygon = pcall(function()
