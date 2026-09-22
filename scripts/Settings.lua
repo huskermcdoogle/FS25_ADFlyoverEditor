@@ -35,14 +35,37 @@ S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
 S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 6, current = 6 }
+-- Move's own tolerance for auto-hookup (item 6) - deliberately its own setting rather than
+-- reusing flyoverMergeDistance/Divergence: those back a deliberate three-click confirmed action,
+-- this fires silently with no confirmation at all, so a tighter default is the safer starting
+-- point even though the shape (a distance and a divergence angle) is the same idea.
+S.settings.flyoverAutoHookupDistance = { values = { 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0 }, default = 3, current = 3 }
+S.settings.flyoverAutoHookupDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 3, current = 3 }
 -- The launch button riding on AutoDrive's HUD: whether it shows at all, and which side of the HUD
 -- it anchors to. Not geometry, just a UI preference, but persisted anyway so a player who hides it
 -- or moves it out of a busy corner does not have to redo that every session.
 S.settings.launchButtonHidden = { values = { false, true }, default = 1, current = 1 }
 S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above", "below" }, default = 1, current = 1 }
+-- Off by default: a user reported hours of normal editing bloating log.txt, and the overwhelming
+-- majority of it is routine per-click/per-action info lines (see FlyoverEditor.lua's debugLog
+-- call sites) that only matter while actively diagnosing something, not on every session.
+S.settings.flyoverDebugLogging = { values = { false, true }, default = 1, current = 1 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
+end
+
+--- Gate for routine info-level logging (click traces, per-action confirmations, etc.) - NOT for
+--- Logging.warning/Logging.error, which stay on unconditionally regardless of this setting; those
+--- indicate an actual problem, not a bloat source. Deliberately reads Logging.info directly rather
+--- than wrapping/overriding the global itself - Logging is base-game, not this mod's, and every
+--- other mod plus the base game itself calls it too, so patching it globally would affect far more
+--- than this mod's own log lines. Call sites across the editor were switched from Logging.info(...)
+--- to ADFlyoverSettings.debugLog(...) instead - a one-word rename, not a global override.
+function S.debugLog(fmt, ...)
+    if S.get("flyoverDebugLogging") then
+        Logging.info(fmt, ...)
+    end
 end
 
 --- Fallthrough is deliberate here and ONLY here: a name we do not own goes to AutoDrive, so the one
@@ -158,6 +181,8 @@ function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence",
+                            "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
+                            "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
     end

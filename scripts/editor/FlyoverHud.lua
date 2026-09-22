@@ -420,6 +420,29 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:cycleOffsetScope() end)
     end
 
+    if editor.tool == editor.TOOL.MOVE then
+        add("toggle", "picks", editor.MOVE_SELECT_NAMES[editor.moveSelectMode], false,
+            function() editor:cycleMoveSelectMode() end)
+        add("toggle", "falloff", editor.moveFalloffOn and "on" or "off", false,
+            function() editor:toggleMoveFalloff() end)
+        add("toggle", "copy (b)", editor.moveCopyOn and "on" or "off", false,
+            function() editor:toggleMoveCopy() end)
+        add("toggle", "disconnect", editor.moveBreakOn and "on" or "off", false,
+            function() editor:toggleMoveBreak() end)
+        if editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN then
+            add("toggle", "offset", editor.moveOffsetOn and "on" or "off", false,
+                function() editor:toggleMoveOffset() end)
+            if editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil then
+                add("toggle", "offset falloff", editor.moveOffsetFalloffOn and "on" or "off", false,
+                    function() editor:toggleMoveOffsetFalloff() end)
+            end
+        end
+        add("toggle", "auto-hookup", editor.moveAutoHookupOn and "on" or "off", false,
+            function() editor:toggleMoveAutoHookup() end)
+        add("toggle", "rotate pivot", editor.moveRotatePivotMode == "click" and "click point" or "centroid", false,
+            function() editor:cycleMoveRotatePivot() end)
+    end
+
     if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
             function() editor:toggleSnapToTerrain() end)
@@ -439,11 +462,8 @@ function ADFlyoverHud:buildRows(editor)
         add("number", entry.label, shown, editing, function() editor:beginEditNumber(entry) end)
         if entry.step ~= nil then
             rows[#rows].stepAction = function(dir) entry.step(dir) end
+            rows[#rows].wheelReach = entry.wheelReach
         end
-        -- Move's falloff is the one field that keeps the original wheel direction (wheel-up widens the
-        -- reach); handleWheel reads this flag. Move is the only tool whose editable number is such a
-        -- reach, so tagging by tool is exact. Steppers are unaffected - they bypass handleWheel.
-        rows[#rows].wheelKeepDir = (editor.tool == editor.TOOL.MOVE)
     end
 
     if editor.tool == editor.TOOL.SPLINE then
@@ -518,6 +538,12 @@ function ADFlyoverHud:buildRows(editor)
     elseif editor.tool == editor.TOOL.DELETE then
         add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
             function() editor:cycleDeleteScope() end)
+        -- A selection wins over "scope" entirely (see deleteAtCursor) - easy to miss since nothing
+        -- else on this card says so, so a click can look like it deleted "scope"'s single waypoint
+        -- when it actually took out the whole selection (reported 2026-09-21).
+        if editor.selectionCount > 0 then
+            add("header", string.format("%d selected - click deletes the SELECTION, not scope", editor.selectionCount))
+        end
     elseif editor.tool == editor.TOOL.JUNCTION then
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
         addWheelNumber("search radius", string.format("%.0f m", editor.junctionRadius or 15))
@@ -1184,6 +1210,14 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     push({ kind = "field", text = "position", value = tostring(ADFlyoverSettings.get("launchButtonPosition")),
         action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
+
+    push({ kind = "section", text = "DEBUG" })
+    push({ kind = "field", text = "verbose logging",
+        value = ADFlyoverSettings.get("flyoverDebugLogging") and "on" or "off",
+        action = function() ADFlyoverSettings.cycle("flyoverDebugLogging", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("flyoverDebugLogging", d) end })
+    push({ kind = "note", text = "off by default - routine click/action lines bloat log.txt over a "
+        .. "long session; warnings and errors always log regardless" })
 
     push({ kind = "gap" })
     push({ kind = "button", text = "reset all to default", action = function() editor:resetTheme() end })

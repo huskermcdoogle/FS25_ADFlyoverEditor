@@ -58,7 +58,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "0.31.0.2"
+P.BUILD = "0.31.0.3"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -67,9 +67,22 @@ do
     end
 end
 
---- "0.4.0.0" when both agree, or "0.4.0.0 (modDesc says 0.3.0.0 - stale, restart to refresh it)".
+--- The RELEASE part of a build string: "1.0.0.0" out of "1.0.0.0+318.bec85b6". P.BUILD carries the
+--- commit it was stamped from, modDesc never does, so the two are compared on the part they can
+--- both have. Comparing them whole would report a stale modDesc on every single dev build, and a
+--- warning that is always on is a warning nobody reads.
+local function releasePart(v)
+    return (tostring(v or ""):gsub("%+.*$", ""))
+end
+
+--- "1.0.0.0+318.bec85b6" when the modDesc agrees, or the same with a note when it does not.
+---
+--- modDesc's version is read by the mod manager at GAME STARTUP only, so returning to the menu and
+--- reloading a savegame picks up new Lua but not a new modDesc. Saying so is the point: it is
+--- harmless, but anything depending on modDesc itself - a new sourceFile entry, say - will not have
+--- taken effect until a full restart.
 function P.versionString()
-    if P.MODDESC_VERSION == P.BUILD then
+    if releasePart(P.MODDESC_VERSION) == releasePart(P.BUILD) then
         return P.BUILD
     end
     return string.format("%s (modDesc says %s - stale, full restart to refresh it)",

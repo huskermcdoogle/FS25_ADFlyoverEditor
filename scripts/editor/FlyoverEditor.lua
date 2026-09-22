@@ -69,10 +69,84 @@ ADFlyoverEditor = {
     dragStartX = nil,
     dragStartZ = nil,
     dragNeighbours = nil,
+    -- Copy was on before or during this drag: the real waypoint(s) are frozen at their pre-drag
+    -- spot and never actually move - see beginDrag/toggleMoveCopy/updateDrag/finishDrag.
+    dragFrozenCopy = false,
+    -- Rotate-during-a-move (settled 2026-09-21, rebound from CapsLock to R after CapsLock did not
+    -- reliably hold on the first try): hold R and wheel, live, while dragging.
+    -- moveRotateAngle accumulates for the CURRENT drag only (radians, reset at each grab).
+    -- moveRotatePivotX/Z are the FIXED pivot the followers rotate around, computed once at grab
+    -- time from their pre-drag positions (see beginDrag) - "click" means the dragged point's own
+    -- start position, "centroid" means the average of the whole moved set's start positions.
+    -- Never the dragged point's LIVE position, or the pivot itself would slide as you rotate.
+    moveRotatePivotMode = "click",
+    moveRotateAngle = 0,
+    moveRotatePivotX = nil,
+    moveRotatePivotZ = nil,
     falloffRadius = 0,
+    -- Which waypoints a grab picks up, and whether the falloff taper applies to that pick. Falloff
+    -- is a toggle sitting ON TOP of the mode (see gatherDragNeighbours): Point uses falloffRadius
+    -- as today, Run tapers to the run's own two ends with no radius to set, Multi-point/box/etc.
+    -- (self.selection) are always rigid regardless of this flag.
+    moveSelectMode = 1,
+    moveFalloffOn = true,
+    -- Copy toggle and the record it needs to work retroactively (see toggleMoveCopy/finishDrag/
+    -- applyMoveAsCopy): lastMoveRecord is the just-completed move's before/after positions, kept
+    -- around until the NEXT drag starts so a copy toggled on after release can still replay it.
+    moveCopyOn = false,
+    moveBreakOn = false,
+    moveAutoHookupOn = false,
+    lastMoveRecord = nil,
+    -- Offset (item 5): Run/Span only, slides the existing chain sideways in place rather than
+    -- creating a new parallel track. moveOffsetBase is the chain's position at grab time - ids and
+    -- points stay in that same order for the whole adjust session, everything else re-derives from
+    -- it (see applyMoveOffset). moveOffsetChainIds ~= nil is what distinguishes "no offset session"
+    -- from "grabbed, cursor-drag phase" (dragId also set) from "released, wheel/typed-entry phase"
+    -- (dragId nil, chain still live) until a right-click commits it - see stopCurrentAction.
+    moveOffsetOn = false,
+    moveOffsetChainIds = nil,
+    moveOffsetBase = nil,
+    moveOffsetMovable = nil,
+    moveOffsetDistance = 0,
+    -- Item requested 2026-09-21: offset was all-or-nothing (the whole chain slides the same
+    -- amount), so a slide meant to blend into an existing junction/track left a hard kink right at
+    -- the tie-in. Off by default - the plain rigid slide is still the common case.
+    moveOffsetFalloffOn = false,
+    moveOffsetFalloffRadius = 8,
+    -- Span's own picked ends, separate from offsetFromId/offsetToId (Parallel/Siding's own span) so
+    -- the two tools cannot stomp on each other's pick.
+    moveSpanFromId = nil,
+    moveSpanToId = nil,
+    moveSpanIds = nil,
     boxActive = false,
     boxStartX = nil,
     boxStartZ = nil,
+    circleActive = false,
+    circleStartX = nil,
+    circleStartZ = nil,
+    freehandActive = false,
+    freehandPoints = nil,
+    ctrlToggleArmed = false,
+    -- Rotated box: Space HELD (spaceHeld, tracked in keyEvent - not a one-shot arm) claims an
+    -- ordinary press-drag-release for the edge (corner 1, then direction+length), the same shape
+    -- Box/Circle/Freehand already use - Space only has to be held at the moment you PRESS, same
+    -- as their own modifiers, not throughout. rotBoxDragging is true for exactly that phase.
+    -- Releasing sets the edge and moves to a second, separate phase (rotBoxActive stays true,
+    -- rotBoxDragging goes false): a single plain click - no modifier needed any more - sets the
+    -- width and commits. See beginRotBoxDrag/finishRotBoxEdge/finishRotBoxSelect.
+    spaceHeld = false,
+    rotBoxActive = false,
+    rotBoxDragging = false,
+    rotBoxP1X = nil,
+    rotBoxP1Z = nil,
+    rotBoxP2X = nil,
+    rotBoxP2Z = nil,
+    -- Our own held-modifier state - see keyEvent. Defaults false until the first keyEvent call.
+    leftCtrlHeld = false,
+    rightCtrlHeld = false,
+    leftShiftHeld = false,
+    rightShiftHeld = false,
+    leftAltHeld = false,
     -- Sticky connection options, shown and changed on the panel instead of held as modifier keys.
     connectionMode = 1,
     subPrio = false,
@@ -248,7 +322,7 @@ ADFlyoverEditor.GROUND_LEVEL_NAMES = { "span line", "top surface" }
 function ADFlyoverEditor:cycleGroundLevel()
     self.groundLevel = (self.groundLevel % #self.GROUND_LEVEL_NAMES) + 1
     self.groundPreview = nil
-    Logging.info("[FlyoverEditor]: ground level -> %s.", self.GROUND_LEVEL_NAMES[self.groundLevel])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: ground level -> %s.", self.GROUND_LEVEL_NAMES[self.groundLevel])
 end
 
 -- How far around the cursor the flyover mode draws the waypoint network, in meters.
@@ -282,6 +356,8 @@ AutoDrive.FLYOVER_FALLOFF_STEP = 2.5
 -- Finer than the key step: the wheel is for dialling a value in while watching it, the keys for
 -- getting somewhere in a hurry.
 AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP = 1.0
+-- One wheel notch's worth of rotation for R+wheel (move-tool rotate), in radians. 5 degrees.
+AutoDrive.FLYOVER_ROTATE_WHEEL_STEP = math.rad(5)
 AutoDrive.FLYOVER_FALLOFF_MAX = 60
 -- Fallback merge distance, used only if the GUI setting is unavailable. The real value is the
 -- flyoverMergeDistance setting.
@@ -380,12 +456,12 @@ function ADFlyoverEditor:probeInputHelp()
 
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
     if hud == nil then
-        Logging.info("[FlyoverEditor]: PROBE no g_currentMission.hud")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE no g_currentMission.hud")
         return
     end
 
     local help = hud.inputHelp
-    Logging.info("[FlyoverEditor]: PROBE hud.inputHelp = %s isVisible=%s",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.inputHelp = %s isVisible=%s",
         tostring(help), help ~= nil and tostring(rawget(help, "isVisible")) or "-")
 
     -- What can actually be called on it. "setIsVisible" was assumed last time and does not exist;
@@ -398,7 +474,7 @@ function ADFlyoverEditor:probeInputHelp()
             end
         end
         table.sort(names)
-        Logging.info("[FlyoverEditor]: PROBE inputHelp methods: %s",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE inputHelp methods: %s",
             #names > 0 and table.concat(names, ", ") or "(none directly on the table)")
     end
 end
@@ -410,7 +486,7 @@ function ADFlyoverEditor:hideInputHelp()
     local help = hud ~= nil and hud.inputHelp or nil
     if help == nil then
         self.inputHelpWasVisible = nil
-        Logging.info("[FlyoverEditor]: no input-help display found to hide.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no input-help display found to hide.")
         return
     end
     -- Read the flag rather than assume it was on: someone who had already turned the help off must
@@ -418,7 +494,7 @@ function ADFlyoverEditor:hideInputHelp()
     self.inputHelpWasVisible = rawget(help, "isVisible")
     local ok, err = self:setInputHelpVisible(false)
     -- Logged either way. Reporting only success is what left the first attempt unexplained.
-    Logging.info("[FlyoverEditor]: hide key-binding help: ok=%s was=%s%s",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: hide key-binding help: ok=%s was=%s%s",
         tostring(ok), tostring(self.inputHelpWasVisible), err ~= nil and (" err=" .. err) or "")
 end
 
@@ -456,6 +532,68 @@ local function pointToSegment(px, pz, ax, az, bx, bz)
     local cx, cz = ax + dx * t, az + dz * t
     local ex, ez = px - cx, pz - cz
     return math.sqrt(ex * ex + ez * ez), cx, cz
+end
+
+--- Total distinct out+incoming neighbours for id, ANYWHERE in the graph - not just inside
+--- whatever run/span it was reached from. A genuine junction, not merely a run's own end.
+---
+--- Nothing that reaches a junction only INCIDENTALLY ever moves it (decided 2026-09-21, after
+--- testing) - Point's falloff radius happening to reach one, or resolveWholeRun's deliberate
+--- extension of a run's own ends ONTO the junction at each side (reachToJunction, so falloff has a
+--- real boundary to taper toward and offset knows where the chain's geometry actually terminates).
+--- A junction is a shared reference point for other runs too, and a plain move was never asked to
+--- touch it, even a little, even tapered near zero. An EXPLICIT pick stays movable regardless -
+--- grabbing one directly in Point mode, or clicking it as one of Span's own two ends - since that
+--- decides it the same way an explicit box/circle/freehand/ctrl-click selection already does.
+--- Declared this early (well before its first use) so every consumer - the pre-grab preview, Point's
+--- own follower gather, Run/Span/Offset's - can all see it regardless of where in the file they sit.
+local function isJunction(id)
+    local wp = ADGraphManager:getWayPointById(id)
+    if wp == nil then
+        return false
+    end
+    local seen, count = {}, 0
+    for _, listName in ipairs({ "out", "incoming" }) do
+        for _, other in pairs(wp[listName] or {}) do
+            if not seen[other] then
+                seen[other] = true
+                count = count + 1
+            end
+        end
+    end
+    return count > 2
+end
+
+--- Standalone disconnect (moveBreakOn with copy OFF): severs every connection a member of movedSet
+--- has to a waypoint OUTSIDE movedSet, in both directions, leaving connections WITHIN movedSet
+--- untouched. Direct list surgery rather than ADGraphManager:toggleConnectionBetween - that call
+--- flips whatever state is already there, which is the wrong tool for "make this unconditionally
+--- true" (see the junctionConnect/junctionDisconnect primitives lower in this file for the same
+--- reasoning). Declared here, before finishDrag, since Lua needs a local function defined above
+--- its first use.
+local function disconnectExternal(movedSet)
+    for id in pairs(movedSet) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            local outIds, inIds = {}, {}
+            for _, oid in ipairs(wp.out or {}) do table.insert(outIds, oid) end
+            for _, iid in ipairs(wp.incoming or {}) do table.insert(inIds, iid) end
+            for _, oid in ipairs(outIds) do
+                if not movedSet[oid] then
+                    table.removeValue(wp.out, oid)
+                    local other = ADGraphManager:getWayPointById(oid)
+                    if other ~= nil then table.removeValue(other.incoming, id) end
+                end
+            end
+            for _, iid in ipairs(inIds) do
+                if not movedSet[iid] then
+                    table.removeValue(wp.incoming, iid)
+                    local other = ADGraphManager:getWayPointById(iid)
+                    if other ~= nil then table.removeValue(other.out, id) end
+                end
+            end
+        end
+    end
 end
 
 --- Perpendicular distance from a point to a track, and the closest point on that track.
@@ -610,10 +748,10 @@ end
 --- Reverting more than once is normally wrong, which is why this is a deliberate command and not
 --- something disable() does. It exists because the alternative has twice been restarting the game.
 function ADFlyoverEditor:resetInput()
-    Logging.info("[FlyoverEditor]: input state before reset - %s", self:describeInputState())
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: input state before reset - %s", self:describeInputState())
 
     if self.active then
-        Logging.info("[FlyoverEditor]: still active; shutting down first.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: still active; shutting down first.")
         self:disable()
     end
 
@@ -622,12 +760,12 @@ function ADFlyoverEditor:resetInput()
         if not reverted then
             break
         end
-        Logging.info("[FlyoverEditor]: reverted a context (%d) - %s", i, self:describeInputState())
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: reverted a context (%d) - %s", i, self:describeInputState())
     end
 
     self.contextPushed = false
-    Logging.info("[FlyoverEditor]: input state after reset - %s", self:describeInputState())
-    Logging.info("[FlyoverEditor]: if movement is still dead, the gameplay action events are gone rather than shadowed, and only a reload restores them.")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: input state after reset - %s", self:describeInputState())
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: if movement is still dead, the gameplay action events are gone rather than shadowed, and only a reload restores them.")
 end
 
 function ADFlyoverEditor:isAvailable()
@@ -642,7 +780,7 @@ function ADFlyoverEditor:releaseAutoDriveWheel()
     if hud ~= nil and hud.closeAllPullDownLists ~= nil and (AutoDrive.pullDownListExpanded or 0) ~= 0 then
         local ok, err = pcall(hud.closeAllPullDownLists, hud, vehicle)
         if ok then
-            Logging.info("[FlyoverEditor]: collapsed an expanded AutoDrive pull-down list (it was holding the mouse wheel).")
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: collapsed an expanded AutoDrive pull-down list (it was holding the mouse wheel).")
         else
             Logging.warning("[FlyoverEditor]: could not collapse AutoDrive's pull-down list: %s", tostring(err))
             AutoDrive.pullDownListExpanded = 0
@@ -677,7 +815,7 @@ function ADFlyoverEditor:enable()
     end
 
     if self.active then
-        Logging.info("[FlyoverEditor]: already active.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: already active.")
         return
     end
 
@@ -686,7 +824,7 @@ function ADFlyoverEditor:enable()
             tostring(GuiTopDownCamera), tostring(GuiTopDownCursor))
         return
     end
-    Logging.info("[FlyoverEditor]: GuiTopDownCamera and GuiTopDownCursor are both present.")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: GuiTopDownCamera and GuiTopDownCursor are both present.")
     -- AutoDrive's wheel hook ends in `return AutoDrive.mouseWheelActive` - a flag its HUD sets while
     -- the cursor is over a scrollable element, and RE-ASSERTS on every mouse event for as long as a
     -- pull-down list is expanded. The mouseEvent wrapper mutes AutoDrive's handler while the editor
@@ -725,7 +863,7 @@ function ADFlyoverEditor:enable()
         startX, _, startZ = getWorldTranslation(g_localPlayer.rootNode)
     end
     if startX ~= nil then
-        Logging.info("[FlyoverEditor]: camera will start at x=%.1f z=%.1f", startX, startZ)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: camera will start at x=%.1f z=%.1f", startX, startZ)
     else
         Logging.warning("[FlyoverEditor]: no vehicle or player position to start the camera from; using the map default.")
     end
@@ -757,7 +895,7 @@ function ADFlyoverEditor:enable()
         self.contextCreated = true
     end
     self.contextPushed = pushed
-    Logging.info("[FlyoverEditor]: custom input context '%s' pushed=%s", self.INPUT_CONTEXT, tostring(pushed))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: custom input context '%s' pushed=%s", self.INPUT_CONTEXT, tostring(pushed))
 
     -- Activation happens AFTER the context push, not before it.
     --
@@ -778,14 +916,14 @@ function ADFlyoverEditor:enable()
 
     if self.camera.registerActionEvents ~= nil then
         tryCall("camera:registerActionEvents", function() self.camera:registerActionEvents() end)
-        Logging.info("[FlyoverEditor]: camera:registerActionEvents() called - WASD/zoom should now be the camera's.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: camera:registerActionEvents() called - WASD/zoom should now be the camera's.")
     else
         Logging.warning("[FlyoverEditor]: this GuiTopDownCamera has no registerActionEvents(); camera movement will have to be driven manually.")
     end
 
     local okGet, previous = pcall(function() return g_inputBinding:getShowMouseCursor() end)
     self.previousShowMouseCursor = okGet and previous or false
-    Logging.info("[FlyoverEditor]: mouse cursor was %s on entry; camera:removeActionEvents is %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: mouse cursor was %s on entry; camera:removeActionEvents is %s.",
         tostring(self.previousShowMouseCursor),
         self.camera.removeActionEvents ~= nil and "available" or "MISSING - the camera cannot unbind its own action events")
 
@@ -804,7 +942,7 @@ function ADFlyoverEditor:enable()
             end)
         end
     end
-    Logging.info("[FlyoverEditor]: registered %d cancel action event(s).", #self.actionEventIds)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: registered %d cancel action event(s).", #self.actionEventIds)
 
     -- Free the mouse so it picks in the world; the camera keeps its own hold-middle/wheel bindings.
     tryCall("g_inputBinding:setShowMouseCursor(true)", function() g_inputBinding:setShowMouseCursor(true) end)
@@ -842,18 +980,18 @@ function ADFlyoverEditor:enable()
     local wpCount = ADGraphManager:getWayPointsCount()
     if self.historyGuardCount ~= nil and self.historyGuardCount ~= wpCount then
         ADEditorHistory:clear()
-        Logging.info("[FlyoverEditor]: network changed while closed (%s -> %d waypoints); cleared the undo history.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: network changed while closed (%s -> %d waypoints); cleared the undo history.",
             tostring(self.historyGuardCount), wpCount)
     elseif ADEditorHistory:canUndo() or ADEditorHistory:canRedo() then
-        Logging.info("[FlyoverEditor]: kept the undo history from before (%d undo, %d redo).",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: kept the undo history from before (%d undo, %d redo).",
             ADEditorHistory:depth(), ADEditorHistory:redoDepth())
     end
-    Logging.info("[FlyoverEditor]: ACTIVE - %s", self:describeBuild())
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: ACTIVE - %s", self:describeBuild())
 end
 
 function ADFlyoverEditor:disable()
     if not self.active then
-        Logging.info("[FlyoverEditor]: not active.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: not active.")
         return
     end
 
@@ -937,7 +1075,7 @@ function ADFlyoverEditor:disable()
     -- Leaving this set makes the mod swallow wheel events after the editor has gone - and clearing the
     -- flag alone is not enough: an expanded pull-down list re-sets it on the next mouse event.
     self:releaseAutoDriveWheel()
-    Logging.info("[FlyoverEditor]: mouse cursor set to %s on exit (showHUD=%s, was %s on entry).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: mouse cursor set to %s on exit (showHUD=%s, was %s on entry).",
         tostring(wantCursor), tostring(okHud and hudOn or "unreadable"), tostring(self.previousShowMouseCursor))
     if self.contextPushed then
         -- FALSE, not true. The argument was assumed to mean "clean up the events of the context
@@ -962,7 +1100,7 @@ function ADFlyoverEditor:disable()
         -- Only forget the context if it actually came back off, so a later enable() can tell.
         self.contextPushed = not reverted
         if reverted then
-            Logging.info("[FlyoverEditor]: input context reverted.")
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: input context reverted.")
         end
     end
 
@@ -970,7 +1108,7 @@ function ADFlyoverEditor:disable()
 
     self.camera, self.cursor = nil, nil
     self.active = false
-    Logging.info("[FlyoverEditor]: exited after placing %d waypoint(s).", self.placedCount)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: exited after placing %d waypoint(s).", self.placedCount)
     -- Compare this against the entry line of the NEXT activation. A count that climbs cycle after
     -- cycle is the leak; one that returns to where it started is not.
     -- Kept: this pair is one line each and would catch a regression of the input-context bug
@@ -1006,7 +1144,7 @@ function ADFlyoverEditor:disable()
             Logging.warning("[FlyoverEditor]   before: %s", tostring(self.inputStateOnEnter))
             Logging.warning("[FlyoverEditor]   after:  %s", after)
         elseif after ~= self.inputStateOnEnter then
-            Logging.info("[FlyoverEditor]: input restored; context count and cursor differ, which is "
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: input restored; context count and cursor differ, which is "
                 .. "expected. before: %s | after: %s", tostring(self.inputStateOnEnter), after)
         end
     end
@@ -1024,7 +1162,7 @@ function ADFlyoverEditor:endRun()
     if self.lastWaypointId == nil then
         return
     end
-    Logging.info("[FlyoverEditor]: ended the run at waypoint id=%s; the next click starts a new one.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: ended the run at waypoint id=%s; the next click starts a new one.",
         tostring(self.lastWaypointId))
     self.lastWaypointId = nil
 end
@@ -1033,7 +1171,7 @@ function ADFlyoverEditor:onCancelAction(actionName)
     if not self.active or self:isGuiBlocking() then
         return
     end
-    Logging.info("[FlyoverEditor]: exiting via the %s action event.", actionName)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: exiting via the %s action event.", actionName)
     self:disable()
 end
 
@@ -1049,6 +1187,41 @@ function ADFlyoverEditor:isGuiBlocking()
 end
 
 function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
+    -- Our own held-modifier state, read directly off the SAME modifier bitmask every keyEvent
+    -- callback receives (base game Input.MOD_* flags) - not AutoDrive's own leftCTRLmodifierKeyPressed
+    -- etc. globals, which this file used to read. AutoDrive computes those the identical way
+    -- (AutoDrive.lua, AutoDrive:keyEvent) - this is base-game plumbing, not anything specific to it.
+    --
+    -- Captured UNCONDITIONALLY, before every early return below, on every call - not just isDown.
+    -- A held key is only correctly tracked if its release (isDown == false) is seen too: gating
+    -- this on isDown the way the rest of this function is gated would see Ctrl go down and then
+    -- never see it come back up, leaving the flag stuck true. Left/right Alt is deliberately NOT
+    -- tracked here - AutoDrive itself never reads Input.MOD_RALT anywhere, so there is no confirmed
+    -- evidence that constant exists to test against.
+    if Input ~= nil then
+        self.leftCtrlHeld = bit32.band(modifier, Input.MOD_LCTRL) > 0
+        self.rightCtrlHeld = bit32.band(modifier, Input.MOD_RCTRL) > 0
+        self.leftShiftHeld = bit32.band(modifier, Input.MOD_LSHIFT) > 0
+        self.rightShiftHeld = bit32.band(modifier, Input.MOD_RSHIFT) > 0
+        self.leftAltHeld = bit32.band(modifier, Input.MOD_LALT) > 0
+    end
+
+    -- Space, for the rotated box - NOT part of the modifier bitmask above (that is CTRL/ALT/SHIFT
+    -- only), so it needs its own down/up tracking off sym directly, same unconditional-before-any-
+    -- early-return reasoning: only seeing isDown ever (as the rest of this function is gated)
+    -- would see Space go down and never see it come back up.
+    if Input ~= nil and Input.KEY_space ~= nil and sym == Input.KEY_space then
+        self.spaceHeld = isDown
+    end
+
+    -- R, for rotate-during-a-move (settled 2026-09-21, rebound off CapsLock - it did not hold
+    -- reliably, most likely the hardware-toggle behaviour flagged as an open risk when CapsLock
+    -- was chosen). Same reasoning as Space: not part of the modifier bitmask, needs its own
+    -- down/up tracking here rather than reading Input.MOD_*.
+    if Input ~= nil and Input.KEY_r ~= nil and sym == Input.KEY_r then
+        self.rotateKeyHeld = isDown
+    end
+
     if not self.active or not isDown or self:isGuiBlocking() then
         return
     end
@@ -1083,7 +1256,7 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
     end
 
     if isKey("KEY_esc") then
-        Logging.info("[FlyoverEditor]: escape observed via keyEvent (fallback path).")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: escape observed via keyEvent (fallback path).")
         self:disable()
         return
     end
@@ -1122,6 +1295,8 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return
     end
 
+
+
     -- Hide/show the floating tool card. A keyboard key rather than middle mouse, which is the camera.
     if isKey("KEY_h") then
         self:toggleCard()
@@ -1139,6 +1314,20 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         self:setFalloffRadius(self.falloffRadius - AutoDrive.FLYOVER_FALLOFF_STEP)
     elseif isKey("KEY_period") then
         self:setFalloffRadius(self.falloffRadius + AutoDrive.FLYOVER_FALLOFF_STEP)
+    end
+
+    -- Copy toggle on B, Move tool only - clicking the HUD row is the only other way to flip it,
+    -- which is physically impossible while the mouse button is held down for a drag (the case
+    -- toggleMoveCopy's case 1 exists for). A key works mid-drag; a HUD click does not.
+    --
+    -- NOT C: the flyover camera's own zoom/rotate cluster is bound to Z/X/C/V (reported
+    -- 2026-09-21 - "zxcv zoom and rotate camera, copy with c works too, but obviously we need a
+    -- new home"), and keyEvent can only OBSERVE a key, never consume it - the same reason Q/E sit
+    -- on undo/redo instead of the more obvious Ctrl+Z. B is clear of that cluster and everything
+    -- else this file binds (1-9/0, Q, E, H, comma/period, slash, Space).
+    if self.tool == self.TOOL.MOVE and isKey("KEY_b") then
+        self:toggleMoveCopy()
+        return
     end
 end
 
@@ -1192,6 +1381,17 @@ function ADFlyoverEditor:update(dt)
         local ok, x, y, z = pcall(function() return self.cursor:getPosition() end)
         if ok and x ~= nil and z ~= nil then
             self.cursorX, self.cursorZ, self.cursorY = x, z, y
+        end
+    end
+
+    -- Sample the traced path while a freehand drag is live. Only when the cursor has actually
+    -- moved a bit since the last sample - appending every frame regardless would pile up a point
+    -- for every render tick even while the hand is briefly still, for no benefit to the shape.
+    if self.freehandActive and self.freehandPoints ~= nil and self.cursorX ~= nil then
+        local last = self.freehandPoints[#self.freehandPoints]
+        local dx, dz = self.cursorX - last.x, self.cursorZ - last.z
+        if (dx * dx + dz * dz) >= 1 then -- 1m apart, squared
+            table.insert(self.freehandPoints, { x = self.cursorX, z = self.cursorZ })
         end
     end
 
@@ -1359,7 +1559,7 @@ function ADFlyoverEditor:openSpanMenu(fromId, toId, sx, sy)
         return
     end
     self.ctxMenu = { kind = "span", fromId = fromId, toId = toId, ids = ids, sx = sx, sy = sy }
-    Logging.info("[FlyoverEditor]: span menu for id=%s..id=%s (%d waypoints).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: span menu for id=%s..id=%s (%d waypoints).",
         tostring(fromId), tostring(toId), #ids)
 end
 
@@ -1371,7 +1571,7 @@ function ADFlyoverEditor:openRunMenu(seedId, sx, sy)
     local fromId, toId, ids = self:resolveWholeRun(seedId)
     self.ctxMenu = { kind = "run", seedId = seedId, count = count or 0, runSet = run,
         fromId = fromId, toId = toId, ids = ids, sx = sx, sy = sy }
-    Logging.info("[FlyoverEditor]: run menu through id=%s (%d waypoints).", tostring(seedId), count or 0)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: run menu through id=%s (%d waypoints).", tostring(seedId), count or 0)
 end
 
 function ADFlyoverEditor:selectClick()
@@ -1430,7 +1630,7 @@ function ADFlyoverEditor:menuDelete()
     local doomed = ADGraphManager:getWayPointById(id)
     local px, pz = doomed ~= nil and doomed.x or 0, doomed ~= nil and doomed.z or 0
     ADGraphManager:removeWayPoint(id, false)
-    Logging.info("[FlyoverEditor]: (menu) deleted waypoint id=%s at x=%.1f z=%.1f (%d left).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: (menu) deleted waypoint id=%s at x=%.1f z=%.1f (%d left).",
         tostring(id), px, pz, ADGraphManager:getWayPointsCount())
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -1478,7 +1678,7 @@ function ADFlyoverEditor:menuDeleteSpan()
     -- Highest id first: removal renumbers everything above it.
     table.sort(ids, function(a, b) return a > b end)
     for _, id in ipairs(ids) do ADGraphManager:removeWayPoint(id, false) end
-    Logging.info("[FlyoverEditor]: deleted a span of %d waypoint(s).", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: deleted a span of %d waypoint(s).", #ids)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
     self:closeMenu()
@@ -1521,7 +1721,7 @@ function ADFlyoverEditor:menuConvertSpan(op)
             end
         end
     end
-    Logging.info("[FlyoverEditor]: span direction -> %s, %d link(s) changed.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: span direction -> %s, %d link(s) changed.",
         self.CONVERT_OP_NAMES[op] or "?", changed)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -1554,7 +1754,7 @@ function ADFlyoverEditor:menuArmMove()
     local id = self:menuTarget()
     if id == nil then return end
     self:setTool(self.TOOL.MOVE)
-    Logging.info("[FlyoverEditor]: move armed; drag waypoint id=%s.", tostring(id))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move armed; drag waypoint id=%s.", tostring(id))
 end
 
 function ADFlyoverEditor:menuArmDraw()
@@ -1562,7 +1762,7 @@ function ADFlyoverEditor:menuArmDraw()
     if id == nil then return end
     self:setTool(self.TOOL.DRAW)
     self.lastWaypointId = id
-    Logging.info("[FlyoverEditor]: draw armed from id=%s; click the next waypoint to connect.", tostring(id))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: draw armed from id=%s; click the next waypoint to connect.", tostring(id))
 end
 
 function ADFlyoverEditor:menuArmSpline()
@@ -1570,7 +1770,7 @@ function ADFlyoverEditor:menuArmSpline()
     if id == nil then return end
     self:setTool(self.TOOL.SPLINE)
     self.splineFromId = id
-    Logging.info("[FlyoverEditor]: spline armed from id=%s; click the waypoint to curve to.", tostring(id))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline armed from id=%s; click the waypoint to curve to.", tostring(id))
 end
 
 --- Span/run arming for the adjustable span tools: switch to the tool with the span (or run)
@@ -1590,7 +1790,7 @@ function ADFlyoverEditor:menuArmStraighten()
     self.spanIds = ids
     self.straightenFromId, self.straightenToId, self.straightenPreview = from, to, nil
     self:setArmedMenu(sx, sy)
-    Logging.info("[FlyoverEditor]: straighten armed on a %d-point span.", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: straighten armed on a %d-point span.", #ids)
 end
 
 function ADFlyoverEditor:menuArmSmooth()
@@ -1602,7 +1802,7 @@ function ADFlyoverEditor:menuArmSmooth()
     self.smoothFromId, self.smoothToId = from, to
     self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
     self:setArmedMenu(sx, sy)
-    Logging.info("[FlyoverEditor]: smooth armed on a %d-point span.", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: smooth armed on a %d-point span.", #ids)
 end
 
 function ADFlyoverEditor:menuArmDivide()
@@ -1615,7 +1815,7 @@ function ADFlyoverEditor:menuArmDivide()
     self.dividePreview = nil
     self.divideCount = math.max(0, #ids - 2)
     self:setArmedMenu(sx, sy)
-    Logging.info("[FlyoverEditor]: divide armed on a %d-point span.", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: divide armed on a %d-point span.", #ids)
 end
 
 function ADFlyoverEditor:menuArmGround()
@@ -1629,7 +1829,7 @@ function ADFlyoverEditor:menuArmGround()
     self.groundPreview = nil
     self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
     self:setArmedMenu(sx, sy)
-    Logging.info("[FlyoverEditor]: ground armed on a %d-point span.", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: ground armed on a %d-point span.", #ids)
 end
 
 function ADFlyoverEditor:menuArmParallel()
@@ -1646,7 +1846,7 @@ function ADFlyoverEditor:menuArmParallel()
         self.offsetSide = self:offsetSideFromCursor(seedPts)
     end
     self:setArmedMenu(sx, sy)
-    Logging.info("[FlyoverEditor]: parallel armed on a %d-point span.", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: parallel armed on a %d-point span.", #ids)
 end
 
 --- Apply the armed tool's pending action and return to Select mode. Same commit the tool's own
@@ -1694,10 +1894,25 @@ function ADFlyoverEditor:setTool(tool)
     end
     self.mergeFromId = nil
     self.mergeToId = nil
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
     self.dragId = nil
     self.boxActive = false
+    self.circleActive = false
+    self.circleStartX, self.circleStartZ = nil, nil
+    self.freehandActive = false
+    self.freehandPoints = nil
+    self.ctrlToggleArmed = false
+    self.rotBoxActive, self.rotBoxDragging = false, false
+    self.rotBoxP1X, self.rotBoxP1Z, self.rotBoxP2X, self.rotBoxP2Z = nil, nil, nil, nil
+    self.moveCopyOn = false
+    self.moveBreakOn = false
+    self.lastMoveRecord = nil
+    -- Abandons a pending offset rather than committing it - switching tools mid-adjustment is not
+    -- the deliberate right-click this feature otherwise requires to commit.
+    self.moveOffsetOn = false
+    self:cancelMoveOffset()
     self.ctxMenu = nil
     -- A dragged card stays dragged ACROSS tool switches now, not per tool: field reports kept saying
     -- the card was in the way, and re-jumping it on every tool change undid the player's own
@@ -1707,7 +1922,7 @@ function ADFlyoverEditor:setTool(tool)
     -- Picking a tool always brings its card back: middle-click hides the CURRENT tool's card to work
     -- under it, but switching tools should not carry that hidden state onto the next one.
     self.cardHidden = false
-    Logging.info("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
 end
 
 function ADFlyoverEditor:clearSelection()
@@ -1731,6 +1946,52 @@ end
 --- Finish a Ctrl+drag. A drag too small to be a deliberate box is treated as a plain Ctrl+click
 --- on the hovered waypoint, so the two gestures share one modifier without the click becoming a
 --- one-waypoint box that depends on the hand being perfectly still.
+--- The camera's forward direction projected onto the ground plane, normalized. The same lookup
+--- MapMarker's own aimOf() uses to point the minimap airplane icon (duplicated here in miniature
+--- rather than exported - a couple of lines, and this file already owns self.camera). Falls back
+--- to world +Z - the box's old, always-axis-aligned behaviour - if the camera cannot report it, so
+--- a lookup failure degrades gracefully instead of breaking selection outright.
+function ADFlyoverEditor:cameraForwardXZ()
+    local camera = self.camera
+    local node = camera ~= nil and (camera.camera or camera.cameraBaseNode) or nil
+    if node ~= nil and localDirectionToWorld ~= nil then
+        local ok, dx, _, dz = pcall(localDirectionToWorld, node, 0, 0, -1)
+        if ok and dx ~= nil and (dx * dx + dz * dz) > 1e-6 then
+            local len = math.sqrt(dx * dx + dz * dz)
+            return dx / len, dz / len
+        end
+    end
+    return 0, 1
+end
+
+--- Turn two clicked corners into a rectangle ALIGNED WITH THE CURRENT VIEW rather than world X/Z -
+--- orbiting the camera and then boxing something that now runs across the screen should not need
+--- an L-shaped drag to avoid sweeping up everything beside it. One basis (rx/rz = right, fx/fz =
+--- forward) shared by the live preview and the actual hit test below, so the box never selects
+--- something the preview did not show.
+function ADFlyoverEditor:boxFrame(x0, z0, x1, z1)
+    local fx, fz = self:cameraForwardXZ()
+    local rx, rz = -fz, fx
+
+    local u1 = (x1 - x0) * rx + (z1 - z0) * rz
+    local v1 = (x1 - x0) * fx + (z1 - z0) * fz
+    local minU, maxU = math.min(0, u1), math.max(0, u1)
+    local minV, maxV = math.min(0, v1), math.max(0, v1)
+
+    local function toWorld(u, v)
+        return x0 + rx * u + fx * v, z0 + rz * u + fz * v
+    end
+
+    return {
+        rx = rx, rz = rz, fx = fx, fz = fz,
+        minU = minU, maxU = maxU, minV = minV, maxV = maxV,
+        corners = {
+            { toWorld(minU, minV) }, { toWorld(maxU, minV) },
+            { toWorld(maxU, maxV) }, { toWorld(minU, maxV) },
+        },
+    }
+end
+
 function ADFlyoverEditor:finishBoxSelect()
     self.boxActive = false
 
@@ -1744,35 +2005,267 @@ function ADFlyoverEditor:finishBoxSelect()
     if math.abs(x1 - x0) < AutoDrive.FLYOVER_BOX_MIN_SIZE and math.abs(z1 - z0) < AutoDrive.FLYOVER_BOX_MIN_SIZE then
         if self.hoverId ~= nil then
             self:toggleSelected(self.hoverId)
-            Logging.info("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
                 self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
         end
         return
     end
 
-    -- Shift adds to what is already selected; without it the box replaces the selection, which is
+    -- Ctrl adds to what is already selected; without it the box replaces the selection, which is
     -- the behaviour that makes a mis-aimed box cheap to correct.
-    local additive = AutoDrive.leftLSHIFTmodifierKeyPressed == true or AutoDrive.rightSHIFTmodifierKeyPressed == true
+    local additive = self.leftCtrlHeld or self.rightCtrlHeld
     if not additive then
         self:clearSelection()
     end
 
-    local minX, maxX = math.min(x0, x1), math.max(x0, x1)
-    local minZ, maxZ = math.min(z0, z1), math.max(z0, z1)
+    local frame = self:boxFrame(x0, z0, x1, z1)
 
     local added = 0
     local wayPoints = ADGraphManager:getWayPoints()
     for i = 1, #wayPoints do
         local wp = wayPoints[i]
-        if wp.x >= minX and wp.x <= maxX and wp.z >= minZ and wp.z <= maxZ and not self.selection[wp.id] then
+        local u = (wp.x - x0) * frame.rx + (wp.z - z0) * frame.rz
+        local v = (wp.x - x0) * frame.fx + (wp.z - z0) * frame.fz
+        if u >= frame.minU and u <= frame.maxU and v >= frame.minV and v <= frame.maxV
+            and not self.selection[wp.id] then
             self.selection[wp.id] = true
             self.selectionCount = self.selectionCount + 1
             added = added + 1
         end
     end
 
-    Logging.info("[FlyoverEditor]: box %s %d waypoint(s) over %.0fm x %.0fm (%d selected).",
-        additive and "added" or "selected", added, maxX - minX, maxZ - minZ, self.selectionCount)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: box %s %d waypoint(s) over %.0fm x %.0fm, view-aligned (%d selected).",
+        additive and "added" or "selected", added,
+        frame.maxU - frame.minU, frame.maxV - frame.minV, self.selectionCount)
+end
+
+--- Rotated box's own frame, from three points instead of boxFrame's camera-derived basis: P1->P2
+--- IS the edge (direction and length - the box's rotation, explicit rather than inferred from
+--- wherever the camera happens to face), P3's perpendicular offset from that edge is the width.
+--- Same returned shape as boxFrame (rx/rz/fx/fz/minU/maxU/minV/maxV/corners) so the hit test and
+--- the live preview can use it identically. Returns nil for a degenerate edge or width, same
+--- "too small to be deliberate" threshold boxFrame's caller uses.
+function ADFlyoverEditor:edgeBoxFrame(p1x, p1z, p2x, p2z, p3x, p3z)
+    local fx, fz = p2x - p1x, p2z - p1z
+    local len = MathUtil.vector2Length(fx, fz)
+    if len < AutoDrive.FLYOVER_BOX_MIN_SIZE then
+        return nil
+    end
+    fx, fz = fx / len, fz / len
+    local rx, rz = -fz, fx
+
+    local w = (p3x - p2x) * rx + (p3z - p2z) * rz
+    if math.abs(w) < AutoDrive.FLYOVER_BOX_MIN_SIZE then
+        return nil
+    end
+
+    local minU, maxU = math.min(0, w), math.max(0, w)
+    local minV, maxV = 0, len
+
+    local function toWorld(u, v)
+        return p1x + rx * u + fx * v, p1z + rz * u + fz * v
+    end
+
+    return {
+        rx = rx, rz = rz, fx = fx, fz = fz,
+        minU = minU, maxU = maxU, minV = minV, maxV = maxV,
+        corners = {
+            { toWorld(minU, minV) }, { toWorld(maxU, minV) },
+            { toWorld(maxU, maxV) }, { toWorld(minU, maxV) },
+        },
+    }
+end
+
+--- Rotated box's click handling - three plain clicks (armed/cancelled by Space, see keyEvent),
+--- not a drag, so this is reached from onLeftRelease exactly like moveSpanClick's own picking
+--- clicks. First click places a corner, second sets the edge (direction + length), third sets
+--- the width and commits - degenerate at either the second or third click (edge or width too
+--- short) falls back to the same single-point toggle every other selection shape uses for a
+--- gesture too small to be deliberate, per the "no ambiguity to guess between two different
+--- actions" reasoning span's own click-to-replace already established.
+--- Phase A's start: Space was held at press time (checked by the caller) - an ordinary press,
+--- same as Box/Circle/Freehand's own gesture start, just gated on Space instead of Alt/Shift.
+function ADFlyoverEditor:beginRotBoxDrag()
+    self.rotBoxActive = true
+    self.rotBoxDragging = true
+    self.rotBoxP1X, self.rotBoxP1Z = self.cursorX, self.cursorZ
+end
+
+--- Phase A's end: releasing the drag sets the edge (direction + length) and moves to phase B - a
+--- single plain click, no longer gated on Space (see the design note on the state block above),
+--- to set the width and commit. Degenerate (edge too short) falls back to the same single-point
+--- toggle every other shape uses for a gesture too small to be deliberate, and abandons the whole
+--- sequence rather than leaving phase B waiting on a corner that was never really placed.
+function ADFlyoverEditor:finishRotBoxEdge()
+    self.rotBoxDragging = false
+    local dx, dz = self.cursorX - self.rotBoxP1X, self.cursorZ - self.rotBoxP1Z
+    if MathUtil.vector2Length(dx, dz) < AutoDrive.FLYOVER_BOX_MIN_SIZE then
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected",
+                tostring(self.hoverId), self.selectionCount)
+        end
+        self.rotBoxActive = false
+        self.rotBoxP1X, self.rotBoxP1Z = nil, nil
+        return
+    end
+    self.rotBoxP2X, self.rotBoxP2Z = self.cursorX, self.cursorZ
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: rotated box: edge set - click to set the width and finish.")
+end
+
+--- Commits the rotated box - same additive/hit-test shape as finishBoxSelect, just against
+--- edgeBoxFrame instead of boxFrame.
+function ADFlyoverEditor:finishRotBoxSelect(p3x, p3z)
+    local p1x, p1z, p2x, p2z = self.rotBoxP1X, self.rotBoxP1Z, self.rotBoxP2X, self.rotBoxP2Z
+    self.rotBoxActive = false
+    self.rotBoxP1X, self.rotBoxP1Z, self.rotBoxP2X, self.rotBoxP2Z = nil, nil, nil, nil
+
+    local frame = self:edgeBoxFrame(p1x, p1z, p2x, p2z, p3x, p3z)
+    if frame == nil then
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected",
+                tostring(self.hoverId), self.selectionCount)
+        end
+        return
+    end
+
+    local additive = self.leftCtrlHeld or self.rightCtrlHeld
+    if not additive then
+        self:clearSelection()
+    end
+
+    local added = 0
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        local u = (wp.x - p1x) * frame.rx + (wp.z - p1z) * frame.rz
+        local v = (wp.x - p1x) * frame.fx + (wp.z - p1z) * frame.fz
+        if u >= frame.minU and u <= frame.maxU and v >= frame.minV and v <= frame.maxV
+            and not self.selection[wp.id] then
+            self.selection[wp.id] = true
+            self.selectionCount = self.selectionCount + 1
+            added = added + 1
+        end
+    end
+
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: rotated box %s %d waypoint(s) (%d selected).",
+        additive and "added" or "selected", added, self.selectionCount)
+end
+
+--- Finish an Alt+drag circle. The two clicked points are a DIAMETER, not a centre and a
+--- radius - the centre is their midpoint, the radius is half the distance between them - so the
+--- gesture stays "click one edge, drag to the other", the same shape as box's two corners, rather
+--- than needing to eyeball a centre point first. A circle has no orientation, so unlike box this
+--- needs no view-alignment at all.
+function ADFlyoverEditor:finishCircleSelect()
+    self.circleActive = false
+
+    local x0, z0 = self.circleStartX, self.circleStartZ
+    local x1, z1 = self.cursorX, self.cursorZ
+    self.circleStartX, self.circleStartZ = nil, nil
+    if x0 == nil or x1 == nil then
+        return
+    end
+
+    local dx, dz = x1 - x0, z1 - z0
+    local diameter = math.sqrt(dx * dx + dz * dz)
+    if diameter < AutoDrive.FLYOVER_BOX_MIN_SIZE then
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
+        end
+        return
+    end
+
+    -- Ctrl adds, same as box - a mis-aimed circle should be as cheap to correct as a mis-aimed box.
+    local additive = self.leftCtrlHeld or self.rightCtrlHeld
+    if not additive then
+        self:clearSelection()
+    end
+
+    local centreX, centreZ = (x0 + x1) / 2, (z0 + z1) / 2
+    local radiusSq = (diameter / 2) * (diameter / 2)
+
+    local added = 0
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        local ex, ez = wp.x - centreX, wp.z - centreZ
+        if (ex * ex + ez * ez) <= radiusSq and not self.selection[wp.id] then
+            self.selection[wp.id] = true
+            self.selectionCount = self.selectionCount + 1
+            added = added + 1
+        end
+    end
+
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: circle %s %d waypoint(s), %.0fm across (%d selected).",
+        additive and "added" or "selected", added, diameter, self.selectionCount)
+end
+
+--- Even-odd ray-casting point-in-polygon test. Standalone rather than a method (mirrors
+--- heightAlongChain elsewhere in this file) - it has no need of self, and OffsetGeometry.lua
+--- already has one of these (isPointInsideRing) but keeps it local to that file, unexported.
+local function pointInPolygon(px, pz, poly)
+    local inside = false
+    local j = #poly
+    for i = 1, #poly do
+        local pi, pj = poly[i], poly[j]
+        if (pi.z > pz) ~= (pj.z > pz)
+            and px < (pj.x - pi.x) * (pz - pi.z) / (pj.z - pi.z) + pi.x then
+            inside = not inside
+        end
+        j = i
+    end
+    return inside
+end
+
+--- Finish a Ctrl+Alt freehand drag. The traced path (sampled live in update()) is closed into a
+--- polygon implicitly - pointInPolygon walks it edge i to edge i+1 including the wrap from the
+--- last sampled point back to the first, so releasing anywhere just finishes the loop rather than
+--- needing the hand to return to its own start.
+function ADFlyoverEditor:finishFreehandSelect()
+    self.freehandActive = false
+    local points = self.freehandPoints
+    self.freehandPoints = nil
+    if points == nil then
+        return
+    end
+
+    -- Too few samples to be a deliberate trace (a stationary click only ever gathers the one
+    -- opening point - see the 1m-apart gate in update()) - same single-point toggle fallback box
+    -- and circle both use for a drag too small to be deliberate.
+    if #points < 3 then
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
+        end
+        return
+    end
+
+    -- Ctrl adds, same as box/circle - a mis-aimed trace should be as cheap to correct as either.
+    local additive = self.leftCtrlHeld or self.rightCtrlHeld
+    if not additive then
+        self:clearSelection()
+    end
+
+    local added = 0
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        if pointInPolygon(wp.x, wp.z, points) and not self.selection[wp.id] then
+            self.selection[wp.id] = true
+            self.selectionCount = self.selectionCount + 1
+            added = added + 1
+        end
+    end
+
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: freehand %s %d waypoint(s) over a %d-point trace (%d selected).",
+        additive and "added" or "selected", added, #points, self.selectionCount)
 end
 
 --- Ids shift whenever a waypoint is removed (GraphManager.lua:288), so anything holding an id has
@@ -1786,6 +2279,15 @@ function ADFlyoverEditor:invalidateIdReferences()
     self.mergeFromId = nil
     self.mergeToId = nil
     self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+    -- Holds waypoint ids (record.members[i].id), which a destructive edit like this one shifts -
+    -- see node-keyed-pairs-is-nondeterministic / junction-numbers-do-not-persist in project memory
+    -- for the general rule this follows.
+    self.lastMoveRecord = nil
+    -- Same reasoning: moveOffsetChainIds holds waypoint ids too. A pending offset is abandoned
+    -- rather than committed here, same as setTool - this fires mid-edit, not at a deliberate
+    -- right-click.
+    self:cancelMoveOffset()
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
     self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
@@ -1815,7 +2317,7 @@ function ADFlyoverEditor:drawNetworkFallback()
         local wp = wayPoints[i]
         local dx, dz = wp.x - self.cursorX, wp.z - self.cursorZ
         if (dx * dx + dz * dz) < radiusSq then
-            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.5, wp.z, 2, 1, 0.8, 0, 0.5)
+            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.5, wp.z, 2, 1, 0.8, 0, 0.15)
             for _, targetId in pairs(wp.out or {}) do
                 local target = ADGraphManager:getWayPointById(targetId)
                 if target ~= nil then
@@ -1858,13 +2360,23 @@ function ADFlyoverEditor:drawNetwork()
 
     -- What is left is only what the mod cannot know about: which waypoints this editor considers
     -- hovered, selected, or the pending end of a connection.
+    -- The 4th colour argument to addSphereTask is NOT alpha/opacity - DrawingManager:drawSphere
+    -- adds it directly to self.emittivity (a dynamic, ambient-light-aware glow baseline, roughly
+    -- 0-0.45) as an EMISSIVE intensity. Every sphere in this file was passing 0.4-1.0 there;
+    -- AutoDrive's own markers (same call, same shader) use ~0.15. The excess pushed colour
+    -- channels toward clipping, especially in bright daylight - a clipped RGB triple reads as
+    -- white regardless of the intended hue, which is why every highlight in the editor read as
+    -- washed-out/pale rather than distinctly coloured (reported and root-caused 2026-09-21).
+    -- Every addSphereTask call below (not addLineTask - it takes no alpha at all) now uses one of
+    -- three tiers instead of a dozen ad hoc values: 0.10 (dim/secondary), 0.15 (normal - matches
+    -- AutoDrive's own value exactly), 0.20 (standout - the "you would grab this" markers).
     local function accent(id, r, g, b, size)
         if id == nil then
             return
         end
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
-            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.6, wp.z, size, r, g, b, 0.65)
+            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.6, wp.z, size, r, g, b, 0.15)
         end
     end
 
@@ -1875,26 +2387,82 @@ function ADFlyoverEditor:drawNetwork()
     accent(self.splineFromId, 0, 0.6, 1, 4)
     accent(self.mergeFromId, 1, 0.4, 0.9, 4)
     accent(self.mergeToId, 1, 0.4, 0.9, 4)
+    -- Matches smooth/spline's own blue exactly (0, 0.6, 1), not a new colour - the original
+    -- (0.2, 0.7, 1) added red and extra green, which pushed it toward pale/near-white and was
+    -- reported hard to see (2026-09-21); this value is already proven visible in this same file.
+    accent(self.moveSpanFromId, 0, 0.6, 1, 4)
+    accent(self.moveSpanToId, 0, 0.6, 1, 4)
+    if self.moveSpanIds ~= nil then
+        for id in pairs(self.moveSpanIds) do
+            if id ~= self.moveSpanFromId and id ~= self.moveSpanToId then
+                accent(id, 0, 0.6, 1, 2.5)
+            end
+        end
+    end
+    -- The chain currently being offset - amber, distinct from span's blue, for the whole time it
+    -- is live (both the cursor-drag phase and the released-but-still-pending-commit phase).
+    if self.moveOffsetChainIds ~= nil then
+        for _, id in ipairs(self.moveOffsetChainIds) do
+            accent(id, 1, 0.65, 0, 3)
+        end
+    end
 
     -- Move falloff preview: the waypoints the falloff would carry, measured ALONG THE TRACK (not a
     -- circle - the reach follows the run through junctions, so a ring would lie about it). The centre
     -- is the point being dragged, or the last one pointed at, so wheeling the radius over the tool
     -- card shows its reach live. Sized and brightened by how far each point would actually move.
-    if self.tool == self.TOOL.MOVE then
+    -- A pending offset owns the interaction (a stray click elsewhere is ignored - see onLeftPress)
+    -- but the hover preview below did not know that, and kept lighting up whatever run/point the
+    -- cursor passed over anyway - misleading, since nothing you hover actually does anything while
+    -- one is pending (reported 2026-09-21: "other spans are highlighting, but not selecting").
+    if self.tool == self.TOOL.MOVE and self.moveOffsetChainIds == nil then
         local centreId = self.dragId or self.moveFocusId
-        local radius = self.falloffRadius or 0
-        if centreId ~= nil and radius > 0 then
+        if centreId ~= nil and self.moveSelectMode == self.MOVE_SELECT.RUN then
+            -- Run mode: highlight the whole run the point belongs to. Not weighted by taper here -
+            -- this fires before a grab even starts, when there is no drag distance yet to weight
+            -- by, so it shows WHAT would move rather than how much.
             local c = ADGraphManager:getWayPointById(centreId)
+            -- Third return is an ORDERED ARRAY (see the same note in gatherDragNeighbours's Run
+            -- branch) - ipairs, not pairs, or `id` binds to the array INDEX (1, 2, 3...) instead
+            -- of the actual waypoint id, which is why this never highlighted anything real.
+            -- Junctions excluded from the highlight too, matching what an actual grab now does.
+            local _, _, ids = self:resolveWholeRun(centreId)
             if c ~= nil then
-                ADDrawingManager:addSphereTask(c.x, c.y + 0.7, c.z, 4.5, 1, 0.8, 0.15, 0.95)
-                local reached = self:collectAlongTrack(centreId, radius)
-                for otherId, d in pairs(reached) do
-                    if otherId ~= centreId then
-                        local wp = ADGraphManager:getWayPointById(otherId)
+                ADDrawingManager:addSphereTask(c.x, c.y + 0.7, c.z, 4.5, 1, 0.8, 0.15, 0.20)
+            end
+            if ids ~= nil then
+                for _, id in ipairs(ids) do
+                    if id ~= centreId and not isJunction(id) then
+                        local wp = ADGraphManager:getWayPointById(id)
                         if wp ~= nil then
-                            local w = 0.5 * (1 + math.cos(math.pi * math.min(d, radius) / radius))
-                            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z,
-                                2 + 3 * w, 1, 0.82, 0.2, 0.35 + 0.55 * w)
+                            ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z, 3.5, 1, 0.82, 0.2, 0.15)
+                        end
+                    end
+                end
+            end
+        elseif centreId ~= nil and self.moveSelectMode == self.MOVE_SELECT.POINT then
+            -- Point only - this is collectAlongTrack's own radius-reach preview, which has
+            -- nothing to do with Span's falloff (tapers to the span's own two picked ends, no
+            -- radius involved at all). Left ungated it fired for Span too (reported 2026-09-21):
+            -- a misleading preview around whatever was merely hovered, unrelated to the actual
+            -- span - the real click logic already correctly ignored points outside the span, only
+            -- the PREVIEW was wrong.
+            local radius = self.moveFalloffOn and (self.falloffRadius or 0) or 0
+            if radius > 0 then
+                local c = ADGraphManager:getWayPointById(centreId)
+                if c ~= nil then
+                    ADDrawingManager:addSphereTask(c.x, c.y + 0.7, c.z, 4.5, 1, 0.8, 0.15, 0.20)
+                    -- Same exclusion as the actual grab (gatherDragNeighbours) - a junction the
+                    -- radius merely reaches is never a follower, so it should not preview as one.
+                    local reached = self:collectAlongTrack(centreId, radius)
+                    for otherId, d in pairs(reached) do
+                        if otherId ~= centreId and not isJunction(otherId) then
+                            local wp = ADGraphManager:getWayPointById(otherId)
+                            if wp ~= nil then
+                                local w = 0.5 * (1 + math.cos(math.pi * math.min(d, radius) / radius))
+                                ADDrawingManager:addSphereTask(wp.x, wp.y + 0.7, wp.z,
+                                    2 + 3 * w, 1, 0.82, 0.2, 0.10 + 0.10 * w)
+                            end
                         end
                     end
                 end
@@ -1949,7 +2517,7 @@ function ADFlyoverEditor:drawNetwork()
             local py = (p.y or fallbackY) + 0.6
             local pinned = (self.smoothPinned or {})[i]
             ADDrawingManager:addSphereTask(p.x, py, p.z, pinned and 3.5 or 2.5,
-                pinned and 1 or 0, pinned and 0.5 or 1, pinned and 0 or 0.4, 0.8)
+                pinned and 1 or 0, pinned and 0.5 or 1, pinned and 0 or 0.4, 0.20)
             if prev ~= nil then
                 ADDrawingManager:addLineTask(prev.x, (prev.y or fallbackY) + 0.6, prev.z, p.x, py, p.z, lw, 0, 1, 0.4)
             end
@@ -1961,7 +2529,7 @@ function ADFlyoverEditor:drawNetwork()
         for i = 1, #self.sidingPreview do
             local p = self.sidingPreview[i]
             local py = (p.y or 0) + 0.6
-            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.2, 0.8, 1, 0.6)
+            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.2, 0.8, 1, 0.15)
             if i > 1 then
                 local q = self.sidingPreview[i - 1]
                 ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 0.2, 0.8, 1)
@@ -1973,7 +2541,7 @@ function ADFlyoverEditor:drawNetwork()
         for i = 1, #self.offsetPreview do
             local p = self.offsetPreview[i]
             local py = (p.y or 0) + 0.6
-            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 1, 0.6, 0.1, 0.6)
+            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 1, 0.6, 0.1, 0.15)
             if i > 1 then
                 local q = self.offsetPreview[i - 1]
                 ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 1, 0.6, 0.1)
@@ -1991,8 +2559,8 @@ function ADFlyoverEditor:drawNetwork()
             if not above then
                 r, g, b = 0.3, 0.6, 1
             end
-            ADDrawingManager:addSphereTask(p.x, p.y + 0.4, p.z, 3, r, g, b, 0.8)
-            ADDrawingManager:addSphereTask(p.x, p.targetY + 0.4, p.z, 2, r, g, b, 0.4)
+            ADDrawingManager:addSphereTask(p.x, p.y + 0.4, p.z, 3, r, g, b, 0.20)
+            ADDrawingManager:addSphereTask(p.x, p.targetY + 0.4, p.z, 2, r, g, b, 0.10)
             ADDrawingManager:addLineTask(p.x, p.y + 0.4, p.z, p.x, p.targetY + 0.4, p.z, lw, r, g, b)
         end
     end
@@ -2041,8 +2609,8 @@ function ADFlyoverEditor:drawNetwork()
                     local q, r = chain[i - 1], chain[i]
                     ADDrawingManager:addLineTask(q.x, q.y, q.z, r.x, r.y, r.z, lw, cr, cg, cb)
                 end
-                ADDrawingManager:addSphereTask(c.ax, (c.ay or baseY) + 0.5, c.az, 1.8, cr, cg, cb, 1)
-                ADDrawingManager:addSphereTask(c.bx, (c.by or baseY) + 0.5, c.bz, 1.8, cr, cg, cb, 1)
+                ADDrawingManager:addSphereTask(c.ax, (c.ay or baseY) + 0.5, c.az, 1.8, cr, cg, cb, 0.20)
+                ADDrawingManager:addSphereTask(c.bx, (c.by or baseY) + 0.5, c.bz, 1.8, cr, cg, cb, 0.20)
             end
         end
 
@@ -2053,7 +2621,7 @@ function ADFlyoverEditor:drawNetwork()
             if ap.dir == "in" then r, g, b = 0.1, 1, 0.3 end   -- entry: green
             local gy = (w.y or baseY)
             ADDrawingManager:addLineTask(w.x, gy, w.z, w.x, gy + 4, w.z, lw, r, g, b)
-            ADDrawingManager:addSphereTask(w.x, gy + 4, w.z, 2.5, r, g, b, 1)
+            ADDrawingManager:addSphereTask(w.x, gy + 4, w.z, 2.5, r, g, b, 0.20)
             ADDrawingManager:addLineTask(w.x, gy + 4, w.z,
                 w.x + math.sin(ap.bearing) * 4, gy + 4, w.z + math.cos(ap.bearing) * 4, lw, r, g, b)
         end
@@ -2063,7 +2631,7 @@ function ADFlyoverEditor:drawNetwork()
         for i = 1, #self.straightenPreview do
             local p = self.straightenPreview[i]
             local py = (p.y or 0) + 0.6
-            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.4, 1, 0.4, 0.6)
+            ADDrawingManager:addSphereTask(p.x, py, p.z, 2.5, 0.4, 1, 0.4, 0.15)
             if i > 1 then
                 local q = self.straightenPreview[i - 1]
                 ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 0.4, 1, 0.4)
@@ -2075,7 +2643,7 @@ function ADFlyoverEditor:drawNetwork()
         local cursorGroundY = AutoDrive:getTerrainHeightAtWorldPos(self.cursorX, self.cursorZ)
         for i = 1, #self.dividePreview do
             local p = self.dividePreview[i]
-            ADDrawingManager:addSphereTask(p.x, (p.y or cursorGroundY) + 0.6, p.z, 3, 0, 1, 0.4, 0.7)
+            ADDrawingManager:addSphereTask(p.x, (p.y or cursorGroundY) + 0.6, p.z, 3, 0, 1, 0.4, 0.15)
             if i > 1 then
                 local q = self.dividePreview[i - 1]
                 ADDrawingManager:addLineTask(q.x, (q.y or cursorGroundY) + 0.6, q.z,
@@ -2129,9 +2697,8 @@ function ADFlyoverEditor:drawNetwork()
     -- The box being dragged, drawn as four lines on the ground so it reads as a region rather
     -- than a screen overlay floating over the terrain.
     if self.boxActive and self.boxStartX ~= nil then
-        local x0, z0 = self.boxStartX, self.boxStartZ
-        local x1, z1 = self.cursorX, self.cursorZ
-        local corners = { { x0, z0 }, { x1, z0 }, { x1, z1 }, { x0, z1 } }
+        local frame = self:boxFrame(self.boxStartX, self.boxStartZ, self.cursorX, self.cursorZ)
+        local corners = frame.corners
         for i = 1, 4 do
             local a, b = corners[i], corners[(i % 4) + 1]
             ADDrawingManager:addLineTask(
@@ -2141,9 +2708,99 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    -- Rotated box, mid-sequence: an edge line while only the first corner is placed, the full
+    -- rotated rectangle (edgeBoxFrame, live against the cursor as the not-yet-clicked point) once
+    -- the edge is set too - so the shape it is ABOUT to commit is always visible before the
+    -- deciding click, the same principle box/circle/freehand's own live previews already follow.
+    if self.rotBoxActive and self.rotBoxP1X ~= nil then
+        if self.rotBoxDragging then
+            ADDrawingManager:addLineTask(
+                self.rotBoxP1X, AutoDrive:getTerrainHeightAtWorldPos(self.rotBoxP1X, self.rotBoxP1Z) + 0.5, self.rotBoxP1Z,
+                self.cursorX, AutoDrive:getTerrainHeightAtWorldPos(self.cursorX, self.cursorZ) + 0.5, self.cursorZ,
+                lw, 0, 1, 0.2)
+        else
+            local frame = self:edgeBoxFrame(self.rotBoxP1X, self.rotBoxP1Z, self.rotBoxP2X, self.rotBoxP2Z,
+                self.cursorX, self.cursorZ)
+            if frame ~= nil then
+                local corners = frame.corners
+                for i = 1, 4 do
+                    local a, b = corners[i], corners[(i % 4) + 1]
+                    ADDrawingManager:addLineTask(
+                        a[1], AutoDrive:getTerrainHeightAtWorldPos(a[1], a[2]) + 0.5, a[2],
+                        b[1], AutoDrive:getTerrainHeightAtWorldPos(b[1], b[2]) + 0.5, b[2],
+                        lw, 0, 1, 0.2)
+                end
+            end
+        end
+    end
+
+    -- The circle being dragged - drawn as a ring the same way the falloff ring is, from the two
+    -- points as a diameter rather than a centre and radius, matching finishCircleSelect.
+    if self.circleActive and self.circleStartX ~= nil then
+        local x0, z0 = self.circleStartX, self.circleStartZ
+        local x1, z1 = self.cursorX, self.cursorZ
+        local centreX, centreZ = (x0 + x1) / 2, (z0 + z1) / 2
+        local radius = MathUtil.vector2Length(x1 - x0, z1 - z0) / 2
+        local segments = 32
+        local prevX, prevZ
+        for i = 0, segments do
+            local angle = (i / segments) * 2 * math.pi
+            local px = centreX + math.cos(angle) * radius
+            local pz = centreZ + math.sin(angle) * radius
+            if prevX ~= nil then
+                ADDrawingManager:addLineTask(
+                    prevX, AutoDrive:getTerrainHeightAtWorldPos(prevX, prevZ) + 0.5, prevZ,
+                    px, AutoDrive:getTerrainHeightAtWorldPos(px, pz) + 0.5, pz,
+                    lw, 0, 1, 0.2)
+            end
+            prevX, prevZ = px, pz
+        end
+    end
+
+    -- The freehand trace so far, drawn as the sampled path plus the closing segment back to its
+    -- start - the same implicit close finishFreehandSelect's polygon test uses, so the preview
+    -- never promises a shape the hit test does not actually use.
+    if self.freehandActive and self.freehandPoints ~= nil and #self.freehandPoints >= 2 then
+        local points = self.freehandPoints
+        for i = 1, #points do
+            local a = points[i]
+            local b = points[(i % #points) + 1]
+            ADDrawingManager:addLineTask(
+                a.x, AutoDrive:getTerrainHeightAtWorldPos(a.x, a.z) + 0.5, a.z,
+                b.x, AutoDrive:getTerrainHeightAtWorldPos(b.x, b.z) + 0.5, b.z,
+                lw, 0, 1, 0.2)
+        end
+    end
+
+    -- Frozen copy (dragFrozenCopy - see beginDrag/toggleMoveCopy/updateDrag): the real
+    -- waypoint(s) stay put, which is the whole point, but that also means nothing at all follows
+    -- the cursor any more - reported 2026-09-21, "doesn't show us our new copy until drop, so we
+    -- have no idea where it is going." Preview-only marker(s) at exactly the position the copy
+    -- WOULD land at right now, using the identical rotate-then-translate math updateDrag itself
+    -- uses when not frozen, so the preview never promises a spot the actual release would not
+    -- also produce.
+    if self.tool == self.TOOL.MOVE and self.dragId ~= nil and self.dragFrozenCopy
+        and self.dragStartX ~= nil then
+        local py = AutoDrive:getTerrainHeightAtWorldPos(self.cursorX, self.cursorZ) + 0.7
+        ADDrawingManager:addSphereTask(self.cursorX, py, self.cursorZ, 4.5, 0.2, 1, 0.3, 0.20)
+        local cosA, sinA = math.cos(self.moveRotateAngle), math.sin(self.moveRotateAngle)
+        local pivotX = self.moveRotatePivotX or self.dragStartX
+        local pivotZ = self.moveRotatePivotZ or self.dragStartZ
+        local deltaX, deltaZ = self.cursorX - self.dragStartX, self.cursorZ - self.dragStartZ
+        for _, n in ipairs(self.dragNeighbours or {}) do
+            local ox, oz = n.x - pivotX, n.z - pivotZ
+            local px = pivotX + ox * cosA - oz * sinA + deltaX * n.weight
+            local pz = pivotZ + ox * sinA + oz * cosA + deltaZ * n.weight
+            local ny = AutoDrive:getTerrainHeightAtWorldPos(px, pz) + 0.7
+            ADDrawingManager:addSphereTask(px, ny, pz, 3.5, 0.2, 1, 0.3, 0.15)
+        end
+    end
+
     -- Falloff ring, so the reach of a proportional move is visible before committing to it
-    -- rather than being discovered from the result.
-    if self.tool == self.TOOL.MOVE and self.falloffRadius > 0 then
+    -- rather than being discovered from the result. Point only - Run's taper has no radius, it
+    -- follows the run's own ends, so a ring here would just be wrong.
+    if self.tool == self.TOOL.MOVE and self.moveSelectMode == self.MOVE_SELECT.POINT
+        and self.moveFalloffOn and self.falloffRadius > 0 then
         local centreX = self.cursorX
         local centreZ = self.cursorZ
         if self.dragId ~= nil and self.dragStartX ~= nil then
@@ -2176,7 +2833,7 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     -- the click arrived and was rejected or never arrived. This says which.
     if isDown and button ~= nil
         and button ~= Input.MOUSE_BUTTON_WHEEL_UP and button ~= Input.MOUSE_BUTTON_WHEEL_DOWN then
-        Logging.info("[FlyoverEditor]: click button=%s active=%s camera=%s cursor=%s guiBlocking=%s",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: click button=%s active=%s camera=%s cursor=%s guiBlocking=%s",
             tostring(button), tostring(self.active), tostring(self.camera ~= nil),
             tostring(self.cursor ~= nil), tostring(self:isGuiBlocking()))
     end
@@ -2284,7 +2941,7 @@ end
 --- used to do this, but that button is the camera's orbit.
 function ADFlyoverEditor:toggleCard()
     self.cardHidden = not self.cardHidden
-    Logging.info("[FlyoverEditor]: tool card %s.", self.cardHidden and "hidden" or "shown")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: tool card %s.", self.cardHidden and "hidden" or "shown")
 end
 
 --- Show/hide the contextual help panel - the "?" button on the header and the / (?) key both call
@@ -2339,19 +2996,101 @@ function ADFlyoverEditor:onLeftPress()
         self.toolCardY = math.max(0, math.min(1, g_lastMousePosY + oy))
     end
 
-    -- Ctrl claims the drag for box selection, in every tool. It has to be decided here on the
-    -- press, before the move tool can grab a waypoint, or a Ctrl+drag starting on top of one
-    -- would move it instead of selecting.
-    if AutoDrive.leftCTRLmodifierKeyPressed == true then
+    -- Rotated box, phase A: Space held claims this press to start the edge-drag - checked before
+    -- everything else, same precedence as the shapes below.
+    if self.spaceHeld and not self.rotBoxActive then
+        self:beginRotBoxDrag()
+        return
+    end
+
+    -- Rotated box, phase B: mid-sequence (edge already set, waiting for the third click) claims
+    -- every press regardless of Space's state by now (see the design note above) - the press
+    -- itself does nothing but stop the underlying tool's own click/drag firing underneath it; the
+    -- real handling is on release (finishRotBoxSelect).
+    if self.rotBoxActive then
+        return
+    end
+
+    -- Reassigned 2026-09-21: Ctrl is now the ONE consistent "add to what I already have" layer,
+    -- held on top of any of the shapes below (or alone, for a single point) - matching the
+    -- CAD/creative-tool convention (Blender/Photoshop: Shift/modifier adds, base gesture picks
+    -- the tool) rather than the file-manager one (Ctrl adds, nothing else needed) chosen for
+    -- ergonomics (Ctrl+another key is easier to hold than Shift+another key). Alt/Shift/Alt+Shift
+    -- now pick the SHAPE instead of Ctrl/Alt/Ctrl+Alt, freeing Ctrl for this.
+
+    -- Alt+Shift together claims the drag for freehand selection - checked before either single
+    -- modifier below, or it would never be reached. Box and Circle are the two simple shapes one
+    -- modifier each picks; combining them picks the free-form one.
+    if self.leftAltHeld and (self.leftShiftHeld or self.rightShiftHeld) then
+        self.freehandActive = true
+        self.freehandPoints = { { x = self.cursorX, z = self.cursorZ } }
+        return
+    end
+
+    -- Alt alone claims the drag for box selection (view-aligned - see boxFrame).
+    if self.leftAltHeld then
         self.boxActive = true
         self.boxStartX, self.boxStartZ = self.cursorX, self.cursorZ
         return
     end
 
+    -- Shift alone claims the drag for circle selection.
+    if self.leftShiftHeld or self.rightShiftHeld then
+        self.circleActive = true
+        self.circleStartX, self.circleStartZ = self.cursorX, self.cursorZ
+        return
+    end
+
+    -- Ctrl ALONE (none of the shapes above also held) no longer triggers any drag gesture of its
+    -- own - it just toggles whichever single point you release on. Claimed here on press, same as
+    -- the shapes above, so the underlying tool's own click/drag never fires underneath it; no
+    -- drag-distance threshold needed since there is no shape being drawn to compare against.
+    if self.leftCtrlHeld then
+        self.ctrlToggleArmed = true
+        return
+    end
+
     -- Only the move tool cares about the press itself; every other tool acts on release, so that
-    -- a click that turns out to be a camera drag does not commit an edit.
+    -- a click that turns out to be a camera drag does not commit an edit. Span is the exception:
+    -- picking its two ends (and later replacing one) is a plain click, not a drag, so it is left
+    -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
+    -- exists AND the hovered point is actually a member of it.
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
-        self:beginDrag(self.hoverId)
+        -- An offset already awaiting its right-click commit owns this press: resume cursor-driven
+        -- adjustment if the point is part of that SAME chain, otherwise ignore the press entirely
+        -- rather than silently starting a different grab and abandoning the pending one without
+        -- committing OR explicitly cancelling it.
+        if self.moveOffsetChainIds ~= nil then
+            local inChain = false
+            for _, id in ipairs(self.moveOffsetChainIds) do
+                if id == self.hoverId then inChain = true break end
+            end
+            if inChain then
+                -- dragStartX/Z are not actually read by the offset path (offsetDistanceFromCursor
+                -- only needs the cursor and moveOffsetBase), but updateDrag's very first line
+                -- bails out whenever dragStartX is nil - set for that guard alone, same values
+                -- beginDrag itself would set.
+                local wp = ADGraphManager:getWayPointById(self.hoverId)
+                self.dragId = self.hoverId
+                self.dragStartX, self.dragStartZ = wp ~= nil and wp.x or self.cursorX,
+                    wp ~= nil and wp.z or self.cursorZ
+            else
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: an offset is still pending - right-click to finish it first.")
+            end
+            return
+        end
+
+        -- A pre-built selection (Ctrl-click/box/circle/freehand/rotated box) always wins over picks
+        -- - see gatherDragNeighbours's own doc comment - but this gate was only ever checking
+        -- Span's own two ends, so grabbing a box-selected point that happened not to be a span
+        -- member did nothing at all, silently, while Span was active (reported 2026-09-21). Now
+        -- also lets a drag start when the hovered point is in the selection, matching every other
+        -- picks mode.
+        if self.moveSelectMode ~= self.MOVE_SELECT.SPAN
+            or (self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId])
+            or (self.selectionCount > 0 and self.selection[self.hoverId]) then
+            self:beginDrag(self.hoverId)
+        end
     end
 end
 
@@ -2361,22 +3100,79 @@ function ADFlyoverEditor:onLeftRelease()
     -- from the world. Apply is a right-click or the popup's own apply row.
     if self.ctxMenu ~= nil and self.ctxMenu.kind == "armed" then
         self:menuCancelArmed()
-        Logging.info("[FlyoverEditor]: armed tool cancelled (clicked away).")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: armed tool cancelled (clicked away).")
+        return
+    end
+
+    if self.rotBoxDragging then
+        self:finishRotBoxEdge()
+        return
+    end
+
+    if self.rotBoxActive then
+        self:finishRotBoxSelect(self.cursorX, self.cursorZ)
         return
     end
 
     -- Ctrl builds a selection, whatever the tool. Selection is a shared substrate rather than a
     -- tool of its own: the multi-point operations all need it, so building one should not mean
     -- leaving the tool you are working with.
+    if self.ctrlToggleArmed then
+        self.ctrlToggleArmed = false
+        if self.hoverId ~= nil then
+            self:toggleSelected(self.hoverId)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
+                self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
+        end
+        return
+    end
+
     if self.boxActive then
         self:finishBoxSelect()
+        return
+    end
+
+    if self.circleActive then
+        self:finishCircleSelect()
+        return
+    end
+
+    if self.freehandActive then
+        self:finishFreehandSelect()
         return
     end
 
     if self.tool == self.TOOL.DRAW then
         self:drawClick()
     elseif self.tool == self.TOOL.MOVE then
-        self:finishDrag()
+        -- A click (not a drag) on a point that is already a span MEMBER should re-pick whichever
+        -- end is closer, not commit a same-place "move" - onLeftPress cannot tell in advance
+        -- whether a member click will turn into a real drag or was only ever meant to replace an
+        -- end (reported 2026-09-21: shrinking a span never worked, only extending it, because a
+        -- click landing back inside the CURRENT span always went through beginDrag with no way to
+        -- reach moveSpanClick's own "click the new one" rule). Same too-small-to-be-deliberate
+        -- distance Box/Circle/Freehand already use to tell a gesture from a stray click.
+        if self.dragId ~= nil and self.moveSelectMode == self.MOVE_SELECT.SPAN
+            and self.moveSpanIds ~= nil and self.moveSpanIds[self.dragId] and self.dragStartX ~= nil then
+            local dx, dz = self.cursorX - self.dragStartX, self.cursorZ - self.dragStartZ
+            if MathUtil.vector2Length(dx, dz) < AutoDrive.FLYOVER_BOX_MIN_SIZE then
+                -- Put everything back exactly where it started (mirrors refreshActiveDrag) before
+                -- treating this as a plain click instead of a drag.
+                for _, n in ipairs(self.dragNeighbours or {}) do
+                    self:moveTo(n.id, n.x, n.z)
+                end
+                self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
+                self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours, self.dragFrozenCopy = nil, nil, nil, nil, false
+                self:moveSpanClick()
+                return
+            end
+        end
+
+        if self.dragId ~= nil then
+            self:finishDrag()
+        elseif self.moveSelectMode == self.MOVE_SELECT.SPAN then
+            self:moveSpanClick()
+        end
     elseif self.tool == self.TOOL.DELETE then
         self:deleteAtCursor()
     elseif self.tool == self.TOOL.SMOOTH then
@@ -2422,10 +3218,10 @@ function ADFlyoverEditor:onRightRelease()
     if self.ctxMenu ~= nil then
         if self.ctxMenu.kind == "armed" then
             self:menuApplyArmed()
-            Logging.info("[FlyoverEditor]: armed tool applied (right-click).")
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: armed tool applied (right-click).")
         else
             self:closeMenu()
-            Logging.info("[FlyoverEditor]: context menu closed (right-click).")
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: context menu closed (right-click).")
         end
         return
     end
@@ -2440,7 +3236,7 @@ function ADFlyoverEditor:onRightRelease()
 
     if self.selectionCount > 0 then
         self:clearSelection()
-        Logging.info("[FlyoverEditor]: selection cleared.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: selection cleared.")
         return
     end
 
@@ -2450,12 +3246,12 @@ function ADFlyoverEditor:onRightRelease()
 
     if sincePrevious == nil or sincePrevious < AutoDrive.FLYOVER_TOOL_EXIT_DELAY then
         -- Too soon to be deliberate. Say so, or it looks like right-click simply stopped working.
-        Logging.info("[FlyoverEditor]: nothing in progress (%.0fms since the last right-click, need %.0fms) - press again to put the %s tool away.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: nothing in progress (%.0fms since the last right-click, need %.0fms) - press again to put the %s tool away.",
             sincePrevious or 0, AutoDrive.FLYOVER_TOOL_EXIT_DELAY, self.TOOL_NAMES[self.tool] or "current")
         return
     end
 
-    Logging.info("[FlyoverEditor]: put the %s tool away; no tool selected.", self.TOOL_NAMES[self.tool] or "current")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: put the %s tool away; no tool selected.", self.TOOL_NAMES[self.tool] or "current")
     self:setTool(self.TOOL.NONE)
 end
 
@@ -2484,6 +3280,11 @@ function ADFlyoverEditor:stopCurrentAction()
     elseif tool == self.TOOL.SIDING then
         if self.sidingAnchorId ~= nil then
             self:commitSiding()
+            return true
+        end
+    elseif tool == self.TOOL.MOVE then
+        if self.moveOffsetChainIds ~= nil then
+            self:commitMoveOffset()
             return true
         end
     elseif tool == self.TOOL.PARALLEL then
@@ -2536,7 +3337,7 @@ function ADFlyoverEditor:stopCurrentAction()
         end
     elseif tool == self.TOOL.MERGE then
         if self.mergeFromId ~= nil or self.mergeToId ~= nil then
-            Logging.info("[FlyoverEditor]: cancelled the pending merge.")
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the pending merge.")
             self.mergeFromId, self.mergeToId = nil, nil
             self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
             return true
@@ -2558,7 +3359,7 @@ function ADFlyoverEditor:stopCurrentAction()
             if jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0 then
                 self:applyJunction()
             else
-                Logging.info("[FlyoverEditor]: junction site unlocked (nothing to place).")
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: junction site unlocked (nothing to place).")
             end
             self.junctionArmed = nil
             self.junctionPreview, self.junctionPreviewKey = nil, nil
@@ -2581,8 +3382,9 @@ end
 --- the connections makes that impossible: the far limb is only reached by travelling the whole way
 --- round, so it falls outside the radius on its own.
 ---
---- The walk includes a junction but does not continue through it: past a junction the points
---- belong to another route, and dragging those is never what moving this one means.
+--- The walk includes a junction (as a distance reference - see gatherDragNeighbours, which drops it
+--- from the actual follower list) but never continues PAST one: past a junction the points belong
+--- to another route, and dragging those is never what moving this one means.
 function ADFlyoverEditor:collectAlongTrack(seedId, maxDistance)
     local distance = { [seedId] = 0 }
     local frontier = { seedId }
@@ -2631,6 +3433,11 @@ function ADFlyoverEditor:beginDrag(id)
         return
     end
 
+    -- A new drag supersedes any pending retroactive-copy chance from the previous one - moveCopyOn
+    -- itself is left alone, since toggling it on BEFORE this drag (then dragging) is exactly how
+    -- copy is meant to apply to a fresh move.
+    self.lastMoveRecord = nil
+
     ADEditorHistory:snapshot("move waypoint")
 
     self.dragId = id
@@ -2642,25 +3449,119 @@ function ADFlyoverEditor:beginDrag(id)
     -- developing a kink where the influence stops.
     self:gatherDragNeighbours()
 
-    Logging.info("[FlyoverEditor]: grabbed waypoint id=%s (falloff %.1fm along the track, %d waypoint(s) following).",
-        tostring(id), self.falloffRadius, #self.dragNeighbours)
+    -- Copy already on when the grab starts (reported 2026-09-21): the original should never
+    -- visibly move at all in that case - you are dragging a fresh copy OUT of it from the first
+    -- frame, not moving the real thing and having it snap back later. Same freeze
+    -- toggleMoveCopy uses when copy comes on mid-drag instead - see updateDrag/finishDrag.
+    self.dragFrozenCopy = self.moveCopyOn
+
+    -- Rotate pivot, fixed for the whole drag (see the state table comment for why it has to be
+    -- the START position, not tracked live).
+    self.moveRotateAngle = 0
+    if self.moveRotatePivotMode == "centroid" then
+        local sumX, sumZ, n = self.dragStartX, self.dragStartZ, 1
+        for _, nb in ipairs(self.dragNeighbours or {}) do
+            sumX, sumZ, n = sumX + nb.x, sumZ + nb.z, n + 1
+        end
+        self.moveRotatePivotX, self.moveRotatePivotZ = sumX / n, sumZ / n
+    else
+        self.moveRotatePivotX, self.moveRotatePivotZ = self.dragStartX, self.dragStartZ
+    end
+
+    local mode = (self.selectionCount > 0 and self.selection[id]) and "selection"
+        or self.MOVE_SELECT_NAMES[self.moveSelectMode]
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: grabbed waypoint id=%s (%s, %d waypoint(s) following).",
+        tostring(id), mode, #self.dragNeighbours)
 end
 
 --- Work out which waypoints follow the grab, and how strongly.
 ---
 --- Records each follower's CURRENT position, which the drag then offsets from. It therefore has to
---- be called with everything sitting where it started - see setFalloffRadius, which restores before
---- re-gathering, or the recorded origins would be positions the drag had already moved.
+--- be called with everything sitting where it started - see refreshActiveDrag, which restores
+--- before re-gathering, or the recorded origins would be positions the drag had already moved.
+---
+--- Three sources, checked in order:
+---   1. A pre-built selection (self.selection - ctrl-click, box, later circle/freehand) wins, but
+---      only when the grabbed point is actually IN it - grabbing some unrelated point elsewhere
+---      moves just that point instead of hijacking the click with a stale leftover selection.
+---      Always rigid: there is no single along-track "centre" a scattered set could taper from.
+---   2. Run mode carries the whole run the grab belongs to. Falloff (on: taper to the run's own
+---      two ends: off: rigid) - never a fixed radius, because the run's own ends already are the
+---      natural falloff-to-zero points.
+---   3. Point mode (the default): today's along-track falloff from a single grab, unchanged.
 function ADFlyoverEditor:gatherDragNeighbours()
     self.dragNeighbours = {}
-    local radius = self.falloffRadius
-    if self.dragId == nil or radius <= 0 then
+    if self.dragId == nil then
         return
     end
 
+    if self.selectionCount > 0 and self.selection[self.dragId] then
+        for id in pairs(self.selection) do
+            if id ~= self.dragId then
+                local wp = ADGraphManager:getWayPointById(id)
+                if wp ~= nil then
+                    table.insert(self.dragNeighbours, { id = id, x = wp.x, z = wp.z, weight = 1 })
+                end
+            end
+        end
+        return
+    end
+
+    if self.moveSelectMode == self.MOVE_SELECT.RUN then
+        local fromId, toId, ids = self:resolveWholeRun(self.dragId)
+        if fromId == nil then
+            Logging.warning("[FlyoverEditor]: no clear run through id=%s to move as a run - it is "
+                .. "a junction, or the run closes on itself.", tostring(self.dragId))
+            return
+        end
+        -- resolveWholeRun's third return is an ORDERED ARRAY (#ids, ipairs - see
+        -- claimWholeRunClick/self.spanIds, which rely on exactly that shape for Smooth/Divide/
+        -- Ground/Straighten/Offset), not a membership set. gatherChainFollowers/gatherOffsetChain/
+        -- orderRunDistances all need id-keyed membership (run[other]) - converted here, at THIS
+        -- call site, the same way Span already converts runPathBetween's own array into
+        -- moveSpanIds, rather than changing resolveWholeRun's established contract.
+        local run = {}
+        for _, id in ipairs(ids) do
+            run[id] = true
+        end
+
+        -- excludeJunctionEnds = true: resolveWholeRun deliberately extends a run's own ends onto
+        -- whatever junction sits beyond them (reachToJunction), which is incidental to picking
+        -- Run - you clicked a point mid-run, not the junction - unlike Span, where the two ends
+        -- are exactly whatever the user directly clicked.
+        if self.moveOffsetOn then
+            self:gatherOffsetChain(fromId, toId, run, true)
+            return
+        end
+        self:gatherChainFollowers(fromId, toId, run, true)
+        return
+    end
+
+    if self.moveSelectMode == self.MOVE_SELECT.SPAN then
+        if self.moveSpanIds == nil or not self.moveSpanIds[self.dragId] then
+            return
+        end
+        -- excludeJunctionEnds = false: a span's ends are exactly what the user clicked - if that
+        -- happens to be a junction, it was explicit, the same as clicking one directly in Point.
+        if self.moveOffsetOn then
+            self:gatherOffsetChain(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false)
+            return
+        end
+        self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false)
+        return
+    end
+
+    local radius = self.moveFalloffOn and self.falloffRadius or 0
+    if radius <= 0 then
+        return
+    end
+
+    -- A junction the radius happens to reach is a distance REFERENCE (collectAlongTrack keeps it
+    -- in the map so the walk stops there correctly), not a follower - incidental reach was never
+    -- an explicit pick, same reasoning as Run/Span's excludeJunctionEnds (see isJunction).
     local alongTrack = self:collectAlongTrack(self.dragId, radius)
     for otherId, d in pairs(alongTrack) do
-        if otherId ~= self.dragId then
+        if otherId ~= self.dragId and not isJunction(otherId) then
             local other = ADGraphManager:getWayPointById(otherId)
             if other ~= nil then
                 table.insert(self.dragNeighbours, {
@@ -2672,6 +3573,277 @@ function ADFlyoverEditor:gatherDragNeighbours()
             end
         end
     end
+end
+
+--- Order a simple run (resolveWholeRun guarantees at most 2 in-run connections per member, so it
+--- is a plain chain, not a branching graph) from `fromId` outward, giving each member's distance
+--- travelled to get there, AND the walk order itself (offset's gatherOffsetChain needs the order,
+--- falloff's gatherChainFollowers only ever needed the distances). Walked fresh rather than
+--- trusting `run`'s pairs() order, which is address order and has nothing to do with the run's
+--- actual shape - see node-keyed-pairs-is-nondeterministic in project memory.
+function ADFlyoverEditor:orderRunDistances(run, fromId)
+    local dist = { [fromId] = 0 }
+    local orderedIds = { fromId }
+    local prevId, currentId = nil, fromId
+    while true do
+        local wp = ADGraphManager:getWayPointById(currentId)
+        if wp == nil then break end
+        local nextId = nil
+        for _, listName in ipairs({ "out", "incoming" }) do
+            for _, other in pairs(wp[listName] or {}) do
+                if run[other] and other ~= prevId and other ~= currentId then
+                    nextId = other
+                end
+            end
+        end
+        if nextId == nil then break end
+        local nwp = ADGraphManager:getWayPointById(nextId)
+        if nwp == nil then break end
+        dist[nextId] = dist[currentId] + MathUtil.vector2Length(nwp.x - wp.x, nwp.z - wp.z)
+        table.insert(orderedIds, nextId)
+        prevId, currentId = currentId, nextId
+    end
+    return dist, orderedIds
+end
+
+--- Run and Span's shared followers: every other member of a simple chain (a whole run, or a picked
+--- span) the grab belongs to, from one end (fromId) to the other (toId).
+---
+--- With falloff off, every member moves exactly as far as the grab - the whole chain as one rigid
+--- piece. With falloff on, each member tapers to 0 at whichever of the chain's own two ends it sits
+--- towards, using ITS side's own distance to that end as the falloff reach - not a shared radius,
+--- since a run's ends are structural and a span's ends are what the user just picked, either way
+--- not a separate distance to dial in on top.
+--- Offset's own chain setup, in place of gatherChainFollowers - it does not use the weighted
+--- follower/dragNeighbours mechanism at all (dragNeighbours is left empty; updateDrag special-cases
+--- offset before it ever reaches the normal per-follower loop). Captures the ORDERED chain, ids and
+--- points both in walk order, ONCE at grab time - this is moveOffsetBase, and it stays fixed for
+--- the whole adjust session (drag AND the wheel/typed-entry phase after release) so repeated
+--- offsetOpenChain calls all measure from the same original shape rather than compounding onto
+--- whatever the previous adjustment already produced.
+---
+--- moveOffsetMovable flags which chain positions are actually allowed to move (excludes a genuine
+--- junction at either end - see isJunction) - kept the SAME LENGTH/ORDER as moveOffsetBase/
+--- moveOffsetChainIds rather than dropped from them, because offsetOpenChain still needs the
+--- junction's real position to compute the curve's end geometry correctly; only the WRITE-BACK in
+--- applyMoveOffset skips it (Run's own case; Span's explicitly-clicked ends are never junction-
+--- extended here in the first place, so this never excludes anything a user directly picked).
+function ADFlyoverEditor:gatherOffsetChain(fromId, toId, run, excludeJunctionEnds)
+    local _, orderedIds = self:orderRunDistances(run, fromId)
+    if orderedIds[#orderedIds] ~= toId then
+        Logging.warning("[FlyoverEditor]: could not walk the chain from id=%s to id=%s to offset it.",
+            tostring(fromId), tostring(toId))
+        return
+    end
+
+    local points = {}
+    local movable = {}
+    for _, id in ipairs(orderedIds) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp == nil then
+            return
+        end
+        table.insert(points, { x = wp.x, y = wp.y, z = wp.z })
+        movable[id] = not (excludeJunctionEnds and isJunction(id))
+    end
+
+    self.moveOffsetChainIds = orderedIds
+    self.moveOffsetBase = points
+    self.moveOffsetMovable = movable
+    self.moveOffsetDistance = 0
+end
+
+--- Signed perpendicular distance from the cursor to the chain's nearest segment - same nearest-
+--- segment-then-cross-product shape as offsetSideFromCursor (PARALLEL's own side picker), but
+--- returning the actual magnitude too, not just the sign, since offset here is cursor-DRIVEN
+--- (dynamic slide) rather than a typed magnitude with only its side read from the cursor.
+local function offsetDistanceFromCursor(cx, cz, pts)
+    if cx == nil or cz == nil or pts == nil or #pts < 2 then
+        return nil
+    end
+
+    local bestIndex, bestDistance = 1, math.huge
+    for i = 1, #pts - 1 do
+        local a, b = pts[i], pts[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local lengthSquared = dx * dx + dz * dz
+        local t = 0
+        if lengthSquared > 1e-9 then
+            t = math.max(0, math.min(1, ((cx - a.x) * dx + (cz - a.z) * dz) / lengthSquared))
+        end
+        local d = MathUtil.vector2Length(cx - (a.x + t * dx), cz - (a.z + t * dz))
+        if d < bestDistance then
+            bestIndex, bestDistance = i, d
+        end
+    end
+
+    local a, b = pts[bestIndex], pts[bestIndex + 1]
+    local cross = (b.x - a.x) * (cz - a.z) - (b.z - a.z) * (cx - a.x)
+    return cross >= 0 and bestDistance or -bestDistance
+end
+
+--- Re-slide the chain from its fixed base to the current moveOffsetDistance. The one place both
+--- the live cursor-drag and the wheel/typed-entry phase end up writing through - offsetOpenChain
+--- takes the base and a signed distance and returns one point per input point, in the same order,
+--- which is what keeps this an in-place SLIDE (existing ids, existing connections) rather than
+--- PARALLEL's own use of the same function to grow a brand new track.
+function ADFlyoverEditor:applyMoveOffset()
+    if self.moveOffsetChainIds == nil or self.moveOffsetBase == nil then
+        return
+    end
+
+    local track, err = ADOffsetGeometry.offsetOpenChain(self.moveOffsetBase, self.moveOffsetDistance)
+    if track == nil then
+        Logging.warning("[FlyoverEditor]: could not offset - %s", tostring(err))
+        return
+    end
+
+    -- Optional taper (item requested 2026-09-21): offsetOpenChain itself only knows how to slide
+    -- everything the same signed distance - blending is done here instead, by mixing each point
+    -- BACK toward its own pre-offset position the closer it sits to either end of the chain, same
+    -- cosine shape Point/Run's own falloff already use. nil weights (falloff off) skips the blend
+    -- entirely, so the plain rigid slide costs nothing extra.
+    local weights = nil
+    if self.moveOffsetFalloffOn and self.moveOffsetFalloffRadius > 0 then
+        weights = {}
+        local base = self.moveOffsetBase
+        local n = #base
+        local along = { 0 }
+        for i = 2, n do
+            local a, b = base[i - 1], base[i]
+            along[i] = along[i - 1] + MathUtil.vector2Length(b.x - a.x, b.z - a.z)
+        end
+        local total = along[n]
+        for i = 1, n do
+            local distToNearEnd = math.min(along[i], total - along[i])
+            if distToNearEnd >= self.moveOffsetFalloffRadius then
+                weights[i] = 1
+            else
+                local t = distToNearEnd / self.moveOffsetFalloffRadius
+                weights[i] = 0.5 * (1 - math.cos(math.pi * t))
+            end
+        end
+    end
+
+    for i, id in ipairs(self.moveOffsetChainIds) do
+        local p = track[i]
+        if p ~= nil and (self.moveOffsetMovable == nil or self.moveOffsetMovable[id]) then
+            if weights ~= nil then
+                local base = self.moveOffsetBase[i]
+                local w = weights[i]
+                self:moveTo(id, base.x + (p.x - base.x) * w, base.z + (p.z - base.z) * w)
+            else
+                self:moveTo(id, p.x, p.z)
+            end
+        end
+    end
+end
+
+--- Set the offset distance directly - the wheel/typed-entry path, usable both mid-drag (where it
+--- is immediately overwritten by the next frame's cursor-driven update - the user's own call: drag
+--- drives it live, wheel only takes over once the button is up) and after release, while the chain
+--- is still awaiting its right-click commit.
+function ADFlyoverEditor:setMoveOffsetDistance(value)
+    if self.moveOffsetChainIds == nil then
+        return
+    end
+    self.moveOffsetDistance = math.max(-AutoDrive.FLYOVER_OFFSET_MAX, math.min(AutoDrive.FLYOVER_OFFSET_MAX, value))
+    self:applyMoveOffset()
+end
+
+--- Right-click commit for a pending offset (dragId already nil - see onLeftRelease/stopCurrentAction).
+--- Re-grounds the chain at its final positions with the accurate raycast, same reasoning finishDrag
+--- already gives for every other move: the last live-preview frame is not necessarily where the
+--- distance was actually left.
+function ADFlyoverEditor:commitMoveOffset()
+    local moved = 0
+    for _, id in ipairs(self.moveOffsetChainIds or {}) do
+        if self.moveOffsetMovable == nil or self.moveOffsetMovable[id] then
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                self:regroundTo(id, wp.x, wp.z, wp.y)
+                moved = moved + 1
+            end
+        end
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset %.1fm applied to %d waypoint(s).",
+        self.moveOffsetDistance, moved)
+    self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetMovable, self.moveOffsetDistance = nil, nil, nil, 0
+    ADGraphManager:markChanges()
+end
+
+--- Abandon a pending offset without committing - the waypoints stay wherever the last live
+--- adjustment left them (this mirrors every other move: the position write already happened
+--- frame-by-frame, same as a normal drag, not a separate preview overlay - see gatherOffsetChain).
+--- Undo (Q, snapshotted at the original beginDrag) is what actually reverts the positions; this
+--- just stops treating the chain as still adjustable.
+function ADFlyoverEditor:cancelMoveOffset()
+    self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetMovable, self.moveOffsetDistance = nil, nil, nil, 0
+end
+
+-- excludeJunctionEnds: true from Run (its ends are incidentally extended onto whatever junction
+-- sits beyond them - see isJunction), false from Span (its ends are exactly what the user clicked,
+-- explicit either way). dist[fromId]/dist[toId] stay valid taper REFERENCE points either way -
+-- only membership in the moved set is filtered, not the distance math a taper measures against.
+function ADFlyoverEditor:gatherChainFollowers(fromId, toId, run, excludeJunctionEnds)
+    if not self.moveFalloffOn then
+        for id in pairs(run) do
+            if id ~= self.dragId and not (excludeJunctionEnds and isJunction(id)) then
+                local wp = ADGraphManager:getWayPointById(id)
+                if wp ~= nil then
+                    table.insert(self.dragNeighbours, { id = id, x = wp.x, z = wp.z, weight = 1 })
+                end
+            end
+        end
+        return
+    end
+
+    local dist = self:orderRunDistances(run, fromId)
+    local grabDist, total = dist[self.dragId], dist[toId]
+
+    if grabDist == nil or total == nil then
+        return
+    end
+
+    for id in pairs(run) do
+        if id ~= self.dragId and not (excludeJunctionEnds and isJunction(id)) then
+            local wp = ADGraphManager:getWayPointById(id)
+            local d = dist[id]
+            if wp ~= nil and d ~= nil then
+                local side = d - grabDist
+                local reach = side >= 0 and (total - grabDist) or grabDist
+                local weight = 1
+                if reach > 1e-6 then
+                    local t = math.min(math.abs(side) / reach, 1)
+                    weight = 0.5 * (1 + math.cos(math.pi * t))
+                elseif side ~= 0 then
+                    weight = 0
+                end
+                table.insert(self.dragNeighbours, { id = id, x = wp.x, z = wp.z, weight = weight })
+            end
+        end
+    end
+end
+
+--- Re-run the follower gather live, mid-drag, when the mode or falloff toggle changes underneath
+--- an active grab. Cannot simply re-gather in place: the followers have already been displaced by
+--- the drag so far, so their current positions are not the origins the new set should measure
+--- from - everything is put back first (the grabbed point too, since a run/along-track distance is
+--- measured through its position), then the new set is gathered and the drag re-applied.
+function ADFlyoverEditor:refreshActiveDrag()
+    if self.dragId == nil then
+        return
+    end
+
+    for _, n in ipairs(self.dragNeighbours or {}) do
+        self:moveTo(n.id, n.x, n.z)
+    end
+    if self.dragStartX ~= nil then
+        self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
+    end
+
+    self:gatherDragNeighbours()
+    self:updateDrag()
 end
 
 --- Change the falloff, live during a drag if one is in progress.
@@ -2689,27 +3861,41 @@ function ADFlyoverEditor:setFalloffRadius(value)
 
     if self.dragId == nil then
         self.falloffRadius = value
-        Logging.info("[FlyoverEditor]: falloff %.1fm along the track.", value)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: falloff %.1fm along the track.", value)
         return
     end
 
-    for _, n in ipairs(self.dragNeighbours or {}) do
-        self:moveTo(n.id, n.x, n.z)
-    end
-    if self.dragStartX ~= nil then
-        self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
-    end
-
     self.falloffRadius = value
-    self:gatherDragNeighbours()
-    self:updateDrag()
+    self:refreshActiveDrag()
 
-    Logging.info("[FlyoverEditor]: falloff %.1fm along the track, %d waypoint(s) following.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: falloff %.1fm along the track, %d waypoint(s) following.",
         value, #self.dragNeighbours)
 end
 
 function ADFlyoverEditor:updateDrag()
     if self.cursorX == nil or self.dragStartX == nil then
+        return
+    end
+
+    -- Offset: the cursor drives the signed distance directly (dynamic slide), not a delta applied
+    -- to a per-follower weight - see gatherOffsetChain/applyMoveOffset. Only while still actively
+    -- held; once released the wheel/typed-entry phase takes over (setMoveOffsetDistance), and this
+    -- function stops being called at all until the next grab.
+    if self.moveOffsetChainIds ~= nil then
+        local d = offsetDistanceFromCursor(self.cursorX, self.cursorZ, self.moveOffsetBase)
+        if d ~= nil then
+            self.moveOffsetDistance = math.max(-AutoDrive.FLYOVER_OFFSET_MAX,
+                math.min(AutoDrive.FLYOVER_OFFSET_MAX, d))
+            self:applyMoveOffset()
+        end
+        return
+    end
+
+    -- Frozen copy (copy was on before or during this drag - see beginDrag/toggleMoveCopy): the
+    -- real waypoint(s) stay exactly where they started, full stop. finishDrag still computes
+    -- where the clone belongs from dragStartX/Z and the cursor directly, so nothing here needs to
+    -- track that separately - it just has nothing left to do each frame.
+    if self.dragFrozenCopy then
         return
     end
 
@@ -2720,8 +3906,20 @@ function ADFlyoverEditor:updateDrag()
     -- on a ramp rather than on the ground below it. Followers keep to whatever surface they are
     -- already on.
     self:moveTo(self.dragId, self.cursorX, self.cursorZ, nil, self.cursorY)
+
+    -- Rotate (R+wheel - see applyWheelToActiveTool) composes with the translate above: each
+    -- follower's ORIGINAL offset from the fixed pivot is rotated by the accumulated angle first,
+    -- THEN the drag's delta is added on top - so the whole rotated shape rides along with the
+    -- drag exactly the way the plain (unrotated) shape already does. moveRotateAngle stays 0
+    -- unless R+wheel was actually used this drag, so cos=1/sin=0 makes this an identity transform
+    -- (no different from the old plain add) whenever rotation is not in play.
+    local cosA, sinA = math.cos(self.moveRotateAngle), math.sin(self.moveRotateAngle)
+    local pivotX, pivotZ = self.moveRotatePivotX or self.dragStartX, self.moveRotatePivotZ or self.dragStartZ
     for _, n in ipairs(self.dragNeighbours or {}) do
-        self:moveTo(n.id, n.x + deltaX * n.weight, n.z + deltaZ * n.weight)
+        local ox, oz = n.x - pivotX, n.z - pivotZ
+        local rx = pivotX + ox * cosA - oz * sinA
+        local rz = pivotZ + ox * sinA + oz * cosA
+        self:moveTo(n.id, rx + deltaX * n.weight, rz + deltaZ * n.weight)
     end
 end
 
@@ -2845,6 +4043,42 @@ function ADFlyoverEditor:finishDrag()
         return
     end
 
+    -- Offset: releasing the mouse does NOT commit here - see gatherOffsetChain/commitMoveOffset.
+    -- Only the "actively held, cursor is driving the distance" bookkeeping ends; the chain itself
+    -- stays live for the wheel/typed-entry phase until a right-click commits it
+    -- (stopCurrentAction).
+    if self.moveOffsetChainIds ~= nil then
+        self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours, self.dragFrozenCopy = nil, nil, nil, nil, false
+        return
+    end
+
+    -- Built BEFORE anything below moves further, from the pre-drag positions already tracked
+    -- (dragStartX/Z for the grab, each follower's own recorded origin) - independent of whether
+    -- copy is actually used this time, so a PLAIN move can still be turned into a copy afterward
+    -- (see toggleMoveCopy).
+    --
+    -- finalX/finalZ, only when frozen (dragFrozenCopy): the real waypoint never moved this drag
+    -- (updateDrag skipped it - see there), so its own x/z cannot say where the drag would have
+    -- ended. Computed here with the exact same formula updateDrag would have applied every frame,
+    -- so it matches what a non-frozen drag's actual final position already is. Left nil otherwise
+    -- - the non-frozen path already has the true, re-grounded final position on the real waypoint
+    -- by the time applyMoveAsCopy reads it below, which is more accurate than recomputing it.
+    local members
+    if self.dragFrozenCopy then
+        local deltaX, deltaZ = self.cursorX - self.dragStartX, self.cursorZ - self.dragStartZ
+        members = { { id = self.dragId, originalX = self.dragStartX, originalZ = self.dragStartZ,
+            finalX = self.cursorX, finalZ = self.cursorZ } }
+        for _, n in ipairs(self.dragNeighbours or {}) do
+            table.insert(members, { id = n.id, originalX = n.x, originalZ = n.z,
+                finalX = n.x + deltaX * n.weight, finalZ = n.z + deltaZ * n.weight })
+        end
+    else
+        members = { { id = self.dragId, originalX = self.dragStartX, originalZ = self.dragStartZ } }
+        for _, n in ipairs(self.dragNeighbours or {}) do
+            table.insert(members, { id = n.id, originalX = n.x, originalZ = n.z })
+        end
+    end
+
     -- Re-ground everything that moved, at its final position and with the accurate raycast. During
     -- the drag the height only has to look right while the point is in flight; where it comes to
     -- rest is what actually matters, and the last frame of a drag is not necessarily where the
@@ -2864,7 +4098,7 @@ function ADFlyoverEditor:finishDrag()
 
         self:regroundTo(self.dragId, dropped.x, dropped.z, dropped.y)
 
-        Logging.info("[FlyoverEditor]: heights at the drop point - cursor reports %s, plain terrain %s, ray from cursor %s, ray from 30m up %s, was %.2f, set to %.2f.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: heights at the drop point - cursor reports %s, plain terrain %s, ray from cursor %s, ray from 30m up %s, was %.2f, set to %.2f.",
             self.cursorY ~= nil and string.format("%.2f", self.cursorY) or "nil",
             terrainY ~= nil and string.format("%.2f", terrainY) or "nil",
             fromCursor ~= nil and string.format("%.2f", fromCursor) or "nil",
@@ -2879,9 +4113,44 @@ function ADFlyoverEditor:finishDrag()
     end
 
     local moved = 1 + #(self.dragNeighbours or {})
-    Logging.info("[FlyoverEditor]: moved %d waypoint(s) ending at id=%s, re-grounded at the drop point.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: moved %d waypoint(s) ending at id=%s, re-grounded at the drop point.",
         moved, tostring(self.dragId))
-    self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours = nil, nil, nil, nil
+    self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours, self.dragFrozenCopy = nil, nil, nil, nil, false
+
+    -- Copy already toggled on before release: convert this move into a copy right now, and there
+    -- is nothing left to retroactively convert later. Otherwise stash the record - a plain move,
+    -- but one toggleMoveCopy can still turn into a copy afterward.
+    if self.moveCopyOn then
+        self:applyMoveAsCopy({ members = members })
+        self.moveCopyOn = false
+        self.moveBreakOn = false
+        self.lastMoveRecord = nil
+    else
+        self.lastMoveRecord = { members = members }
+
+        -- Standalone disconnect (copy off, break on): sever this moved set's OUTSIDE connections
+        -- right here rather than via applyMoveAsCopy's clone-then-delete-original route, which only
+        -- runs when copy is also on. No clone, no id churn - just moved and cut loose.
+        if self.moveBreakOn then
+            local movedSet = {}
+            for _, m in ipairs(members) do
+                movedSet[m.id] = true
+            end
+            disconnectExternal(movedSet)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: disconnected %d waypoint(s) from their outside connections.",
+                #members)
+        end
+
+        -- Only the plain-move path - applyMoveAsCopy runs its own auto-hookup on the CLONE's ids,
+        -- not these originals (a copy's whole point is starting disconnected; hookup still applies
+        -- to it, just against its own new ids, not the source's).
+        local ids = {}
+        for _, m in ipairs(members) do
+            table.insert(ids, m.id)
+        end
+        self:autoHookupEndpoints(ids)
+    end
+
     ADGraphManager:markChanges()
 end
 
@@ -2909,13 +4178,13 @@ function ADFlyoverEditor:drawClick()
     -- A waypoint, and no run open: start from it rather than stacking a duplicate on top of it.
     if self.lastWaypointId == nil then
         self.lastWaypointId = self.hoverId
-        Logging.info("[FlyoverEditor]: run starts at existing waypoint id=%s; click on to draw from it.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: run starts at existing waypoint id=%s; click on to draw from it.",
             tostring(self.lastWaypointId))
         return
     end
 
     if self.lastWaypointId == self.hoverId then
-        Logging.info("[FlyoverEditor]: cannot connect a waypoint to itself.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: cannot connect a waypoint to itself.")
         return
     end
 
@@ -2931,7 +4200,7 @@ function ADFlyoverEditor:drawClick()
     ADEditorHistory:snapshot("toggle connection")
     ADGraphManager:toggleConnectionBetween(startNode, endNode, reverseDirection, dualConnection, false)
 
-    Logging.info("[FlyoverEditor]: toggled the connection %s -> %s (dual=%s reverse=%s).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: toggled the connection %s -> %s (dual=%s reverse=%s).",
         tostring(self.lastWaypointId), tostring(self.hoverId), tostring(dualConnection), tostring(reverseDirection))
 
     -- Carry the run on from the waypoint just clicked, so a route can be drawn straight through an
@@ -2971,7 +4240,7 @@ function ADFlyoverEditor:claimWholeRunClick(setEnds)
     end
     self.spanIds = ids
     setEnds(fromId, toId)
-    Logging.info("[FlyoverEditor]: %s covers the whole run: %d waypoint(s), id=%s to id=%s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: %s covers the whole run: %d waypoint(s), id=%s to id=%s.",
         self.TOOL_NAMES[self.tool] or "tool", #ids, tostring(fromId), tostring(toId))
     return true
 end
@@ -2982,18 +4251,504 @@ ADFlyoverEditor.OFFSET_SCOPE_NAMES = { "picked span", "whole run" }
 function ADFlyoverEditor:flipOffsetSide()
     self.offsetSide = -(self.offsetSide or 1)
     self.offsetCache = nil
-    Logging.info("[FlyoverEditor]: offset side -> %s.", self.offsetSide >= 0 and "left" or "right")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset side -> %s.", self.offsetSide >= 0 and "left" or "right")
 end
 
 function ADFlyoverEditor:cycleOffsetScope()
     self.offsetScope = (self.offsetScope % #self.OFFSET_SCOPE_NAMES) + 1
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
     self.spanIds = nil
-    Logging.info("[FlyoverEditor]: offset covers the %s.", self.OFFSET_SCOPE_NAMES[self.offsetScope])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset covers the %s.", self.OFFSET_SCOPE_NAMES[self.offsetScope])
 end
 
 ADFlyoverEditor.DELETE_SCOPE = { POINT = 1, RUN = 2 }
 ADFlyoverEditor.DELETE_SCOPE_NAMES = { "one waypoint", "whole run" }
+
+-- Move's own pick, separate from DELETE_SCOPE even though Point/Run overlap it: move additionally
+-- has Span (and, later, Box/Circle/Freehand), none of which delete has any use for.
+ADFlyoverEditor.MOVE_SELECT = { POINT = 1, RUN = 2, SPAN = 3 }
+ADFlyoverEditor.MOVE_SELECT_NAMES = { "point", "run", "span" }
+
+--- Span mode's click handling. Point/Run grab and move in one press-drag-release gesture; Span is
+--- built up first with plain clicks, and only once both ends exist does pressing on a MEMBER of it
+--- become an actual grab (onLeftPress/beginDrag - see there).
+---
+--- Same gesture ("click the new one") whichever end is being set: with fewer than two ends picked,
+--- a click fills in the next one; once both exist, a click that lands on neither end nor a member
+--- replaces whichever existing end it is geometrically closer to. This is deliberately NOT a
+--- separate "reselect" mode - there is only ever one thing a click does here, so nothing needs
+--- cancelling to redo an end, and there is no ambiguity to guess between "replace" and "start over"
+--- (see junction-crossing-detection-self-destructs in project memory for why a proximity GUESS
+--- between two different actions is the wrong shape here).
+function ADFlyoverEditor:moveSpanClick()
+    if self.hoverId == nil then
+        return
+    end
+
+    if self.moveSpanFromId == nil then
+        self.moveSpanFromId = self.hoverId
+        self.moveSpanToId, self.moveSpanIds = nil, nil
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: move span from id=%s; click the far end.", tostring(self.hoverId))
+        return
+    end
+
+    if self.moveSpanToId == nil then
+        if self.hoverId == self.moveSpanFromId then
+            return
+        end
+        local span = self:runPathBetween(self.moveSpanFromId, self.hoverId)
+        if span == nil then
+            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
+                tostring(self.hoverId), tostring(self.moveSpanFromId))
+            return
+        end
+        self.moveSpanToId = self.hoverId
+        self.moveSpanIds = {}
+        for _, id in ipairs(span) do self.moveSpanIds[id] = true end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: move span of %d waypoint(s) picked. Grab and drag any point "
+            .. "on it to move; click elsewhere on the network to replace whichever end is closer.", #span)
+        return
+    end
+
+    -- Both ends exist - replace whichever end sits closer to this click. Used to refuse a click
+    -- that landed on a member outright, back when onLeftPress guaranteed one could never reach
+    -- here at all; onLeftRelease now deliberately routes a too-small-to-be-a-drag click on a
+    -- member here too (2026-09-21 fix - shrinking a span never worked before this, only
+    -- extending it), so a member landing here is expected, not a case to refuse. Re-picking the
+    -- SAME end you clicked (or clicking the far end exactly) both resolve to a harmless no-op via
+    -- the distance comparison below, so nothing special has to be done for those either.
+    local wp = ADGraphManager:getWayPointById(self.hoverId)
+    local fromWp = ADGraphManager:getWayPointById(self.moveSpanFromId)
+    local toWp = ADGraphManager:getWayPointById(self.moveSpanToId)
+    if wp == nil or fromWp == nil or toWp == nil then
+        return
+    end
+    local dFrom = MathUtil.vector2Length(wp.x - fromWp.x, wp.z - fromWp.z)
+    local dTo = MathUtil.vector2Length(wp.x - toWp.x, wp.z - toWp.z)
+    local replacingFrom = dFrom <= dTo
+    local newFromId = replacingFrom and self.hoverId or self.moveSpanFromId
+    local newToId = replacingFrom and self.moveSpanToId or self.hoverId
+
+    local span = self:runPathBetween(newFromId, newToId)
+    if span == nil then
+        Logging.warning("[FlyoverEditor]: id=%s is not connected to the other end, so the span was not changed.",
+            tostring(self.hoverId))
+        return
+    end
+
+    self.moveSpanFromId, self.moveSpanToId = newFromId, newToId
+    self.moveSpanIds = {}
+    for _, id in ipairs(span) do self.moveSpanIds[id] = true end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move span of %d waypoint(s) picked.", #span)
+end
+
+function ADFlyoverEditor:cancelMoveSpan()
+    if self.moveSpanFromId ~= nil or self.moveSpanToId ~= nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: move span cancelled.")
+    end
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+end
+
+function ADFlyoverEditor:cycleMoveSelectMode()
+    self.moveSelectMode = (self.moveSelectMode % #self.MOVE_SELECT_NAMES) + 1
+    self:cancelMoveSpan()
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move picks %s.", self.MOVE_SELECT_NAMES[self.moveSelectMode])
+    self:refreshActiveDrag()
+end
+
+function ADFlyoverEditor:toggleMoveFalloff()
+    self.moveFalloffOn = not self.moveFalloffOn
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move falloff %s.", self.moveFalloffOn and "on" or "off")
+    self:refreshActiveDrag()
+end
+
+--- Convert a completed move into a copy: every ORIGINAL point restores to where it started, and a
+--- NEW waypoint is created at each one's final (already re-grounded) position instead. Internal
+--- connections among the moved set are replicated onto the clones - walking only wp.out, so each
+--- directed edge is reconstructed exactly once; a dual connection reconstructs itself naturally as
+--- two separate directed edges when both directions were present, no special case needed. Nothing
+--- connects a clone to anything OUTSIDE the moved set - it never had a link there, and a copy
+--- being disconnected by default is the whole point of it (see move-tool-copy-and-break-spec in
+--- project memory).
+---
+--- `record.members` is a plain list of { id, originalX, originalZ } - see finishDrag, which builds
+--- it for every move (not just copies), and toggleMoveCopy, which is what lets a plain move already
+--- released get turned into a copy afterward.
+function ADFlyoverEditor:applyMoveAsCopy(record)
+    if record == nil or record.members == nil then
+        return
+    end
+
+    local movedSet = {}
+    for _, m in ipairs(record.members) do
+        movedSet[m.id] = true
+    end
+
+    local newIds = {}
+    for _, m in ipairs(record.members) do
+        local wp = ADGraphManager:getWayPointById(m.id)
+        if wp ~= nil then
+            -- Final position first - restoring the original below moves THIS waypoint, not the
+            -- clone, so its current x/y/z has to be captured before that happens. Skipped
+            -- entirely when breaking: the original is about to be deleted anyway, so there is no
+            -- point writing it back to its start position first.
+            --
+            -- m.finalX/finalZ, when present, override reading wp's own live position - the frozen-
+            -- copy path (dragFrozenCopy: copy was on before or during the drag, so the REAL
+            -- waypoint never moved at all and is sitting at its original spot right now, not the
+            -- drop point) records where the drag would have ended separately, since wp.x/z cannot
+            -- tell us that anymore. The retroactive path (copy toggled on AFTER release) has no
+            -- such override - wp really is sitting at its final dropped position, which is exactly
+            -- what should be read live.
+            local fx, fy, fz, flags = wp.x, wp.y, wp.z, wp.flags
+            if m.finalX ~= nil then
+                fx, fz = m.finalX, m.finalZ
+                fy = AutoDrive:getTerrainHeightAtWorldPos(fx, fz, wp.y)
+            end
+            if not self.moveBreakOn then
+                self:moveTo(m.id, m.originalX, m.originalZ)
+            end
+
+            local newWp = ADGraphManager:recordWayPoint(fx, fy, fz, false, false, false, nil, flags, false)
+            if newWp ~= nil then
+                newIds[m.id] = newWp.id
+            end
+        end
+    end
+
+    local edgeCount = 0
+    for _, m in ipairs(record.members) do
+        local wp = ADGraphManager:getWayPointById(m.id)
+        local newFromId = newIds[m.id]
+        if wp ~= nil and newFromId ~= nil then
+            for _, otherId in pairs(wp.out or {}) do
+                if movedSet[otherId] and newIds[otherId] ~= nil then
+                    local newFrom = ADGraphManager:getWayPointById(newFromId)
+                    local newTo = ADGraphManager:getWayPointById(newIds[otherId])
+                    if newFrom ~= nil and newTo ~= nil then
+                        ADGraphManager:toggleConnectionBetween(newFrom, newTo, false, false, false)
+                        edgeCount = edgeCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    -- Break (item 4): delete every original NOW, after the clones exist and their internal edges
+    -- are wired, but before anything reads the originals again. This is what turns a copy into a
+    -- relocate - the clone is already disconnected by default (a fresh waypoint never inherited
+    -- the source's links), so deleting the source leaves it moved and cleanly detached rather than
+    -- leaving a stretched connection or a lost waypoint (see move-tool-copy-and-break-spec).
+    if self.moveBreakOn then
+        local toDelete = {}
+        for _, m in ipairs(record.members) do
+            table.insert(toDelete, m.id)
+        end
+        -- Same reasoning deleteSelection already relies on: descending order, so each pending id
+        -- is still valid when its turn comes.
+        table.sort(toDelete, function(a, b) return a > b end)
+        for _, id in ipairs(toDelete) do
+            ADGraphManager:removeWayPoint(id, false)
+        end
+
+        -- Every original has a LOWER id than every clone (clones are always appended strictly
+        -- after this operation starts, never inserted below anything), so deleting #toDelete of
+        -- them shifts every clone's id down by exactly that count - uniformly, regardless of
+        -- which original happened to cause which shift.
+        local shift = #toDelete
+        for oldId, newId in pairs(newIds) do
+            newIds[oldId] = newId - shift
+        end
+        self:invalidateIdReferences()
+    end
+
+    -- The clone becomes the new selection - the natural thing to act on next, the same way a
+    -- freshly picked span or box leaves its own result selected. After invalidateIdReferences
+    -- above (break only), which already cleared it - this still has to run either way, copy or
+    -- break, so it is unconditional rather than duplicated into both branches.
+    self:clearSelection()
+    local finalIds = {}
+    for _, newId in pairs(newIds) do
+        self.selection[newId] = true
+        self.selectionCount = self.selectionCount + 1
+        table.insert(finalIds, newId)
+    end
+
+    -- The clone's own ends (item 6) - not the source's, which either still exists (plain copy) or
+    -- is already gone (break). Using newIds' FINAL values here matters: they were already shifted
+    -- above when breaking, so this checks the ids the clone actually has now.
+    self:autoHookupEndpoints(finalIds)
+
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: %s %d waypoint(s), %d internal connection(s), now selected.",
+        self.moveBreakOn and "broke off" or "copied", #record.members, edgeCount)
+    ADGraphManager:markChanges()
+end
+
+--- Copy is a toggle sitting on top of whichever move just happened or is about to, not a mode of
+--- its own - see move-tool-copy-and-break-spec in project memory for the two ways it applies:
+---
+---   1. Toggled on BEFORE or DURING a drag: finishDrag sees moveCopyOn and applies the copy
+---      itself once the drag actually completes.
+---   2. Toggled on AFTER a drag has already finished (self.dragId == nil): there is no pending
+---      drag to wait for, so this converts the just-finished move right now, using the record
+---      finishDrag already stashed in lastMoveRecord for exactly this case.
+---
+--- Auto-clears back to off once actually applied (case 2, and the mirror of it inside finishDrag)
+--- rather than staying on for the next drag too - a defensible default given a copy creates new
+--- waypoints, not just repositions existing ones, so leaving it silently armed risks a drag some
+--- time later cloning when a plain move was intended.
+function ADFlyoverEditor:toggleMoveCopy()
+    self.moveCopyOn = not self.moveCopyOn
+
+    if self.moveCopyOn and self.dragId == nil and self.lastMoveRecord ~= nil then
+        self:applyMoveAsCopy(self.lastMoveRecord)
+        self.lastMoveRecord = nil
+        self.moveCopyOn = false
+        self.moveBreakOn = false
+        return
+    end
+
+    -- Turned on WHILE a drag is already live: freeze the real waypoint(s) back at their pre-drag
+    -- spot right now, same as beginDrag does when copy is already on at grab time - the original
+    -- should never look like it "moved and then undid," it should just stop following the cursor
+    -- from this frame on. finishDrag tracks where the drag would have ended separately (via the
+    -- members' finalX/finalZ) so the eventual clone still lands wherever you actually release,
+    -- even though the real point stopped moving here.
+    if self.moveCopyOn and self.dragId ~= nil then
+        for _, n in ipairs(self.dragNeighbours or {}) do
+            self:moveTo(n.id, n.x, n.z)
+        end
+        if self.dragStartX ~= nil then
+            self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
+        end
+        self.dragFrozenCopy = true
+    elseif not self.moveCopyOn then
+        self.dragFrozenCopy = false
+    end
+
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move copy %s.", self.moveCopyOn and "on" or "off")
+end
+
+--- Disconnect (item 4, HUD label "disconnect") is independent of copy - decided 2026-09-21 after
+--- copy being a prerequisite read as confusing (it isn't a copy modifier, it just happens to
+--- BECOME one when copy is also on):
+---
+---   copy off, disconnect on:  standalone - finishDrag moves the set as normal, then severs its
+---                              OUTSIDE connections in place (disconnectExternal). No clone.
+---   copy on,  disconnect on:  same net result as before - applyMoveAsCopy clones, then deletes
+---                              the originals instead of restoring them, leaving a disconnected
+---                              clone at the drop spot.
+---
+--- So this toggle always applies; it no longer resets when copy turns off, and the HUD always
+--- shows its row under Move (see move-tool-copy-and-break-spec in project memory for the older,
+--- copy-gated history of this toggle).
+function ADFlyoverEditor:toggleMoveBreak()
+    self.moveBreakOn = not self.moveBreakOn
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move disconnect %s.", self.moveBreakOn and "on" or "off")
+end
+
+function ADFlyoverEditor:toggleMoveAutoHookup()
+    self.moveAutoHookupOn = not self.moveAutoHookupOn
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move auto-hookup %s.", self.moveAutoHookupOn and "on" or "off")
+end
+
+--- Item 6, widened 2026-09-21 (was total connections <= 1 only - resolveWholeRun's own "an end has
+--- at most one inside connection" idea for a run's two ends). A genuine THROUGH point (one
+--- incoming, one outgoing, to two DIFFERENT neighbours) is still excluded - that is a normal
+--- interior point with both its connections, snapping it elsewhere would replace a link, not add
+--- one. But a FORK where every remaining connection points the same logical way is now eligible
+--- too, on request: "two two-way, or both one-ways leaving or entering should be eligible" - a
+--- node that lost its one outside tie and kept two internal branches all flowing the same
+--- direction (all out, all in, or all dual) still has an unambiguous single role to reconnect.
+---
+--- Returns (eligible, neighbourIdSet, role) - role is "isolated" (0 connections), "source" (only
+--- outgoing - needs a new incoming link), "destination" (only incoming - needs a new outgoing
+--- link), or "dual" (every neighbour is a two-way pair - the new link should be dual too).
+local function isEndpoint(id)
+    local wp = ADGraphManager:getWayPointById(id)
+    if wp == nil then
+        return false
+    end
+    local seen = {}
+    for _, listName in ipairs({ "out", "incoming" }) do
+        for _, other in pairs(wp[listName] or {}) do
+            seen[other] = true
+        end
+    end
+
+    local outCount, inCount = #(wp.out or {}), #(wp.incoming or {})
+    if outCount == 0 and inCount == 0 then
+        return true, seen, "isolated"
+    end
+    if outCount == 0 then
+        return true, seen, "destination"
+    end
+    if inCount == 0 then
+        return true, seen, "source"
+    end
+
+    -- Both lists non-empty: eligible only if EVERY neighbour appears in BOTH lists (all pairs
+    -- genuinely dual) - otherwise this is a normal through-point (different neighbours in and
+    -- out), not a fork, and stays excluded exactly as before.
+    for other in pairs(seen) do
+        if not (table.contains(wp.out or {}, other) and table.contains(wp.incoming or {}, other)) then
+            return false
+        end
+    end
+    return true, seen, "dual"
+end
+
+--- Auto-hookup for a moved or copied set of ids (item 6) - checked at the tail of finishDrag (a
+--- plain move) and applyMoveAsCopy (copy/break), after positions are settled. Endpoints only (see
+--- isEndpoint) - an interior point already has both its connections, and snapping it elsewhere
+--- would mean REPLACING a link, not adding one; left for later if this ever extends past
+--- endpoints, per move-tool-auto-hookup-spec.
+---
+--- One candidate per endpoint - the single NEAREST other waypoint within tolerance, excluding the
+--- moved/copied set itself (reconnecting to something already there is the point; two ends of the
+--- same set drifting near each other is not what this is for). Divergence is only checked when the
+--- endpoint already has one neighbour to measure a heading from - a bare point (zero connections,
+--- e.g. a lone copied point) has no heading to diverge from, so distance alone decides it.
+function ADFlyoverEditor:autoHookupEndpoints(ids)
+    if not self.moveAutoHookupOn or ids == nil then
+        return 0
+    end
+
+    local movedSet = {}
+    for _, id in ipairs(ids) do
+        movedSet[id] = true
+    end
+
+    local maxDistance = ADFlyoverSettings.get("flyoverAutoHookupDistance") or 3.0
+    local maxDivergence = ADFlyoverSettings.get("flyoverAutoHookupDivergence") or 15
+    local wayPoints = ADGraphManager:getWayPoints()
+    local hooked = 0
+
+    for _, id in ipairs(ids) do
+        local endpoint, neighbours, role = isEndpoint(id)
+        if endpoint then
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                -- Heading: the AVERAGE direction away from every surviving neighbour, not just
+                -- one - a fork (role "source"/"destination"/"dual" with more than one neighbour,
+                -- widened 2026-09-21) has several, and none of them alone says which way the
+                -- candidate should roughly continue. "isolated" (a bare copied point) has none at
+                -- all, so heading/divergence is skipped entirely for it, same as before.
+                --
+                -- Direction and dual-ness both come straight from role now instead of inspecting
+                -- one neighbour's own lists: "source" (only outgoing survives) means wp used to be
+                -- fed from outside, so the replacement should too (target->wp); "destination"
+                -- (only incoming survives) means wp used to feed onward, so the replacement
+                -- continues that (wp->target); "dual" (every neighbour two-way) makes the new link
+                -- dual too. Got wpIsSource backwards on an earlier single-neighbour pass (reported
+                -- 2026-09-21 as "one connection was the wrong direction") - role removes the need
+                -- to infer it from an "inverse of the survivor" rule at all.
+                local headingX, headingZ = nil, nil
+                local hSumX, hSumZ, hCount = 0, 0, 0
+                for otherId in pairs(neighbours) do
+                    local ow = ADGraphManager:getWayPointById(otherId)
+                    if ow ~= nil then
+                        local hx, hz = wp.x - ow.x, wp.z - ow.z
+                        local len = MathUtil.vector2Length(hx, hz)
+                        if len > 1e-6 then
+                            hSumX, hSumZ, hCount = hSumX + hx / len, hSumZ + hz / len, hCount + 1
+                        end
+                    end
+                end
+                if hCount > 0 then
+                    local len = MathUtil.vector2Length(hSumX, hSumZ)
+                    if len > 1e-6 then
+                        headingX, headingZ = hSumX / len, hSumZ / len
+                    end
+                end
+                local dual = (role == "dual")
+                local wpIsSource = (role == "destination")
+
+                local bestId, bestDist = nil, maxDistance
+                for i = 1, #wayPoints do
+                    local other = wayPoints[i]
+                    if not movedSet[other.id] and not neighbours[other.id] then
+                        local dx, dz = other.x - wp.x, other.z - wp.z
+                        local dist = MathUtil.vector2Length(dx, dz)
+                        if dist <= bestDist and dist > 1e-6 then
+                            local ok = true
+                            if headingX ~= nil then
+                                local ux, uz = dx / dist, dz / dist
+                                local cosAngle = math.max(-1, math.min(1, ux * headingX + uz * headingZ))
+                                local angleDeg = math.deg(math.acos(cosAngle))
+                                ok = angleDeg <= maxDivergence
+                            end
+                            if ok then
+                                bestId, bestDist = other.id, dist
+                            end
+                        end
+                    end
+                end
+
+                if bestId ~= nil then
+                    local target = ADGraphManager:getWayPointById(bestId)
+                    if target ~= nil then
+                        -- Argument order carries the direction directly (rather than trusting the
+                        -- exact sign convention of a reverseDirection flag): wp was a source, so
+                        -- wp->target continues it; wp was a destination, so target->wp does.
+                        if wpIsSource then
+                            ADGraphManager:toggleConnectionBetween(wp, target, false, dual, false)
+                        else
+                            ADGraphManager:toggleConnectionBetween(target, wp, false, dual, false)
+                        end
+                        hooked = hooked + 1
+                    end
+                end
+            end
+        end
+    end
+
+    if hooked > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: auto-hookup connected %d endpoint(s).", hooked)
+    end
+    return hooked
+end
+
+--- Run/Span only - see gatherDragNeighbours/gatherOffsetChain. Blocked while an offset is already
+--- pending (moveOffsetChainIds ~= nil): flipping the toggle off then would leave the panel saying
+--- "off" while a chain is still live and awaiting its right-click commit, which is exactly the
+--- kind of stale-looking-inactive-but-still-armed state the rest of this feature works to avoid.
+function ADFlyoverEditor:toggleMoveOffset()
+    if self.moveOffsetChainIds ~= nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: an offset is still pending - right-click to finish it first.")
+        return
+    end
+    self.moveOffsetOn = not self.moveOffsetOn
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move offset %s.", self.moveOffsetOn and "on" or "off")
+end
+
+--- Item requested 2026-09-21: taper the offset slide toward either end of the chain instead of
+--- sliding it all rigidly - see applyMoveOffset for the actual blend. Live while a chain is
+--- already pending too (unlike toggleMoveOffset itself), since flipping it mid-adjust is exactly
+--- when you would want to see the effect.
+function ADFlyoverEditor:toggleMoveOffsetFalloff()
+    self.moveOffsetFalloffOn = not self.moveOffsetFalloffOn
+    if self.moveOffsetChainIds ~= nil then
+        self:applyMoveOffset()
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move offset falloff %s.", self.moveOffsetFalloffOn and "on" or "off")
+end
+
+--- Rotate's pivot choice (settled 2026-09-21): "click" rotates the moved set around the dragged
+--- point's own start position, "centroid" around the average of the whole set's start positions.
+--- Only takes effect on the NEXT grab (see beginDrag) - changing it mid-drag would yank the
+--- pivot out from under an already-rotating shape.
+function ADFlyoverEditor:cycleMoveRotatePivot()
+    self.moveRotatePivotMode = (self.moveRotatePivotMode == "click") and "centroid" or "click"
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move rotate pivot -> %s.", self.moveRotatePivotMode)
+end
+
+function ADFlyoverEditor:setMoveOffsetFalloffRadius(value)
+    self.moveOffsetFalloffRadius = math.max(0, math.min(AutoDrive.FLYOVER_FALLOFF_MAX, value))
+    if self.moveOffsetChainIds ~= nil then
+        self:applyMoveOffset()
+    end
+end
 
 -- ---------------------------------------------------------------------------------------------
 -- Typed numeric entry.
@@ -3067,18 +4822,74 @@ function ADFlyoverEditor:getEditableNumbers()
             settingEntry("divergence", "flyoverMergeDivergence")
         }
     elseif self.tool == self.TOOL.MOVE then
-        return { {
-            label = "falloff along track",
-            unit = "m",
-            get = function() return editor.falloffRadius end,
-            apply = function(value)
-                editor:setFalloffRadius(value)
-                return editor.falloffRadius
-            end,
-            step = function(dir)
-                editor:setFalloffRadius(editor.falloffRadius + dir * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
-            end
-        } }
+        local fields = {}
+
+        -- A live offset chain owns this field while one is pending - it is a different value
+        -- (signed distance, Run/Span only) from falloff's radius, and the two never apply at once
+        -- (offset replaces the weighted-follower mechanism entirely - see gatherDragNeighbours).
+        if self.moveOffsetChainIds ~= nil then
+            table.insert(fields, {
+                label = "sideways offset",
+                unit = "m",
+                get = function() return editor.moveOffsetDistance end,
+                apply = function(value)
+                    editor:setMoveOffsetDistance(value)
+                    return editor.moveOffsetDistance
+                end,
+                step = function(dir)
+                    editor:setMoveOffsetDistance(editor.moveOffsetDistance + dir * AutoDrive.FLYOVER_OFFSET_STEP)
+                end
+            })
+        end
+
+        if (self.moveOffsetOn or self.moveOffsetChainIds ~= nil) and self.moveOffsetFalloffOn then
+            table.insert(fields, {
+                label = "offset falloff",
+                unit = "m",
+                wheelReach = true,
+                get = function() return editor.moveOffsetFalloffRadius end,
+                apply = function(value)
+                    editor:setMoveOffsetFalloffRadius(value)
+                    return editor.moveOffsetFalloffRadius
+                end,
+                step = function(dir)
+                    editor:setMoveOffsetFalloffRadius(editor.moveOffsetFalloffRadius + dir * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
+                end
+            })
+        end
+
+        -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
+        -- no radius for it to set - so the field would just be a dead number sitting on the panel.
+        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
+            table.insert(fields, {
+                label = "falloff along track",
+                unit = "m",
+                -- Marks this field for handleWheel: a spatial REACH wants wheel-up to WIDEN it,
+                -- the opposite of the global wheel-reversal every tolerance/count field uses (see
+                -- handleWheel). `step`'s own `dir` still has to stay the RAW, unreversed sign here
+                -- (matching what the +/- stepper buttons already send) - handleWheel is what flips
+                -- the wheel's contribution before it ever reaches this function, not this function
+                -- itself, since this same `step` also serves the buttons which must not be flipped.
+                wheelReach = true,
+                get = function() return editor.falloffRadius end,
+                apply = function(value)
+                    editor:setFalloffRadius(value)
+                    return editor.falloffRadius
+                end,
+                step = function(dir)
+                    editor:setFalloffRadius(editor.falloffRadius + dir * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
+                end
+            })
+        end
+
+        -- Persisted settings (unlike the two above, which are ephemeral per-drag state) - same
+        -- settingEntry() shape MERGE already uses for its own distance/divergence pair.
+        if self.moveAutoHookupOn then
+            table.insert(fields, settingEntry("hookup distance", "flyoverAutoHookupDistance"))
+            table.insert(fields, settingEntry("hookup divergence", "flyoverAutoHookupDivergence", "deg"))
+        end
+
+        return fields
     end
     return {}
 end
@@ -3115,14 +4926,14 @@ function ADFlyoverEditor:beginEditNumber(entry)
         apply = entry.apply,
         buffer = ""
     }
-    Logging.info("[FlyoverEditor]: editing '%s' (currently %s). Type a value, Enter to apply, Esc to cancel.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: editing '%s' (currently %s). Type a value, Enter to apply, Esc to cancel.",
         entry.label, tostring(current))
 end
 
 function ADFlyoverEditor:cancelEditNumber()
     self.editingWarned = false
     if self.editing ~= nil then
-        Logging.info("[FlyoverEditor]: '%s' left unchanged.", self.editing.label)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: '%s' left unchanged.", self.editing.label)
     end
     self.editing = nil
 end
@@ -3146,10 +4957,10 @@ function ADFlyoverEditor:commitEditNumber()
     if applied == nil then
         Logging.warning("[FlyoverEditor]: could not apply %s to '%s'.", tostring(typed), edit.label)
     elseif math.abs(applied - typed) > 1e-6 then
-        Logging.info("[FlyoverEditor]: '%s' set to %.2f%s - the nearest step to the %.2f typed.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: '%s' set to %.2f%s - the nearest step to the %.2f typed.",
             edit.label, applied, edit.unit or "", typed)
     else
-        Logging.info("[FlyoverEditor]: '%s' set to %.2f%s.", edit.label, applied, edit.unit or "")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: '%s' set to %.2f%s.", edit.label, applied, edit.unit or "")
     end
 end
 
@@ -3162,7 +4973,7 @@ function ADFlyoverEditor:handleEditKey(unicode, sym)
     -- Every key goes to the field while one is open, so this state has to be obvious. The panel
     -- shows the field highlighted with a caret; this is the log half of the same message.
     if not self.editingWarned then
-        Logging.info("[FlyoverEditor]: typing into '%s' - the keyboard goes to this field until Enter or Esc, or a click elsewhere.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: typing into '%s' - the keyboard goes to this field until Enter or Esc, or a click elsewhere.",
             self.editing.label)
         self.editingWarned = true
     end
@@ -3210,7 +5021,7 @@ end
 function ADFlyoverEditor:toggleJunctionCheckSurface()
     self.junctionCheckSurface = not (self.junctionCheckSurface ~= false)
     self.junctionPreviewKey = nil        -- force a resolve so the change is visible immediately
-    Logging.info("[FlyoverEditor]: junction road-surface check %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction road-surface check %s.",
         self.junctionCheckSurface and "on" or "off (turns only bounded by radius)")
 end
 
@@ -3218,7 +5029,7 @@ end
 function ADFlyoverEditor:toggleJunctionCheckObstacles()
     self.junctionCheckObstacles = not (self.junctionCheckObstacles ~= false)
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction obstacle check %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction obstacle check %s.",
         self.junctionCheckObstacles and "on" or "off (corridors may pass through obstacles)")
 end
 
@@ -3226,7 +5037,7 @@ end
 function ADFlyoverEditor:toggleJunctionCurveEngine()
     self.junctionUseDubins = not (self.junctionUseDubins ~= false)
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction curve engine: %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction curve engine: %s.",
         self.junctionUseDubins and "Dubins (radius-bounded)" or "biarc (tangent fit)")
 end
 
@@ -3237,7 +5048,7 @@ end
 function ADFlyoverEditor:toggleJunctionRebuild()
     self.junctionRebuild = not (self.junctionRebuild == true)
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction existing turns will be %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction existing turns will be %s.",
         self.junctionRebuild and "REBUILT (old connectors replaced)" or "kept as they are")
 end
 
@@ -3247,19 +5058,19 @@ end
 function ADFlyoverEditor:toggleJunctionExtendTrim()
     self.junctionExtendTrim = not (self.junctionExtendTrim ~= false)
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction trim/extend %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction trim/extend %s.",
         self.junctionExtendTrim and "on (projects past a trimmed stem)" or "off (clamps at the trim)")
 end
 
 function ADFlyoverEditor:toggleSnapToTerrain()
     self.snapToTerrain = not self.snapToTerrain
-    Logging.info("[FlyoverEditor]: heights now snap to %s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: heights now snap to %s.",
         self.snapToTerrain and "the terrain, ignoring structures" or "whatever surface is there")
 end
 
 function ADFlyoverEditor:cycleDeleteScope()
     self.deleteScope = (self.deleteScope % #self.DELETE_SCOPE_NAMES) + 1
-    Logging.info("[FlyoverEditor]: delete removes %s.", self.DELETE_SCOPE_NAMES[self.deleteScope])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: delete removes %s.", self.DELETE_SCOPE_NAMES[self.deleteScope])
 end
 
 --- Every waypoint on the run through seedId, out to the junctions at either end.
@@ -3336,7 +5147,7 @@ function ADFlyoverEditor:deleteRunAtCursor()
         ADGraphManager:removeWayPoint(id, false)
     end
 
-    Logging.info("[FlyoverEditor]: deleted a run of %d waypoint(s), stopping at %d junction(s), which were left in place.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: deleted a run of %d waypoint(s), stopping at %d junction(s), which were left in place.",
         #ids, junctionCount)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -3365,7 +5176,7 @@ function ADFlyoverEditor:deleteAtCursor()
     ADGraphManager:removeWayPoint(self.hoverId, false)
     -- Position as well as id: removal renumbers, so deleting a run one point at a time reports the
     -- same id over and over and looks like a stuck loop when it is working correctly.
-    Logging.info("[FlyoverEditor]: deleted waypoint id=%s at x=%.1f z=%.1f (%d left).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: deleted waypoint id=%s at x=%.1f z=%.1f (%d left).",
         tostring(self.hoverId), px, pz, ADGraphManager:getWayPointsCount())
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -3386,7 +5197,7 @@ function ADFlyoverEditor:deleteSelection()
         ADGraphManager:removeWayPoint(id, false)
     end
 
-    Logging.info("[FlyoverEditor]: deleted %d selected waypoint(s).", #ids)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: deleted %d selected waypoint(s).", #ids)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
 end
@@ -3413,7 +5224,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
     -- with known-good behaviour instead of depending on what reference the cursor's y is in.
     local terrainY = self:resolveHeightAt(x, z, y, y)
     if not self.loggedHeightComparison then
-        Logging.info("[FlyoverEditor]: height check - cursor y=%s, terrain y=%.2f (using terrain).",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: height check - cursor y=%s, terrain y=%.2f (using terrain).",
             y ~= nil and string.format("%.2f", y) or "nil", terrainY)
         self.loggedHeightComparison = true
     end
@@ -3440,7 +5251,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
     self.placedCount = self.placedCount + 1
 
     ADGraphManager:markChanges()
-    Logging.info("[FlyoverEditor]: placed waypoint id=%s at x=%.1f y=%.1f z=%.1f%s",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: placed waypoint id=%s at x=%.1f y=%.1f z=%.1f%s",
         tostring(newId), x, y, z, connectPrevious and " (connected to the previous one)" or "")
 end
 
@@ -3486,7 +5297,7 @@ AutoDrive.FLYOVER_TOOL_EXIT_DELAY = 350
 function ADFlyoverEditor:cycleSmoothMode()
     self.smoothMode = (self.smoothMode % #self.SMOOTH_MODE_NAMES) + 1
     self.smoothPreview = nil
-    Logging.info("[FlyoverEditor]: smooth mode -> %s.", self.SMOOTH_MODE_NAMES[self.smoothMode])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: smooth mode -> %s.", self.SMOOTH_MODE_NAMES[self.smoothMode])
 end
 
 function ADFlyoverEditor:smoothClick()
@@ -3504,7 +5315,7 @@ function ADFlyoverEditor:smoothClick()
     if self.smoothFromId == nil then
         self.spanIds = nil
         self.smoothFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: smoothing from id=%s; click the far end of the span.", tostring(self.smoothFromId))
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: smoothing from id=%s; click the far end of the span.", tostring(self.smoothFromId))
         return
     end
 
@@ -3513,7 +5324,7 @@ function ADFlyoverEditor:smoothClick()
             return
         end
         self.smoothToId = self.hoverId
-        Logging.info("[FlyoverEditor]: smoothing id=%s..id=%s in %s mode. Wheel sets %s, right-click applies.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: smoothing id=%s..id=%s in %s mode. Wheel sets %s, right-click applies.",
             tostring(self.smoothFromId), tostring(self.smoothToId),
             self.SMOOTH_MODE_NAMES[self.smoothMode],
             self.smoothMode == self.SMOOTH_MODE.REBUILD and "max spacing" or "strength")
@@ -3523,7 +5334,7 @@ function ADFlyoverEditor:smoothClick()
     if self.hoverId ~= self.smoothFromId then
         self.smoothToId = self.hoverId
         self.smoothPreview = nil
-        Logging.info("[FlyoverEditor]: span far end moved to id=%s. Right-click to clear and start again.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: span far end moved to id=%s. Right-click to clear and start again.",
             tostring(self.smoothToId))
     end
 end
@@ -3531,7 +5342,7 @@ end
 function ADFlyoverEditor:cancelSmooth()
     self.spanIds = nil
     if self.smoothFromId ~= nil or self.smoothToId ~= nil then
-        Logging.info("[FlyoverEditor]: smooth cancelled.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: smooth cancelled.")
     end
     self.smoothFromId, self.smoothToId = nil, nil
     self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
@@ -3684,7 +5495,7 @@ function ADFlyoverEditor:commitSmooth()
                 end
             end
         end
-        Logging.info("[FlyoverEditor]: relaxed %d of %d waypoint(s) at strength %d; %d pinned (junctions or ends).",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: relaxed %d of %d waypoint(s) at strength %d; %d pinned (junctions or ends).",
             moved, #ids, self.smoothStrength, #ids - moved)
         ADGraphManager:markChanges()
         self.smoothFromId, self.smoothToId = nil, nil
@@ -3812,11 +5623,11 @@ function ADFlyoverEditor:rebuildSpanInPieces(ids)
     end
 
     if piecesDone == 0 then
-        Logging.info("[FlyoverEditor]: nothing to rebuild - the span is all anchors, or too short between them.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: nothing to rebuild - the span is all anchors, or too short between them.")
         return
     end
 
-    Logging.info("[FlyoverEditor]: rebuilt %d piece(s) at %.1fm max spacing: %d point(s) -> %d, %d junction/marker anchor(s) kept in place.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: rebuilt %d piece(s) at %.1fm max spacing: %d point(s) -> %d, %d junction/marker anchor(s) kept in place.",
         piecesDone, maxSpacing, before, after, junctions)
 end
 
@@ -3852,7 +5663,7 @@ function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
     end
 
     if totalLength <= 0 then
-        Logging.info("[FlyoverEditor]: nothing to divide.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: nothing to divide.")
         return
     end
 
@@ -3876,7 +5687,7 @@ function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
         end
     end
 
-    Logging.info("[FlyoverEditor]: divided %d piece(s) into %d point(s) total, %d intersection anchor(s) kept in place.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: divided %d piece(s) into %d point(s) total, %d intersection anchor(s) kept in place.",
         done, placed, anchors)
 end
 
@@ -4079,7 +5890,7 @@ function ADFlyoverEditor:nameAtCursor()
             .. "registered as 'ADEnterTargetNameGui'. Is AutoDrive fully loaded?")
         return
     end
-    Logging.info("[FlyoverEditor]: opened the name dialog for waypoint id=%s.", tostring(self.hoverId))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: opened the name dialog for waypoint id=%s.", tostring(self.hoverId))
 end
 
 
@@ -4098,12 +5909,12 @@ ADFlyoverEditor.CONNECTION_NAMES = { "one-way", "two-way", "reverse" }
 
 function ADFlyoverEditor:cycleConnectionMode()
     self.connectionMode = (self.connectionMode % #self.CONNECTION_NAMES) + 1
-    Logging.info("[FlyoverEditor]: new connections are now %s.", self.CONNECTION_NAMES[self.connectionMode])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: new connections are now %s.", self.CONNECTION_NAMES[self.connectionMode])
 end
 
 function ADFlyoverEditor:togglePriority()
     self.subPrio = not self.subPrio
-    Logging.info("[FlyoverEditor]: new connections are now %s.", self.subPrio and "secondary" or "primary")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: new connections are now %s.", self.subPrio and "secondary" or "primary")
 end
 
 function ADFlyoverEditor:cycleFalloff()
@@ -4131,6 +5942,23 @@ function ADFlyoverEditor:getNextStepLines()
     local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
     local function side() return (self.offsetSide or 1) >= 0 and L("left") or L("right") end
 
+    -- Circle-select is tool-agnostic (selection is a shared substrate, same as Ctrl+drag box), so
+    -- this overrides whatever the current tool would otherwise say - the mid-drag state is what the
+    -- player actually needs telling right now, regardless of which tool is active. No "armed" state
+    -- to report any more - Alt+drag starts a circle in one motion, the same as Ctrl+drag does a box.
+    if self.circleActive then
+        return L("Release to select everything inside the circle.")
+    end
+    if self.freehandActive then
+        return L("Release to select everything inside the traced area.")
+    end
+    if self.rotBoxDragging then
+        return L("Release to set the box's edge (direction and length).")
+    end
+    if self.rotBoxActive then
+        return L("Click to set the width and finish the box.")
+    end
+
     if self.tool == t.NONE then
         return L("No tool selected. Pick one above, or press 1-9 / 0.")
     end
@@ -4141,8 +5969,35 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Click to start a run, or a waypoint to draw on from it.")
     elseif self.tool == t.MOVE then
+        if self.moveOffsetChainIds ~= nil then
+            if self.dragId ~= nil then
+                return string.format(L("Dragging sets the offset (%.1fm). Release, then wheel to fine-tune."),
+                    self.moveOffsetDistance)
+            end
+            return string.format(L("Offset %.1fm - wheel to adjust, right-click to finish."),
+                self.moveOffsetDistance)
+        end
         if self.dragId ~= nil then
-            return string.format(L("Wheel changes falloff (%.1fm), live. Release to drop."), self.falloffRadius)
+            local verb = (self.moveCopyOn and self.moveBreakOn and L("disconnect"))
+                or (self.moveCopyOn and L("copy"))
+                or (self.moveBreakOn and L("drop and disconnect"))
+                or L("drop")
+            if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
+                return string.format(L("Wheel changes falloff (%.1fm), live. Release to %s."), self.falloffRadius, verb)
+            end
+            return string.format(L("Release to %s."), verb)
+        end
+        if self.moveSelectMode == self.MOVE_SELECT.SPAN then
+            if self.moveSpanFromId == nil then
+                return L("Click a waypoint to start the span.")
+            end
+            if self.moveSpanToId == nil then
+                return L("Click the far end of the span.")
+            end
+            if self.hoverId ~= nil and self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId] then
+                return L("Drag the highlighted span.")
+            end
+            return L("Click to replace whichever end is closer, or drag the span.")
         end
         if self.hoverId ~= nil then
             return L("Drag the highlighted waypoint.")
@@ -4306,17 +6161,17 @@ end
 -- function that no longer existed.
 function ADFlyoverEditor:toggleSplineEnds()
     self.splineSwapEnds = not self.splineSwapEnds
-    Logging.info("[FlyoverEditor]: spline endpoints are %s.", self.splineSwapEnds and "swapped" or "normal")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline endpoints are %s.", self.splineSwapEnds and "swapped" or "normal")
 end
 
 function ADFlyoverEditor:toggleSplineEndTangent()
     self.splineFlipEndTangent = not self.splineFlipEndTangent
-    Logging.info("[FlyoverEditor]: spline end tangent %s.", self.splineFlipEndTangent and "flipped" or "auto")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline end tangent %s.", self.splineFlipEndTangent and "flipped" or "auto")
 end
 
 function ADFlyoverEditor:toggleSplineStartTangent()
     self.splineFlipStartTangent = not self.splineFlipStartTangent
-    Logging.info("[FlyoverEditor]: spline start tangent %s.", self.splineFlipStartTangent and "flipped" or "auto")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline start tangent %s.", self.splineFlipStartTangent and "flipped" or "auto")
 end
 
 --- Build the interpolation, applying any tangent flips.
@@ -4363,7 +6218,7 @@ end
 
 function ADFlyoverEditor:cycleCurvature()
     self.curvatureIndex = (self.curvatureIndex % #self.CURVATURE_VALUES) + 1
-    Logging.info("[FlyoverEditor]: spline curvature %s.", self.CURVATURE_NAMES[self.curvatureIndex])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline curvature %s.", self.CURVATURE_NAMES[self.curvatureIndex])
 end
 
 function ADFlyoverEditor:splineClick()
@@ -4373,7 +6228,7 @@ function ADFlyoverEditor:splineClick()
 
     if self.splineFromId == nil then
         self.splineFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: spline from id=%s; click the waypoint to curve to.", tostring(self.splineFromId))
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: spline from id=%s; click the waypoint to curve to.", tostring(self.splineFromId))
         return
     end
 
@@ -4387,7 +6242,7 @@ function ADFlyoverEditor:splineClick()
         if type(AutoDrive.splineInterpolationUserCurvature) ~= "number" then
             AutoDrive.splineInterpolationUserCurvature = AutoDrive.FLYOVER_DEFAULT_CURVATURE
         end
-        Logging.info("[FlyoverEditor]: previewing a spline id=%s -> id=%s. Wheel adjusts curvature, right-click places it.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: previewing a spline id=%s -> id=%s. Wheel adjusts curvature, right-click places it.",
             tostring(self.splineFromId), tostring(self.splineToId))
         return
     end
@@ -4434,7 +6289,7 @@ end
 
 function ADFlyoverEditor:cancelSplinePreview()
     if self.splineFromId ~= nil or self.splineToId ~= nil then
-        Logging.info("[FlyoverEditor]: spline preview discarded.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: spline preview discarded.")
     end
     self.splineFromId, self.splineToId = nil, nil
     self.splineResolvedStart, self.splineResolvedEnd = nil, nil
@@ -4464,7 +6319,7 @@ function ADFlyoverEditor:commitSplinePreview()
         -- Below curvature 0.5 the mod deliberately falls back to a straight line, and it also
         -- refuses a preview between two waypoints that are already connected. Both are ordinary
         -- outcomes rather than failures, so this connects them straight rather than complaining.
-        Logging.info("[FlyoverEditor]: no curve to place (curvature %.2f); connecting id=%s to id=%s directly.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no curve to place (curvature %.2f); connecting id=%s to id=%s directly.",
             curvature or -1, tostring(startId), tostring(endId))
         ADEditorHistory:snapshot("connect (straight)")
         ADGraphManager:toggleConnectionBetween(startNode, endNode, reverse, dual, false)
@@ -4514,7 +6369,7 @@ function ADFlyoverEditor:commitSplinePreview()
         end
     end
 
-    Logging.info("[FlyoverEditor]: placed spline id=%s -> id=%s with %d point(s), curvature %.2f, %s%s%s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: placed spline id=%s -> id=%s with %d point(s), curvature %.2f, %s%s%s.",
         tostring(chainStart), tostring(chainEnd), #waypoints, curvature or -1,
         dual and "two-way" or "one-way", flags ~= AutoDrive.FLAG_NONE and " secondary" or "",
         reverse and " (reversed)" or "")
@@ -4682,7 +6537,7 @@ function ADFlyoverEditor:orderedRunThrough(seedId)
         -- No ends at all: a closed loop, not a failure. Cut it opposite the seed and carry on.
         ids = count >= 3 and orderClosedRun(run, count, seedId) or nil
         if ids ~= nil and #ids >= 3 then
-            Logging.info("[FlyoverEditor]: that run is a closed loop of %d waypoint(s); using it "
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: that run is a closed loop of %d waypoint(s); using it "
                 .. "cut opposite id=%s.", #ids, tostring(seedId))
         else
             return nil, nil, nil, why
@@ -4876,7 +6731,7 @@ function ADFlyoverEditor:sidingClick()
         Logging.warning("[FlyoverEditor]: %s", tostring(err))
         return
     end
-    Logging.info("[FlyoverEditor]: siding centred on id=%s - %.0fm long, %.1fm to the %s, merging "
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: siding centred on id=%s - %.0fm long, %.1fm to the %s, merging "
         .. "over %.0fm at each end. Wheel changes the length, right-click applies.",
         tostring(self.sidingAnchorId), plan.length, plan.offset,
         plan.side >= 0 and "left" or "right", plan.merge)
@@ -4948,7 +6803,7 @@ function ADFlyoverEditor:commitSiding()
     self:splineConnectIds(aId, firstNewId, dual, flags)
     self:splineConnectIds(lastNewId, dId, dual, flags)
 
-    Logging.info("[FlyoverEditor]: laid a %.0fm siding %.1fm to the %s with %.0fm merges, %d track "
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: laid a %.0fm siding %.1fm to the %s with %.0fm merges, %d track "
         .. "waypoint(s), attached at id=%s and id=%s.",
         plan.length, plan.offset, plan.side >= 0 and "left" or "right", plan.merge,
         #plan.track, tostring(aId), tostring(dId))
@@ -4960,7 +6815,7 @@ end
 
 function ADFlyoverEditor:cancelSiding()
     if self.sidingAnchorId ~= nil then
-        Logging.info("[FlyoverEditor]: cancelled the siding.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the siding.")
     end
     self.sidingAnchorId, self.sidingPreview, self.sidingBlockedBy = nil, nil, nil
 end
@@ -4991,7 +6846,7 @@ function ADFlyoverEditor:offsetClick()
     if self.offsetFromId == nil then
         self.offsetFromId = self.hoverId
         self.spanIds = nil
-        Logging.info("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
             self.TOOL_NAMES[self.tool] or "offset", tostring(self.offsetFromId))
         return
     end
@@ -5013,7 +6868,7 @@ function ADFlyoverEditor:offsetClick()
     if seedPts ~= nil then
         self.offsetSide = self:offsetSideFromCursor(seedPts)
     end
-    Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
         .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
     -- The actual route, not just its length. runPathBetween is a path FINDER: asked to get from a
     -- siding back to the main line it can leave along one merge taper and return along the other,
@@ -5024,7 +6879,7 @@ function ADFlyoverEditor:offsetClick()
     for i, id in ipairs(span) do
         ids[i] = tostring(id)
     end
-    Logging.info("[FlyoverEditor]: span route: %s", table.concat(ids, " -> "))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: span route: %s", table.concat(ids, " -> "))
 end
 
 --- Where a chain turns back on itself, or nil when it does not.
@@ -5229,7 +7084,7 @@ function ADFlyoverEditor:offsetSpanPoints()
         if #check == #span and reversalIn(check) ~= nil then
             local straight = self:straightRouteBetween(self.offsetFromId, self.offsetToId)
             if straight ~= nil and #straight >= 2 then
-                Logging.info("[FlyoverEditor]: the shortest path doubled back through an "
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: the shortest path doubled back through an "
                     .. "intersection; took the straight run instead (%d waypoint(s), was %d).",
                     #straight, #span)
                 span = straight
@@ -5418,7 +7273,7 @@ end
 --- dividing is needed, because the attachment points are the span's own endpoints, which already
 --- exist - that is what selecting a span rather than a length buys.
 function ADFlyoverEditor:commitOffset()
-    Logging.info("[FlyoverEditor]: commit %s: from=%s to=%s anchor=%s preview=%s",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: commit %s: from=%s to=%s anchor=%s preview=%s",
         self.tool == self.TOOL.SIDING and "siding" or "parallel",
         tostring(self.offsetFromId), tostring(self.offsetToId), tostring(self.sidingAnchorId),
         self.offsetPreview ~= nil and tostring(#self.offsetPreview) or "nil")
@@ -5492,7 +7347,7 @@ function ADFlyoverEditor:commitOffset()
         self:splineConnectIds(lastNewId, span[#span], dual, flags)
     end
 
-    Logging.info("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
         siding and "siding" or "parallel track", #laying, self.offsetDistance,
         (self.offsetSide or 1) >= 0 and "left" or "right",
         siding and ", splined in at both ends"
@@ -5508,7 +7363,7 @@ end
 
 function ADFlyoverEditor:cancelOffset()
     if self.offsetFromId ~= nil or self.offsetToId ~= nil then
-        Logging.info("[FlyoverEditor]: cancelled the span.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the span.")
     end
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
     self.spanIds = nil
@@ -5611,7 +7466,7 @@ local roadProbeNoted = {}
 local function roadNote(key, fmt, ...)
     if not roadProbeNoted[key] then
         roadProbeNoted[key] = true
-        Logging.info("[FlyoverEditor]: junction clearance - " .. fmt, ...)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction clearance - " .. fmt, ...)
     end
 end
 
@@ -5801,7 +7656,7 @@ function ADFlyoverEditor:groundClick()
         self.spanIds = nil
         self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
         self.groundFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: grounding from id=%s; click the far end of the span.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: grounding from id=%s; click the far end of the span.",
             tostring(self.groundFromId))
         return
     end
@@ -5812,14 +7667,14 @@ function ADFlyoverEditor:groundClick()
 
     self.groundToId = self.hoverId
     self.groundPreview = nil
-    Logging.info("[FlyoverEditor]: ground span set, id=%s to id=%s. Wheel sets the tolerance "
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: ground span set, id=%s to id=%s. Wheel sets the tolerance "
         .. "(%.1fm). Right-click re-seats what is marked.",
         tostring(self.groundFromId), tostring(self.groundToId), self.groundTolerance)
 end
 
 function ADFlyoverEditor:commitGround()
     if self.groundPreview == nil or #self.groundPreview == 0 then
-        Logging.info("[FlyoverEditor]: nothing is further than %.1fm off the ground in that span "
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: nothing is further than %.1fm off the ground in that span "
             .. "(%d waypoint(s) checked).", self.groundTolerance, self.groundChecked or 0)
         self:cancelGround()
         return
@@ -5843,7 +7698,7 @@ function ADFlyoverEditor:commitGround()
         end
     end
 
-    Logging.info("[FlyoverEditor]: re-seated %d waypoint(s) on the ground - %d lowered, %d raised "
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: re-seated %d waypoint(s) on the ground - %d lowered, %d raised "
         .. "(tolerance %.1fm).", moved, lowered, raised, self.groundTolerance)
 
     self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
@@ -5855,7 +7710,7 @@ end
 function ADFlyoverEditor:cancelGround()
     self.spanIds = nil
     if self.groundFromId ~= nil or self.groundToId ~= nil then
-        Logging.info("[FlyoverEditor]: cancelled the ground span.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the ground span.")
     end
     self.groundFromId, self.groundToId, self.groundPreview = nil, nil, nil
 end
@@ -5875,7 +7730,7 @@ function ADFlyoverEditor:straightenClick()
     if self.straightenFromId == nil then
         self.spanIds = nil
         self.straightenFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: straightening from id=%s; click the far end of the span.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: straightening from id=%s; click the far end of the span.",
             tostring(self.straightenFromId))
         return
     end
@@ -5893,7 +7748,7 @@ function ADFlyoverEditor:straightenClick()
 
     self.straightenToId = self.hoverId
     self.straightenPreview = nil
-    Logging.info("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the tolerance (%.2fm), right-click applies.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the tolerance (%.2fm), right-click applies.",
         #span, self.straightenTolerance)
 end
 
@@ -6035,7 +7890,7 @@ function ADFlyoverEditor:commitStraighten()
     ADEditorHistory:snapshot("straighten span")
     local pieces = self:straightenSpanInPieces(span)
 
-    Logging.info("[FlyoverEditor]: straightened a %d-point span in %d junction-free piece(s) at %.2fm tolerance.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: straightened a %d-point span in %d junction-free piece(s) at %.2fm tolerance.",
         #pts, pieces, self.straightenTolerance)
 
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
@@ -6046,7 +7901,7 @@ end
 function ADFlyoverEditor:cancelStraighten()
     self.spanIds = nil
     if self.straightenFromId ~= nil or self.straightenToId ~= nil then
-        Logging.info("[FlyoverEditor]: cancelled the straighten span.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the straighten span.")
     end
     self.straightenFromId, self.straightenToId, self.straightenPreview = nil, nil, nil
 end
@@ -6066,7 +7921,7 @@ function ADFlyoverEditor:divideClick()
     if self.divideFromId == nil then
         self.spanIds = nil
         self.divideFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: dividing from id=%s; click the far end of the span.", tostring(self.divideFromId))
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: dividing from id=%s; click the far end of the span.", tostring(self.divideFromId))
         return
     end
 
@@ -6084,7 +7939,7 @@ function ADFlyoverEditor:divideClick()
         -- Start from what is already there, so the wheel adjusts from the current spacing rather
         -- than jumping to an arbitrary default.
         self.divideCount = math.max(0, #span - 2)
-        Logging.info("[FlyoverEditor]: span of %d waypoint(s), %d between the ends. Wheel to change, right-click to apply.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s), %d between the ends. Wheel to change, right-click to apply.",
             #span, self.divideCount)
         return
     end
@@ -6098,7 +7953,7 @@ function ADFlyoverEditor:divideClick()
         -- meant something entirely different from one span to the next - 39 points wheeled up on a
         -- long span were then applied to a single segment.
         self.divideCount = self:currentInteriorCount(self.divideFromId, self.divideToId)
-        Logging.info("[FlyoverEditor]: span far end moved to id=%s, %d point(s) between the ends. Right-click to clear and start again.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: span far end moved to id=%s, %d point(s) between the ends. Right-click to clear and start again.",
             tostring(self.divideToId), self.divideCount)
     end
 end
@@ -7159,7 +9014,7 @@ function ADFlyoverEditor:junctionClick()
     if self.cursorX == nil then return end
     self.junctionArmed = { cx = self.cursorX, cz = self.cursorZ, cy = self.cursorY }
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction site locked at %.1f, %.1f - wheel = scope, right-click places.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction site locked at %.1f, %.1f - wheel = scope, right-click places.",
         self.cursorX, self.cursorZ)
 end
 
@@ -7180,36 +9035,36 @@ function ADFlyoverEditor:applyJunction()
     -- Every count below comes straight from the preview that was just looked at (armed, so it already
     -- logged the per-pair detail) - not recomputed here, so this summary can never disagree with it.
     if (jp.nTight or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - refused %d turn(s): tighter than the %.0f m turn radius even at the %.0f m floor.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - refused %d turn(s): tighter than the %.0f m turn radius even at the %.0f m floor.",
             jp.nTight, jp.turnRadius or 0, AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4)
     end
     if (jp.nOffRoad or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - refused %d turn(s): no radius down to %.0f m keeps a %.1f m corridor on the road.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - refused %d turn(s): no radius down to %.0f m keeps a %.1f m corridor on the road.",
             jp.nOffRoad, AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4,
             self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4)
     end
     if (jp.nNoCurve or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - %d pair(s) had no joinable curve (see the id lines above) - not placed.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d pair(s) had no joinable curve (see the id lines above) - not placed.",
             jp.nNoCurve)
     end
     if (jp.nUTurn or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - %d pair(s) skipped as U-turns (bearings over 170 deg apart, see above).",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d pair(s) skipped as U-turns (bearings over 170 deg apart, see above).",
             jp.nUTurn)
     end
     if (jp.nFar or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - %d pair(s) never came close to each other - likely two separate crossings caught by one scope; not placed.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d pair(s) never came close to each other - likely two separate crossings caught by one scope; not placed.",
             jp.nFar)
     end
     if (jp.nLane or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - %d redundant lane pairing(s) skipped (a closer match exists for the same turn, see above).",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d redundant lane pairing(s) skipped (a closer match exists for the same turn, see above).",
             jp.nLane)
     end
     if (jp.nBlocked or 0) > 0 then
-        Logging.info("[FlyoverEditor]: junction - refused %d turn(s): a static obstacle sits in the corridor at every radius tried.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - refused %d turn(s): a static obstacle sits in the corridor at every radius tried.",
             jp.nBlocked)
     end
     if #newMoves == 0 then
-        Logging.info("[FlyoverEditor]: junction - nothing new to connect here.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - nothing new to connect here.")
         return
     end
 
@@ -7232,7 +9087,7 @@ function ADFlyoverEditor:applyJunction()
         end
     end
     if staleCut > 0 then
-        Logging.info("[FlyoverEditor]: junction - severed %d stale direct link(s) between road nodes (rebuild).", staleCut)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - severed %d stale direct link(s) between road nodes (rebuild).", staleCut)
     end
     -- A movement (e,x) and its MIRROR (e2,x2) with e2.wp.id==x.wp.id and x2.wp.id==e.wp.id can only
     -- both exist when BOTH boundary nodes carry traffic in and out of the scope - a genuine two-way
@@ -7348,14 +9203,14 @@ function ADFlyoverEditor:applyJunction()
         end
     end
     if debrisCleared > 0 then
-        Logging.info("[FlyoverEditor]: junction - cleared %d old junction point(s) (rebuild).", debrisCleared)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - cleared %d old junction point(s) (rebuild).", debrisCleared)
     end
 
     if mirrorsSkipped > 0 then
-        Logging.info("[FlyoverEditor]: junction - %d mirrored one-way pair(s) folded into their dual connector (built once, not twice).",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d mirrored one-way pair(s) folded into their dual connector (built once, not twice).",
             mirrorsSkipped)
     end
-    Logging.info("[FlyoverEditor]: junction placed %d connector(s) (%d dual, %d rebuilt over old ones), consumed %d stub point(s).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction placed %d connector(s) (%d dual, %d rebuilt over old ones), consumed %d stub point(s).",
         placed, dualPlaced, rebuiltPlaced, #allStubs)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -7399,7 +9254,31 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         self.divideCount = math.max(0, math.min(AutoDrive.FLYOVER_DIVIDE_MAX, self.divideCount + step))
         return true
     elseif t == self.TOOL.MOVE then
-        self:setFalloffRadius(self.falloffRadius + step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
+        -- R+wheel rotates the currently-dragged set live (settled 2026-09-21) - takes priority
+        -- over falloff/offset whenever it applies, since holding R is a deliberate, active choice
+        -- to rotate rather than just wheeling absent-mindedly. Only meaningful mid-drag (there is
+        -- nothing to rotate once released) and does nothing for a frozen copy-preview drag (see
+        -- updateDrag - out of scope for now, not handled).
+        if self.rotateKeyHeld and self.dragId ~= nil then
+            self.moveRotateAngle = self.moveRotateAngle - step * AutoDrive.FLYOVER_ROTATE_WHEEL_STEP
+            self:updateDrag()
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: move rotate %.0f deg.", math.deg(self.moveRotateAngle))
+            return true
+        end
+        -- A pending offset (released, awaiting its right-click commit) takes the wheel over
+        -- falloff whenever both could apply - it is the thing actually awaiting input right now,
+        -- and handleWheel also claims the wheel for it everywhere, not just over the card (see the
+        -- MOVE branch of the pending-action list below), so this has to agree with that.
+        if self.moveOffsetChainIds ~= nil then
+            self:setMoveOffsetDistance(self.moveOffsetDistance - step * AutoDrive.FLYOVER_OFFSET_STEP)
+            return true
+        end
+        -- Falloff is a spatial reach, not a tolerance/count - wheel-up should WIDEN it, the
+        -- opposite of the global reversal `step` already carries (see handleWheel), so this
+        -- negates it back to the raw scroll direction. This is the one negation Move's wheel
+        -- actually needs; an earlier attempt removed it entirely instead of scoping it to just
+        -- this field, which is what made the wheel read backwards again.
+        self:setFalloffRadius(self.falloffRadius - step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
         return true
     elseif t == self.TOOL.SMOOTH then
         -- Each mode gets the number it actually uses; rebuild ignores strength.
@@ -7454,19 +9333,29 @@ function ADFlyoverEditor:handleWheel(offset)
     end
 
     -- Move's falloff radius is a spatial REACH, and players expect wheel-up to WIDEN it - the opposite
-    -- of the tolerances and counts the global reversal above suits. So the move tool keeps the original
-    -- (pre-reversal) wheel direction; everything else (junction scope radius included) stays reversed.
-    -- The -/+ steppers are unaffected either way (they call stepAction directly, not here).
-    local toolStep = (self.tool == self.TOOL.MOVE) and -step or step
+    -- of the tolerances and counts the global reversal above suits. Two rounds of history here:
+    --
+    --   1. (2026-09-21, earlier) a `-step` negation for Move fought an unrelated second negation
+    --      elsewhere and produced wheel-up NARROWING the reach - backwards. "Fixed" by deleting
+    --      the negation entirely, so Move fell through to the same plain reversed `step` as every
+    --      tolerance/count field.
+    --   2. (2026-09-21, later) that "fix" was itself backwards: it removed the ONE negation Move
+    --      actually needed (to counteract the global reversal, not to double it), so the wheel was
+    --      reported backwards again. The negation is back, but scoped correctly this time - see
+    --      applyWheelToActiveTool's MOVE branch and the `wheelReach` field flag below, not a
+    --      standing local here. The -/+ steppers were never affected either way (they call
+    --      stepAction directly with a raw, unreversed dir, not through here).
+    local toolStep = step
 
     -- Any numeric field under the cursor takes the wheel: the floating card's fields, the settings
     -- fields in the corner block, and the armed popup. Only rows carrying a stepAction match, so a
-    -- scroll over a plain button or empty space still falls through to the camera zoom below. A field
-    -- flagged wheelKeepDir (move's falloff) keeps the original direction; the rest use the reversed one.
+    -- scroll over a plain button or empty space still falls through to the camera zoom below.
     if ADFlyoverHud ~= nil then
         local field = ADFlyoverHud:numberFieldAt(self.mouseX, self.mouseY)
         if field ~= nil and field.stepAction ~= nil then
-            field.stepAction(field.wheelKeepDir and -step or step)
+            -- wheelReach fields (Move's falloff) want the raw, unreversed sign - see the field's
+            -- own definition in getEditableNumbers for why.
+            field.stepAction(field.wheelReach and -step or step)
             return true
         end
     end
@@ -7480,14 +9369,21 @@ function ADFlyoverEditor:handleWheel(offset)
     end
 
     -- Otherwise a tool claims the wheel only while it has a pending action (a span picked, a drag in
-    -- progress), so the camera zoom keeps the wheel the rest of the time. toolStep carries move's
-    -- kept-direction; for every other tool it is the reversed step.
+    -- progress), so the camera zoom keeps the wheel the rest of the time. toolStep is the plain
+    -- reversed step for every tool - Move's own falloff negation happens inside
+    -- applyWheelToActiveTool, not here, since that is the one call site shared by both the
+    -- mid-drag and hover-over-card cases.
     if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
-    if self.tool == self.TOOL.MOVE and self.dragId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    -- Also claimed with a pending (released, not yet right-click-committed) offset - not just
+    -- mid-drag - so the wheel adjusts it from anywhere in the view, not only over the card
+    -- (requested 2026-09-21: it previously only worked while actually hovering the tool card).
+    if self.tool == self.TOOL.MOVE and (self.dragId ~= nil or self.moveOffsetChainIds ~= nil) then
+        return self:applyWheelToActiveTool(toolStep)
+    end
     if self.tool == self.TOOL.SMOOTH and self.smoothToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     -- Junction claims the wheel whenever it is active (no pending action needed): the wheel IS the
     -- scope-radius lever, so it takes the wheel over the world too, not just over the card.
@@ -7731,7 +9627,7 @@ end
 function ADFlyoverEditor:cancelDivide()
     self.spanIds = nil
     if self.divideFromId ~= nil or self.divideToId ~= nil then
-        Logging.info("[FlyoverEditor]: divide cancelled.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: divide cancelled.")
     end
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.divideBlockedBy = nil
@@ -7772,12 +9668,12 @@ ADFlyoverEditor.CONVERT_OP_NAMES = { "secondary", "primary", "two-way", "one-way
 
 function ADFlyoverEditor:cycleConvertOp()
     self.convertOp = (self.convertOp % #self.CONVERT_OP_NAMES) + 1
-    Logging.info("[FlyoverEditor]: convert will make it %s.", self.CONVERT_OP_NAMES[self.convertOp])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: convert will make it %s.", self.CONVERT_OP_NAMES[self.convertOp])
 end
 
 function ADFlyoverEditor:cycleConvertScope()
     self.convertScope = (self.convertScope % #self.DELETE_SCOPE_NAMES) + 1
-    Logging.info("[FlyoverEditor]: convert applies to %s.", self.DELETE_SCOPE_NAMES[self.convertScope])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: convert applies to %s.", self.DELETE_SCOPE_NAMES[self.convertScope])
 end
 
 local function addLink(fromId, toId)
@@ -7930,14 +9826,14 @@ function ADFlyoverEditor:convertAtCursor()
         end
     end
 
-    Logging.info("[FlyoverEditor]: converted %s to %s (%d change(s)).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: converted %s to %s (%d change(s)).",
         (op == self.CONVERT_OP.SECONDARY or op == self.CONVERT_OP.PRIMARY)
             and string.format("%d waypoint(s)", #(flagIds or ordered))
             or string.format("%d connection(s) across %d waypoint(s), junctions at the ends included",
                 #ordered - 1, #ordered),
         self.CONVERT_OP_NAMES[op], changed)
     if changed == 0 then
-        Logging.info("[AD]   nothing to do - it was already %s.", self.CONVERT_OP_NAMES[op])
+        ADFlyoverSettings.debugLog("[AD]   nothing to do - it was already %s.", self.CONVERT_OP_NAMES[op])
     end
 
     ADGraphManager:markChanges()
@@ -8123,7 +10019,7 @@ function ADFlyoverEditor:mergeClick()
     -- track. The span is what stops a merge running away down the whole length of both runs.
     if self.mergeFromId == nil then
         self.mergeFromId = self.hoverId
-        Logging.info("[FlyoverEditor]: merge span starts at id=%s; click the other end of the span on the SAME track.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: merge span starts at id=%s; click the other end of the span on the SAME track.",
             tostring(self.mergeFromId))
         return
     end
@@ -8139,7 +10035,7 @@ function ADFlyoverEditor:mergeClick()
             return
         end
         self.mergeToId = self.hoverId
-        Logging.info("[FlyoverEditor]: merge span is %d waypoint(s); now click a point on the OTHER track.", #span)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: merge span is %d waypoint(s); now click a point on the OTHER track.", #span)
         return
     end
 
@@ -8258,7 +10154,7 @@ function ADFlyoverEditor:mergeTracks(spanStartId, spanEndId, seedB)
     end
 
     if #aInside == 0 then
-        Logging.info("[FlyoverEditor]: no part of the %d-waypoint span runs within %.1fm of the other track. Closest they come is %s.",
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no part of the %d-waypoint span runs within %.1fm of the other track. Closest they come is %s.",
             #span, mergeDistance,
             nearestMiss < math.huge and string.format("%.2fm", nearestMiss) or "not measurable")
         return
@@ -8273,17 +10169,17 @@ function ADFlyoverEditor:mergeTracks(spanStartId, spanEndId, seedB)
     ADEditorHistory:snapshot("merge tracks")
     self:absorbTrack(span, aInside, aTarget, bInside, inB)
 
-    Logging.info("[FlyoverEditor]: merged %d of %d span waypoint(s) with %d from the other track, within %.1fm.",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: merged %d of %d span waypoint(s) with %d from the other track, within %.1fm.",
         #aInside, #span, #bInside, mergeDistance)
     if nearestMiss < math.huge then
-        Logging.info("[AD]   the rest of the span stays separate; nearest it came was %.2fm.", nearestMiss)
+        ADFlyoverSettings.debugLog("[AD]   the rest of the span stays separate; nearest it came was %.2fm.", nearestMiss)
     end
     if bridged > 0 then
-        Logging.info("[AD]   crossed %d waypoint(s) where the tracks pulled apart, within the %.0fm divergence tolerance, and picked the track up again on the far side.",
+        ADFlyoverSettings.debugLog("[AD]   crossed %d waypoint(s) where the tracks pulled apart, within the %.0fm divergence tolerance, and picked the track up again on the far side.",
             bridged, divergence)
     end
     if countB < nearCount then
-        Logging.info("[AD]   %d other waypoint(s) were also near the span but not connected to the one clicked, and were left alone.",
+        ADFlyoverSettings.debugLog("[AD]   %d other waypoint(s) were also near the span but not connected to the one clicked, and were left alone.",
             nearCount - countB)
     end
 end
@@ -8469,12 +10365,12 @@ ADFlyoverEditor.FIELD_LOOP_DIR_NAMES = { "clockwise", "counter-clockwise", "two-
 
 function ADFlyoverEditor:toggleFieldLoopPriority()
     self.fieldLoopSubPrio = not self.fieldLoopSubPrio
-    Logging.info("[FlyoverEditor]: field loop track will be %s.", self.fieldLoopSubPrio and "secondary" or "primary")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop track will be %s.", self.fieldLoopSubPrio and "secondary" or "primary")
 end
 
 function ADFlyoverEditor:cycleFieldLoopDirection()
     self.fieldLoopDirection = (self.fieldLoopDirection % #self.FIELD_LOOP_DIR_NAMES) + 1
-    Logging.info("[FlyoverEditor]: field loop track will be %s.", self.FIELD_LOOP_DIR_NAMES[self.fieldLoopDirection])
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop track will be %s.", self.FIELD_LOOP_DIR_NAMES[self.fieldLoopDirection])
 end
 
 function ADFlyoverEditor:generateFieldLoopAtCursor()

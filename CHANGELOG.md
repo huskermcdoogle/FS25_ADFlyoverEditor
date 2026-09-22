@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
+
+Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and
+fixed along the way - this is not a first-pass drop.
+
+The move tool now has three ways to pick what a drag grabs - **Point** (a single waypoint,
+optionally with a falloff taper along the track), **Run** (the whole run between junctions, one
+click), and **Span** (two clicks marking the ends, click near either one again to replace it,
+including shrinking it back by clicking a point already inside it) - plus a shared multi-point/
+region selection any of them defer to: **Alt+drag** a box (aligned to the current camera view, not
+north), **Shift+drag** a circle, **Alt+Shift+drag** freehand, or hold **Space**, drag an edge, then
+click once more to set the width for a rotated box. **Ctrl** is the one consistent "add to what I
+already have" modifier on top of any of those, or alone for a single-point toggle. All of them work
+in every tool, not just Move, and a built selection always wins over whatever "picks" mode is
+active when you grab one of its members.
+
+- **copy (hotkey B)** - leaves the originals in place and creates the drag as a new, disconnected
+  piece instead. Can be turned on before, during, or even just after a drag - toggling it on right
+  after releasing still converts that move into a copy, and toggling it on mid-drag (or having it
+  on before you grab) freezes the real waypoint in place immediately, with a live green preview
+  showing where the copy will actually land.
+- **disconnect** - independent of copy now, not a sub-option of it. With copy off, it moves the
+  set in place and severs its outside connections, no clone. With copy on, it clones then deletes
+  the originals, same as the old "break" - a run relocated cleanly detached instead of stretching
+  a connection across the map.
+- **offset** (Run/Span only) - slides an existing run or span sideways IN PLACE, connections and
+  all, rather than creating a new parallel track like Parallel does. Drag sets it live, releasing
+  does NOT commit, wheel (from anywhere in the view, not just over the tool card) or a typed value
+  fine-tunes it, right-click finishes it. An optional **offset falloff** tapers the slide toward
+  either end of the chain instead of sliding it all rigidly, for blending into an existing junction
+  without a hard kink.
+- **rotate (hold R + wheel)** - rotate whatever is being dragged, live, around either the point you
+  grabbed or the moved set's centroid ("rotate pivot" on the tool card, takes effect on the next
+  grab).
+- **auto-hookup** - optional, off by default; silently reconnects a dangling end left by a move,
+  copy, or disconnect to whatever it lands near, within its own distance/divergence tolerance
+  (separate settings from Merge's own, tighter by default since this fires with no confirmation
+  step, and now dialable up to 20m instead of capping at 5m). Matches both the connection TYPE
+  (one-way stays one-way, two-way stays two-way) and DIRECTION of the track it is extending, and
+  now also reconnects a fork left with two or more surviving connections - not just a single dead
+  end - as long as every one of them still points the same way.
+
+Also new: a **DEBUG** section on the settings dialog with a verbose-logging toggle, off by
+default. A user reported log.txt bloating badly over hours of normal editing - the mouse-click
+trace and most other routine info-level lines are now gated behind it; warnings and errors always
+log regardless.
+
 ## 0.31.0.2 — Hotfix: the mouse wheel freeze this line had already fixed once (2026-09-20)
 
 Ports forward one fix that predates the junction-placement work and was never part of this

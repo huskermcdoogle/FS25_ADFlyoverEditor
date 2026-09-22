@@ -160,7 +160,7 @@ end
 --- Restore the most recent snapshot. Returns the label of what was undone, or nil.
 function ADEditorHistory:undo()
     if #self.stack == 0 then
-        Logging.info("[FlyoverEditor] ADEditorHistory: nothing to undo.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: nothing to undo.")
         return nil
     end
 
@@ -179,7 +179,7 @@ function ADEditorHistory:undo()
     end
 
     table.remove(self.stack)
-    Logging.info("[FlyoverEditor] ADEditorHistory: undid '%s' (%d undo, %d redo available).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: undid '%s' (%d undo, %d redo available).",
         tostring(entry.label), #self.stack, #self.redoStack)
     return entry.label
 end
@@ -195,7 +195,7 @@ end
 --- Put back the most recently undone state.
 function ADEditorHistory:redo()
     if #self.redoStack == 0 then
-        Logging.info("[FlyoverEditor] ADEditorHistory: nothing to redo.")
+        ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: nothing to redo.")
         return nil
     end
 
@@ -214,7 +214,7 @@ function ADEditorHistory:redo()
     end
 
     table.remove(self.redoStack)
-    Logging.info("[FlyoverEditor] ADEditorHistory: redid '%s' (%d undo, %d redo available).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: redid '%s' (%d undo, %d redo available).",
         tostring(entry.label), #self.stack, #self.redoStack)
     return entry.label
 end
