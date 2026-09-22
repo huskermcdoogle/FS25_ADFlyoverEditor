@@ -157,9 +157,6 @@ ADFlyoverEditor = {
     -- createFieldLoopGraph always did before these existed: secondary, two-way.
     fieldLoopSubPrio = true,
     fieldLoopDirection = 3,
-    -- True while a live tilled-ground scan (see FieldLoopGenerator) is out to a Courseplay vehicle
-    -- waiting on its callback - clicks are ignored and the tool card says so until it clears.
-    fieldLoopPending = false,
     splineFromId = nil,
     curvatureIndex = 1,
     -- Two separate spline controls, because they answer two different questions: which way the
@@ -6039,9 +6036,6 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Click the waypoint to curve from.")
     elseif self.tool == t.FIELDLOOP then
-        if self.fieldLoopPending then
-            return L("Scanning the field boundary - this can take a few seconds on a large area.")
-        end
         return L("Click inside a field to ring it. Uses the field loop settings.")
     elseif self.tool == t.SIDING then
         if self.sidingBlockedBy ~= nil then
@@ -10387,14 +10381,6 @@ function ADFlyoverEditor:generateFieldLoopAtCursor()
     if self.cursorX == nil then
         return
     end
-    -- The live tilled-ground scan (see FieldLoopGenerator's getFieldPolygonAtPositionAsync) can
-    -- take several real frames to come back; ignore a re-click rather than starting a second
-    -- request that would race the first (or, on the SAME vehicle, just be refused and warned).
-    if self.fieldLoopPending then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop already scanning a boundary, ignoring click.")
-        return
-    end
-
     -- COMPANION EDIT: the `or` fallbacks match what the merge reads already do. Without them a nil
     -- margin becomes `-nil` inside the offset, which is a hard Lua error on the first click, on a
     -- path with no pcall around it.
@@ -10407,18 +10393,14 @@ function ADFlyoverEditor:generateFieldLoopAtCursor()
         [self.FIELD_LOOP_DIR.TWOWAY] = "twoway" })[self.fieldLoopDirection] or "twoway"
 
     -- A field loop can add hundreds of waypoints in one click, which is exactly the kind of thing
-    -- that wants to be undoable in one step. Taken up front, same as before this became async, so
-    -- it covers the click even if the scan that follows takes a while.
+    -- that wants to be undoable in one step.
     ADEditorHistory:snapshot("field loop")
 
-    self.fieldLoopPending = true
-    AutoDrive:generateFieldLoopAt(self.cursorX, self.cursorZ,
-        marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop", flags, direction,
-        function(ok)
-            self.fieldLoopPending = false
-            if ok then
-                self:invalidateIdReferences()
-                ADGraphManager:markChanges()
-            end
-        end)
+    local ok = AutoDrive:generateFieldLoopAt(self.cursorX, self.cursorZ,
+        marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop", flags, direction)
+
+    if ok then
+        self:invalidateIdReferences()
+        ADGraphManager:markChanges()
+    end
 end

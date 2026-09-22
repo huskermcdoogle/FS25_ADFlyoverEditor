@@ -139,7 +139,7 @@ Field loop builds a complete two-way route that runs just outside a field's boun
 - **tree clearance** — how far the loop keeps from trees before detouring.
 - **turning radius** — the tightest turn the loop is allowed to make.
 - **vehicle height** — how tall a machine the tree check clears for.
-- **detect custom field** — on by default; when Courseplay is active, also finds ground plowed to connect two separate map fields into one (via a live scan, which can take a moment - the tool card says so while it works) or a boundary recorded with Courseplay's custom-field tool, not just a field shipped with the map. No effect without Courseplay. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.
+- **detect custom field** — on by default; when Courseplay is active, also finds ground plowed to connect two separate map fields into one, or a boundary recorded with Courseplay's custom-field tool, not just a field shipped with the map. No effect without Courseplay. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.
 
 <a id="parallel"></a>
 ## Parallel

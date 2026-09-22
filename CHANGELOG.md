@@ -13,11 +13,9 @@ against Courseplay's own source rather than guessed:
 
 - A boundary explicitly saved with Courseplay's custom-field recorder, if one exists at the site —
   cheap and exact, but the rarer case.
-- Courseplay's own live field-boundary scan (the same one its "generate course" feature uses),
-  which traces the actual tilled-ground edge instead of a static boundary, so a plowed-together gap
-  is just part of the contour. This is asynchronous — it runs a few frames at a time on a
-  Courseplay-capable vehicle borrowed from the mission — so field loop now shows "scanning the
-  field boundary…" on the tool card while it works, and ignores a re-click until it finishes.
+- Courseplay's own field-boundary scanner (`g_fieldScanner`), which traces the actual tilled-ground
+  edge from the cursor position instead of a static boundary, so a plowed-together gap is just part
+  of the contour. It needs no vehicle and runs synchronously, same as everything else on the card.
 
 Falls back to the map-field lookup if neither finds anything, or Courseplay isn't installed. A new
 **detect custom field** toggle on the tool card (on by default) switches back to map-field-only for

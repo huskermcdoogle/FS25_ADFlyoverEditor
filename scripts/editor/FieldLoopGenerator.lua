@@ -43,39 +43,31 @@ AutoDrive.FIELD_LOOP_TREE_DETOUR_MAX_DEPTH = 15 -- meters; give up rather than b
 AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added along segments passing near a tree, before detouring
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
 
---- Find the field boundary under an arbitrary world position, calling back(points, label, err).
+--- Find the field boundary under an arbitrary world position.
 ---
 --- Split out from the vehicle version so the flyover editor can generate a loop around whatever
 --- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
 --- position lookup feeding this.
 ---
---- Takes a callback rather than returning, because the COMPANION FIX below is asynchronous.
----
 --- COMPANION FIX, two Courseplay-only attempts before the base-game farmland fallback, both gated
---- by the same "detect custom field" toggle:
+--- by the same "detect custom field" toggle, both synchronous, both confirmed against Courseplay's
+--- own source (scripts/field/CustomField*.lua, FieldScanner.lua, CpFieldUtil.lua) rather than
+--- guessed:
 ---
---- 1. A RECORDED custom field (g_customFieldManager) - cheap, exact, synchronous, but only ever
----    finds something if the player explicitly recorded one in Courseplay, which is the rarer
----    case. Needs AutoDrive:resolveCourseplayEnvironment() below: measured live (see the field
----    loop custom-field debug lines from an earlier build) that Courseplay's bare globals read as
----    nil from here even though Courseplay is loaded - same cause Arming.lua documents for
----    AutoDrive, FS25 gives every mod its own Lua environment, so a global assigned inside
----    Courseplay's sourced files lives in COURSEPLAY's environment, not the one our own files see
----    by plain name.
---- 2. A LIVE tilled-ground scan via vehicle:cpDetectFieldBoundary(x, z, object, callback) - what
----    Courseplay's own "generate course" feature calls (confirmed in CourseGeneratorInterface.lua,
----    not guessed) to trace the actual tilled edge at a position, so ground plowed to connect two
----    separate map fields is just part of the contour, no saved boundary needed. This is the one
----    that matters for that case. Unlike the bare globals above, this needs NO environment
----    resolution: a vehicle object is not a bare global, it is a row in g_currentMission.vehicles
----    (a base-game table, visible everywhere), and a function registered on it via
----    SpecializationUtil.registerFunction is a normal field on that object - reachable by plain
----    `vehicle:cpDetectFieldBoundary(...)`. It is asynchronous: it only progresses inside the
----    owning vehicle's own onUpdate, in small time-budgeted steps, so it can take several real
----    frames to come back on a large area. AutoDrive:findFieldBoundaryVehicle() below picks any
----    idle Courseplay-capable vehicle in the mission to own the request - its identity does not
----    otherwise matter - and the result comes back through the callback Courseplay calls when it
----    finishes, not a return value.
+--- 1. A RECORDED custom field (g_customFieldManager) - cheap and exact, but only ever finds
+---    something if the player explicitly recorded one in Courseplay, the rarer case.
+--- 2. g_fieldScanner:findContour() - what actually answers "plow the ground between two map
+---    fields to connect them": it walks a probe out from (x, z) and traces the LIVE tilled-ground
+---    edge (Courseplay's own comment on this: "first ignore field ID as with it we can't handle
+---    merged fields"), so a tilled gap joining two map fields is just part of the contour, no
+---    saved boundary needed. It is a synchronous walk against the density map, not a vehicle
+---    capability - no vehicle, no waiting.
+---
+--- Both need AutoDrive:resolveCourseplayEnvironment() below: measured live (see the field loop
+--- custom-field debug lines from an earlier build) that Courseplay's bare globals read as nil from
+--- here even though Courseplay is loaded - same cause Arming.lua documents for AutoDrive, FS25
+--- gives every mod its own Lua environment, so a global assigned inside Courseplay's sourced files
+--- lives in COURSEPLAY's environment, not the one our own files see by plain name.
 ---
 --- Falls back to the base-game farmland lookup if neither attempt finds anything, Courseplay is
 --- not installed, or the toggle is off - a report of this misbehaving on a particular map/save can
@@ -111,129 +103,101 @@ function AutoDrive:resolveCourseplayEnvironment()
     return nil
 end
 
-function AutoDrive:findFieldBoundaryVehicle()
-    if g_currentMission == nil or g_currentMission.vehicles == nil then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop vehicle scan: g_currentMission or .vehicles is nil.")
-        return nil
-    end
-    local total, capable, busy = 0, 0, 0
-    local found = nil
-    for _, vehicle in pairs(g_currentMission.vehicles) do
-        total = total + 1
-        if type(vehicle.cpDetectFieldBoundary) == "function" then
-            capable = capable + 1
-            local running = type(vehicle.cpIsFieldBoundaryDetectionRunning) == "function" and vehicle:cpIsFieldBoundaryDetectionRunning()
-            if running then
-                busy = busy + 1
-            elseif found == nil then
-                local okName, name = pcall(function() return vehicle:getName() end)
-                found = { vehicle = vehicle, name = (okName and name) or "?" }
-            end
-        end
-    end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop vehicle scan: %d vehicle(s) in g_currentMission.vehicles, %d Courseplay-capable, %d busy, picked %s.",
-        total, capable, busy, found and found.name or "none")
-    return found and found.vehicle or nil
-end
-
-function AutoDrive:getFieldPolygonAtPositionAsync(x, z, callback)
+function AutoDrive:getFieldPolygonAtPosition(x, z)
     if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
+        -- PROBE, temporary: FieldBoundaryDetector.lua's own comment calls FieldCourseField/
+        -- FieldCourseSettings "the Giants field boundary detection" - base-game classes Courseplay
+        -- merely wraps, not something it defines. If that holds, they should be plain globals
+        -- reachable from OUR OWN environment with no Courseplay dependency at all, unlike
+        -- g_customFieldManager/g_fieldScanner below (which Courseplay's own files DO define, hence
+        -- needing environment resolution). One log line settles it instead of guessing again.
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop base-game probe: FieldCourseField=%s FieldCourseSettings=%s",
+            tostring(type(FieldCourseField)), tostring(type(FieldCourseSettings)))
+
         local cpEnv = AutoDrive:resolveCourseplayEnvironment()
-        local customFieldManager = cpEnv ~= nil and cpEnv.g_customFieldManager or nil
-        if customFieldManager == nil then
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop has no g_customFieldManager (Courseplay not loaded, or not resolved yet).")
+        if cpEnv == nil then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop could not resolve Courseplay's environment (not loaded, or not resolved yet).")
         else
-            local okCustom, customField = pcall(function()
-                return customFieldManager:getCustomField(x, z)
-            end)
-            if not okCustom then
-                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_customFieldManager:getCustomField errored: %s", tostring(customField))
-            elseif customField == nil then
-                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop no recorded custom field here.")
+            local customFieldManager = cpEnv.g_customFieldManager
+            if customFieldManager == nil then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop has no g_customFieldManager.")
             else
-                local okVerts, vertices = pcall(function() return customField:getVertices() end)
-                if okVerts and vertices ~= nil and #vertices >= 3 then
-                    local points = {}
-                    for i = 1, #vertices do
-                        points[i] = { x = vertices[i].x, z = vertices[i].z }
+                local okCustom, customField = pcall(function()
+                    return customFieldManager:getCustomField(x, z)
+                end)
+                if not okCustom then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_customFieldManager:getCustomField errored: %s", tostring(customField))
+                elseif customField == nil then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop no recorded custom field here.")
+                else
+                    local okVerts, vertices = pcall(function() return customField:getVertices() end)
+                    if okVerts and vertices ~= nil and #vertices >= 3 then
+                        local points = {}
+                        for i = 1, #vertices do
+                            points[i] = { x = vertices[i].x, z = vertices[i].z }
+                        end
+                        local okName, name = pcall(function() return customField:getName() end)
+                        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop found a recorded custom field ('%s').", (okName and name) or "?")
+                        return points, (okName and name) or "Custom field", nil
                     end
-                    local okName, name = pcall(function() return customField:getName() end)
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop found a recorded custom field ('%s').", (okName and name) or "?")
-                    callback(points, (okName and name) or "Custom field", nil)
-                    return
+                end
+            end
+
+            local fieldScanner = cpEnv.g_fieldScanner
+            if fieldScanner == nil then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop has no g_fieldScanner.")
+            else
+                local okScan, found, scanned = pcall(function()
+                    return fieldScanner:findContour(x, z)
+                end)
+                if not okScan then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_fieldScanner:findContour errored: %s", tostring(found))
+                elseif not found then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanner could not trace a contour here (not on field, or lost).")
+                elseif scanned == nil or #scanned < 3 then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanner returned too few points (%s).", tostring(scanned and #scanned or "nil"))
+                else
+                    local points = {}
+                    for i = 1, #scanned do
+                        points[i] = { x = scanned[i].x, z = scanned[i].z }
+                    end
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanned a %d-point tilled-ground contour.", #points)
+                    return points, "Scanned field", nil
                 end
             end
         end
-
-        local vehicle = AutoDrive:findFieldBoundaryVehicle()
-        if vehicle == nil then
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop found no idle Courseplay vehicle for a live scan, using the map field.")
-        else
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop starting a live tilled-ground scan at x=%.1f z=%.1f.", x, z)
-            local started = pcall(function()
-                vehicle:cpDetectFieldBoundary(x, z, nil, function(_, fieldPolygon)
-                    if fieldPolygon ~= nil and #fieldPolygon >= 3 then
-                        local points = {}
-                        for i = 1, #fieldPolygon do
-                            points[i] = { x = fieldPolygon[i].x, z = fieldPolygon[i].z }
-                        end
-                        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop live scan found a %d-point boundary.", #points)
-                        callback(points, "Scanned field", nil)
-                    else
-                        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop live scan found nothing here, falling back to the map field.")
-                        AutoDrive:getFieldPolygonAtPositionSync(x, z, callback)
-                    end
-                end)
-            end)
-            if started then
-                return
-            end
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop cpDetectFieldBoundary call errored, using the map field.")
-        end
     end
 
-    AutoDrive:getFieldPolygonAtPositionSync(x, z, callback)
-end
-
---- The base-game path: a map field's static boundary via g_farmlandManager. Calls back
---- immediately (never a real wait), kept as its own function so the async wrapper above can fall
---- back into it from inside a Courseplay callback as easily as from the top.
-function AutoDrive:getFieldPolygonAtPositionSync(x, z, callback)
     if g_farmlandManager == nil then
-        callback(nil, nil, "g_farmlandManager is not available.")
-        return
+        return nil, nil, "g_farmlandManager is not available."
     end
 
     local okFarmland, farmland = pcall(function()
         return g_farmlandManager:getFarmlandAtWorldPosition(x, z)
     end)
     if not okFarmland or farmland == nil then
-        callback(nil, nil, string.format("No farmland at x=%.1f z=%.1f.", x, z))
-        return
+        return nil, nil, string.format("No farmland at x=%.1f z=%.1f.", x, z)
     end
 
     local okField, field = pcall(function()
         return farmland:getField()
     end)
     if not okField or field == nil then
-        callback(nil, nil, string.format("No field at x=%.1f z=%.1f - that farmland has no field on it.", x, z))
-        return
+        return nil, nil, string.format("No field at x=%.1f z=%.1f - that farmland has no field on it.", x, z)
     end
 
     local okPolygon, polygon = pcall(function()
         return field:getDensityMapPolygon()
     end)
     if not okPolygon or polygon == nil then
-        callback(nil, nil, "Field has no boundary polygon.")
-        return
+        return nil, nil, "Field has no boundary polygon."
     end
 
     local okVerts, verts = pcall(function()
         return polygon:getVerticesList()
     end)
     if not okVerts or verts == nil or #verts < 6 then
-        callback(nil, nil, "Field boundary polygon is degenerate (<3 vertices).")
-        return
+        return nil, nil, "Field boundary polygon is degenerate (<3 vertices)."
     end
 
     local points = {}
@@ -247,7 +211,7 @@ function AutoDrive:getFieldPolygonAtPositionSync(x, z, callback)
         fieldLabel = "Field " .. tostring(fieldId)
     end
 
-    callback(points, fieldLabel, nil)
+    return points, fieldLabel, nil
 end
 
 -- Synchronous overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
@@ -735,47 +699,42 @@ end
 --- function's own defaults - secondary, two-way - so the console command, which has no editor
 --- panel to read them from, is unaffected).
 ---
---- Asynchronous - the field-polygon lookup can be (see getFieldPolygonAtPositionAsync) - so this
---- takes an optional onDone(ok) instead of returning. Everything interesting is already logged
---- here either way.
-function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction, onDone)
-    AutoDrive:getFieldPolygonAtPositionAsync(x, z, function(rawPoints, fieldLabel, fieldErr)
-        if rawPoints == nil then
-            Logging.error("[AD] %s: %s", source, tostring(fieldErr))
-            if onDone then onDone(false) end
-            return
-        end
+--- Returns true on success. Everything interesting is already logged here.
+function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
+    local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
+    if rawPoints == nil then
+        Logging.error("[AD] %s: %s", source, tostring(fieldErr))
+        return false
+    end
 
-        local ring, perimeter, treeStats, ringErr = AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
-        if ring == nil then
-            Logging.error("[AD] %s: %s", source, tostring(ringErr))
-            if onDone then onDone(false) end
-            return
-        end
+    local ring, perimeter, treeStats, ringErr = AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
+    if ring == nil then
+        Logging.error("[AD] %s: %s", source, tostring(ringErr))
+        return false
+    end
 
-        local summary = AutoDrive:createFieldLoopGraph(ring, flags, direction)
+    local summary = AutoDrive:createFieldLoopGraph(ring, flags, direction)
 
-        Logging.info(
-            "[AD] %s: created %d waypoints (ids %d-%d) around '%s', %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
-            source,
-            summary.ringCount,
-            summary.idRange[1],
-            summary.idRange[2],
-            fieldLabel,
-            (flags or AutoDrive.FLAG_SUBPRIO) == AutoDrive.FLAG_SUBPRIO and "secondary" or "primary",
-            direction or "twoway",
-            marginDistance,
-            treeClearance,
-            turningRadius,
-            perimeter,
-            treeStats.rawVertexCount,
-            treeStats.simplifiedVertexCount,
-            treeStats.detours,
-            treeStats.nudged,
-            treeStats.stuck,
-            treeStats.smoothMoves,
-            summary.networkErrorCount
-        )
-        if onDone then onDone(true) end
-    end)
+    Logging.info(
+        "[AD] %s: created %d waypoints (ids %d-%d) around '%s', %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
+        source,
+        summary.ringCount,
+        summary.idRange[1],
+        summary.idRange[2],
+        fieldLabel,
+        (flags or AutoDrive.FLAG_SUBPRIO) == AutoDrive.FLAG_SUBPRIO and "secondary" or "primary",
+        direction or "twoway",
+        marginDistance,
+        treeClearance,
+        turningRadius,
+        perimeter,
+        treeStats.rawVertexCount,
+        treeStats.simplifiedVertexCount,
+        treeStats.detours,
+        treeStats.nudged,
+        treeStats.stuck,
+        treeStats.smoothMoves,
+        summary.networkErrorCount
+    )
+    return true
 end
