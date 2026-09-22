@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1.1 — Hotfix: field loop ignored custom fields (2026-09-22)
+
+Field loop found a field's boundary by asking `g_farmlandManager` which farmland owns the cursor's
+position, then reading that farmland's field. A field drawn in-game with **Define Field** — a
+custom field, not one shipped with the map — has no purchasable farmland behind it, so that path
+never found one: the tool reported "no field here" over ground that plainly had one. It now asks
+`g_fieldManager` for the field under the cursor directly first, which answers "what field polygon
+is here" instead of "who owns this land" and covers both custom and map-defined fields; the old
+farmland-based lookup is kept as a fallback.
+
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
 Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and

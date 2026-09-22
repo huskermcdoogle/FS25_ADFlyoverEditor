@@ -48,23 +48,45 @@ AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available 
 --- Split out from the vehicle version so the flyover editor can generate a loop around whatever
 --- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
 --- position lookup feeding this.
+---
+--- COMPANION FIX: tries g_fieldManager:getFieldAtWorldPosition() first. A field the player drew
+--- in-game with "Define Field" - a custom field, not one shipped with the map - has no purchasable
+--- farmland behind it, so the original farmland->getField() path below never finds it: it asks
+--- "what farmland owns this spot", and a custom field is not tied to one. FieldManager answers the
+--- geometric question instead ("what field polygon is under this spot"), which is what covers both
+--- kinds. Kept as a fallback rather than a replacement in case an older/modified g_fieldManager
+--- lacks the method - same pcall-guarded, log-and-continue style as the rest of this file.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
-    if g_farmlandManager == nil then
-        return nil, nil, "g_farmlandManager is not available."
+    local field = nil
+
+    if g_fieldManager ~= nil then
+        local okDirect, directField = pcall(function()
+            return g_fieldManager:getFieldAtWorldPosition(x, z)
+        end)
+        if okDirect then
+            field = directField
+        end
     end
 
-    local okFarmland, farmland = pcall(function()
-        return g_farmlandManager:getFarmlandAtWorldPosition(x, z)
-    end)
-    if not okFarmland or farmland == nil then
-        return nil, nil, string.format("No farmland at x=%.1f z=%.1f.", x, z)
-    end
+    if field == nil then
+        if g_farmlandManager == nil then
+            return nil, nil, "g_farmlandManager is not available."
+        end
 
-    local okField, field = pcall(function()
-        return farmland:getField()
-    end)
-    if not okField or field == nil then
-        return nil, nil, string.format("No field at x=%.1f z=%.1f - that farmland has no field on it.", x, z)
+        local okFarmland, farmland = pcall(function()
+            return g_farmlandManager:getFarmlandAtWorldPosition(x, z)
+        end)
+        if not okFarmland or farmland == nil then
+            return nil, nil, string.format("No farmland at x=%.1f z=%.1f.", x, z)
+        end
+
+        local okField, farmlandField = pcall(function()
+            return farmland:getField()
+        end)
+        if not okField or farmlandField == nil then
+            return nil, nil, string.format("No field at x=%.1f z=%.1f - that farmland has no field on it.", x, z)
+        end
+        field = farmlandField
     end
 
     local okPolygon, polygon = pcall(function()
