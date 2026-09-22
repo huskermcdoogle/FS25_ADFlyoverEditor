@@ -106,11 +106,10 @@ TOOLS = [
                                  "buildings instead of laying it straight through them. Turn it "
                                  "off to take the offset boundary as laid if the obstacle check "
                                  "keeps flagging something that isn't really in the way."),
-            ("multi", "off by default. On, each click stages another scanned region instead of "
-                      "placing it, and right-click places all of them at once, bridging the ones "
-                      "that ended up close together (bridge distance sets how close). For a field "
-                      "a lane splits into disconnected tilled patches, since a live scan can only "
-                      "ever return the one piece the click landed on."),
+            ("max gap", "how far to auto-search for another disconnected patch of the same field "
+                        "when it's split by a lane, and combine it into the same course - a live "
+                        "scan can only ever return the one piece a click lands on, so this finds "
+                        "the rest on its own, no extra clicks needed."),
         ],
     },
     {

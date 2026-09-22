@@ -103,6 +103,8 @@ function AutoDrive:resolveCourseplayEnvironment()
     return nil
 end
 
+--- Returns points, label, err, cpEnv - cpEnv (nil if not resolved) is handed back so
+--- findConnectedFieldRegions below can reuse it without resolving twice.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
     if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
         -- PROBE, temporary: FieldBoundaryDetector.lua's own comment calls FieldCourseField/
@@ -138,7 +140,7 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
                         end
                         local okName, name = pcall(function() return customField:getName() end)
                         ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop found a recorded custom field ('%s').", (okName and name) or "?")
-                        return points, (okName and name) or "Custom field", nil
+                        return points, (okName and name) or "Custom field", nil, cpEnv
                     end
                 end
             end
@@ -162,7 +164,7 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
                         points[i] = { x = scanned[i].x, z = scanned[i].z }
                     end
                     ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanned a %d-point tilled-ground contour.", #points)
-                    return points, "Scanned field", nil
+                    return points, "Scanned field", nil, cpEnv
                 end
             end
         end
@@ -211,7 +213,110 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         fieldLabel = "Field " .. tostring(fieldId)
     end
 
-    return points, fieldLabel, nil
+    return points, fieldLabel, nil, nil
+end
+
+local function pointInPolygon(px, pz, poly)
+    local inside = false
+    local j = #poly
+    for i = 1, #poly do
+        local pi, pj = poly[i], poly[j]
+        if (pi.z > pz) ~= (pj.z > pz)
+            and px < (pj.x - pi.x) * (pz - pi.z) / (pj.z - pi.z) + pi.x then
+            inside = not inside
+        end
+        j = i
+    end
+    return inside
+end
+
+-- Auto-discovery is bounded on both axes: FIELD_LOOP_MAX_REGIONS caps how many disconnected
+-- patches one field loop will ever combine (a runaway match against unrelated fields elsewhere is
+-- a bug report, not a feature), and PROBE_STRIDE samples only every Nth raw scan point so the
+-- search cost tracks boundary length rather than findContour's (much higher) point density.
+AutoDrive.FIELD_LOOP_MAX_REGIONS = 6
+AutoDrive.FIELD_LOOP_PROBE_STRIDE = 6
+AutoDrive.FIELD_LOOP_PROBE_STEP = 1.0 -- meters between probe samples along each outward ray
+
+--- Auto-discover every tilled-ground region connected to the first one via a gap no wider than
+--- fieldLoopMaxGap - a lane splitting one field into disconnected patches, say. Fully automatic,
+--- no extra clicks: probes outward from points around each found region's boundary, on BOTH sides
+--- (winding direction is not assumed), and scans a fresh contour wherever a probe lands on tilled
+--- ground not already inside a found region.
+---
+--- Needs cpEnv (for g_fieldScanner and CpFieldUtil.isOnFieldArea, the cheap "is this point on any
+--- field" density-map check Courseplay's own field scan uses) - without it, or if isOnFieldArea
+--- isn't there, this returns just the one region it was given rather than guessing.
+function AutoDrive:findConnectedFieldRegions(cpEnv, firstRegion)
+    local regions = { firstRegion }
+
+    local fieldUtil = cpEnv ~= nil and cpEnv.CpFieldUtil or nil
+    local fieldScanner = cpEnv ~= nil and cpEnv.g_fieldScanner or nil
+    if fieldUtil == nil or type(fieldUtil.isOnFieldArea) ~= "function" or fieldScanner == nil then
+        return regions
+    end
+
+    local maxGap = ADFlyoverSettings.get("fieldLoopMaxGap") or 8
+    local step = AutoDrive.FIELD_LOOP_PROBE_STEP
+
+    local function alreadyCovered(px, pz)
+        for _, r in ipairs(regions) do
+            if pointInPolygon(px, pz, r) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local expanded = true
+    while expanded and #regions < AutoDrive.FIELD_LOOP_MAX_REGIONS do
+        expanded = false
+        for ri = 1, #regions do
+            local r = regions[ri]
+            local n = #r
+            local i = 1
+            while i <= n and not expanded do
+                local a, b = r[i], r[(i % n) + 1]
+                local ex, ez = b.x - a.x, b.z - a.z
+                local len = MathUtil.vector2Length(ex, ez)
+                if len > 1e-6 then
+                    local nx, nz = -ez / len, ex / len
+                    local side = 1
+                    while side >= -1 and not expanded do
+                        local dist = step
+                        while dist <= maxGap do
+                            local px, pz = a.x + nx * dist * side, a.z + nz * dist * side
+                            if not alreadyCovered(px, pz) then
+                                local okArea, isField = pcall(function() return fieldUtil.isOnFieldArea(px, pz) end)
+                                if okArea and isField then
+                                    local okScan, found, scanned = pcall(function() return fieldScanner:findContour(px, pz) end)
+                                    if okScan and found and scanned ~= nil and #scanned >= 3 then
+                                        local newRegion = {}
+                                        for k = 1, #scanned do
+                                            newRegion[k] = { x = scanned[k].x, z = scanned[k].z }
+                                        end
+                                        if not alreadyCovered(newRegion[1].x, newRegion[1].z) then
+                                            table.insert(regions, newRegion)
+                                            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop auto-discovered region %d, %.1fm from an existing one.",
+                                                #regions, dist)
+                                            expanded = true
+                                        end
+                                    end
+                                end
+                            end
+                            if expanded then break end
+                            dist = dist + step
+                        end
+                        side = side - 2
+                    end
+                end
+                i = i + AutoDrive.FIELD_LOOP_PROBE_STRIDE
+            end
+            if expanded then break end
+        end
+    end
+
+    return regions
 end
 
 -- Synchronous overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
@@ -704,6 +809,59 @@ function AutoDrive:generateFieldLoop(marginArg, treeClearanceArg, turningRadiusA
     AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, "ADGenerateFieldLoop")
 end
 
+--- Closest pair of points between two FINISHED rings, by index. Used only to splice rings
+--- together (a handful of regions at most), so brute force is fine - no reason to reach for
+--- anything cleverer for what runs once per click.
+local function ringClosestPair(a, b)
+    local bestI, bestJ, bestDistSq = 1, 1, math.huge
+    for i = 1, #a do
+        local pa = a[i]
+        for j = 1, #b do
+            local pb = b[j]
+            local dx, dz = pb.x - pa.x, pb.z - pa.z
+            local d = dx * dx + dz * dz
+            if d < bestDistSq then
+                bestDistSq, bestI, bestJ = d, i, j
+            end
+        end
+    end
+    return bestI, bestJ, math.sqrt(bestDistSq)
+end
+
+--- Splice ring b into ring a at their closest pair (ai in a, bj in b), keyhole-style: walk a up to
+--- and including ai, jump to b, walk the WHOLE of b starting and ending at bj, then continue a
+--- from ai+1 onward. The a[ai]<->b[bj] edge this creates is what createFieldLoopGraph will later
+--- connect like any other consecutive pair in the sequence - a real bridge, not a special case -
+--- and being the same physical edge whichever direction it is walked, it works for a one-way loop
+--- (drive into b, all the way around, out the same point) exactly as it does for two-way.
+local function spliceRingAt(a, ai, b, bj)
+    local out = {}
+    for i = 1, ai do out[#out + 1] = a[i] end
+    local n = #b
+    for k = 0, n do
+        out[#out + 1] = b[((bj - 1 + k) % n) + 1]
+    end
+    for i = ai + 1, #a do out[#out + 1] = a[i] end
+    return out
+end
+
+--- Combine however many finished rings into the ONE ring that actually gets placed. Splices the
+--- closest-remaining ring into the combined result one at a time (order does not affect the
+--- outcome, just which bridge gets drawn where) - by the time this runs, every ring has already
+--- gone through the full offset/corner-round/tree-avoid pipeline on its own, so nothing here
+--- touches boundary geometry, only which order the already-finished points are walked in.
+function AutoDrive:spliceFieldLoopRings(rings)
+    if rings == nil or #rings == 0 then
+        return nil
+    end
+    local combined = rings[1]
+    for k = 2, #rings do
+        local ai, bj = ringClosestPair(combined, rings[k])
+        combined = spliceRingAt(combined, ai, rings[k], bj)
+    end
+    return combined
+end
+
 --- Generate a loop around the field at a world position. Shared by the console command and the
 --- flyover tool so the two cannot drift apart; the caller decides where the position comes from
 --- and what to log, this does the work.
@@ -712,32 +870,55 @@ end
 --- function's own defaults - secondary, two-way - so the console command, which has no editor
 --- panel to read them from, is unaffected).
 ---
---- Returns true, idRange on success ({firstId, lastId} of the placed ring - see
---- AutoDrive:bridgeFieldLoopRings, which uses it to connect separately scanned regions back
---- together) or false, nil on failure. Everything interesting is already logged here either way;
---- existing callers that only capture the first return value are unaffected.
+--- A field a lane splits into disconnected tilled patches auto-discovers every patch it can reach
+--- (AutoDrive:findConnectedFieldRegions), finishes EACH one through the normal offset/corner-round/
+--- tree-avoid pipeline on its own, then splices the finished rings into the one combined ring that
+--- actually gets placed (AutoDrive:spliceFieldLoopRings) - one click, one course, no follow-up
+--- clicks and no separate loops left for the player to connect by hand.
+---
+--- Returns true on success, false on failure. Everything interesting is already logged here.
 function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
-    local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
+    local rawPoints, fieldLabel, fieldErr, cpEnv = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
-        return false, nil
+        return false
     end
 
-    local ring, perimeter, treeStats, ringErr = AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
-    if ring == nil then
-        Logging.error("[AD] %s: %s", source, tostring(ringErr))
-        return false, nil
+    local rawRegions = AutoDrive:findConnectedFieldRegions(cpEnv, rawPoints)
+
+    local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
+    local lastRingErr = nil
+    for _, region in ipairs(rawRegions) do
+        local ring, ringPerimeter, ringTreeStats, ringErr = AutoDrive:buildFieldLoopRing(region, marginDistance, treeClearance, turningRadius)
+        if ring == nil then
+            lastRingErr = ringErr
+            Logging.warning("[AD] %s: dropped one of %d discovered region(s) - %s", source, #rawRegions, tostring(ringErr))
+        else
+            table.insert(rings, ring)
+            perimeter = perimeter + ringPerimeter
+            for _, key in ipairs({ "nudged", "stuck", "detours", "smoothMoves", "rawVertexCount", "simplifiedVertexCount" }) do
+                treeStats[key] = treeStats[key] + (ringTreeStats[key] or 0)
+            end
+        end
     end
 
-    local summary = AutoDrive:createFieldLoopGraph(ring, flags, direction)
+    if #rings == 0 then
+        Logging.error("[AD] %s: %s", source, tostring(lastRingErr))
+        return false
+    end
 
+    local combinedRing = AutoDrive:spliceFieldLoopRings(rings)
+    local summary = AutoDrive:createFieldLoopGraph(combinedRing, flags, direction)
+
+    local regionNote = #rings > 1 and string.format(", %d region(s) combined", #rings) or ""
     Logging.info(
-        "[AD] %s: created %d waypoints (ids %d-%d) around '%s', %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
+        "[AD] %s: created %d waypoints (ids %d-%d) around '%s'%s, %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
         source,
         summary.ringCount,
         summary.idRange[1],
         summary.idRange[2],
         fieldLabel,
+        regionNote,
         (flags or AutoDrive.FLAG_SUBPRIO) == AutoDrive.FLAG_SUBPRIO and "secondary" or "primary",
         direction or "twoway",
         marginDistance,
@@ -752,53 +933,5 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         treeStats.smoothMoves,
         summary.networkErrorCount
     )
-    return true, summary.idRange
-end
-
---- Connect separately scanned regions back together where they ended up close - the live scanner
---- (getFieldPolygonAtPosition's g_fieldScanner path) can only ever return the ONE tilled-ground
---- piece the click landed in, so a lane splitting a field into disconnected patches needs one
---- click per patch, each producing its own standalone ring. This is the second half: for every
---- pair of rings, find their single closest point-to-point gap and, if it's within
---- fieldLoopBridgeDistance, connect just those two points - not a merge, a single new edge, so the
---- vehicle can cross from one ring to the other there.
----
---- ranges: a list of {firstId, lastId} pairs, as returned by generateFieldLoopAt. Brute-force
---- (every point in one ring against every point in the other) - ring sizes are in the low hundreds
---- and this runs once per multi-region placement, not per frame, so there is no reason to reach
---- for anything cleverer.
-function AutoDrive:bridgeFieldLoopRings(ranges)
-    if ranges == nil or #ranges < 2 then
-        return 0
-    end
-    local maxBridge = ADFlyoverSettings.get("fieldLoopBridgeDistance") or 8
-    local bridged = 0
-    for i = 1, #ranges do
-        for j = i + 1, #ranges do
-            local a1, a2 = ranges[i][1], ranges[i][2]
-            local b1, b2 = ranges[j][1], ranges[j][2]
-            local bestA, bestB, bestDist = nil, nil, math.huge
-            for ia = a1, a2 do
-                local wa = ADGraphManager:getWayPointById(ia)
-                if wa ~= nil then
-                    for ib = b1, b2 do
-                        local wb = ADGraphManager:getWayPointById(ib)
-                        if wb ~= nil then
-                            local dist = MathUtil.vector2Length(wb.x - wa.x, wb.z - wa.z)
-                            if dist < bestDist then
-                                bestDist, bestA, bestB = dist, wa, wb
-                            end
-                        end
-                    end
-                end
-            end
-            if bestA ~= nil and bestDist <= maxBridge then
-                ADGraphManager:toggleConnectionBetween(bestA, bestB, false, true, false)
-                bridged = bridged + 1
-                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop bridged two scanned regions, %.1fm gap (waypoints %d<->%d).",
-                    bestDist, bestA.id, bestB.id)
-            end
-        end
-    end
-    return bridged
+    return true
 end

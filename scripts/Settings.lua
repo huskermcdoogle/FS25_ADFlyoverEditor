@@ -48,11 +48,12 @@ S.settings.fieldLoopDetectCustomField = { values = { false, true }, default = 2,
 -- something that isn't really in the way (a re-textured/invisible collider, say), or just to see
 -- the raw offset boundary without the detour warping it while diagnosing something else.
 S.settings.fieldLoopAvoidObstacles = { values = { false, true }, default = 2, current = 2 }
--- Multi mode's bridge gap: the farthest apart the closest pair of points on two separately
--- scanned regions can be and still get auto-connected. A lane wide enough to drive on is the
--- common case this exists for, so the default sits comfortably above a typical field lane's width
--- without also being so generous it bridges two genuinely separate fields left staged by mistake.
-S.settings.fieldLoopBridgeDistance = { values = { 3, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50 }, default = 6, current = 6 }
+-- How far AutoDrive:findConnectedFieldRegions will probe outward from an already-found region
+-- looking for another disconnected tilled patch to auto-combine into the same course - a lane
+-- wide enough to drive on is the common case this exists for, so the default sits comfortably
+-- above a typical field lane's width without also being so generous it pulls in a genuinely
+-- separate field it happens to pass near.
+S.settings.fieldLoopMaxGap = { values = { 3, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50 }, default = 6, current = 6 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
@@ -203,7 +204,7 @@ function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles",
-                            "fieldLoopBridgeDistance", "flyoverMergeDistance", "flyoverMergeDivergence",
+                            "fieldLoopMaxGap", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
                             "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do

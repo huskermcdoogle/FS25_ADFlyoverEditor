@@ -141,7 +141,7 @@ Field loop builds a complete two-way route that runs just outside a field's boun
 - **vehicle height** — how tall a machine the tree check clears for.
 - **detect custom field** — on by default; when Courseplay is active, also finds ground plowed to connect two separate map fields into one, or a boundary recorded with Courseplay's custom-field tool, not just a field shipped with the map. No effect without Courseplay. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.
 - **avoid obstacles** — on by default; nudges the loop away from trees, poles, fences and buildings instead of laying it straight through them. Turn it off to take the offset boundary as laid if the obstacle check keeps flagging something that isn't really in the way.
-- **multi** — off by default. On, each click stages another scanned region instead of placing it, and right-click places all of them at once, bridging the ones that ended up close together (bridge distance sets how close). For a field a lane splits into disconnected tilled patches, since a live scan can only ever return the one piece the click landed on.
+- **max gap** — how far to auto-search for another disconnected patch of the same field when it's split by a lane, and combine it into the same course - a live scan can only ever return the one piece a click lands on, so this finds the rest on its own, no extra clicks needed.
 
 <a id="parallel"></a>
 ## Parallel
