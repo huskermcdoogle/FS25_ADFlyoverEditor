@@ -39,7 +39,7 @@ S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 5
 -- reusing flyoverMergeDistance/Divergence: those back a deliberate three-click confirmed action,
 -- this fires silently with no confirmation at all, so a tighter default is the safer starting
 -- point even though the shape (a distance and a divergence angle) is the same idea.
-S.settings.flyoverAutoHookupDistance = { values = { 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 3, current = 3 }
+S.settings.flyoverAutoHookupDistance = { values = { 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0 }, default = 3, current = 3 }
 S.settings.flyoverAutoHookupDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 3, current = 3 }
 -- The launch button riding on AutoDrive's HUD: whether it shows at all, and which side of the HUD
 -- it anchors to. Not geometry, just a UI preference, but persisted anyway so a player who hides it

@@ -1,30 +1,46 @@
 # Changelog
 
-## 0.31.0.3 — Move tool redesign: picks, copy, break, offset, auto-hookup (2026-09-21)
+## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
-**Not yet tested in-game** - built and reviewed on the `move-tool` branch, first real test
-pending. Flagging here in case this version ships before that happens.
+Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and
+fixed along the way - this is not a first-pass drop.
 
 The move tool now has three ways to pick what a drag grabs - **Point** (a single waypoint,
 optionally with a falloff taper along the track), **Run** (the whole run between junctions, one
-click), and **Span** (two clicks marking the ends, click near either one again to replace it) -
-plus a shared multi-point/region selection any of them defer to: Ctrl-click or Ctrl+drag a box
-(aligned to the current camera view, not north), Alt+drag a circle, or Ctrl+Alt+drag freehand -
-all three work in every tool, not just Move.
+click), and **Span** (two clicks marking the ends, click near either one again to replace it,
+including shrinking it back by clicking a point already inside it) - plus a shared multi-point/
+region selection any of them defer to: **Alt+drag** a box (aligned to the current camera view, not
+north), **Shift+drag** a circle, **Alt+Shift+drag** freehand, or hold **Space**, drag an edge, then
+click once more to set the width for a rotated box. **Ctrl** is the one consistent "add to what I
+already have" modifier on top of any of those, or alone for a single-point toggle. All of them work
+in every tool, not just Move, and a built selection always wins over whatever "picks" mode is
+active when you grab one of its members.
 
-- **copy** - leaves the originals in place and creates the drag as a new, disconnected piece
-  instead. Can be turned on before, during, or even just after a drag - toggling it on right after
-  releasing still converts that move into a copy.
-- **break** (copy's own sub-option) - also deletes the originals once copied, so a run can be
-  relocated cleanly detached instead of stretching a connection across the map or losing the
-  waypoint outright.
+- **copy (hotkey B)** - leaves the originals in place and creates the drag as a new, disconnected
+  piece instead. Can be turned on before, during, or even just after a drag - toggling it on right
+  after releasing still converts that move into a copy, and toggling it on mid-drag (or having it
+  on before you grab) freezes the real waypoint in place immediately, with a live green preview
+  showing where the copy will actually land.
+- **disconnect** - independent of copy now, not a sub-option of it. With copy off, it moves the
+  set in place and severs its outside connections, no clone. With copy on, it clones then deletes
+  the originals, same as the old "break" - a run relocated cleanly detached instead of stretching
+  a connection across the map.
 - **offset** (Run/Span only) - slides an existing run or span sideways IN PLACE, connections and
-  all, rather than creating a new parallel track like Parallel does. An unusual interaction for
-  this editor: drag sets it live, releasing does NOT commit, wheel (or type a value) fine-tunes it,
-  right-click finishes it.
+  all, rather than creating a new parallel track like Parallel does. Drag sets it live, releasing
+  does NOT commit, wheel (from anywhere in the view, not just over the tool card) or a typed value
+  fine-tunes it, right-click finishes it. An optional **offset falloff** tapers the slide toward
+  either end of the chain instead of sliding it all rigidly, for blending into an existing junction
+  without a hard kink.
+- **rotate (hold R + wheel)** - rotate whatever is being dragged, live, around either the point you
+  grabbed or the moved set's centroid ("rotate pivot" on the tool card, takes effect on the next
+  grab).
 - **auto-hookup** - optional, off by default; silently reconnects a dangling end left by a move,
-  copy, or break to whatever it lands near, within its own distance/divergence tolerance (separate
-  settings from Merge's own, tighter by default since this fires with no confirmation step).
+  copy, or disconnect to whatever it lands near, within its own distance/divergence tolerance
+  (separate settings from Merge's own, tighter by default since this fires with no confirmation
+  step, and now dialable up to 20m instead of capping at 5m). Matches both the connection TYPE
+  (one-way stays one-way, two-way stays two-way) and DIRECTION of the track it is extending, and
+  now also reconnects a fork left with two or more surviving connections - not just a single dead
+  end - as long as every one of them still points the same way.
 
 Also new: a **DEBUG** section on the settings dialog with a verbose-logging toggle, off by
 default. A user reported log.txt bloating badly over hours of normal editing - the mouse-click

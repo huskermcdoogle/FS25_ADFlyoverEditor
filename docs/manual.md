@@ -27,6 +27,8 @@ Opening, leaving, and the keys and controls that work everywhere.
 - Q - undo,  E - redo.
 - H - hide / show the floating tool card (it also auto-hides while you drag).
 - , and . - move tool falloff radius down / up.
+- B - toggle the move tool's copy setting (Move tool only).
+- R (held) + wheel - rotate whatever is being dragged (Move tool only, mid-drag).
 - Esc - leave the editor (or close a dialog / cancel an edit).
 
 ### Mouse & camera
@@ -35,9 +37,11 @@ Opening, leaving, and the keys and controls that work everywhere.
 - Right-click - end a run, cancel a menu, or apply an armed tool.
 - Middle-mouse - orbit / spin the camera. WASD moves it.
 - Wheel - camera zoom, or adjust the numeric field the cursor is over.
-- Ctrl+drag - box-select (aligned to the current camera view, not north). Shift adds to an existing selection instead of replacing it. Works in every tool.
-- Alt+drag - circle-select; the two dragged points are a diameter, not a centre and radius.
-- Ctrl+Alt+drag - freehand-select; trace a shape and release to close it.
+- Ctrl - the universal "add to selection" modifier: held on top of any shape below, or alone (plain Ctrl-click) to toggle a single point. Works in every tool.
+- Alt+drag - box-select (aligned to the current camera view, not north).
+- Shift+drag - circle-select; the two dragged points are a diameter, not a centre and radius.
+- Alt+Shift+drag - freehand-select; trace a shape and release to close it.
+- Space+drag+click - rotated box-select: hold Space, press-drag-release sets one edge (Space only needs to be held at the press), then one more plain click sets the width and finishes.
 
 ### The tool card
 
@@ -67,7 +71,7 @@ Select mode is where you inspect and act on what is already there rather than cr
 1. Click a waypoint to open its POINT menu (name, move, connect, convert, delete).
 1. Click again on the same point, or double-click, to grab the SPAN either side of it.
 1. A further click grabs the whole RUN between the two nearest junctions.
-1. Ctrl+drag a box, Alt+drag a circle, or Ctrl+Alt+drag freehand to multi-select points - works in every tool, not just Select, and a plain Ctrl-click toggles one point at a time.
+1. Alt+drag a box, Shift+drag a circle, Alt+Shift+drag freehand, or Space+drag+click a rotated box to multi-select points - works in every tool, not just Select. Hold Ctrl on top of any of these (or alone) to ADD to the selection instead of replacing it; a plain Ctrl-click toggles one point at a time.
 1. The clicked point/span/run is highlighted in the world while its menu is open.
 1. Right-click closes the menu without doing anything.
 
@@ -184,20 +188,24 @@ Move drags one or more waypoints to a new spot and re-seats them on the real gro
 1. Point at a waypoint and drag it; release to drop it.
 1. "picks" cycles Point / Run / Span. Span needs its two ends clicked first; once picked, click near either end again to replace it, or drag the span to move it.
 1. "falloff" toggles the taper. On Point it spreads along the track by the falloff radius (wheel over the card, the +/- steppers, or , and .); on Run/Span it tapers to the run or span's own two ends automatically, with no radius to set.
-1. A ctrl-click / box / circle (Alt+drag) / freehand (Ctrl+Alt+drag) selection, if one exists, always wins over picks - grab any point IN it to drag the whole set, rigid.
-1. "copy" toggles whether the drag creates a new, disconnected copy instead of moving the originals. It can be turned on before, during, or even just after a drag - toggling it on right after releasing still converts that move into a copy.
-1. With copy on, "break" additionally deletes the originals once the copy is made - the piece ends up relocated, not duplicated.
-1. On Run or Span, "offset" changes what a drag does: instead of a free 2D move, the cursor's distance from the chain slides it sideways, the whole thing at once. Releasing does NOT drop it - wheel (or type a value) to fine-tune the distance, then right-click to finish. A stray click elsewhere is ignored while one is pending.
+1. A ctrl-click / box (Alt+drag) / circle (Shift+drag) / freehand (Alt+Shift+drag) / rotated box (Space+drag+click) selection, if one exists, always wins over picks - grab any point IN it to drag the whole set, rigid.
+1. "copy" (hotkey B) toggles whether the drag creates a new, disconnected copy instead of moving the originals. It can be turned on before, during, or even just after a drag - toggling it on right after releasing still converts that move into a copy.
+1. "disconnect" severs the moved piece's outside connections. On its own (copy off) it just moves and cuts loose, no clone. With copy also on, it additionally deletes the originals once the copy is made - the piece ends up relocated, not duplicated.
+1. On Run or Span, "offset" changes what a drag does: instead of a free 2D move, the cursor's distance from the chain slides it sideways, the whole thing at once. Releasing does NOT drop it - wheel (or type a value) to fine-tune the distance, then right-click to finish. A stray click elsewhere is ignored while one is pending, and the wheel adjusts the pending offset from anywhere in the view, not just over the card.
+1. "offset falloff", when offset is on, tapers the slide toward either end of the chain instead of sliding it all the same amount - useful for blending an offset smoothly into an existing junction or track instead of leaving a hard kink.
 1. "auto-hookup", if on, checks any dangling end left by the drag (at most one existing connection) against nearby waypoints and wires it up automatically, no confirmation - its own distance/divergence tolerances appear on the card while it is on.
+1. Hold R and scroll the wheel WHILE dragging to rotate whatever is moving, live - around either the point you grabbed or the moved set's centroid, whichever "rotate pivot" is set to.
 1. The tool card auto-hides while you drag, so it is never in the way.
 
 **Controls**
 
-- **picks** — what a plain drag grabs: Point, Run, or Span.
+- **picks** — what a plain drag grabs: Point, Run, or Span. A box/circle/freehand/rotated-box/ctrl-click selection always overrides picks when you grab a member of it.
 - **falloff** — on/off; Point also gets a settable radius when on.
-- **copy** — on/off; leaves the originals and creates a new, disconnected piece.
-- **break** — on/off (copy only); also deletes the originals once copied.
+- **copy (b)** — on/off; leaves the originals and creates a new, disconnected piece.
+- **disconnect** — on/off; severs outside connections. With copy off, moves in place and cuts loose. With copy on, also deletes the originals once copied.
 - **offset** — on/off (Run/Span only); drag-then-wheel sideways slide, right-click to finish.
+- **rotate pivot** — click point or centroid - what R+wheel rotates the dragged set around. Takes effect on the NEXT grab.
+- **offset falloff** — on/off (while offset is on); tapers the slide near the chain's own two ends instead of sliding it all rigidly.
 - **auto-hookup** — on/off; silently reconnects a dangling end within tolerance.
 - **snap to** — surface or terrain for the dropped point.
 
