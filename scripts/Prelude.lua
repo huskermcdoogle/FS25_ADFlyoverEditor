@@ -410,6 +410,10 @@ end
 ---
 --- ADDITIVE - it appends waypoints to the network and destroys nothing. AutoDrive only writes the
 --- route file on save, so quitting without saving discards it entirely.
+---
+--- COMPANION EDIT: generateFieldLoopAt became asynchronous (a live tilled-ground scan can take
+--- several real frames), so this can no longer return the final result - it starts the request and
+--- logs the outcome when the callback lands instead.
 function P:consoleFieldLoop(marginArg, clearanceArg, radiusArg)
     if AutoDrive == nil or AutoDrive.generateFieldLoopAt == nil then
         return "Not armed, or FieldLoopGenerator did not source."
@@ -421,17 +425,17 @@ function P:consoleFieldLoop(marginArg, clearanceArg, radiusArg)
     local x, _, z = getWorldTranslation(vehicle.components[1].node)
 
     local before = ADGraphManager:getWayPointsCount()
-    local ok = AutoDrive:generateFieldLoopAt(x, z,
+    AutoDrive:generateFieldLoopAt(x, z,
         tonumber(marginArg) or ADFlyoverSettings.get("fieldLoopMargin"),
         tonumber(clearanceArg) or ADFlyoverSettings.get("fieldLoopTreeClearance"),
         tonumber(radiusArg) or ADFlyoverSettings.get("fieldLoopTurningRadius"),
-        "FlyoverFieldLoop")
-    local after = ADGraphManager:getWayPointsCount()
-
-    local result = string.format("%s - waypoints %d -> %d (+%d)",
-        ok and "generated" or "FAILED, see the log", before, after, after - before)
-    log("field loop: %s", result)
-    return result
+        "FlyoverFieldLoop", nil, nil,
+        function(ok)
+            local after = ADGraphManager:getWayPointsCount()
+            log("field loop: %s - waypoints %d -> %d (+%d)",
+                ok and "generated" or "FAILED, see the log", before, after, after - before)
+        end)
+    return "field loop requested - the boundary lookup can take a moment on a large area, see the log for the result"
 end
 
 --- Stage 5a: exercise the snapshot half of undo WITHOUT restoring.

@@ -6,13 +6,22 @@ Field loop only ever found a *map* field's static boundary — by asking `g_farm
 farmland owns the cursor's position, then reading that farmland's field. Plowing the gap between
 two separate map fields to work them as one — a common [Courseplay](https://github.com/Courseplay/Courseplay_FS25)
 workflow — was invisible to that lookup: it was still answering "what map field owns this spot",
-which doesn't change just because the ground between two of them got tilled. Field loop now also
-tries Courseplay's `g_fieldScanner`, when Courseplay is active, which traces the live tilled-ground
-edge instead of a static boundary and so naturally includes a plowed-together gap in the contour
-(plus a cheap check against any boundary explicitly recorded with Courseplay's custom-field
-recorder, for the rarer case one exists). Falls back to the map-field lookup otherwise. A new
+which doesn't change just because the ground between two of them got tilled.
+
+Field loop now tries two Courseplay-only lookups first, when Courseplay is active, both confirmed
+against Courseplay's own source rather than guessed:
+
+- A boundary explicitly saved with Courseplay's custom-field recorder, if one exists at the site —
+  cheap and exact, but the rarer case.
+- Courseplay's own live field-boundary scan (the same one its "generate course" feature uses),
+  which traces the actual tilled-ground edge instead of a static boundary, so a plowed-together gap
+  is just part of the contour. This is asynchronous — it runs a few frames at a time on a
+  Courseplay-capable vehicle borrowed from the mission — so field loop now shows "scanning the
+  field boundary…" on the tool card while it works, and ignores a re-click until it finishes.
+
+Falls back to the map-field lookup if neither finds anything, or Courseplay isn't installed. A new
 **detect custom field** toggle on the tool card (on by default) switches back to map-field-only for
-isolating a report. No effect if Courseplay isn't installed.
+isolating a report.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
