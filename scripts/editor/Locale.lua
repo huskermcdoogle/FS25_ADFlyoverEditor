@@ -153,6 +153,13 @@ L.STRINGS = {
         ["tolerance"] = "Toleranz",
         ["points"] = "Punkte",
         ["distance"] = "Abstand",
+        ["picks"] = "wählt",
+        ["falloff"] = "Abnahme",
+        ["copy (b)"] = "kopieren (b)",
+        ["disconnect"] = "trennen",
+        ["auto-hookup"] = "Auto-Anschluss",
+        ["rotate pivot"] = "Drehpunkt",
+        ["offset falloff"] = "Versatz-Abnahme",
 
         -- editable-number labels
         ["offset"] = "Versatz",
@@ -188,6 +195,13 @@ L.STRINGS = {
         ["normal"] = "normal",
         ["flipped"] = "umgedreht",
         ["auto"] = "auto",
+        ["on"] = "an",
+        ["off"] = "aus",
+        ["point"] = "Punkt",
+        ["run"] = "Route",
+        ["span"] = "Abschnitt",
+        ["click point"] = "Klickpunkt",
+        ["centroid"] = "Schwerpunkt",
 
         -- theme preset names
         ["Contrast Dark"] = "Kontrast Dunkel",
