@@ -72,11 +72,18 @@ AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available 
 --- map/save can be isolated by switching back to the map-field-only path without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
     if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop custom-field detection at x=%.1f z=%.1f - g_customFieldManager=%s g_fieldScanner=%s",
+            x, z, tostring(g_customFieldManager ~= nil), tostring(g_fieldScanner ~= nil))
+
         if g_customFieldManager ~= nil then
             local okCustom, customField = pcall(function()
                 return g_customFieldManager:getCustomField(x, z)
             end)
-            if okCustom and customField ~= nil then
+            if not okCustom then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_customFieldManager:getCustomField errored: %s", tostring(customField))
+            elseif customField == nil then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop no recorded custom field here.")
+            else
                 local okVerts, vertices = pcall(function() return customField:getVertices() end)
                 if okVerts and vertices ~= nil and #vertices >= 3 then
                     local points = {}
@@ -88,6 +95,7 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
                         (okName and name) or "?")
                     return points, (okName and name) or "Custom field", nil
                 end
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop recorded custom field had no usable vertices (okVerts=%s).", tostring(okVerts))
             end
         end
 
@@ -97,7 +105,13 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
             local okScan, found, scanned = pcall(function()
                 return g_fieldScanner:findContour(x, z)
             end)
-            if okScan and found and scanned ~= nil and #scanned >= 3 then
+            if not okScan then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_fieldScanner:findContour errored: %s", tostring(found))
+            elseif not found then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanner could not trace a contour here (not on field, or lost).")
+            elseif scanned == nil or #scanned < 3 then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanner returned too few points (%s).", tostring(scanned and #scanned or "nil"))
+            else
                 local points = {}
                 for i = 1, #scanned do
                     points[i] = { x = scanned[i].x, z = scanned[i].z }
