@@ -167,6 +167,14 @@ T["field loop"] = {
     "  boundary as laid if the obstacle check keeps",
     "  flagging something that isn't really in the",
     "  way.",
+    "multi: off by default. On, each click stages",
+    "  another scanned region instead of placing it,",
+    "  and right-click places all of them at once,",
+    "  bridging the ones that ended up close together",
+    "  (bridge distance sets how close). For a field",
+    "  a lane splits into disconnected tilled",
+    "  patches, since a live scan can only ever",
+    "  return the one piece the click landed on.",
   },
 }
 

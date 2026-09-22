@@ -539,6 +539,16 @@ function ADFlyoverHud:buildRows(editor)
         -- laid rather than nudging it clear of whatever the obstacle check is flagging.
         add("toggle", "avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles") and "on" or "off", false,
             function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
+        -- On: each click stages another scanned region instead of placing immediately, and
+        -- right-click places all of them at once, bridging the ones that ended up close together -
+        -- a lane splitting one field into disconnected tilled patches needs one click per patch,
+        -- since the live scan can only ever return whichever piece the click landed in.
+        add("toggle", "multi", editor.fieldLoopMultiOn and "on" or "off", false,
+            function() editor:toggleFieldLoopMulti() end)
+        if editor.fieldLoopMultiOn then
+            local n = editor.fieldLoopStaged and #editor.fieldLoopStaged or 0
+            add("toggle", "staged", tostring(n))
+        end
     elseif editor.tool == editor.TOOL.CONVERT then
         add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
             function() editor:cycleConvertOp() end)

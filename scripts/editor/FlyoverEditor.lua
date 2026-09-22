@@ -157,6 +157,12 @@ ADFlyoverEditor = {
     -- createFieldLoopGraph always did before these existed: secondary, two-way.
     fieldLoopSubPrio = true,
     fieldLoopDirection = 3,
+    -- Multi mode: each click SCANS another region and stages it instead of placing immediately;
+    -- right-click places every staged region as one undo step and bridges the ones that ended up
+    -- close together (a lane splitting one field into disconnected tilled patches, say, which the
+    -- live scanner can only ever return one piece of per click - see getFieldPolygonAtPosition).
+    fieldLoopMultiOn = false,
+    fieldLoopStaged = nil,
     splineFromId = nil,
     curvatureIndex = 1,
     -- Two separate spline controls, because they answer two different questions: which way the
@@ -1897,6 +1903,7 @@ function ADFlyoverEditor:setTool(tool)
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+    self.fieldLoopStaged = nil
     self.dragId = nil
     self.boxActive = false
     self.circleActive = false
@@ -2562,6 +2569,16 @@ function ADFlyoverEditor:drawNetwork()
             ADDrawingManager:addSphereTask(p.x, p.y + 0.4, p.z, 3, r, g, b, 0.20)
             ADDrawingManager:addSphereTask(p.x, p.targetY + 0.4, p.z, 2, r, g, b, 0.10)
             ADDrawingManager:addLineTask(p.x, p.y + 0.4, p.z, p.x, p.targetY + 0.4, p.z, lw, r, g, b)
+        end
+    end
+
+    -- Field loop multi mode: a marker at each staged click, so it is clear roughly where they are
+    -- (the tool card's status line already says how many). Nothing here changes the network until
+    -- right-click.
+    if self.tool == self.TOOL.FIELDLOOP and self.fieldLoopStaged ~= nil then
+        for _, pos in ipairs(self.fieldLoopStaged) do
+            local py = AutoDrive:getTerrainHeightAtWorldPos(pos.x, pos.z) or 0
+            ADDrawingManager:addSphereTask(pos.x, py + 0.6, pos.z, 3, 0.2, 0.9, 0.3, 0.20)
         end
     end
 
@@ -3340,6 +3357,11 @@ function ADFlyoverEditor:stopCurrentAction()
             ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the pending merge.")
             self.mergeFromId, self.mergeToId = nil, nil
             self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+            return true
+        end
+    elseif tool == self.TOOL.FIELDLOOP then
+        if self.fieldLoopStaged ~= nil and #self.fieldLoopStaged > 0 then
+            self:commitMultiFieldLoop()
             return true
         end
     elseif tool == self.TOOL.MOVE then
@@ -4794,12 +4816,16 @@ function ADFlyoverEditor:getEditableNumbers()
     end
 
     if self.tool == self.TOOL.FIELDLOOP then
-        return {
+        local fields = {
             settingEntry("margin", "fieldLoopMargin"),
             settingEntry("tree clearance", "fieldLoopTreeClearance"),
             settingEntry("turning radius", "fieldLoopTurningRadius"),
             settingEntry("vehicle height", "fieldLoopVehicleHeight")
         }
+        if self.fieldLoopMultiOn then
+            table.insert(fields, settingEntry("bridge distance", "fieldLoopBridgeDistance"))
+        end
+        return fields
     elseif self.tool == self.TOOL.SMOOTH and self.smoothMode == self.SMOOTH_MODE.REBUILD then
         return { {
             label = "max spacing",
@@ -6036,6 +6062,13 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Click the waypoint to curve from.")
     elseif self.tool == t.FIELDLOOP then
+        if self.fieldLoopMultiOn then
+            local n = self.fieldLoopStaged and #self.fieldLoopStaged or 0
+            if n > 0 then
+                return string.format(L("%d region(s) staged. Click another, or right-click to place them all."), n)
+            end
+            return L("Multi: click each disconnected part of the field. Right-click places them all.")
+        end
         return L("Click inside a field to ring it. Uses the field loop settings.")
     elseif self.tool == t.SIDING then
         if self.sidingBlockedBy ~= nil then
@@ -10373,6 +10406,28 @@ function ADFlyoverEditor:cycleFieldLoopDirection()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop track will be %s.", self.FIELD_LOOP_DIR_NAMES[self.fieldLoopDirection])
 end
 
+-- COMPANION EDIT: the `or` fallbacks match what the merge reads already do. Without them a nil
+-- margin becomes `-nil` inside the offset, which is a hard Lua error on the first click, on a path
+-- with no pcall around it. Shared by the single-click and multi-mode paths so they cannot drift.
+function ADFlyoverEditor:fieldLoopSettings()
+    local marginDistance = ADFlyoverSettings.get("fieldLoopMargin") or 1.25
+    local treeClearance = ADFlyoverSettings.get("fieldLoopTreeClearance") or 1.25
+    local turningRadius = ADFlyoverSettings.get("fieldLoopTurningRadius") or 8
+    local flags = self.fieldLoopSubPrio and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+    local direction = ({ [self.FIELD_LOOP_DIR.CW] = "cw", [self.FIELD_LOOP_DIR.CCW] = "ccw",
+        [self.FIELD_LOOP_DIR.TWOWAY] = "twoway" })[self.fieldLoopDirection] or "twoway"
+    return marginDistance, treeClearance, turningRadius, flags, direction
+end
+
+function ADFlyoverEditor:toggleFieldLoopMulti()
+    self.fieldLoopMultiOn = not self.fieldLoopMultiOn
+    -- Switching modes mid-stage would silently drop whatever was already staged with no commit -
+    -- clear it instead so "off" always means the plain single-click behaviour, not "off, but still
+    -- carrying leftover state from multi mode".
+    self.fieldLoopStaged = nil
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop multi mode %s.", self.fieldLoopMultiOn and "on" or "off")
+end
+
 function ADFlyoverEditor:generateFieldLoopAtCursor()
     if g_server == nil then
         Logging.error("[FlyoverEditor]: field loops can only be generated on the server (host/singleplayer).")
@@ -10381,16 +10436,16 @@ function ADFlyoverEditor:generateFieldLoopAtCursor()
     if self.cursorX == nil then
         return
     end
-    -- COMPANION EDIT: the `or` fallbacks match what the merge reads already do. Without them a nil
-    -- margin becomes `-nil` inside the offset, which is a hard Lua error on the first click, on a
-    -- path with no pcall around it.
-    local marginDistance = ADFlyoverSettings.get("fieldLoopMargin") or 1.25
-    local treeClearance = ADFlyoverSettings.get("fieldLoopTreeClearance") or 1.25
-    local turningRadius = ADFlyoverSettings.get("fieldLoopTurningRadius") or 8
 
-    local flags = self.fieldLoopSubPrio and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
-    local direction = ({ [self.FIELD_LOOP_DIR.CW] = "cw", [self.FIELD_LOOP_DIR.CCW] = "ccw",
-        [self.FIELD_LOOP_DIR.TWOWAY] = "twoway" })[self.fieldLoopDirection] or "twoway"
+    if self.fieldLoopMultiOn then
+        self.fieldLoopStaged = self.fieldLoopStaged or {}
+        table.insert(self.fieldLoopStaged, { x = self.cursorX, z = self.cursorZ })
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop staged region %d at x=%.1f z=%.1f.",
+            #self.fieldLoopStaged, self.cursorX, self.cursorZ)
+        return
+    end
+
+    local marginDistance, treeClearance, turningRadius, flags, direction = self:fieldLoopSettings()
 
     -- A field loop can add hundreds of waypoints in one click, which is exactly the kind of thing
     -- that wants to be undoable in one step.
@@ -10400,6 +10455,43 @@ function ADFlyoverEditor:generateFieldLoopAtCursor()
         marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop", flags, direction)
 
     if ok then
+        self:invalidateIdReferences()
+        ADGraphManager:markChanges()
+    end
+end
+
+--- Right-click with staged regions: place all of them as one undo step, then bridge whichever
+--- pairs ended up close together (see AutoDrive:bridgeFieldLoopRings). Multi mode stays ON
+--- afterward - starting the next split field is just clicking again - so this only clears the
+--- staged list, not the mode toggle.
+function ADFlyoverEditor:commitMultiFieldLoop()
+    local staged = self.fieldLoopStaged
+    self.fieldLoopStaged = nil
+    if staged == nil or #staged == 0 then
+        return
+    end
+
+    local marginDistance, treeClearance, turningRadius, flags, direction = self:fieldLoopSettings()
+
+    ADEditorHistory:snapshot("field loop")
+
+    local ranges, anyOk = {}, false
+    for _, pos in ipairs(staged) do
+        local ok, idRange = AutoDrive:generateFieldLoopAt(pos.x, pos.z,
+            marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop", flags, direction)
+        if ok then
+            anyOk = true
+            if idRange ~= nil then
+                table.insert(ranges, idRange)
+            end
+        end
+    end
+
+    local bridged = AutoDrive:bridgeFieldLoopRings(ranges)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop placed %d of %d staged region(s), bridged %d pair(s).",
+        #ranges, #staged, bridged)
+
+    if anyOk then
         self:invalidateIdReferences()
         ADGraphManager:markChanges()
     end

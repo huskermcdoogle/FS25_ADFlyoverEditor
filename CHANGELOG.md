@@ -25,6 +25,12 @@ Also new: an **avoid obstacles** toggle on the same card (on by default) that sk
 tree/pole/fence/building detour entirely, for a field where the obstacle check keeps flagging
 something that isn't really in the way.
 
+And a **multi** toggle (off by default) for a field a lane splits into disconnected tilled
+patches — the live scan can only ever return the one piece a click landed on, so with multi on
+each click stages another region instead of placing it, and right-click places all of them at once
+as a single undo step, bridging any pair that ended up within **bridge distance** of each other so
+the finished route can cross the lane instead of ending in two separate loops.
+
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
 Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and

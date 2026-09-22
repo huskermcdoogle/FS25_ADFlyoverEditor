@@ -712,18 +712,21 @@ end
 --- function's own defaults - secondary, two-way - so the console command, which has no editor
 --- panel to read them from, is unaffected).
 ---
---- Returns true on success. Everything interesting is already logged here.
+--- Returns true, idRange on success ({firstId, lastId} of the placed ring - see
+--- AutoDrive:bridgeFieldLoopRings, which uses it to connect separately scanned regions back
+--- together) or false, nil on failure. Everything interesting is already logged here either way;
+--- existing callers that only capture the first return value are unaffected.
 function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
     local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
-        return false
+        return false, nil
     end
 
     local ring, perimeter, treeStats, ringErr = AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
     if ring == nil then
         Logging.error("[AD] %s: %s", source, tostring(ringErr))
-        return false
+        return false, nil
     end
 
     local summary = AutoDrive:createFieldLoopGraph(ring, flags, direction)
@@ -749,5 +752,53 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         treeStats.smoothMoves,
         summary.networkErrorCount
     )
-    return true
+    return true, summary.idRange
+end
+
+--- Connect separately scanned regions back together where they ended up close - the live scanner
+--- (getFieldPolygonAtPosition's g_fieldScanner path) can only ever return the ONE tilled-ground
+--- piece the click landed in, so a lane splitting a field into disconnected patches needs one
+--- click per patch, each producing its own standalone ring. This is the second half: for every
+--- pair of rings, find their single closest point-to-point gap and, if it's within
+--- fieldLoopBridgeDistance, connect just those two points - not a merge, a single new edge, so the
+--- vehicle can cross from one ring to the other there.
+---
+--- ranges: a list of {firstId, lastId} pairs, as returned by generateFieldLoopAt. Brute-force
+--- (every point in one ring against every point in the other) - ring sizes are in the low hundreds
+--- and this runs once per multi-region placement, not per frame, so there is no reason to reach
+--- for anything cleverer.
+function AutoDrive:bridgeFieldLoopRings(ranges)
+    if ranges == nil or #ranges < 2 then
+        return 0
+    end
+    local maxBridge = ADFlyoverSettings.get("fieldLoopBridgeDistance") or 8
+    local bridged = 0
+    for i = 1, #ranges do
+        for j = i + 1, #ranges do
+            local a1, a2 = ranges[i][1], ranges[i][2]
+            local b1, b2 = ranges[j][1], ranges[j][2]
+            local bestA, bestB, bestDist = nil, nil, math.huge
+            for ia = a1, a2 do
+                local wa = ADGraphManager:getWayPointById(ia)
+                if wa ~= nil then
+                    for ib = b1, b2 do
+                        local wb = ADGraphManager:getWayPointById(ib)
+                        if wb ~= nil then
+                            local dist = MathUtil.vector2Length(wb.x - wa.x, wb.z - wa.z)
+                            if dist < bestDist then
+                                bestDist, bestA, bestB = dist, wa, wb
+                            end
+                        end
+                    end
+                end
+            end
+            if bestA ~= nil and bestDist <= maxBridge then
+                ADGraphManager:toggleConnectionBetween(bestA, bestB, false, true, false)
+                bridged = bridged + 1
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop bridged two scanned regions, %.1fm gap (waypoints %d<->%d).",
+                    bestDist, bestA.id, bestB.id)
+            end
+        end
+    end
+    return bridged
 end
