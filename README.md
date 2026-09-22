@@ -33,6 +33,15 @@ Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/w6mvhuaa9k
 - **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - **Esc** to leave. Every edit is undoable — **Q** undo, **E** redo.
 
+## Works with placeable junctions too
+
+The move tool's box/circle/freehand grab, drag, rotate, and auto-hookup now all recognize the
+placeable intersections from
+[**AD_XandT-intersections**](https://github.com/williwillswisse/AD_XandT-intersections) by
+**williwillswisse** — select one in a box grab alongside regular waypoints, drag and rotate it into
+place, and let auto-hookup reconnect its approaches to the surrounding network on drop. A great
+pairing if you want hand-built intersection geometry with flyover-editor convenience on top.
+
 ## Tools
 
 Grouped by job on the panel. **Select** is the default mode: no tool held, click things to edit them.
@@ -113,6 +122,10 @@ table at source time, and AutoDrive is unresolvable then.
 
 By huskermcdoogle. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive)
 (MIT); not affiliated with or endorsed by the AutoDrive team.
+
+Move-tool support for placeable intersections targets
+[williwillswisse/AD_XandT-intersections](https://github.com/williwillswisse/AD_XandT-intersections) —
+credit to williwillswisse for that mod.
 
 The field-loop feature was *inspired* by [Courseplay](https://github.com/Courseplay/Courseplay_FS25)'s
 field-course generation, but its geometry here is an **independent implementation** written from
