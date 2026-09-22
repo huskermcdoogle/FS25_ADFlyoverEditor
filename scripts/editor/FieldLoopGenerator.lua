@@ -113,15 +113,27 @@ end
 
 function AutoDrive:findFieldBoundaryVehicle()
     if g_currentMission == nil or g_currentMission.vehicles == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop vehicle scan: g_currentMission or .vehicles is nil.")
         return nil
     end
+    local total, capable, busy = 0, 0, 0
+    local found = nil
     for _, vehicle in pairs(g_currentMission.vehicles) do
-        if type(vehicle.cpDetectFieldBoundary) == "function"
-            and (type(vehicle.cpIsFieldBoundaryDetectionRunning) ~= "function" or not vehicle:cpIsFieldBoundaryDetectionRunning()) then
-            return vehicle
+        total = total + 1
+        if type(vehicle.cpDetectFieldBoundary) == "function" then
+            capable = capable + 1
+            local running = type(vehicle.cpIsFieldBoundaryDetectionRunning) == "function" and vehicle:cpIsFieldBoundaryDetectionRunning()
+            if running then
+                busy = busy + 1
+            elseif found == nil then
+                local okName, name = pcall(function() return vehicle:getName() end)
+                found = { vehicle = vehicle, name = (okName and name) or "?" }
+            end
         end
     end
-    return nil
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop vehicle scan: %d vehicle(s) in g_currentMission.vehicles, %d Courseplay-capable, %d busy, picked %s.",
+        total, capable, busy, found and found.name or "none")
+    return found and found.vehicle or nil
 end
 
 function AutoDrive:getFieldPolygonAtPositionAsync(x, z, callback)
