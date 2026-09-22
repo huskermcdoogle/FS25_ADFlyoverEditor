@@ -11,7 +11,7 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 *Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 0.31.0.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
+> **Status:** build 1.0.1.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
 
 ## Install
 
