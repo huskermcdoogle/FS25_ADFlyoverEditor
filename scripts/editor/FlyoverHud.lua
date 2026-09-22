@@ -535,6 +535,10 @@ function ADFlyoverHud:buildRows(editor)
         -- here so that can be isolated per-site without a settings-dialog trip.
         add("toggle", "detect custom field", ADFlyoverSettings.get("fieldLoopDetectCustomField") and "on" or "off", false,
             function() ADFlyoverSettings.cycle("fieldLoopDetectCustomField", 1) end)
+        -- Off skips the tree/pole/fence/building detour entirely, taking the offset boundary as
+        -- laid rather than nudging it clear of whatever the obstacle check is flagging.
+        add("toggle", "avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles") and "on" or "off", false,
+            function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
     elseif editor.tool == editor.TOOL.CONVERT then
         add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
             function() editor:cycleConvertOp() end)

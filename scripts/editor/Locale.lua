@@ -161,6 +161,7 @@ L.STRINGS = {
         ["rotate pivot"] = "Drehpunkt",
         ["offset falloff"] = "Versatz-Abnahme",
         ["detect custom field"] = "eigenes Feld erkennen",
+        ["avoid obstacles"] = "Hindernisse meiden",
 
         -- editable-number labels
         ["offset"] = "Versatz",

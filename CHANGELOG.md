@@ -21,6 +21,10 @@ Falls back to the map-field lookup if neither finds anything, or Courseplay isn'
 **detect custom field** toggle on the tool card (on by default) switches back to map-field-only for
 isolating a report.
 
+Also new: an **avoid obstacles** toggle on the same card (on by default) that skips the
+tree/pole/fence/building detour entirely, for a field where the obstacle check keeps flagging
+something that isn't really in the way.
+
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
 Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and

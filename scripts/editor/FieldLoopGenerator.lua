@@ -537,42 +537,55 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     -- Tree avoidance runs last, on the finished (offset, corner-rounded, adaptively spaced)
     -- boundary, so it only ever perturbs an otherwise-good path. Add resolution around trees
     -- first, so the detour has points to be shaped from and no tree can hide between two samples.
-    local nearTreeRing = densifyNearTrees(tidiedXZ, treeClearance, AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING)
+    --
+    -- COMPANION EDIT: gated by "avoid obstacles" - off skips this whole pass (densify, detour, and
+    -- the detour-aware relaxation below) and takes the offset boundary as-is, for a field where the
+    -- obstacle check keeps flagging something that isn't really in the way.
+    local avoidObstacles = ADFlyoverSettings.get("fieldLoopAvoidObstacles")
+    local finalXZ, treeStats, smoothMoveCount
+    if avoidObstacles then
+        local nearTreeRing = densifyNearTrees(tidiedXZ, treeClearance, AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING)
 
-    local detouredXZ, treeStats = detourAroundTrees(nearTreeRing, fieldCentroid, treeClearance, turningRadius)
+        local detouredXZ
+        detouredXZ, treeStats = detourAroundTrees(nearTreeRing, fieldCentroid, treeClearance, turningRadius)
 
-    if #detouredXZ < 3 then
-        return nil, nil, nil, "Too many points along this loop could not clear trees - fewer than 3 points remained. Try a larger tree clearance or a different margin."
+        if #detouredXZ < 3 then
+            return nil, nil, nil, "Too many points along this loop could not clear trees - fewer than 3 points remained. Try a larger tree clearance or a different margin."
+        end
+
+        -- The raised-cosine detour is already within turningRadius by construction, so this is a
+        -- safety net for anything the max-of-overlapping-detours combination left too tight - and
+        -- it still refuses any relaxation that would re-enter a tree's clearance radius.
+        finalXZ, smoothMoveCount = ADOffsetGeometry.smoothTightVertices(
+            detouredXZ,
+            turningRadius,
+            AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR,
+            AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS,
+            -- Check the spans this move creates, not just the point: relaxing a point on a detour
+            -- can leave it clear while the chord to its neighbour clips the tree the detour exists
+            -- to avoid.
+            function(x, z, prev, nxt)
+                if AutoDrive:hasTreeNear(x, z, treeClearance) then
+                    return false
+                end
+                if prev and AutoDrive:hasTreeNear((x + prev.x) / 2, (z + prev.z) / 2, treeClearance) then
+                    return false
+                end
+                if nxt and AutoDrive:hasTreeNear((x + nxt.x) / 2, (z + nxt.z) / 2, treeClearance) then
+                    return false
+                end
+                return true
+            end
+        )
+    else
+        finalXZ = tidiedXZ
+        treeStats = { nudged = 0, stuck = 0, detours = 0 }
+        smoothMoveCount = 0
     end
 
-    -- The raised-cosine detour is already within turningRadius by construction, so this is a
-    -- safety net for anything the max-of-overlapping-detours combination left too tight - and it
-    -- still refuses any relaxation that would re-enter a tree's clearance radius.
-    local smoothedXZ, smoothMoveCount = ADOffsetGeometry.smoothTightVertices(
-        detouredXZ,
-        turningRadius,
-        AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR,
-        AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS,
-        -- Check the spans this move creates, not just the point: relaxing a point on a detour
-        -- can leave it clear while the chord to its neighbour clips the tree the detour exists
-        -- to avoid.
-        function(x, z, prev, nxt)
-            if AutoDrive:hasTreeNear(x, z, treeClearance) then
-                return false
-            end
-            if prev and AutoDrive:hasTreeNear((x + prev.x) / 2, (z + prev.z) / 2, treeClearance) then
-                return false
-            end
-            if nxt and AutoDrive:hasTreeNear((x + nxt.x) / 2, (z + nxt.z) / 2, treeClearance) then
-                return false
-            end
-            return true
-        end
-    )
-
     local ring = {}
-    for i = 1, #smoothedXZ do
-        local p = smoothedXZ[i]
+    for i = 1, #finalXZ do
+        local p = finalXZ[i]
         ring[i] = { x = p.x, y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z), z = p.z }
     end
 

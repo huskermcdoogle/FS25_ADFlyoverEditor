@@ -102,6 +102,10 @@ TOOLS = [
                                      "just a field shipped with the map. No effect without "
                                      "Courseplay. Turn it off to fall back to the map-field-only "
                                      "lookup if it ever misreads a field on your save."),
+            ("avoid obstacles", "on by default; nudges the loop away from trees, poles, fences and "
+                                 "buildings instead of laying it straight through them. Turn it "
+                                 "off to take the offset boundary as laid if the obstacle check "
+                                 "keeps flagging something that isn't really in the way."),
         ],
     },
     {
