@@ -244,10 +244,20 @@ AutoDrive.FIELD_LOOP_PROBE_STEP = 1.0 -- meters between probe samples along each
 --- (winding direction is not assumed), and scans a fresh contour wherever a probe lands on tilled
 --- ground not already inside a found region.
 ---
---- Needs cpEnv (for g_fieldScanner and CpFieldUtil.isOnFieldArea, the cheap "is this point on any
---- field" density-map check Courseplay's own field scan uses) - without it, or if isOnFieldArea
---- isn't there, this returns just the one region it was given rather than guessing.
-function AutoDrive:findConnectedFieldRegions(cpEnv, firstRegion)
+--- Needs cpEnv (for g_fieldScanner and CpFieldUtil.isOnFieldArea, confirmed against Courseplay's
+--- own CpFieldUtil.lua) - without it, or if isOnFieldArea isn't there, this returns just the one
+--- region it was given rather than guessing.
+---
+--- Distance is the ONLY signal this has for "same field, split by a lane" vs. "a genuinely
+--- different field that happens to be nearby, across an actual road" - reported live
+--- (2026-09-22): the default max gap pulled in an unrelated field across a real road. Field ID
+--- cannot tell them apart either: Courseplay's own FieldScanner.lua explains why it ignores field
+--- ID while scanning - "with it we can't handle merged fields" - meaning the STATIC id does not
+--- update when two map fields get tilled together, so requiring a match would reject the exact
+--- case this exists for, not just the unwanted one. fieldLoopMaxGap is genuinely a per-map,
+--- per-player tuning knob: set it just above your widest field lane and it should not reach a
+--- real road, since roads are typically wider than a field lane.
+function AutoDrive:findConnectedFieldRegions(x, z, cpEnv, firstRegion)
     local regions = { firstRegion }
 
     local fieldUtil = cpEnv ~= nil and cpEnv.CpFieldUtil or nil
@@ -809,21 +819,48 @@ function AutoDrive:generateFieldLoop(marginArg, treeClearanceArg, turningRadiusA
     AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, "ADGenerateFieldLoop")
 end
 
---- Closest pair of points between two FINISHED rings, by index. Used only to splice rings
---- together (a handful of regions at most), so brute force is fine - no reason to reach for
---- anything cleverer for what runs once per click.
+--- Closest pair of points between two FINISHED rings, by index, REJECTING any pair whose bridge
+--- would cut across either ring's own interior rather than crossing the clear gap between them -
+--- reported live (2026-09-22): the plain closest-pair version picked a corner of one ring that
+--- was geometrically nearer to a far point of the other than to the ring actually facing it,
+--- landing a waypoint in the middle of the wrong field. Concave/irregular shapes (a raw tilled-
+--- ground scan is rarely a clean rectangle) make that a real case, not a corner case.
+---
+--- Sampled rather than exact: three points along each candidate segment (25/50/75%) checked
+--- against BOTH rings with pointInPolygon. Exact segment/polygon intersection would catch a
+--- graze this can miss, but at ring sizes in the hundreds, testing every candidate exactly is a
+--- lot of work for a defect this sampling already prevents in the reported case; falls back to
+--- the plain closest pair if literally nothing passes, so this never leaves the two rings
+--- unbridged.
 local function ringClosestPair(a, b)
-    local bestI, bestJ, bestDistSq = 1, 1, math.huge
+    local bestI, bestJ, bestDistSq = nil, nil, math.huge
+    local fallbackI, fallbackJ, fallbackDistSq = 1, 1, math.huge
     for i = 1, #a do
         local pa = a[i]
         for j = 1, #b do
             local pb = b[j]
             local dx, dz = pb.x - pa.x, pb.z - pa.z
             local d = dx * dx + dz * dz
+            if d < fallbackDistSq then
+                fallbackDistSq, fallbackI, fallbackJ = d, i, j
+            end
             if d < bestDistSq then
-                bestDistSq, bestI, bestJ = d, i, j
+                local clear = true
+                for _, t in ipairs({ 0.25, 0.5, 0.75 }) do
+                    local mx, mz = pa.x + dx * t, pa.z + dz * t
+                    if pointInPolygon(mx, mz, a) or pointInPolygon(mx, mz, b) then
+                        clear = false
+                        break
+                    end
+                end
+                if clear then
+                    bestDistSq, bestI, bestJ = d, i, j
+                end
             end
         end
+    end
+    if bestI == nil then
+        return fallbackI, fallbackJ, math.sqrt(fallbackDistSq)
     end
     return bestI, bestJ, math.sqrt(bestDistSq)
 end
@@ -884,7 +921,7 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         return false
     end
 
-    local rawRegions = AutoDrive:findConnectedFieldRegions(cpEnv, rawPoints)
+    local rawRegions = AutoDrive:findConnectedFieldRegions(x, z, cpEnv, rawPoints)
 
     local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
     local lastRingErr = nil

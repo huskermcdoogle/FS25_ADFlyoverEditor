@@ -172,7 +172,11 @@ T["field loop"] = {
     "  split by a lane, and combine it into the same",
     "  course - a live scan can only ever return the",
     "  one piece a click lands on, so this finds the",
-    "  rest on its own, no extra clicks needed.",
+    "  rest on its own, no extra clicks needed. A",
+    "  real per-map setting, not just a safety",
+    "  margin: raise it if a wide lane gets missed,",
+    "  lower it if it ever reaches across an actual",
+    "  road into an unrelated field.",
   },
 }
 

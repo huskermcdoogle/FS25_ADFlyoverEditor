@@ -27,10 +27,14 @@ something that isn't really in the way.
 
 Field loop also now handles a field a lane splits into disconnected tilled patches on its own,
 with no extra clicks: the live scan can only ever return the one piece a click lands on, so it now
-auto-discovers any other patch within **max gap** of the first (a new field on the card), finishes
-each one through the normal offset/tree-avoidance pipeline on its own, then splices the finished
-boundaries into the single course that actually gets placed — one click, one course, crossing the
-lane instead of leaving two separate loops for you to connect by hand.
+auto-discovers any other patch within **max gap** of the first (a new field on the card, default
+8m — this is a real per-map tuning knob, since distance is the only signal available for "the same
+field, split by a lane" vs. "a different field across an actual road"), finishes each one through
+the normal offset/tree-avoidance pipeline on its own, then splices the finished boundaries into the
+single course that actually gets placed — one click, one course, crossing the lane instead of
+leaving two separate loops for you to connect by hand. The bridge point between two patches is now
+also chosen to never cut across either patch's own interior, not just whichever pair happened to
+be closest.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
