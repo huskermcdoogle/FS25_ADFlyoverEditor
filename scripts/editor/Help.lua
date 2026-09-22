@@ -151,6 +151,11 @@ T["field loop"] = {
     "  allowed to make.",
     "vehicle height: how tall a machine the tree",
     "  check clears for.",
+    "detect custom field: on by default; also finds",
+    "  a field drawn in-game with Define Field, not",
+    "  just one shipped with the map. Turn it off to",
+    "  fall back to the old lookup if it ever",
+    "  misreads a field on your save.",
   },
 }
 

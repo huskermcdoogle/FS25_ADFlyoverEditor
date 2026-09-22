@@ -139,6 +139,7 @@ Field loop builds a complete two-way route that runs just outside a field's boun
 - **tree clearance** — how far the loop keeps from trees before detouring.
 - **turning radius** — the tightest turn the loop is allowed to make.
 - **vehicle height** — how tall a machine the tree check clears for.
+- **detect custom field** — on by default; also finds a field drawn in-game with Define Field, not just one shipped with the map. Turn it off to fall back to the old lookup if it ever misreads a field on your save.
 
 <a id="parallel"></a>
 ## Parallel

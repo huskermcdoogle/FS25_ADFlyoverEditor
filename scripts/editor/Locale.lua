@@ -160,6 +160,7 @@ L.STRINGS = {
         ["auto-hookup"] = "Auto-Anschluss",
         ["rotate pivot"] = "Drehpunkt",
         ["offset falloff"] = "Versatz-Abnahme",
+        ["detect custom field"] = "eigenes Feld erkennen",
 
         -- editable-number labels
         ["offset"] = "Versatz",

@@ -56,10 +56,13 @@ AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available 
 --- geometric question instead ("what field polygon is under this spot"), which is what covers both
 --- kinds. Kept as a fallback rather than a replacement in case an older/modified g_fieldManager
 --- lacks the method - same pcall-guarded, log-and-continue style as the rest of this file.
+---
+--- Gated by the "detect custom field" toggle so a report of it misbehaving on a particular
+--- map/save can be isolated by switching back to the old farmland-only path without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
     local field = nil
 
-    if g_fieldManager ~= nil then
+    if ADFlyoverSettings.get("fieldLoopDetectCustomField") and g_fieldManager ~= nil then
         local okDirect, directField = pcall(function()
             return g_fieldManager:getFieldAtWorldPosition(x, z)
         end)
