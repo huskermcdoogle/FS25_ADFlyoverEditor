@@ -34,7 +34,9 @@ the normal offset/tree-avoidance pipeline on its own, then splices the finished 
 single course that actually gets placed — one click, one course, crossing the lane instead of
 leaving two separate loops for you to connect by hand. The bridge point between two patches is now
 also chosen to never cut across either patch's own interior, not just whichever pair happened to
-be closest.
+be closest, and a final pass over the finished loop drops any point where the path folds sharply
+back on itself — a spike, not a real corner — whether that came from a splice or anywhere else in
+the pipeline.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 

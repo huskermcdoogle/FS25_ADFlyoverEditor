@@ -851,6 +851,65 @@ function ADOffsetGeometry.ensureMinimumEdgeLength(ring, minEdgeLength)
     return out
 end
 
+--- Drop any vertex where the path folds sharply back on itself - the incoming and outgoing
+--- direction at that point are close to OPPOSITE, not a real corner but a spike: an offset/scan
+--- artifact, or the tight kink right where two rings get spliced together (see FieldLoopGenerator's
+--- spliceFieldLoopRings). maxReversalDeg is how close to a full 180-degree reversal counts - callers
+--- use something like 150, so a genuine sharp turn (a real field corner, say 90-120 degrees)
+--- survives untouched.
+---
+--- Repeats until a full pass removes nothing - dropping one spike can reveal another right next to
+--- it, most often at exactly the kind of kink this exists to catch - so a short run of spikes
+--- clears in one call rather than needing the caller to loop it. Capped at 20 passes as a safety
+--- net; a ring still finding new spikes after that many rounds has a worse problem than this pass
+--- is meant to fix, and it is better to return what it has than spin.
+function ADOffsetGeometry.removeSpikes(ring, maxReversalDeg)
+    if ring == nil or #ring < 4 then
+        return copyPoints(ring), 0
+    end
+    local cosThreshold = math.cos(math.rad(maxReversalDeg))
+    local removed = 0
+    local pass = 0
+    while pass < 20 do
+        pass = pass + 1
+        local n = #ring
+        if n < 4 then
+            break
+        end
+        local skip = {}
+        local anySkipped = false
+        for i = 1, n do
+            local prev = ring[((i - 2) % n) + 1]
+            local cur = ring[i]
+            local nxt = ring[(i % n) + 1]
+            local inX, inZ = cur.x - prev.x, cur.z - prev.z
+            local outX, outZ = nxt.x - cur.x, nxt.z - cur.z
+            local inLen = MathUtil.vector2Length(inX, inZ)
+            local outLen = MathUtil.vector2Length(outX, outZ)
+            if inLen > 1e-6 and outLen > 1e-6 then
+                local cosAngle = (inX * outX + inZ * outZ) / (inLen * outLen)
+                if cosAngle < cosThreshold then
+                    skip[i] = true
+                    anySkipped = true
+                end
+            end
+        end
+        if not anySkipped then
+            break
+        end
+        local out = {}
+        for i = 1, n do
+            if not skip[i] then
+                out[#out + 1] = ring[i]
+            else
+                removed = removed + 1
+            end
+        end
+        ring = out
+    end
+    return copyPoints(ring), removed
+end
+
 --- Split any edge longer than maxSpacing into equal sub-segments no longer than it. Needed before
 --- thinToAdaptiveSpacing, which can only remove points: a field boundary taken straight from the
 --- game's polygon can have a single 260m edge with nothing in between for the thinning pass to

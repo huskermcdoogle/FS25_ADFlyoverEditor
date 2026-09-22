@@ -42,6 +42,10 @@ AutoDrive.FIELD_LOOP_TREE_DETOUR_AMPLITUDE_STEP = 0.25 -- meters; granularity of
 AutoDrive.FIELD_LOOP_TREE_DETOUR_MAX_DEPTH = 15 -- meters; give up rather than bend the loop further than this into the field
 AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added along segments passing near a tree, before detouring
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
+-- How close to a full 180-degree fold-back counts as a spike (see ADOffsetGeometry.removeSpikes,
+-- the final cleanup pass on the ring that actually gets placed) rather than a genuine sharp field
+-- corner. 90-120 degrees is a normal corner; 150+ is the path doubling back on itself.
+AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG = 150
 
 --- Find the field boundary under an arbitrary world position.
 ---
@@ -945,7 +949,17 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     end
 
     local combinedRing = AutoDrive:spliceFieldLoopRings(rings)
-    local summary = AutoDrive:createFieldLoopGraph(combinedRing, flags, direction)
+
+    -- Final cleanup on the ring that actually gets placed: a spike here (the path folding sharply
+    -- back on itself for one point, not a real corner) can come from the finished-per-region
+    -- pipeline just as easily as from a splice bridge, so this runs whether or not any splicing
+    -- happened - reported live (2026-09-22) as a point sticking out at a corner.
+    local cleanedRing, spikesRemoved = ADOffsetGeometry.removeSpikes(combinedRing, AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG)
+    if spikesRemoved > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop removed %d spike point(s) from the finished ring.", spikesRemoved)
+    end
+
+    local summary = AutoDrive:createFieldLoopGraph(cleanedRing, flags, direction)
 
     local regionNote = #rings > 1 and string.format(", %d region(s) combined", #rings) or ""
     Logging.info(
