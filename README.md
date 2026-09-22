@@ -95,13 +95,18 @@ and why:
 
 ### Versioning
 
-Two numbers, because one cannot answer the question honestly. `P.BUILD` in `Prelude.lua` is
-re-sourced every time a savegame loads, so it always describes the Lua actually running. `modDesc`'s
-version is read by the mod manager at **game startup only**. So reloading a savegame from the main
-menu is enough for Lua changes; a full restart is needed only when `modDesc.xml` itself changes. When
-the two disagree the version line says so — e.g.
-`build 0.29.4.0 (modDesc says 0.29.3.0 - stale, full restart to refresh it)` — which is
-informational, not a fault.
+Two numbers, because one cannot answer the question honestly. `modDesc`'s `<version>` is the
+**release** number — four single digits, bumped by hand, and the only one KingMods or the mod
+manager ever sees; it's read at **game startup only**. `P.BUILD` in `Prelude.lua` is the
+**development** number — the release plus how many commits deep the build is plus the short commit
+SHA, e.g. `1.0.1.0+120.cc5285e` — and it's stamped automatically by `tools/stamp_version.py` before
+every package, never typed by hand. Because it's re-sourced every time a savegame loads, `P.BUILD`
+always describes the Lua actually running; a full restart is needed only when `modDesc.xml` itself
+changes. When the release parts disagree the version line says so — e.g.
+`build 1.0.1.0+120.cc5285e (modDesc says 1.0.0.0 - stale, full restart to refresh it)` — which is
+informational, not a fault. A **release** build (`build_zip.py --release`) refuses to package unless
+`modDesc`'s version is four single digits and a matching git tag exists, so the zip, the tag, the
+GitHub release, and the listing all agree.
 
 ### Repository layout
 
