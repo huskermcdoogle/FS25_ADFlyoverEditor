@@ -512,6 +512,21 @@ function ADFlyoverEditor:probeAllHud()
                     ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (precision farming?) vehicle.%s = %s", tostring(key), type(value))
                 end
             end
+
+            -- vehicle.getUseExtendedSprayerHudExtension confirms a real base-game "HUD extension"
+            -- mechanism is involved - dig into spec_sprayer specifically (the base-game spec,
+            -- distinct from the precisionFarming DLC spec above) for the actual extension
+            -- object/list this hook is about, rather than the DLC spec's own state.
+            local sprayerSpec = vehicle.spec_sprayer
+            if type(sprayerSpec) == "table" then
+                for key in pairs(sprayerSpec) do
+                    local lower = tostring(key):lower()
+                    if lower:find("hud", 1, true) or lower:find("extension", 1, true) or lower:find("extended", 1, true) then
+                        local value = sprayerSpec[key]
+                        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE spec_sprayer.%s = %s", tostring(key), type(value))
+                    end
+                end
+            end
         end
     end
 
