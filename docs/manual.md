@@ -139,7 +139,7 @@ Field loop builds a complete two-way route that runs just outside a field's boun
 - **tree clearance** — how far the loop keeps from trees before detouring.
 - **turning radius** — the tightest turn the loop is allowed to make. Never used below 5m even if set lower - a sharper corner than that reads as an awkward kink rather than a smooth turn.
 - **vehicle height** — how tall a machine the tree check clears for.
-- **detect custom field** — on by default; when Courseplay is active, also finds ground plowed to connect two separate map fields into one, not just a field shipped with the map. No effect without Courseplay. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.
+- **detect custom field** — on by default; also finds ground plowed to connect two separate map fields into one, not just a field shipped with the map. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.
 - **avoid obstacles** — on by default; nudges the loop away from trees, poles, fences and buildings instead of laying it straight through them. Turn it off to take the offset boundary as laid if the obstacle check keeps flagging something that isn't really in the way.
 - **combo gap** — how far to auto-search for another disconnected patch of the same field when it's split by a lane, and combine it into the same course - a live scan can only ever return the one piece a click lands on, so this finds the rest on its own, no extra clicks needed. A real per-map setting, not just a safety margin: raise it if a wide lane gets missed, lower it if it ever reaches across an actual road into an unrelated field.
 

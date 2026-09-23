@@ -4,20 +4,15 @@
 
 Field loop only ever found a *map* field's static boundary — by asking `g_farmlandManager` which
 farmland owns the cursor's position, then reading that farmland's field. Plowing the gap between
-two separate map fields to work them as one — a common [Courseplay](https://github.com/Courseplay/Courseplay_FS25)
-workflow — was invisible to that lookup: it was still answering "what map field owns this spot",
-which doesn't change just because the ground between two of them got tilled.
+two separate map fields to work them as one was invisible to that lookup: it was still answering
+"what map field owns this spot", which doesn't change just because the ground between two of them
+got tilled.
 
-Field loop now tries Courseplay's own field-boundary scanner (`g_fieldScanner`) first, when
-Courseplay is active, confirmed against Courseplay's own source rather than guessed: it traces the
-actual tilled-ground edge from the cursor position instead of a static boundary, so a
-plowed-together gap is just part of the contour. It needs no vehicle and runs synchronously, same
-as everything else on the card. Courseplay stays entirely optional for the mod as a whole — this is
-the one place it is used, and falls back cleanly to the map-field lookup if it isn't installed.
-
-Falls back to the map-field lookup if the scan finds nothing, or Courseplay isn't installed. A new
-**detect custom field** toggle on the tool card (on by default) switches back to map-field-only for
-isolating a report.
+Field loop now traces the actual tilled-ground edge from the cursor position first, instead of a
+static boundary, so a plowed-together gap is just part of the contour — a from-scratch boundary
+walk built directly on `FSDensityMapUtil` (a base-game global), no other mod involved. Falls back
+to the map-field lookup if the trace finds nothing. A new **detect custom field** toggle on the
+tool card (on by default) switches back to map-field-only for isolating a report.
 
 Also new: an **avoid obstacles** toggle on the same card (on by default) that skips the
 tree/pole/fence/building detour entirely, for a field where the obstacle check keeps flagging

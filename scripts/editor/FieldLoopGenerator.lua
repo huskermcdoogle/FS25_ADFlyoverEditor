@@ -60,120 +60,175 @@ AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO = 0.5
 -- smoothly represent.
 AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 5
 
---- Find the field boundary under an arbitrary world position.
----
---- Split out from the vehicle version so the flyover editor can generate a loop around whatever
---- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
---- position lookup feeding this.
----
---- COMPANION FIX: a single Courseplay-only attempt before the base-game farmland fallback, gated
---- by the "detect custom field" toggle, confirmed against Courseplay's own source
---- (scripts/field/FieldScanner.lua, CpFieldUtil.lua) rather than guessed.
----
---- g_fieldScanner:findContour() is what actually answers "plow the ground between two map fields
---- to connect them": it walks a probe out from (x, z) and traces the LIVE tilled-ground edge
---- (Courseplay's own comment on this: "first ignore field ID as with it we can't handle merged
---- fields"), so a tilled gap joining two map fields is just part of the contour, no saved boundary
---- needed. It is a synchronous walk against the density map, not a vehicle capability - no
---- vehicle, no waiting.
----
---- Deliberately just this one method, not also a RECORDED custom field (g_customFieldManager) -
---- Courseplay is optional for this whole mod (nothing in Arming.lua/Prelude.lua requires it to
---- load; every use of it here is nil-checked and falls back to the plain map-field lookup), and
---- the field-scanning method is the one actually needed. Adding a second Courseplay surface for a
---- feature (recorded custom fields) nobody asked for here would only be more to keep working
---- against a mod this one does not depend on.
----
---- Needs AutoDrive:resolveCourseplayEnvironment() below: measured live (see the field loop
---- custom-field debug lines from an earlier build) that Courseplay's bare globals read as nil from
---- here even though Courseplay is loaded - same cause Arming.lua documents for AutoDrive, FS25
---- gives every mod its own Lua environment, so a global assigned inside Courseplay's sourced files
---- lives in COURSEPLAY's environment, not the one our own files see by plain name.
----
---- Falls back to the base-game farmland lookup if the scan finds nothing, Courseplay is not
---- installed, or the toggle is off - a report of this misbehaving on a particular map/save can be
---- isolated by switching it off without a rollback.
+-- ---------------------------------------------------------------------------------------------
+-- Live tilled-ground boundary tracer, no Courseplay involved. Confirmed live (2026-09-22):
+-- FSDensityMapUtil.getFieldDataAtWorldPosition is a plain base-game global, reachable directly
+-- with no environment-resolution dance (unlike Courseplay's own g_fieldScanner/g_customFieldManager,
+-- which this mod tried and deliberately dropped - see git history). Same probe-walk TECHNIQUE
+-- Courseplay's own field scanner uses - a standard boundary-following approach, not anything
+-- Courseplay invented - reimplemented here from scratch against base-game primitives only:
+-- createTransformGroup/link/setTranslation/setRotation/getRotation/localToWorld (already used
+-- elsewhere in this codebase - see Proxy.lua) and FSDensityMapUtil.
+-- ---------------------------------------------------------------------------------------------
 
---- Resolve Courseplay's shared mod environment, the same way Arming.lua resolves AutoDrive's:
---- find a live Courseplay function by a STRUCTURAL route (so no mod name is involved and a rename
---- does not break this), then getfenv() it. Scans g_vehicleTypeManager for a vehicle type carrying
---- a `cpDetectFieldBoundary` function - present as soon as Courseplay registers its specialization,
---- with no vehicle instance needed. Cached after the first success; a failure is not cached, since
---- Courseplay can still be mid-load the first few times this is asked.
-AutoDrive.courseplayEnv = nil
+AutoDrive.FIELD_TRACE_RESOLUTION = 0.2         -- meters; forward step while walking onto/off the field
+AutoDrive.FIELD_TRACE_HIGH_RESOLUTION = 0.1    -- meters; fine backup step to land right on the edge
+AutoDrive.FIELD_TRACE_LOOKAHEAD = 5.0          -- meters; how far ahead the probe checks while tracing
+AutoDrive.FIELD_TRACE_SHORT_LOOKAHEAD = 0.5    -- meters; short lookahead used only when first orienting
+AutoDrive.FIELD_TRACE_MAX_POINTS = 20000       -- safety cap so a pathological trace cannot run forever
 
-function AutoDrive:resolveCourseplayEnvironment()
-    if AutoDrive.courseplayEnv ~= nil then
-        return AutoDrive.courseplayEnv
-    end
-    if g_vehicleTypeManager == nil or g_vehicleTypeManager.types == nil then
-        return nil
-    end
-    for _, typeDef in pairs(g_vehicleTypeManager.types) do
-        local fn = typeDef.functions ~= nil and typeDef.functions.cpDetectFieldBoundary or nil
-        if type(fn) == "function" then
-            local ok, env = pcall(getfenv, fn)
-            if ok and type(env) == "table" then
-                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop resolved Courseplay's environment via %s.functions.cpDetectFieldBoundary.",
-                    tostring(typeDef.name or typeDef.typeName or "?"))
-                AutoDrive.courseplayEnv = env
-                return env
-            end
-        end
-    end
-    return nil
+local function isOnFieldGround(x, z)
+    local okY, y = pcall(function() return AutoDrive:getTerrainHeightAtWorldPos(x, z) end)
+    local okField, isField = pcall(function()
+        return FSDensityMapUtil.getFieldDataAtWorldPosition(x, (okY and y) or 0, z)
+    end)
+    return okField and isField == true
 end
 
---- Returns points, label, err, cpEnv - cpEnv (nil if not resolved) is handed back so
---- findConnectedFieldRegions below can reuse it without resolving twice.
+local function isNodeOnFieldGround(node)
+    local x, _, z = getWorldTranslation(node)
+    return isOnFieldGround(x, z)
+end
+
+local function traceSetPosition(node, x, z)
+    local okY, y = pcall(function() return AutoDrive:getTerrainHeightAtWorldPos(x, z) end)
+    setTranslation(node, x, (okY and y) or 0, z)
+end
+
+local function traceMoveForward(node, d)
+    local x, _, z = localToWorld(node, 0, 0, d)
+    traceSetPosition(node, x, z)
+end
+
+local function traceRotateBy(node, angleStep)
+    local _, yRot, _ = getRotation(node)
+    setRotation(node, 0, yRot + angleStep, 0)
+end
+
+--- Rotate the probe until a point `lookahead` ahead of it just crosses the field edge, so the
+--- probe ends up aimed roughly along the boundary.
+local function traceRotateToEdgeDirection(node, lookahead)
+    local x, _, z = localToWorld(node, 0, 0, lookahead)
+    local startOnField = isOnFieldGround(x, z)
+    local target = not startOnField
+    local angleStep = AutoDrive.FIELD_TRACE_HIGH_RESOLUTION / AutoDrive.FIELD_TRACE_LOOKAHEAD
+    local swept, isOnField = 0, startOnField
+    while swept < 2 * math.pi and isOnField ~= target do
+        x, _, z = localToWorld(node, 0, 0, lookahead)
+        isOnField = isOnFieldGround(x, z)
+        traceRotateBy(node, (isOnField and 1 or -1) * angleStep)
+        swept = swept + angleStep
+    end
+    local _, yRot, _ = getRotation(node)
+    return yRot
+end
+
+--- Walk forward while on the field, then back off in small steps until the probe is just off it -
+--- lands right at the edge, ready to start tracing along it.
+local function traceFindEdge(node)
+    local i = 0
+    while i < 100000 and isNodeOnFieldGround(node) do
+        traceMoveForward(node, AutoDrive.FIELD_TRACE_RESOLUTION)
+        i = i + 1
+    end
+    local guard = 0
+    while not isNodeOnFieldGround(node) and guard < 100000 do
+        traceMoveForward(node, -AutoDrive.FIELD_TRACE_HIGH_RESOLUTION)
+        guard = guard + 1
+    end
+    traceRotateToEdgeDirection(node, AutoDrive.FIELD_TRACE_SHORT_LOOKAHEAD)
+end
+
+--- Walk the probe all the way around the field boundary, recording a point roughly every
+--- FIELD_TRACE_LOOKAHEAD meters, stopping once it has swept back close to a full turn and ended
+--- up near where it started. Returns closed(bool), points, lost(bool).
+local function traceFieldEdge(node)
+    local points = {}
+    local startX, _, startZ = getWorldTranslation(node)
+    table.insert(points, { x = startX, z = startZ })
+    local distanceFromStart = math.huge
+    local lookahead = AutoDrive.FIELD_TRACE_LOOKAHEAD
+    local totalRot = 0
+    local prevYRot = nil
+    local i = 0
+    while i < AutoDrive.FIELD_TRACE_MAX_POINTS
+        and (i == 0 or distanceFromStart > lookahead or math.abs(totalRot) < math.pi) do
+        local yRot = traceRotateToEdgeDirection(node, lookahead)
+        local deltaYRot = yRot - (prevYRot or yRot)
+        traceMoveForward(node, lookahead)
+        local px, _, pz = getWorldTranslation(node)
+        table.insert(points, { x = px, z = pz })
+        distanceFromStart = MathUtil.vector2Length(px - startX, pz - startZ)
+        totalRot = totalRot + deltaYRot
+        prevYRot = yRot
+        i = i + 1
+        if math.abs(totalRot) > 3 * math.pi then
+            return false, points, true
+        end
+    end
+    -- Clockwise winding (negative total rotation) and swept most of the way around.
+    return totalRot < 0 and math.abs(totalRot) > math.pi, points, false
+end
+
+--- Trace the boundary of whatever tilled ground is at (x, z). No Courseplay involved: built
+--- directly on FSDensityMapUtil.getFieldDataAtWorldPosition (a base-game global).
+function AutoDrive:traceFieldBoundary(x, z)
+    if type(FSDensityMapUtil) ~= "table" or type(FSDensityMapUtil.getFieldDataAtWorldPosition) ~= "function" then
+        return nil, "FSDensityMapUtil is not available."
+    end
+    if not isOnFieldGround(x, z) then
+        return nil, string.format("x=%.1f z=%.1f is not on field ground.", x, z)
+    end
+    if g_currentMission == nil or g_currentMission.terrainRootNode == nil then
+        return nil, "no terrain root node to trace against."
+    end
+
+    local okNode, node = pcall(createTransformGroup, "adFieldTraceProbe")
+    if not okNode or node == nil then
+        return nil, "could not create a probe node."
+    end
+    pcall(link, g_currentMission.terrainRootNode, node)
+    traceSetPosition(node, x, z)
+    -- Nudge off yRot 0: starting the probe right in a corner (common, since a player tends to
+    -- click near the edge) otherwise finds the field edge very close to the corner, which then
+    -- throws off corner detection later in the pipeline.
+    setRotation(node, 0, math.pi / 7, 0)
+
+    local points, ok = nil, false
+    for attempt = 1, 10 do
+        traceFindEdge(node)
+        local closed, tracedPoints, lost = traceFieldEdge(node)
+        if closed and not lost then
+            points = tracedPoints
+            ok = true
+            break
+        end
+        traceSetPosition(node, x, z)
+        setRotation(node, 0, attempt * math.pi / 6, 0)
+    end
+
+    pcall(function()
+        unlink(node)
+        delete(node)
+    end)
+
+    if not ok or points == nil or #points < 3 then
+        return nil, "could not trace a closed field boundary here."
+    end
+    return points, nil
+end
+
+--- Returns points, label, err. Falls back to the base-game farmland lookup if the trace finds
+--- nothing or the toggle is off - a report of this misbehaving on a particular map/save can be
+--- isolated by switching it off without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
     if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
-        -- PROBE, temporary: FieldBoundaryDetector.lua's own comment calls FieldCourseField/
-        -- FieldCourseSettings "the Giants field boundary detection" - base-game classes Courseplay
-        -- merely wraps, not something it defines. If that holds, they should be plain globals
-        -- reachable from OUR OWN environment with no Courseplay dependency at all, unlike
-        -- g_fieldScanner below (which Courseplay's own files DO define, hence needing environment
-        -- resolution). One log line settles it instead of guessing again.
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop base-game probe: FieldCourseField=%s FieldCourseSettings=%s",
-            tostring(type(FieldCourseField)), tostring(type(FieldCourseSettings)))
-
-        -- PROBE, temporary: Courseplay's own CpFieldUtil.lua calls FSDensityMapUtil.
-        -- getFieldDataAtWorldPosition(x, y, z) directly, as a bare global, with none of the
-        -- environment-resolution dance g_fieldScanner/g_customFieldManager need - exactly what a
-        -- TRUE base-game global looks like from inside Courseplay's own code (the "FS" prefix
-        -- versus Courseplay's own "Cp" prefix points the same way). If this holds, a from-scratch
-        -- edge trace built on it would need no Courseplay dependency at all, unlike g_fieldScanner
-        -- below. One log line checks it instead of assuming.
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop base-game probe: FSDensityMapUtil=%s getFieldDataAtWorldPosition=%s",
-            tostring(type(FSDensityMapUtil)),
-            tostring(FSDensityMapUtil ~= nil and type(FSDensityMapUtil.getFieldDataAtWorldPosition) or "n/a"))
-
-        local cpEnv = AutoDrive:resolveCourseplayEnvironment()
-        if cpEnv == nil then
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop could not resolve Courseplay's environment (not loaded, or not resolved yet).")
+        local traced, traceErr = AutoDrive:traceFieldBoundary(x, z)
+        if traced == nil then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop trace failed, using the map field: %s", tostring(traceErr))
         else
-            local fieldScanner = cpEnv.g_fieldScanner
-            if fieldScanner == nil then
-                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop has no g_fieldScanner.")
-            else
-                local okScan, found, scanned = pcall(function()
-                    return fieldScanner:findContour(x, z)
-                end)
-                if not okScan then
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_fieldScanner:findContour errored: %s", tostring(found))
-                elseif not found then
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanner could not trace a contour here (not on field, or lost).")
-                elseif scanned == nil or #scanned < 3 then
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanner returned too few points (%s).", tostring(scanned and #scanned or "nil"))
-                else
-                    local points = {}
-                    for i = 1, #scanned do
-                        points[i] = { x = scanned[i].x, z = scanned[i].z }
-                    end
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop scanned a %d-point tilled-ground contour.", #points)
-                    return points, "Scanned field", nil, cpEnv
-                end
-            end
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop traced a %d-point tilled-ground contour.", #traced)
+            return traced, "Traced field", nil
         end
     end
 
@@ -220,7 +275,7 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         fieldLabel = "Field " .. tostring(fieldId)
     end
 
-    return points, fieldLabel, nil, nil
+    return points, fieldLabel, nil
 end
 
 local function pointInPolygon(px, pz, poly)
@@ -251,27 +306,20 @@ AutoDrive.FIELD_LOOP_PROBE_STEP = 1.0 -- meters between probe samples along each
 --- (winding direction is not assumed), and scans a fresh contour wherever a probe lands on tilled
 --- ground not already inside a found region.
 ---
---- Needs cpEnv (for g_fieldScanner and CpFieldUtil.isOnFieldArea, confirmed against Courseplay's
---- own CpFieldUtil.lua) - without it, or if isOnFieldArea isn't there, this returns just the one
---- region it was given rather than guessing.
+--- Built entirely on the same Courseplay-free primitives as getFieldPolygonAtPosition
+--- (isOnFieldGround/traceFieldBoundary above) - no Courseplay involved.
 ---
 --- Distance is the ONLY signal this has for "same field, split by a lane" vs. "a genuinely
 --- different field that happens to be nearby, across an actual road" - reported live
 --- (2026-09-22): the default combo gap pulled in an unrelated field across a real road. Field ID
---- cannot tell them apart either: Courseplay's own FieldScanner.lua explains why it ignores field
---- ID while scanning - "with it we can't handle merged fields" - meaning the STATIC id does not
---- update when two map fields get tilled together, so requiring a match would reject the exact
---- case this exists for, not just the unwanted one. fieldLoopMaxGap is genuinely a per-map,
---- per-player tuning knob: set it just above your widest field lane and it should not reach a
---- real road, since roads are typically wider than a field lane.
-function AutoDrive:findConnectedFieldRegions(x, z, cpEnv, firstRegion)
+--- cannot tell them apart either: even Courseplay's own field scanner (when this mod still used
+--- it) ignored field ID while scanning for exactly this reason - the STATIC id does not update
+--- when two map fields get tilled together, so requiring a match would reject the exact case this
+--- exists for, not just the unwanted one. fieldLoopMaxGap is genuinely a per-map, per-player
+--- tuning knob: set it just above your widest field lane and it should not reach a real road,
+--- since roads are typically wider than a field lane.
+function AutoDrive:findConnectedFieldRegions(x, z, firstRegion)
     local regions = { firstRegion }
-
-    local fieldUtil = cpEnv ~= nil and cpEnv.CpFieldUtil or nil
-    local fieldScanner = cpEnv ~= nil and cpEnv.g_fieldScanner or nil
-    if fieldUtil == nil or type(fieldUtil.isOnFieldArea) ~= "function" or fieldScanner == nil then
-        return regions
-    end
 
     local maxGap = ADFlyoverSettings.get("fieldLoopMaxGap") or 8
     local step = AutoDrive.FIELD_LOOP_PROBE_STEP
@@ -303,22 +351,13 @@ function AutoDrive:findConnectedFieldRegions(x, z, cpEnv, firstRegion)
                         local dist = step
                         while dist <= maxGap do
                             local px, pz = a.x + nx * dist * side, a.z + nz * dist * side
-                            if not alreadyCovered(px, pz) then
-                                local okArea, isField = pcall(function() return fieldUtil.isOnFieldArea(px, pz) end)
-                                if okArea and isField then
-                                    local okScan, found, scanned = pcall(function() return fieldScanner:findContour(px, pz) end)
-                                    if okScan and found and scanned ~= nil and #scanned >= 3 then
-                                        local newRegion = {}
-                                        for k = 1, #scanned do
-                                            newRegion[k] = { x = scanned[k].x, z = scanned[k].z }
-                                        end
-                                        if not alreadyCovered(newRegion[1].x, newRegion[1].z) then
-                                            table.insert(regions, newRegion)
-                                            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop auto-discovered region %d, %.1fm from an existing one.",
-                                                #regions, dist)
-                                            expanded = true
-                                        end
-                                    end
+                            if not alreadyCovered(px, pz) and isOnFieldGround(px, pz) then
+                                local newRegion = AutoDrive:traceFieldBoundary(px, pz)
+                                if newRegion ~= nil and #newRegion >= 3 and not alreadyCovered(newRegion[1].x, newRegion[1].z) then
+                                    table.insert(regions, newRegion)
+                                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop auto-discovered region %d, %.1fm from an existing one.",
+                                        #regions, dist)
+                                    expanded = true
                                 end
                             end
                             if expanded then break end
@@ -932,13 +971,13 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     -- radius actually used rather than a setting that got silently overridden.
     turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
 
-    local rawPoints, fieldLabel, fieldErr, cpEnv = AutoDrive:getFieldPolygonAtPosition(x, z)
+    local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
         return false
     end
 
-    local rawRegions = AutoDrive:findConnectedFieldRegions(x, z, cpEnv, rawPoints)
+    local rawRegions = AutoDrive:findConnectedFieldRegions(x, z, rawPoints)
 
     local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
     local lastRingErr = nil

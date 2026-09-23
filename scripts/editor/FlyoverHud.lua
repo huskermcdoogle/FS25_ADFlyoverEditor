@@ -536,8 +536,8 @@ function ADFlyoverHud:buildRows(editor)
         add("toggle", "track", editor.FIELD_LOOP_DIR_NAMES[editor.fieldLoopDirection], false,
             function() editor:cycleFieldLoopDirection() end)
         -- Off switches back to the map-field-only lookup, which misses ground plowed to connect
-        -- two separate map fields into one (Courseplay's live tilled-ground scan finds that) -
-        -- here so that can be isolated per-site without a settings-dialog trip.
+        -- two separate map fields into one (the live tilled-ground trace finds that) - here so
+        -- that can be isolated per-site without a settings-dialog trip.
         add("toggle", "detect custom field", ADFlyoverSettings.get("fieldLoopDetectCustomField") and "on" or "off", false,
             function() ADFlyoverSettings.cycle("fieldLoopDetectCustomField", 1) end)
         -- Off skips the tree/pole/fence/building detour entirely, taking the offset boundary as
