@@ -445,6 +445,47 @@ function ADFlyoverEditor:setInputHelpVisible(visible)
     return ok, ok and nil or tostring(err)
 end
 
+--- One-shot inventory of EVERYTHING under g_currentMission.hud - every element that could draw on
+--- screen while the flyover camera is up, not just the ones already guessed at (inputHelp,
+--- vehicleHud). Requested live (2026-09-22) after a vehicle's own spec display (a sprayer's
+--- application-rate panel) turned out to be drawing over the flyover view with nothing suspending
+--- it - the same class of problem inputHelp already had a fix for, but there is no reason to
+--- assume those two are the only ones. Logs each top-level key, its type, and - for anything
+--- table-shaped - whether it looks like it carries a visibility flag or setter, which is what a
+--- follow-up hide/restore pair for it would need. Read the log after one activation with debug
+--- logging on rather than guessing another field name.
+function ADFlyoverEditor:probeAllHud()
+    if self.probedAllHud then
+        return
+    end
+    self.probedAllHud = true
+
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (all hud) no g_currentMission.hud")
+        return
+    end
+
+    local keys = {}
+    for key in pairs(hud) do
+        keys[#keys + 1] = key
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+
+    for _, key in ipairs(keys) do
+        local value = hud[key]
+        local t = type(value)
+        if t == "table" then
+            local hasVisibleField = rawget(value, "isVisible")
+            local hasSetter = type(value.setIsVisible) == "function" or type(value.setVisible) == "function"
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.%s = table, isVisible=%s, setter=%s",
+                tostring(key), tostring(hasVisibleField), tostring(hasSetter))
+        else
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.%s = %s (%s)", tostring(key), t, tostring(value))
+        end
+    end
+end
+
 --- One-shot probe of the help box, logged on the first activation only. It is what identified the
 --- missing setter, and it is kept so a future game version that moves this can be diagnosed from a
 --- log rather than from another round of guesses.
@@ -504,6 +545,82 @@ function ADFlyoverEditor:restoreInputHelp()
     end
     self:setInputHelpVisible(self.inputHelpWasVisible ~= false)
     self.inputHelpWasVisible = nil
+end
+
+--- Same problem, same fix, different HUD element: reported live (2026-09-22) - the vehicle's own
+--- spec display (a sprayer/spreader's application-rate panel, the "CONTROL GROUP" readout, etc.)
+--- keeps drawing over the flyover camera view, since nothing about entering flyover mode tells the
+--- vehicle HUD to get out of the way. g_currentMission.hud.vehicleHud is the base-game candidate -
+--- the sub-object that draws attached-implement info - but this is UNPROBED, unlike inputHelp
+--- above, which only got its exact field/method figured out after one such probe. Structured the
+--- same way on purpose: log what is actually there on the first activation, try a real setter if
+--- one exists, fall back to writing isVisible directly if not, and do not assume either shape is
+--- right until a log confirms it.
+function ADFlyoverEditor:probeVehicleHud()
+    if self.probedVehicleHud then
+        return
+    end
+    self.probedVehicleHud = true
+
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (vehicle hud) no g_currentMission.hud")
+        return
+    end
+
+    local vHud = hud.vehicleHud
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.vehicleHud = %s isVisible=%s",
+        tostring(vHud), vHud ~= nil and tostring(rawget(vHud, "isVisible")) or "-")
+
+    if type(vHud) == "table" then
+        local names = {}
+        for key, value in pairs(vHud) do
+            if type(value) == "function" then
+                names[#names + 1] = tostring(key)
+            end
+        end
+        table.sort(names)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE vehicleHud methods: %s",
+            #names > 0 and table.concat(names, ", ") or "(none directly on the table)")
+    end
+end
+
+function ADFlyoverEditor:setVehicleHudVisible(visible)
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local vHud = hud ~= nil and hud.vehicleHud or nil
+    if vHud == nil then
+        return false, "no hud.vehicleHud"
+    end
+    if type(vHud.setIsVisible) == "function" then
+        local ok, err = pcall(function() vHud:setIsVisible(visible) end)
+        return ok, ok and nil or tostring(err)
+    end
+    local ok, err = pcall(function() vHud.isVisible = visible end)
+    return ok, ok and nil or tostring(err)
+end
+
+function ADFlyoverEditor:hideVehicleHud()
+    self:probeVehicleHud()
+
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local vHud = hud ~= nil and hud.vehicleHud or nil
+    if vHud == nil then
+        self.vehicleHudWasVisible = nil
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no vehicle hud found to hide.")
+        return
+    end
+    self.vehicleHudWasVisible = rawget(vHud, "isVisible")
+    local ok, err = self:setVehicleHudVisible(false)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: hide vehicle hud: ok=%s was=%s%s",
+        tostring(ok), tostring(self.vehicleHudWasVisible), err ~= nil and (" err=" .. err) or "")
+end
+
+function ADFlyoverEditor:restoreVehicleHud()
+    if self.vehicleHudWasVisible == nil then
+        return
+    end
+    self:setVehicleHudVisible(self.vehicleHudWasVisible ~= false)
+    self.vehicleHudWasVisible = nil
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -947,7 +1064,9 @@ function ADFlyoverEditor:enable()
     -- Free the mouse so it picks in the world; the camera keeps its own hold-middle/wheel bindings.
     tryCall("g_inputBinding:setShowMouseCursor(true)", function() g_inputBinding:setShowMouseCursor(true) end)
 
+    self:probeAllHud()
     self:hideInputHelp()
+    self:hideVehicleHud()
 
     self.active = true
     self.lastWaypointId = nil
@@ -1105,6 +1224,7 @@ function ADFlyoverEditor:disable()
     end
 
     self:restoreInputHelp()
+    self:restoreVehicleHud()
 
     self.camera, self.cursor = nil, nil
     self.active = false
