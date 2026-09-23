@@ -30,7 +30,11 @@ S.FILE = "settings.xml"
 S.settings.fieldLoopMargin = { values = { -10.0, -9.75, -9.50, -9.25, -9.0, -8.75, -8.50, -8.25, -8.0, -7.75, -7.50, -7.25, -7.0, -6.75, -6.50, -6.25, -6.0, -5.75, -5.50, -5.25, -5.0, -4.75, -4.50, -4.25, -4.0, -3.75, -3.50, -3.25, -3.0, -2.75, -2.50, -2.25, -2.0, -1.75, -1.50, -1.25, -1.0, -0.75, -0.50, -0.25, 0.0, 0.25, 0.50, 0.75, 1.0, 1.25, 1.50, 1.75, 2.0, 2.25, 2.50, 2.75, 3.0, 3.25, 3.50, 3.75, 4.0, 4.25, 4.50, 4.75, 5.0, 5.25, 5.50, 5.75, 6.0, 6.25, 6.50, 6.75, 7.0, 7.25, 7.50, 7.75, 8.0, 8.25, 8.50, 8.75, 9.0, 9.25, 9.50, 9.75, 10.0 }, default = 46, current = 46 }
 S.settings.fieldLoopTreeClearance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0 }, default = 4, current = 4 }
 S.settings.fieldLoopVehicleHeight = { values = { 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0 }, default = 4, current = 4 }
-S.settings.fieldLoopTurningRadius = { values = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 6, current = 6 }
+-- Starts at 5, not lower: FieldLoopGenerator's AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS clamps
+-- anything tighter anyway (a field corner sharper than that reads as an awkward kink, not a smooth
+-- turn - see buildFieldLoopRing), so letting the control offer 3 or 4 just showed a number that was
+-- never actually used.
+S.settings.fieldLoopTurningRadius = { values = { 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 4, current = 4 }
 -- On by default: gates two Courseplay-only lookups, tried before the base-game farmland one. The
 -- one that matters is Courseplay's g_fieldScanner:findContour() (see FieldLoopGenerator's
 -- getFieldPolygonAtPosition), which traces the LIVE tilled-ground edge rather than a map field's
