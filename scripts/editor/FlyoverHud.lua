@@ -383,8 +383,13 @@ function ADFlyoverHud:buildRows(editor)
     -- The card also auto-hides while a point is being dragged (editor.dragId): it is only ever in the
     -- way during a move, and this takes it away for exactly that gesture, then brings it straight back
     -- on release - no key or button needed for the common case.
+    --
+    -- Reported live (2026-09-22, field loop): the manual/help popup and settings dialog draw over
+    -- the screen but the tool card kept drawing too, visibly overlapping it - manualOpen/dialogOpen
+    -- were missing from this guard even though the popups themselves already exclude each other
+    -- (see manualOpen = false at line ~9700, "the two modals are mutually exclusive").
     if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil and not editor.cardHidden
-        and editor.dragId == nil then
+        and editor.dragId == nil and not editor.manualOpen and not editor.dialogOpen then
     -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
     -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
     -- matter what is selected, which is what makes them clickable without looking - a button that
