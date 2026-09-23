@@ -475,6 +475,23 @@ function ADFlyoverEditor:probeAllHud()
         end
     end
 
+    -- g_currentMission itself had nothing (confirmed live, no PROBE g_currentMission.* lines from
+    -- the block above) - the "CONTROL GROUP" panel shows a tractor icon, so it reads as PER-VEHICLE
+    -- rather than global UI. Next most likely owner: the controlled vehicle object itself, or one
+    -- of its spec_* tables (each specialization's own state lives there, and several specs draw
+    -- their own HUD extensions independent of g_currentMission.hud entirely).
+    local vehicle = AutoDrive ~= nil and AutoDrive.getControlledVehicle and AutoDrive.getControlledVehicle() or nil
+    if vehicle == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE no controlled vehicle to probe for the control-group panel.")
+    else
+        for key in pairs(vehicle) do
+            local lower = tostring(key):lower()
+            if lower:find("group", 1, true) or lower:find("control", 1, true) then
+                local value = vehicle[key]
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE vehicle.%s = %s", tostring(key), type(value))
+            end
+        end
+    end
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
     if hud == nil then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (all hud) no g_currentMission.hud")
