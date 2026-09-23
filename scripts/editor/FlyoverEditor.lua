@@ -490,6 +490,31 @@ function ADFlyoverEditor:probeAllHud()
         end
     end
 
+    -- The panel read "Nitrogen - Liquid Fertilizer Application" - that is Precision Farming's own
+    -- variable-rate application display, an official GIANTS DLC (confirmed live: its own workshop
+    -- zip has NO .lua files at all despite modDesc.xml referencing scripts/PrecisionFarming.lua -
+    -- the script itself is base-game-bundled, same as everything else this session could not read
+    -- source for). If it draws through its own manager rather than g_currentMission.hud at all,
+    -- that would explain why every hud-suspension attempt above missed it entirely. Checks the
+    -- likely global manager name directly, and scans the controlled vehicle's own keys for
+    -- anything Precision-Farming-named (its specializations commonly store their state in a
+    -- spec_<name> table keyed by the owning mod).
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE g_precisionFarming=%s PrecisionFarming=%s",
+        tostring(type(g_precisionFarming)), tostring(type(PrecisionFarming)))
+    do
+        local vehicle = AutoDrive ~= nil and AutoDrive.getControlledVehicle and AutoDrive.getControlledVehicle() or nil
+        if vehicle ~= nil then
+            for key in pairs(vehicle) do
+                local lower = tostring(key):lower()
+                if lower:find("precision", 1, true) or lower:find("fertiliz", 1, true)
+                    or lower:find("nitrogen", 1, true) or lower:find("sprayer", 1, true) then
+                    local value = vehicle[key]
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (precision farming?) vehicle.%s = %s", tostring(key), type(value))
+                end
+            end
+        end
+    end
+
     -- g_currentMission itself had nothing (confirmed live, no PROBE g_currentMission.* lines from
     -- the block above) - the "CONTROL GROUP" panel shows a tractor icon, so it reads as PER-VEHICLE
     -- rather than global UI. Next most likely owner: the controlled vehicle object itself, or one
