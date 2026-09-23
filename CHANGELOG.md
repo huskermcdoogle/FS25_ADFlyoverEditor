@@ -8,16 +8,14 @@ two separate map fields to work them as one — a common [Courseplay](https://gi
 workflow — was invisible to that lookup: it was still answering "what map field owns this spot",
 which doesn't change just because the ground between two of them got tilled.
 
-Field loop now tries two Courseplay-only lookups first, when Courseplay is active, both confirmed
-against Courseplay's own source rather than guessed:
+Field loop now tries Courseplay's own field-boundary scanner (`g_fieldScanner`) first, when
+Courseplay is active, confirmed against Courseplay's own source rather than guessed: it traces the
+actual tilled-ground edge from the cursor position instead of a static boundary, so a
+plowed-together gap is just part of the contour. It needs no vehicle and runs synchronously, same
+as everything else on the card. Courseplay stays entirely optional for the mod as a whole — this is
+the one place it is used, and falls back cleanly to the map-field lookup if it isn't installed.
 
-- A boundary explicitly saved with Courseplay's custom-field recorder, if one exists at the site —
-  cheap and exact, but the rarer case.
-- Courseplay's own field-boundary scanner (`g_fieldScanner`), which traces the actual tilled-ground
-  edge from the cursor position instead of a static boundary, so a plowed-together gap is just part
-  of the contour. It needs no vehicle and runs synchronously, same as everything else on the card.
-
-Falls back to the map-field lookup if neither finds anything, or Courseplay isn't installed. A new
+Falls back to the map-field lookup if the scan finds nothing, or Courseplay isn't installed. A new
 **detect custom field** toggle on the tool card (on by default) switches back to map-field-only for
 isolating a report.
 

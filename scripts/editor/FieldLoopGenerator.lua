@@ -66,29 +66,33 @@ AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 5
 --- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
 --- position lookup feeding this.
 ---
---- COMPANION FIX, two Courseplay-only attempts before the base-game farmland fallback, both gated
---- by the same "detect custom field" toggle, both synchronous, both confirmed against Courseplay's
---- own source (scripts/field/CustomField*.lua, FieldScanner.lua, CpFieldUtil.lua) rather than
---- guessed:
+--- COMPANION FIX: a single Courseplay-only attempt before the base-game farmland fallback, gated
+--- by the "detect custom field" toggle, confirmed against Courseplay's own source
+--- (scripts/field/FieldScanner.lua, CpFieldUtil.lua) rather than guessed.
 ---
---- 1. A RECORDED custom field (g_customFieldManager) - cheap and exact, but only ever finds
----    something if the player explicitly recorded one in Courseplay, the rarer case.
---- 2. g_fieldScanner:findContour() - what actually answers "plow the ground between two map
----    fields to connect them": it walks a probe out from (x, z) and traces the LIVE tilled-ground
----    edge (Courseplay's own comment on this: "first ignore field ID as with it we can't handle
----    merged fields"), so a tilled gap joining two map fields is just part of the contour, no
----    saved boundary needed. It is a synchronous walk against the density map, not a vehicle
----    capability - no vehicle, no waiting.
+--- g_fieldScanner:findContour() is what actually answers "plow the ground between two map fields
+--- to connect them": it walks a probe out from (x, z) and traces the LIVE tilled-ground edge
+--- (Courseplay's own comment on this: "first ignore field ID as with it we can't handle merged
+--- fields"), so a tilled gap joining two map fields is just part of the contour, no saved boundary
+--- needed. It is a synchronous walk against the density map, not a vehicle capability - no
+--- vehicle, no waiting.
 ---
---- Both need AutoDrive:resolveCourseplayEnvironment() below: measured live (see the field loop
+--- Deliberately just this one method, not also a RECORDED custom field (g_customFieldManager) -
+--- Courseplay is optional for this whole mod (nothing in Arming.lua/Prelude.lua requires it to
+--- load; every use of it here is nil-checked and falls back to the plain map-field lookup), and
+--- the field-scanning method is the one actually needed. Adding a second Courseplay surface for a
+--- feature (recorded custom fields) nobody asked for here would only be more to keep working
+--- against a mod this one does not depend on.
+---
+--- Needs AutoDrive:resolveCourseplayEnvironment() below: measured live (see the field loop
 --- custom-field debug lines from an earlier build) that Courseplay's bare globals read as nil from
 --- here even though Courseplay is loaded - same cause Arming.lua documents for AutoDrive, FS25
 --- gives every mod its own Lua environment, so a global assigned inside Courseplay's sourced files
 --- lives in COURSEPLAY's environment, not the one our own files see by plain name.
 ---
---- Falls back to the base-game farmland lookup if neither attempt finds anything, Courseplay is
---- not installed, or the toggle is off - a report of this misbehaving on a particular map/save can
---- be isolated by switching it off without a rollback.
+--- Falls back to the base-game farmland lookup if the scan finds nothing, Courseplay is not
+--- installed, or the toggle is off - a report of this misbehaving on a particular map/save can be
+--- isolated by switching it off without a rollback.
 
 --- Resolve Courseplay's shared mod environment, the same way Arming.lua resolves AutoDrive's:
 --- find a live Courseplay function by a STRUCTURAL route (so no mod name is involved and a rename
@@ -128,8 +132,8 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         -- FieldCourseSettings "the Giants field boundary detection" - base-game classes Courseplay
         -- merely wraps, not something it defines. If that holds, they should be plain globals
         -- reachable from OUR OWN environment with no Courseplay dependency at all, unlike
-        -- g_customFieldManager/g_fieldScanner below (which Courseplay's own files DO define, hence
-        -- needing environment resolution). One log line settles it instead of guessing again.
+        -- g_fieldScanner below (which Courseplay's own files DO define, hence needing environment
+        -- resolution). One log line settles it instead of guessing again.
         ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop base-game probe: FieldCourseField=%s FieldCourseSettings=%s",
             tostring(type(FieldCourseField)), tostring(type(FieldCourseSettings)))
 
@@ -137,31 +141,6 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         if cpEnv == nil then
             ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop could not resolve Courseplay's environment (not loaded, or not resolved yet).")
         else
-            local customFieldManager = cpEnv.g_customFieldManager
-            if customFieldManager == nil then
-                ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop has no g_customFieldManager.")
-            else
-                local okCustom, customField = pcall(function()
-                    return customFieldManager:getCustomField(x, z)
-                end)
-                if not okCustom then
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop g_customFieldManager:getCustomField errored: %s", tostring(customField))
-                elseif customField == nil then
-                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop no recorded custom field here.")
-                else
-                    local okVerts, vertices = pcall(function() return customField:getVertices() end)
-                    if okVerts and vertices ~= nil and #vertices >= 3 then
-                        local points = {}
-                        for i = 1, #vertices do
-                            points[i] = { x = vertices[i].x, z = vertices[i].z }
-                        end
-                        local okName, name = pcall(function() return customField:getName() end)
-                        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop found a recorded custom field ('%s').", (okName and name) or "?")
-                        return points, (okName and name) or "Custom field", nil, cpEnv
-                    end
-                end
-            end
-
             local fieldScanner = cpEnv.g_fieldScanner
             if fieldScanner == nil then
                 ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop has no g_fieldScanner.")

@@ -35,14 +35,13 @@ S.settings.fieldLoopVehicleHeight = { values = { 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5
 -- turn - see buildFieldLoopRing), so letting the control offer 3 or 4 just showed a number that was
 -- never actually used.
 S.settings.fieldLoopTurningRadius = { values = { 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 4, current = 4 }
--- On by default: gates two Courseplay-only lookups, tried before the base-game farmland one. The
--- one that matters is Courseplay's g_fieldScanner:findContour() (see FieldLoopGenerator's
--- getFieldPolygonAtPosition), which traces the LIVE tilled-ground edge rather than a map field's
--- static boundary - so ground plowed to connect two separate map fields scans as one contour,
--- exactly what the farmland-based lookup below can never see (it can only ever answer "what map
--- field owns this spot"). A boundary explicitly recorded with Courseplay's custom-field tool is
--- tried first as a cheap exact match if one exists, but is not the common case. Both are
--- synchronous. No effect without Courseplay. A toggle rather than a silent
+-- On by default: gates Courseplay's g_fieldScanner:findContour() (see FieldLoopGenerator's
+-- getFieldPolygonAtPosition), tried before the base-game farmland lookup. It traces the LIVE
+-- tilled-ground edge rather than a map field's static boundary, so ground plowed to connect two
+-- separate map fields scans as one contour - exactly what the farmland-based lookup below can
+-- never see (it can only ever answer "what map field owns this spot"). Courseplay is optional for
+-- the whole mod; this is the only place it is used, and only for this one method - synchronous, no
+-- effect without Courseplay. A toggle rather than a silent
 -- always-on change so a report of it misbehaving on a particular map/save can be isolated by
 -- switching back to the map-field-only path without a rollback.
 S.settings.fieldLoopDetectCustomField = { values = { false, true }, default = 2, current = 2 }
