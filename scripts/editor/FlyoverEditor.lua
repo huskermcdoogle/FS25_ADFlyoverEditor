@@ -527,6 +527,15 @@ function ADFlyoverEditor:probeAllHud()
                     end
                 end
             end
+
+            -- A getter this specific (getUseExtendedSprayerHudExtension) almost always has a
+            -- matching setter the game itself calls when the player toggles "extended HUD" in
+            -- their own in-vehicle settings - using the feature's own intended switch instead of
+            -- fighting the renderer. Checking for it directly rather than assuming the name.
+            local okGet, currentValue = pcall(function() return vehicle:getUseExtendedSprayerHudExtension() end)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE vehicle.setUseExtendedSprayerHudExtension=%s current value=%s",
+                tostring(type(vehicle.setUseExtendedSprayerHudExtension)),
+                tostring(okGet and currentValue or "?"))
         end
     end
 
