@@ -5065,19 +5065,27 @@ function ADFlyoverEditor:getEditableNumbers()
     end
 
     if self.tool == self.TOOL.FIELDLOOP then
-        return {
-            -- Grouped to match the toggle order above (detect custom field, then avoid
-            -- obstacles), not the order these were added in: the shape of the ring itself first
-            -- (margin, turning radius - neither toggle changes what these mean), then max gap
-            -- (only matters when "detect custom field" is on), then tree clearance/vehicle height
-            -- (only matter when "avoid obstacles" is on) last, right where "avoid obstacles" - the
-            -- last toggle before this list starts - sits closest to them.
+        -- Grouped to match the toggle order above (detect custom field, then avoid obstacles),
+        -- not the order these were added in: the shape of the ring itself first (margin, turning
+        -- radius - neither toggle changes what these mean), then max gap (only matters when
+        -- "detect custom field" is on), then tree clearance/vehicle height (only matter when
+        -- "avoid obstacles" is on) last, right where "avoid obstacles" - the last toggle before
+        -- this list starts - sits closest to them.
+        --
+        -- Each toggle-owned number is also hidden entirely while its toggle is off, rather than
+        -- shown but inert - a number that visibly does nothing is a worse tell than it being gone.
+        local fields = {
             settingEntry("margin", "fieldLoopMargin"),
             settingEntry("turning radius", "fieldLoopTurningRadius"),
-            settingEntry("max gap", "fieldLoopMaxGap"),
-            settingEntry("tree clearance", "fieldLoopTreeClearance"),
-            settingEntry("vehicle height", "fieldLoopVehicleHeight")
         }
+        if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
+            table.insert(fields, settingEntry("max gap", "fieldLoopMaxGap"))
+        end
+        if ADFlyoverSettings.get("fieldLoopAvoidObstacles") then
+            table.insert(fields, settingEntry("tree clearance", "fieldLoopTreeClearance"))
+            table.insert(fields, settingEntry("vehicle height", "fieldLoopVehicleHeight"))
+        end
+        return fields
     elseif self.tool == self.TOOL.SMOOTH and self.smoothMode == self.SMOOTH_MODE.REBUILD then
         return { {
             label = "max spacing",
