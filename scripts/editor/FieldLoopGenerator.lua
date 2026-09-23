@@ -137,6 +137,17 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop base-game probe: FieldCourseField=%s FieldCourseSettings=%s",
             tostring(type(FieldCourseField)), tostring(type(FieldCourseSettings)))
 
+        -- PROBE, temporary: Courseplay's own CpFieldUtil.lua calls FSDensityMapUtil.
+        -- getFieldDataAtWorldPosition(x, y, z) directly, as a bare global, with none of the
+        -- environment-resolution dance g_fieldScanner/g_customFieldManager need - exactly what a
+        -- TRUE base-game global looks like from inside Courseplay's own code (the "FS" prefix
+        -- versus Courseplay's own "Cp" prefix points the same way). If this holds, a from-scratch
+        -- edge trace built on it would need no Courseplay dependency at all, unlike g_fieldScanner
+        -- below. One log line checks it instead of assuming.
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop base-game probe: FSDensityMapUtil=%s getFieldDataAtWorldPosition=%s",
+            tostring(type(FSDensityMapUtil)),
+            tostring(FSDensityMapUtil ~= nil and type(FSDensityMapUtil.getFieldDataAtWorldPosition) or "n/a"))
+
         local cpEnv = AutoDrive:resolveCourseplayEnvironment()
         if cpEnv == nil then
             ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop could not resolve Courseplay's environment (not loaded, or not resolved yet).")
