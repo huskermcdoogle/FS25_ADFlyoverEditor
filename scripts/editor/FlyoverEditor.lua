@@ -475,6 +475,21 @@ function ADFlyoverEditor:probeAllHud()
         end
     end
 
+    -- Five guesses in a row (hud.displayComponents, hud.drawControlledEntityHUD,
+    -- vehicle.updateControlGroups, hud.draw, plus the two probes above) have all missed it. Last
+    -- diagnostic before parking this: g_currentMission may hold a SECOND hud-like object entirely
+    -- separate from .hud - dump every top-level key whose name suggests one ("hud", "display", or
+    -- "ui", case-insensitive) rather than assuming .hud is the only candidate.
+    if g_currentMission ~= nil then
+        for key in pairs(g_currentMission) do
+            local lower = tostring(key):lower()
+            if key ~= "hud" and (lower:find("hud", 1, true) or lower:find("display", 1, true) or lower:find("ui", 1, true)) then
+                local value = g_currentMission[key]
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (second hud?) g_currentMission.%s = %s", tostring(key), type(value))
+            end
+        end
+    end
+
     -- g_currentMission itself had nothing (confirmed live, no PROBE g_currentMission.* lines from
     -- the block above) - the "CONTROL GROUP" panel shows a tractor icon, so it reads as PER-VEHICLE
     -- rather than global UI. Next most likely owner: the controlled vehicle object itself, or one
