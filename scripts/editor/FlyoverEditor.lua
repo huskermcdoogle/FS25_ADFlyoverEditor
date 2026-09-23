@@ -484,6 +484,41 @@ function ADFlyoverEditor:probeAllHud()
             ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.%s = %s (%s)", tostring(key), t, tostring(value))
         end
     end
+
+    -- hud.vehicleHud does not exist (confirmed live 2026-09-22) - no isVisible/setter of its own
+    -- either, meaning displayComponents is a CONTAINER, most likely the list of registered vehicle
+    -- spec HUD extensions (fill-level bars, application-rate panels, etc. each specialization adds
+    -- one). One level deeper: every entry's class name and whether IT carries a visibility flag -
+    -- that per-entry shape is what a real hide would need to act on, not the container itself.
+    local components = hud.displayComponents
+    if type(components) ~= "table" then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.displayComponents is not a table (%s).", type(components))
+        return
+    end
+    local count = 0
+    for k in pairs(components) do
+        count = count + 1
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.displayComponents has %d entr(y/ies).", count)
+    for k, v in pairs(components) do
+        if type(v) == "table" then
+            local className = "?"
+            local ok, mt = pcall(getmetatable, v)
+            if ok and type(mt) == "table" and mt.__index ~= nil then
+                local okName, name = pcall(function() return v.className or (v.class and v.class.NAME) end)
+                if okName and name ~= nil then
+                    className = tostring(name)
+                end
+            end
+            local hasVisibleField = rawget(v, "isVisible")
+            local hasSetter = type(v.setIsVisible) == "function" or type(v.setVisible) == "function"
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.displayComponents[%s] = %s, isVisible=%s, setter=%s",
+                tostring(k), className, tostring(hasVisibleField), tostring(hasSetter))
+        else
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE hud.displayComponents[%s] = %s (%s)",
+                tostring(k), type(v), tostring(v))
+        end
+    end
 end
 
 --- One-shot probe of the help box, logged on the first activation only. It is what identified the
