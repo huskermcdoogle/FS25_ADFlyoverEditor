@@ -787,6 +787,36 @@ function ADFlyoverEditor:restoreControlledEntityHud()
     hud.drawControlledEntityHUD = original
 end
 
+--- Reported live (2026-09-22): the "CONTROL GROUP" panel survived every hud-level attempt above.
+--- Found instead on the CONTROLLED VEHICLE itself (probeAllHud's vehicle probe): a function named
+--- vehicle.updateControlGroups, a strong-enough name match to try the same wrap-and-restore
+--- approach on - unverified whether this is purely the draw/refresh call or also does something
+--- functional (group membership bookkeeping, say), so worth a visual check after deploying this
+--- rather than assuming. Targets the SPECIFIC vehicle instance that was controlled on entry and
+--- restores that exact one, since the controlled vehicle could in principle change while the
+--- editor is open.
+function ADFlyoverEditor:suspendControlGroupsUpdate()
+    self.controlGroupsVehicle, self.controlGroupsOriginal = nil, nil
+    local vehicle = AutoDrive ~= nil and AutoDrive.getControlledVehicle and AutoDrive.getControlledVehicle() or nil
+    if vehicle == nil or type(vehicle.updateControlGroups) ~= "function" then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no vehicle.updateControlGroups to suspend.")
+        return
+    end
+    self.controlGroupsVehicle = vehicle
+    self.controlGroupsOriginal = vehicle.updateControlGroups
+    vehicle.updateControlGroups = function() end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: suspended vehicle.updateControlGroups.")
+end
+
+function ADFlyoverEditor:restoreControlGroupsUpdate()
+    local vehicle, original = self.controlGroupsVehicle, self.controlGroupsOriginal
+    self.controlGroupsVehicle, self.controlGroupsOriginal = nil, nil
+    if vehicle == nil or original == nil then
+        return
+    end
+    vehicle.updateControlGroups = original
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Track-to-track geometry.
 --
@@ -1233,6 +1263,7 @@ function ADFlyoverEditor:enable()
     self:hideVehicleHud()
     self:hideAllDisplayComponents()
     self:suspendControlledEntityHud()
+    self:suspendControlGroupsUpdate()
 
     self.active = true
     self.lastWaypointId = nil
@@ -1393,6 +1424,7 @@ function ADFlyoverEditor:disable()
     self:restoreVehicleHud()
     self:restoreAllDisplayComponents()
     self:restoreControlledEntityHud()
+    self:restoreControlGroupsUpdate()
 
     self.camera, self.cursor = nil, nil
     self.active = false
