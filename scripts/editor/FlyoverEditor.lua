@@ -5066,11 +5066,17 @@ function ADFlyoverEditor:getEditableNumbers()
 
     if self.tool == self.TOOL.FIELDLOOP then
         return {
+            -- Grouped to match the toggle order above (detect custom field, then avoid
+            -- obstacles), not the order these were added in: the shape of the ring itself first
+            -- (margin, turning radius - neither toggle changes what these mean), then max gap
+            -- (only matters when "detect custom field" is on), then tree clearance/vehicle height
+            -- (only matter when "avoid obstacles" is on) last, right where "avoid obstacles" - the
+            -- last toggle before this list starts - sits closest to them.
             settingEntry("margin", "fieldLoopMargin"),
-            settingEntry("tree clearance", "fieldLoopTreeClearance"),
             settingEntry("turning radius", "fieldLoopTurningRadius"),
-            settingEntry("vehicle height", "fieldLoopVehicleHeight"),
-            settingEntry("max gap", "fieldLoopMaxGap")
+            settingEntry("max gap", "fieldLoopMaxGap"),
+            settingEntry("tree clearance", "fieldLoopTreeClearance"),
+            settingEntry("vehicle height", "fieldLoopVehicleHeight")
         }
     elseif self.tool == self.TOOL.SMOOTH and self.smoothMode == self.SMOOTH_MODE.REBUILD then
         return { {
