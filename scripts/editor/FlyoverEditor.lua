@@ -460,6 +460,21 @@ function ADFlyoverEditor:probeAllHud()
     end
     self.probedAllHud = true
 
+    -- Reported live (2026-09-22): suspending hud.drawControlledEntityHUD did not touch the
+    -- "CONTROL GROUP" panel either, so it is not drawn through g_currentMission.hud at all -
+    -- searching there next. Scans every top-level key of g_currentMission itself (not just .hud)
+    -- for anything whose NAME suggests it, case-insensitive ("group" or "control") - cheap, and a
+    -- real field name beats guessing another one blind.
+    if g_currentMission ~= nil then
+        for key in pairs(g_currentMission) do
+            local lower = tostring(key):lower()
+            if lower:find("group", 1, true) or lower:find("control", 1, true) then
+                local value = g_currentMission[key]
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE g_currentMission.%s = %s", tostring(key), type(value))
+            end
+        end
+    end
+
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
     if hud == nil then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: PROBE (all hud) no g_currentMission.hud")
