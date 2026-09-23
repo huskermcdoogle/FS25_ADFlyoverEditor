@@ -718,6 +718,43 @@ function ADFlyoverEditor:restoreAllDisplayComponents()
     end
 end
 
+--- Reported live (2026-09-22): hideAllDisplayComponents above had NO visible effect on the
+--- "CONTROL GROUP" block, the vehicle's own spec display (a sprayer's application-rate panel),
+--- the speedometer, or the fill-level readout, even though it does hide other things. Read
+--- alongside the earlier probe: hud.drawControlledEntityHUD is a plain FUNCTION, not a component
+--- with its own isVisible flag, and its name says what it is - everything tied to the currently
+--- CONTROLLED vehicle draws through this one call, bypassing whatever displayComponents' own
+--- isVisible flags do. So hiding it there was never going to touch this - it needs the call
+--- itself suspended, the same wrap-and-restore approach Wrappers.lua already uses for AutoDrive's
+--- own functions. Overwriting hud.drawControlledEntityHUD as an own key on the instance shadows
+--- whatever the class itself provides for every hud:drawControlledEntityHUD(...) call while this
+--- reference is in place; restoring puts the exact original function back, not a re-implementation
+--- of one.
+function ADFlyoverEditor:suspendControlledEntityHud()
+    self.controlledEntityHudOriginal = nil
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil or type(hud.drawControlledEntityHUD) ~= "function" then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no hud.drawControlledEntityHUD to suspend.")
+        return
+    end
+    self.controlledEntityHudOriginal = hud.drawControlledEntityHUD
+    hud.drawControlledEntityHUD = function() end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: suspended hud.drawControlledEntityHUD.")
+end
+
+function ADFlyoverEditor:restoreControlledEntityHud()
+    local original = self.controlledEntityHudOriginal
+    self.controlledEntityHudOriginal = nil
+    if original == nil then
+        return
+    end
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil then
+        return
+    end
+    hud.drawControlledEntityHUD = original
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Track-to-track geometry.
 --
@@ -1163,6 +1200,7 @@ function ADFlyoverEditor:enable()
     self:hideInputHelp()
     self:hideVehicleHud()
     self:hideAllDisplayComponents()
+    self:suspendControlledEntityHud()
 
     self.active = true
     self.lastWaypointId = nil
@@ -1322,6 +1360,7 @@ function ADFlyoverEditor:disable()
     self:restoreInputHelp()
     self:restoreVehicleHud()
     self:restoreAllDisplayComponents()
+    self:restoreControlledEntityHud()
 
     self.camera, self.cursor = nil, nil
     self.active = false
