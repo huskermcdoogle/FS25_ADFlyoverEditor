@@ -658,6 +658,66 @@ function ADFlyoverEditor:restoreVehicleHud()
     self.vehicleHudWasVisible = nil
 end
 
+--- Every element under g_currentMission.hud.displayComponents, in one blanket sweep - confirmed
+--- live (2026-09-22, probeAllHud's deeper dump) to be a flat list of 17 named entries mirroring
+--- the top-level hud.* fields (speedMeter, fillLevelsDisplay, ...) plus unnamed ones, almost
+--- certainly the "CONTROL GROUP" indicator among them. Hiding the whole list is simpler and more
+--- future-proof than guessing individual field names one at a time, and it does not touch anything
+--- OUTSIDE that list - Courseplay's own HUD bar and the top-right day/time/money display are not
+--- part of it, which happens to be exactly the boundary asked for ("don't mind Courseplay and the
+--- top right status... the speed and fill displays could go").
+---
+--- Previous visibility is remembered per-entry, keyed by the entry's own table rather than its
+--- index (an index is not guaranteed stable across a save/reload), so anything already hidden
+--- before the editor opened is not handed back visible on exit.
+function ADFlyoverEditor:hideAllDisplayComponents()
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    local components = hud ~= nil and hud.displayComponents or nil
+    self.displayComponentsPrevState = nil
+    if type(components) ~= "table" then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no hud.displayComponents to hide.")
+        return
+    end
+    local saved, hidden = {}, 0
+    for _, component in pairs(components) do
+        if type(component) == "table" then
+            saved[component] = rawget(component, "isVisible")
+            local ok = false
+            if type(component.setIsVisible) == "function" then
+                ok = pcall(function() component:setIsVisible(false) end)
+            elseif type(component.setVisible) == "function" then
+                ok = pcall(function() component:setVisible(false) end)
+            else
+                ok = pcall(function() component.isVisible = false end)
+            end
+            if ok then
+                hidden = hidden + 1
+            end
+        end
+    end
+    self.displayComponentsPrevState = saved
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: hid %d hud display component(s).", hidden)
+end
+
+function ADFlyoverEditor:restoreAllDisplayComponents()
+    local saved = self.displayComponentsPrevState
+    self.displayComponentsPrevState = nil
+    if saved == nil then
+        return
+    end
+    for component, wasVisible in pairs(saved) do
+        if wasVisible ~= false then
+            if type(component.setIsVisible) == "function" then
+                pcall(function() component:setIsVisible(true) end)
+            elseif type(component.setVisible) == "function" then
+                pcall(function() component:setVisible(true) end)
+            else
+                pcall(function() component.isVisible = true end)
+            end
+        end
+    end
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Track-to-track geometry.
 --
@@ -1102,6 +1162,7 @@ function ADFlyoverEditor:enable()
     self:probeAllHud()
     self:hideInputHelp()
     self:hideVehicleHud()
+    self:hideAllDisplayComponents()
 
     self.active = true
     self.lastWaypointId = nil
@@ -1260,6 +1321,7 @@ function ADFlyoverEditor:disable()
 
     self:restoreInputHelp()
     self:restoreVehicleHud()
+    self:restoreAllDisplayComponents()
 
     self.camera, self.cursor = nil, nil
     self.active = false
