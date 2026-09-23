@@ -817,6 +817,42 @@ function ADFlyoverEditor:restoreControlGroupsUpdate()
     vehicle.updateControlGroups = original
 end
 
+--- Bigger hammer, tried after four narrower attempts (hud.displayComponents, hud.
+--- drawControlledEntityHUD, vehicle.updateControlGroups, plus two probes) all failed to touch the
+--- "CONTROL GROUP" panel - reported live (2026-09-22) still there after both suspensions above
+--- ran successfully, so neither of those functions is actually what draws it. Suspends the ENTIRE
+--- top-level hud.draw() instead: whatever else draws through it goes dark too while the editor is
+--- open, a real tradeoff, but every base-game HUD element funnels through this one call, so it is
+--- the one guaranteed catch-all. draw is inherited from the class rather than an own key on the
+--- hud instance (confirmed live - unlike drawControlledEntityHUD/setControlledVehicle, hud.draw
+--- never showed up in probeAllHud's own-key scan), but overwriting it here still shadows it
+--- correctly for every hud:draw(...) call - Lua checks the instance table before any metatable/
+--- class fallback regardless of where the original definition lives.
+function ADFlyoverEditor:suspendHudDraw()
+    self.hudDrawOriginal = nil
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil or type(hud.draw) ~= "function" then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no hud.draw to suspend.")
+        return
+    end
+    self.hudDrawOriginal = hud.draw
+    hud.draw = function() end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: suspended hud.draw entirely.")
+end
+
+function ADFlyoverEditor:restoreHudDraw()
+    local original = self.hudDrawOriginal
+    self.hudDrawOriginal = nil
+    if original == nil then
+        return
+    end
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil then
+        return
+    end
+    hud.draw = original
+end
+
 -- ---------------------------------------------------------------------------------------------
 -- Track-to-track geometry.
 --
@@ -1264,6 +1300,7 @@ function ADFlyoverEditor:enable()
     self:hideAllDisplayComponents()
     self:suspendControlledEntityHud()
     self:suspendControlGroupsUpdate()
+    self:suspendHudDraw()
 
     self.active = true
     self.lastWaypointId = nil
@@ -1425,6 +1462,7 @@ function ADFlyoverEditor:disable()
     self:restoreAllDisplayComponents()
     self:restoreControlledEntityHud()
     self:restoreControlGroupsUpdate()
+    self:restoreHudDraw()
 
     self.camera, self.cursor = nil, nil
     self.active = false
