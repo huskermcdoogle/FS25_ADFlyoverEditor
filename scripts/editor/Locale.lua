@@ -162,7 +162,7 @@ L.STRINGS = {
         ["offset falloff"] = "Versatz-Abnahme",
         ["detect custom field"] = "eigenes Feld erkennen",
         ["avoid obstacles"] = "Hindernisse meiden",
-        ["max gap"] = "max. Lücke",
+        ["combo gap"] = "Kombi-Lücke",
 
         -- editable-number labels
         ["offset"] = "Versatz",

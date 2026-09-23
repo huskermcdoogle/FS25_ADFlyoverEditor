@@ -267,7 +267,7 @@ AutoDrive.FIELD_LOOP_PROBE_STEP = 1.0 -- meters between probe samples along each
 ---
 --- Distance is the ONLY signal this has for "same field, split by a lane" vs. "a genuinely
 --- different field that happens to be nearby, across an actual road" - reported live
---- (2026-09-22): the default max gap pulled in an unrelated field across a real road. Field ID
+--- (2026-09-22): the default combo gap pulled in an unrelated field across a real road. Field ID
 --- cannot tell them apart either: Courseplay's own FieldScanner.lua explains why it ignores field
 --- ID while scanning - "with it we can't handle merged fields" - meaning the STATIC id does not
 --- update when two map fields get tilled together, so requiring a match would reject the exact

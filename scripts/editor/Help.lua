@@ -169,7 +169,7 @@ T["field loop"] = {
     "  boundary as laid if the obstacle check keeps",
     "  flagging something that isn't really in the",
     "  way.",
-    "max gap: how far to auto-search for another",
+    "combo gap: how far to auto-search for another",
     "  disconnected patch of the same field when it's",
     "  split by a lane, and combine it into the same",
     "  course - a live scan can only ever return the",

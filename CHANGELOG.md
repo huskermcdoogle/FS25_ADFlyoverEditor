@@ -27,7 +27,7 @@ something that isn't really in the way.
 
 Field loop also now handles a field a lane splits into disconnected tilled patches on its own,
 with no extra clicks: the live scan can only ever return the one piece a click lands on, so it now
-auto-discovers any other patch within **max gap** of the first (a new field on the card, default
+auto-discovers any other patch within **combo gap** of the first (a new field on the card, default
 8m — this is a real per-map tuning knob, since distance is the only signal available for "the same
 field, split by a lane" vs. "a different field across an actual road"), finishes each one through
 the normal offset/tree-avoidance pipeline on its own, then splices the finished boundaries into the

@@ -5067,7 +5067,7 @@ function ADFlyoverEditor:getEditableNumbers()
     if self.tool == self.TOOL.FIELDLOOP then
         -- Grouped to match the toggle order above (detect custom field, then avoid obstacles),
         -- not the order these were added in: the shape of the ring itself first (margin, turning
-        -- radius - neither toggle changes what these mean), then max gap (only matters when
+        -- radius - neither toggle changes what these mean), then combo gap (only matters when
         -- "detect custom field" is on), then tree clearance/vehicle height (only matter when
         -- "avoid obstacles" is on) last, right where "avoid obstacles" - the last toggle before
         -- this list starts - sits closest to them.
@@ -5079,7 +5079,7 @@ function ADFlyoverEditor:getEditableNumbers()
             settingEntry("turning radius", "fieldLoopTurningRadius"),
         }
         if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
-            table.insert(fields, settingEntry("max gap", "fieldLoopMaxGap"))
+            table.insert(fields, settingEntry("combo gap", "fieldLoopMaxGap"))
         end
         if ADFlyoverSettings.get("fieldLoopAvoidObstacles") then
             table.insert(fields, settingEntry("tree clearance", "fieldLoopTreeClearance"))
