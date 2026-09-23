@@ -851,23 +851,36 @@ function ADOffsetGeometry.ensureMinimumEdgeLength(ring, minEdgeLength)
     return out
 end
 
---- Drop any vertex where the path folds sharply back on itself - the incoming and outgoing
---- direction at that point are close to OPPOSITE, not a real corner but a spike: an offset/scan
---- artifact, or the tight kink right where two rings get spliced together (see FieldLoopGenerator's
---- spliceFieldLoopRings). maxReversalDeg is how close to a full 180-degree reversal counts - callers
---- use something like 150, so a genuine sharp turn (a real field corner, say 90-120 degrees)
---- survives untouched.
+--- Drop any vertex that looks like a pipeline artifact rather than a real field corner, on two
+--- criteria:
 ---
---- Repeats until a full pass removes nothing - dropping one spike can reveal another right next to
---- it, most often at exactly the kind of kink this exists to catch - so a short run of spikes
---- clears in one call rather than needing the caller to loop it. Capped at 20 passes as a safety
---- net; a ring still finding new spikes after that many rounds has a worse problem than this pass
---- is meant to fix, and it is better to return what it has than spin.
-function ADOffsetGeometry.removeSpikes(ring, maxReversalDeg)
+---  1. A near-reversal - incoming and outgoing direction close to OPPOSITE. maxReversalDeg is how
+---     close to a full 180-degree reversal counts; callers use something like 150. Catches, for
+---     example, the tight kink right where two rings get spliced together (see
+---     FieldLoopGenerator's spliceFieldLoopRings).
+---  2. A compressed outlier - turning sharply (above outlierAngleDeg) AND unusually close to a
+---     neighbour relative to the ring's own average spacing (closer than outlierSpacingRatio times
+---     that average). A real small-radius corner spreads its turn across several evenly-spaced
+---     points; putting a whole corner's worth of turn on one point that is ALSO oddly close to its
+---     neighbour is the signature of a stray point, not an intentional tight arc. Reported live
+---     2026-09-22: two very close, sharply-angled points survived at a tight field corner.
+---
+--- Either criterion alone can flag a genuine sharp turn (a real corner can be sudden; a real corner
+--- can sit close to a dense run of other points) - it is the two together that mark an artifact.
+--- outlierAngleDeg/outlierSpacingRatio default to reasonable values so old callers passing only
+--- maxReversalDeg keep working.
+---
+--- Repeats until a full pass removes nothing - dropping one point can reveal another right next to
+--- it, most often at exactly the kind of kink this exists to catch - so a short run clears in one
+--- call rather than needing the caller to loop it. Capped at 20 passes as a safety net; a ring
+--- still finding new matches after that many rounds has a worse problem than this pass is meant to
+--- fix, and it is better to return what it has than spin.
+function ADOffsetGeometry.removeSpikes(ring, maxReversalDeg, outlierAngleDeg, outlierSpacingRatio)
     if ring == nil or #ring < 4 then
         return copyPoints(ring), 0
     end
-    local cosThreshold = math.cos(math.rad(maxReversalDeg))
+    outlierAngleDeg = outlierAngleDeg or 70
+    outlierSpacingRatio = outlierSpacingRatio or 0.5
     local removed = 0
     local pass = 0
     while pass < 20 do
@@ -876,19 +889,27 @@ function ADOffsetGeometry.removeSpikes(ring, maxReversalDeg)
         if n < 4 then
             break
         end
+
+        -- Recomputed each pass, since the ring shrinks as points are removed - the outlier check
+        -- is relative to the CURRENT ring's own scale, not a stale one from before this pass.
+        local totalLen = 0
+        for i = 1, n do
+            totalLen = totalLen + distanceBetween(ring[i], ring[(i % n) + 1])
+        end
+        local avgSpacing = n > 0 and (totalLen / n) or 0
+
         local skip = {}
         local anySkipped = false
         for i = 1, n do
-            local prev = ring[((i - 2) % n) + 1]
-            local cur = ring[i]
-            local nxt = ring[(i % n) + 1]
-            local inX, inZ = cur.x - prev.x, cur.z - prev.z
-            local outX, outZ = nxt.x - cur.x, nxt.z - cur.z
-            local inLen = MathUtil.vector2Length(inX, inZ)
-            local outLen = MathUtil.vector2Length(outX, outZ)
+            local prev, cur, nxt = ringNeighbours(ring, i)
+            local inLen = distanceBetween(prev, cur)
+            local outLen = distanceBetween(cur, nxt)
             if inLen > 1e-6 and outLen > 1e-6 then
-                local cosAngle = (inX * outX + inZ * outZ) / (inLen * outLen)
-                if cosAngle < cosThreshold then
+                local turnDeg = math.abs(math.deg(turnAngle(prev, cur, nxt)))
+                local isReversal = turnDeg >= maxReversalDeg
+                local isCompressedOutlier = turnDeg >= outlierAngleDeg
+                    and math.min(inLen, outLen) < avgSpacing * outlierSpacingRatio
+                if isReversal or isCompressedOutlier then
                     skip[i] = true
                     anySkipped = true
                 end

@@ -94,7 +94,9 @@ TOOLS = [
         "controls": [
             ("margin", "how far outside the boundary the loop runs."),
             ("tree clearance", "how far the loop keeps from trees before detouring."),
-            ("turning radius", "the tightest turn the loop is allowed to make."),
+            ("turning radius", "the tightest turn the loop is allowed to make. Never used below "
+                               "5m even if set lower - a sharper corner than that reads as an "
+                               "awkward kink rather than a smooth turn."),
             ("vehicle height", "how tall a machine the tree check clears for."),
             ("detect custom field", "on by default; when Courseplay is active, also finds ground "
                                      "plowed to connect two separate map fields into one, or a "

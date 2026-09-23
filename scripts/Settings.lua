@@ -57,6 +57,12 @@ S.settings.fieldLoopAvoidObstacles = { values = { false, true }, default = 2, cu
 -- - the default sits close to a typical field lane's width; raise it if a wider lane on a
 -- particular map gets missed, lower it if it ever reaches across a real road.
 S.settings.fieldLoopMaxGap = { values = { 3, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50 }, default = 3, current = 3 }
+-- Hidden - no tool-card row reads this, it exists purely so a determined user can hand-edit
+-- modSettings/FS25_ADFlyoverEditor/settings.xml (a stored index into the list below) without a
+-- rebuild. The floor ADOffsetGeometry.ensureMinimumEdgeLength applies to a finished field loop
+-- ring - no point ever survives closer than this to its neighbour, corners included (reported
+-- live 2026-09-22: two very close, sharply-angled points at a tight corner). Default 1.0m.
+S.settings.fieldLoopMinPointSpacing = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 }, default = 3, current = 3 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
@@ -207,7 +213,7 @@ function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles",
-                            "fieldLoopMaxGap", "flyoverMergeDistance", "flyoverMergeDivergence",
+                            "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
                             "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do

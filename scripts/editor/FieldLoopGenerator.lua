@@ -46,6 +46,19 @@ AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available 
 -- the final cleanup pass on the ring that actually gets placed) rather than a genuine sharp field
 -- corner. 90-120 degrees is a normal corner; 150+ is the path doubling back on itself.
 AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG = 150
+-- The other half of removeSpikes: a point does not need to be a near-reversal to be an artifact -
+-- one that is BOTH turning sharply (above this) AND unusually close to a neighbour relative to the
+-- ring's own average spacing (below FIELD_LOOP_OUTLIER_SPACING_RATIO) is the signature of a stray
+-- point left by the pipeline, not an intentional tight corner - a real small-radius arc turns
+-- gradually across several evenly-spaced points, it does not put a whole corner's worth of turn on
+-- one point that is also oddly close to its neighbour.
+AutoDrive.FIELD_LOOP_OUTLIER_ANGLE_DEG = 70
+AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO = 0.5
+-- A vehicle that can only turn this tightly is already unusual; whatever the player's turning
+-- radius SETTING says, the corner-rounding math below never uses less than this. Reported live
+-- (2026-09-22): a 3m setting left an awkward kink at a field corner sharper than a 3m arc could
+-- smoothly represent.
+AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 5
 
 --- Find the field boundary under an arbitrary world position.
 ---
@@ -594,6 +607,7 @@ local function densifyNearTrees(ring, treeClearance, fineSpacing)
 end
 
 function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
+    turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
     local points = ADPolygonUtils.stripDuplicateClosingVertex(rawPoints)
     -- Light cleanup only - the offset/corner pipeline below classifies real corners by actual
     -- turning-radius cross-track error rather than by pre-removing detail, so this just drops
@@ -648,10 +662,15 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     fieldCentroid.x = fieldCentroid.x / #simplified
     fieldCentroid.z = fieldCentroid.z / #simplified
 
-    -- Drop near-duplicates left at the junctions between the geometry stages. This has to happen
-    -- BEFORE tree avoidance: dropping a point merges two segments into one longer chord, and a
-    -- chord can cut a corner the detour had already verified as clear.
-    local tidiedXZ = ADOffsetGeometry.ensureMinimumEdgeLength(ringXZ, math.min(0.6, arcSpacing * 0.6))
+    -- Enforces the floor requested live (2026-09-22) after two very close, sharply-angled points
+    -- survived at a tight corner: thinToAdaptiveSpacing's minimum spacing deliberately exempts
+    -- anything it classifies as a corner, precisely so rounding a corner is not flattened - which
+    -- also means it is the wrong place to enforce an absolute floor. ensureMinimumEdgeLength makes
+    -- no such exemption, corners included, which is exactly what is wanted here. This also has to
+    -- run BEFORE tree avoidance regardless: dropping a point merges two segments into one longer
+    -- chord, and a chord can cut a corner the detour had already verified as clear.
+    local minPointSpacing = ADFlyoverSettings.get("fieldLoopMinPointSpacing") or 1.0
+    local tidiedXZ = ADOffsetGeometry.ensureMinimumEdgeLength(ringXZ, minPointSpacing)
 
     -- Tree avoidance runs last, on the finished (offset, corner-rounded, adaptively spaced)
     -- boundary, so it only ever perturbs an otherwise-good path. Add resolution around trees
@@ -919,6 +938,10 @@ end
 ---
 --- Returns true on success, false on failure. Everything interesting is already logged here.
 function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
+    -- Clamped here, not just inside buildFieldLoopRing, so the summary log line below reports the
+    -- radius actually used rather than a setting that got silently overridden.
+    turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
+
     local rawPoints, fieldLabel, fieldErr, cpEnv = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
@@ -950,11 +973,12 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
 
     local combinedRing = AutoDrive:spliceFieldLoopRings(rings)
 
-    -- Final cleanup on the ring that actually gets placed: a spike here (the path folding sharply
-    -- back on itself for one point, not a real corner) can come from the finished-per-region
-    -- pipeline just as easily as from a splice bridge, so this runs whether or not any splicing
-    -- happened - reported live (2026-09-22) as a point sticking out at a corner.
-    local cleanedRing, spikesRemoved = ADOffsetGeometry.removeSpikes(combinedRing, AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG)
+    -- Final cleanup on the ring that actually gets placed: a spike or a compressed-and-sharp
+    -- outlier here can come from the finished-per-region pipeline just as easily as from a splice
+    -- bridge, so this runs whether or not any splicing happened - reported live (2026-09-22) as a
+    -- point sticking out at a corner.
+    local cleanedRing, spikesRemoved = ADOffsetGeometry.removeSpikes(combinedRing,
+        AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG, AutoDrive.FIELD_LOOP_OUTLIER_ANGLE_DEG, AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO)
     if spikesRemoved > 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop removed %d spike point(s) from the finished ring.", spikesRemoved)
     end

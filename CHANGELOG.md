@@ -36,7 +36,13 @@ leaving two separate loops for you to connect by hand. The bridge point between 
 also chosen to never cut across either patch's own interior, not just whichever pair happened to
 be closest, and a final pass over the finished loop drops any point where the path folds sharply
 back on itself — a spike, not a real corner — whether that came from a splice or anywhere else in
-the pipeline.
+the pipeline. That same pass now also drops a "compressed outlier": a point turning sharply AND
+sitting unusually close to a neighbour, the signature of a stray pipeline point rather than an
+intentional tight corner. The corner-rounding math also never uses a turning radius under 5m, even
+if the tool's turning radius is set lower, and the minimum spacing between any two points on the
+finished loop (1.0m, corners included — hand-tunable via `fieldLoopMinPointSpacing` in
+`modSettings/FS25_ADFlyoverEditor/settings.xml`, no tool-card control for it) is now actually
+enforced everywhere rather than only away from corners.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
