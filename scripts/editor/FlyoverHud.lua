@@ -740,17 +740,30 @@ function ADFlyoverHud:draw(editor)
         if self.ctxDragging then
             self.cardShift, self.cardKey = nil, nil
         else
-            local bx0, by0, bx1, by1, covered, key, tpts, tsegs = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
+            local bx0, by0, bx1, by1, homeCovered, key, tpts, tsegs = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
             if key ~= self.cardKey then
                 self.cardKey = key
-                self.cardShift = nil
-                if covered then
-                    local avoid = {}
-                    if self.frameW ~= nil and self.frameW > 0 then
-                        avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                if not homeCovered then
+                    -- Nothing is under the card's home any more: go back to it.
+                    self.cardShift = nil
+                else
+                    -- Something is under home. Judge the spot the card is actually SHOWN at (home, or
+                    -- where it already stepped to): a point dropped under a card that had already
+                    -- stepped aside must move it again, from where it is now.
+                    local shownX, shownY = cardX, cardY
+                    if self.cardShift ~= nil then
+                        shownX = math.max(0, math.min(1 - width, self.cardShift[1]))
+                        shownY = math.max(ch, math.min(1, self.cardShift[2]))
                     end
-                    local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, cardX, cardY, tsegs)
-                    self.cardShift = { sx, sy }
+                    local _, _, _, _, shownCovered = self:actionTargetsBox(editor, shownX, shownY - ch, width, ch)
+                    if shownCovered or self.cardShift == nil then
+                        local avoid = {}
+                        if self.frameW ~= nil and self.frameW > 0 then
+                            avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                        end
+                        local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs)
+                        self.cardShift = { sx, sy }
+                    end
                 end
             end
             if self.cardShift ~= nil then
@@ -1227,7 +1240,9 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
     -- changes when the target set does (panning never changes it).
     local sum = 0
     for i = 1, n do sum = sum + ids[i] * i end
-    local key = n .. ":" .. sum .. ":" .. (editor.selectionCount or 0)
+    -- moveDropCount: every drop is new work even when it re-drops the SAME point (same ids, so the
+    -- id sum alone would look unchanged and the card would never re-check).
+    local key = n .. ":" .. sum .. ":" .. (editor.selectionCount or 0) .. ":" .. (editor.moveDropCount or 0)
     local x0, y0, x1, y1, covered
     local tpts, tsegs, screenOf, inSet = {}, {}, {}, {}
     for i = 1, n do inSet[ids[i]] = true end

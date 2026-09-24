@@ -4630,6 +4630,7 @@ function ADFlyoverEditor:finishDrag()
         if #moved < 400 then moved[#moved + 1] = n.id end
     end
     self.lastMovedIds = moved
+    self.moveDropCount = (self.moveDropCount or 0) + 1
 
     -- Offset: releasing the mouse does NOT commit here - see gatherOffsetChain/commitMoveOffset.
     -- Only the "actively held, cursor is driving the distance" bookkeeping ends; the chain itself
