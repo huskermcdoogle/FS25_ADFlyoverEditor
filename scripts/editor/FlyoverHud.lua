@@ -2206,6 +2206,38 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
         return true
     end
 
+    if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
+        if editor ~= nil then
+            -- Pin the card where it is DRAWN right now before the spawn/step-aside positions are dropped.
+            -- Otherwise, until the first mouse move writes a drag position, the card falls back to its
+            -- saved home for a frame or more - the jump on first click.
+            editor.toolCardX = self.ctxFrameX
+            editor.toolCardY = self.ctxFrameY + self.ctxFrameH
+            editor.cardSpawnX, editor.cardSpawnY = nil, nil
+            self.cardShift = nil
+        end
+        self.ctxDragging = true
+        self.ctxDragOffsetX = mouseX - self.ctxFrameX
+        self.ctxDragOffsetY = mouseY - self.ctxFrameY
+        return true
+    end
+    if self.ctxDragging then
+        if button == 1 and isUp then
+            self.ctxDragging = false
+            -- Remember where it was left, once, on release (not per mouse-move: saving writes a file).
+            if editor ~= nil and ADFlyoverTheme ~= nil then
+                ADFlyoverTheme:setCardPos(editor.toolCardX, editor.toolCardY)
+            end
+            return true
+        end
+        if editor ~= nil then
+            editor.toolCardDragged = true
+            editor.toolCardX = math.max(0, math.min(1 - self.ctxFrameW, mouseX - self.ctxDragOffsetX))
+            editor.toolCardY = math.max(self.ctxFrameH or 0, math.min(1, mouseY - self.ctxDragOffsetY + (self.ctxFrameH or 0)))
+        end
+        return true
+    end
+
     -- Corner grip: resizes the whole editor UI by scale. The panel is anchored top-left, so the
     -- bottom-right corner follows the cursor: the new width is the cursor's distance from the left
     -- edge, and the scale is the grabbed scale times new width over grabbed width. Clamped by the
