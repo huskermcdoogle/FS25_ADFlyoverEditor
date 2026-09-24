@@ -761,7 +761,11 @@ function ADFlyoverHud:draw(editor)
                         if self.frameW ~= nil and self.frameW > 0 then
                             avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                         end
-                        local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs)
+                        local sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs)
+                        if not found then
+                            -- Nothing clear close by: it is sitting on the work, so go as far as it takes.
+                            sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs, true)
+                        end
                         self.cardShift = { sx, sy }
                     end
                 end
@@ -1134,19 +1138,26 @@ end
 
 --- Offsets for the card walk, nearest first, out to CARD_WALK_RADIUS in steps of CARD_WALK_STEP. Built
 --- once: the walk tries them in order and the first clear one wins, so it always finds the closest.
+-- Two reaches: the normal one (a card OPENING near the click stays close to it) and a wide one for a
+-- card that is being pushed off something it is sitting ON - better to travel across the screen than to
+-- stay on top of the work.
 local CARD_WALK_STEP, CARD_WALK_RADIUS = 0.01, 0.22
-local CARD_WALK_OFFSETS = nil
-local function cardWalkOffsets()
-    if CARD_WALK_OFFSETS ~= nil then return CARD_WALK_OFFSETS end
-    local list, n = {}, math.floor(CARD_WALK_RADIUS / CARD_WALK_STEP + 0.5)
+local CARD_WALK_WIDE_STEP, CARD_WALK_WIDE_RADIUS = 0.02, 0.70
+local CARD_WALK_OFFSETS = {}
+local function cardWalkOffsets(wide)
+    local key = wide and "wide" or "near"
+    if CARD_WALK_OFFSETS[key] ~= nil then return CARD_WALK_OFFSETS[key] end
+    local step = wide and CARD_WALK_WIDE_STEP or CARD_WALK_STEP
+    local radius = wide and CARD_WALK_WIDE_RADIUS or CARD_WALK_RADIUS
+    local list, n = {}, math.floor(radius / step + 0.5)
     for ix = -n, n do
         for iy = -n, n do
-            local dx, dy = ix * CARD_WALK_STEP, iy * CARD_WALK_STEP
+            local dx, dy = ix * step, iy * step
             list[#list + 1] = { dx, dy, dx * dx + dy * dy }
         end
     end
     table.sort(list, function(a, b) return a[3] < b[3] end)
-    CARD_WALK_OFFSETS = list
+    CARD_WALK_OFFSETS[key] = list
     return list
 end
 
@@ -1155,7 +1166,7 @@ end
 --- screen, taking the first spot with no selected point under it (plus a margin), off the `avoid`
 --- rects and off a keep-out around the cursor. Nothing clear within that reach: stay at the start
 --- rather than wander off across the screen. Always returns a position.
-function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop, segs)
+function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop, segs, wide)
     -- `fromX/fromTop` starts the walk at the card's own home instead of below the cursor, so a card
     -- that only needs to step aside moves the least it can - never teleporting to the cursor.
     local startX, startTop
@@ -1196,7 +1207,7 @@ function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop, segs
         end
         return true
     end
-    for _, o in ipairs(cardWalkOffsets()) do
+    for _, o in ipairs(cardWalkOffsets(wide)) do
         local x, top = startX + o[1], startTop + o[2]
         if clearAt(x, top) then
             return x, top, true
