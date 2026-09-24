@@ -43,6 +43,11 @@ enforced everywhere rather than only away from corners.
   that resizes the whole UI by scale (the typed field still sets an exact value). Point, span and run
   menus now open **clear of the selection** - bottom-right first, then the other corners and sides -
   and stay off the panel and tool card.
+- **Tool card stays put** — it no longer jumps to the cursor on each click (it used to land beside
+  the next point you wanted to pick). It stays where you last dragged it, remembered between
+  sessions, and only steps aside while it would cover a point being worked on.
+- **Name tool** — names the clicked point instead of the one nearest the vehicle; rejects duplicate
+  names on create and rename; a blank rename clears the name.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 

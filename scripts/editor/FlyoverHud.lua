@@ -41,6 +41,7 @@ ADFlyoverHud = {
 -- Height of the floating tool card's header strip - its drag handle (see buildRows and
 -- isMouseOverToolCardGrab). Declared here, at the top: both users sit far apart in this file, and a
 -- `local` is only visible to code compiled after it.
+local placeMenuAround   -- defined with the menu helpers below; the tool card uses it too
 local CTX_GRAB_H = 0.022
 
 -- Localization shorthand: an English UI string in, its localized form out (or unchanged when there is
@@ -694,10 +695,24 @@ function ADFlyoverHud:draw(editor)
         for i = split + 1, #rows do
             ch = ch + (rows[i].kind == "gap" and rowH * 0.35 or rowH)
         end
-        local cardX = editor.toolCardX or (self.posX + width + 0.02)
-        local cardY = editor.toolCardY or top
+        local T = ADFlyoverTheme
+        local cardX = editor.toolCardX or (T ~= nil and T.cardX) or (self.posX + width + 0.02)
+        local cardY = editor.toolCardY or (T ~= nil and T.cardY) or top
         cardX = math.max(0, math.min(1 - width, cardX))
         cardY = math.max(ch, math.min(1, cardY))
+        -- Home is where the player left it. Only while it would cover a point being worked on does it
+        -- step aside - recomputed each frame from home, so it snaps back the moment nothing is under
+        -- it, and never while the player is dragging it.
+        if not self.ctxDragging then
+            local bx0, by0, bx1, by1, covered = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
+            if covered then
+                local avoid = {}
+                if self.frameW ~= nil and self.frameW > 0 then
+                    avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                end
+                cardX, cardY = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid)
+            end
+        end
         local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
         self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
     end
@@ -936,7 +951,7 @@ end
 --- it first, then the other corners, then the sides, then above/below - and stays on screen and clear
 --- of the `avoid` rects (the corner panel and tool card). Returns the menu's left edge and top edge.
 --- If nothing is fully clear it takes the candidate that overlaps the selection least.
-local function placeMenuAround(x0, y0, x1, y1, w, h, avoid)
+function placeMenuAround(x0, y0, x1, y1, w, h, avoid)
     local gap = 0.012
     local function overlap(ax, ay, aw, ah, bx, by, bw, bh)
         local ox = math.min(ax + aw, bx + bw) - math.max(ax, bx)
@@ -975,6 +990,43 @@ local function placeMenuAround(x0, y0, x1, y1, w, h, avoid)
         end
     end
     return best[1], best[2]
+end
+
+--- Screen box of the points the active tool is working on (selection, a picked span end, the point
+--- being dragged), and whether any of them sits under the given rect (x, y = bottom-left). Returns
+--- x0, y0, x1, y1, covered. Sampled, so a huge box selection stays cheap.
+function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
+    if project == nil then return nil end
+    local ids, n = {}, 0
+    local function add(id)
+        if id ~= nil and n < 400 then n = n + 1; ids[n] = id end
+    end
+    for _, key in ipairs({ "dragId", "moveSpanFromId", "moveSpanToId", "straightenFromId", "smoothFromId",
+        "divideFromId", "groundFromId", "offsetFromId", "sidingAnchorId", "splineFromId", "mergeFromId",
+        "lastWaypointId" }) do
+        add(editor[key])
+    end
+    if editor.selection ~= nil then
+        for id in pairs(editor.selection) do add(id) end
+    end
+    local x0, y0, x1, y1, covered
+    local m = 0.012
+    for i = 1, n do
+        local wp = ADGraphManager:getWayPointById(ids[i])
+        if wp ~= nil then
+            local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
+            if ok and sx ~= nil and depth ~= nil and depth > 0 and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
+                x0 = x0 and math.min(x0, sx) or sx
+                x1 = x1 and math.max(x1, sx) or sx
+                y0 = y0 and math.min(y0, sy) or sy
+                y1 = y1 and math.max(y1, sy) or sy
+                if sx >= rx - m and sx <= rx + rw + m and sy >= ry - m and sy <= ry + rh + m then
+                    covered = true
+                end
+            end
+        end
+    end
+    return x0, y0, x1, y1, covered
 end
 
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
@@ -1810,6 +1862,10 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
     if self.ctxDragging then
         if button == 1 and isUp then
             self.ctxDragging = false
+            -- Remember where it was left, once, on release (not per mouse-move: saving writes a file).
+            if editor ~= nil and ADFlyoverTheme ~= nil then
+                ADFlyoverTheme:setCardPos(editor.toolCardX, editor.toolCardY)
+            end
             return true
         end
         if editor ~= nil then

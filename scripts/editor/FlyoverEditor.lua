@@ -3404,19 +3404,8 @@ function ADFlyoverEditor:toolHasPendingStart()
 end
 
 function ADFlyoverEditor:onLeftPress()
-    -- Jump the floating card out to a fixed offset from the FIRST click of an action - never right on
-    -- top of the point you just clicked, which is what made it feel like it was always in the way. It
-    -- can then be dragged (by its header) whever you actually want it, and it stays there - through
-    -- the rest of the action and every action after, in every tool - until the NEXT tool's first
-    -- click jumps it again. self.toolCardDragged (set by the drag itself) skips the jump once the
-    -- player has taken control of it, so a deliberate placement is never overridden.
-    if not self:toolHasPendingStart() and not self.toolCardDragged and g_lastMousePosX ~= nil then
-        local offX, offY = 0.10, 0.08
-        local ox = (g_lastMousePosX < 0.55) and offX or -offX     -- offset AWAY from screen centre,
-        local oy = (g_lastMousePosY < 0.55) and offY or -offY     -- so it lands on-screen, not clipped
-        self.toolCardX = math.max(0, math.min(1, g_lastMousePosX + ox))
-        self.toolCardY = math.max(0, math.min(1, g_lastMousePosY + oy))
-    end
+    -- The floating tool card no longer jumps to the click: it stays where the player last left it
+    -- (persisted), and the HUD moves it aside only while it would cover something being worked on.
 
     -- Rotated box, phase A: Space held claims this press to start the edge-drag - checked before
     -- everything else, same precedence as the shapes below.
