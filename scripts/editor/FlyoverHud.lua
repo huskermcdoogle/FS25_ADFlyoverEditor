@@ -316,17 +316,6 @@ function ADFlyoverHud:buildRows(editor)
         add("number", "ui scale", scaleShown, scaleEditing, function() editor:beginEditNumber(scaleEntry) end)
         rows[#rows].stepAction = function(d) editor:stepThemeScale(d) end
 
-        local lwEntry = {
-            label = "line weight", unit = "",
-            get = function() return ADFlyoverTheme.lineWeight end,
-            apply = function(v) return editor:applyLineWeight(v) end,
-            step = function(d) editor:stepLineWeight(d) end,
-        }
-        local lwEditing = editor.editing ~= nil and editor.editing.label == "line weight"
-        local lwShown = lwEditing and (editor.editing.buffer .. "_") or string.format("%.1f", ADFlyoverTheme.lineWeight)
-        add("number", "line weight", lwShown, lwEditing, function() editor:beginEditNumber(lwEntry) end)
-        rows[#rows].stepAction = function(d) editor:stepLineWeight(d) end
-
         add("toggle", "theme", ADFlyoverTheme.PRESET_NAMES[ADFlyoverTheme.preset] or ADFlyoverTheme.preset,
             false, function() editor:cycleThemePreset(1) end)
         rows[#rows].stepAction = function(d) editor:cycleThemePreset(d) end
@@ -335,42 +324,8 @@ function ADFlyoverHud:buildRows(editor)
         rows[#rows].stepAction = function(d) editor:cycleThemeAccent(d) end
 
         add("action", "reset to default", "", true, function() editor:resetTheme() end)
-        add("toggle", "advanced colours", editor.advancedOpen and "shown" or "hidden", false,
-            function() editor:toggleAdvanced() end)
+        add("action", "more settings...", "", true, function() editor:openSettingsDialog() end)
         add("note", "click / scroll / +- to change - saved automatically")
-
-        -- Layer 3: hand-tune one role at a time. Pick a role, then set its R/G/B (0-255); each write
-        -- is an override on top of the preset + accent, cleared back to those with the button below.
-        if editor.advancedOpen then
-            add("gap")
-            add("section", "COLOUR OVERRIDE")
-
-            local roleKey, roleLabel = editor:currentEditRole()
-            local overridden = roleKey ~= nil and ADFlyoverTheme.overrides[roleKey] ~= nil
-
-            add("toggle", "edit", roleLabel or "-", false, function() editor:cycleEditRole(1) end)
-            rows[#rows].stepAction = function(d) editor:cycleEditRole(d) end
-
-            add("swatch", overridden and "current (custom)" or "current",
-                roleKey ~= nil and ADFlyoverTheme:hexOf(roleKey) or "")
-            rows[#rows].swatchRole = roleKey
-
-            for _, cc in ipairs({ { "R", 1 }, { "G", 2 }, { "B", 3 } }) do
-                local chLabel, idx = cc[1], cc[2]
-                local entry = {
-                    label = "colour " .. chLabel, unit = "",
-                    get = function() return editor:roleChannel255(idx) end,
-                    apply = function(v) return editor:setRoleChannel255(idx, v) end,
-                    step = function(d) editor:stepRoleChannel(idx, d) end,
-                }
-                local editing = editor.editing ~= nil and editor.editing.label == entry.label
-                local shown = editing and (editor.editing.buffer .. "_") or tostring(editor:roleChannel255(idx))
-                add("number", chLabel, shown, editing, function() editor:beginEditNumber(entry) end)
-                rows[#rows].stepAction = function(d) editor:stepRoleChannel(idx, d) end
-            end
-
-            add("action", "clear this colour", "", overridden, function() editor:clearEditRole() end)
-        end
     end
 
     add("gap")
@@ -914,6 +869,30 @@ function ADFlyoverHud:draw(editor)
         end
     end
 
+    -- Resize grip in the panel's bottom-right corner: a triangle of dots, drawn last so no row fill
+    -- covers it. Dragging it sets the mod's ui scale (see handleDrag); the typed field stays the exact
+    -- route. Only the corner panel gets one - the card and menus follow its scale.
+    do
+        local gh = rowH * 0.62
+        local gw = gh / aspect
+        local gx = self.frameX + self.frameW - gw - self.padding * 0.6
+        local gy = self.frameY + self.padding * 0.6
+        self.gripRect = { x = gx - self.padding * 0.6, y = gy - self.padding * 0.6,
+            w = gw + self.padding * 1.6, h = gh + self.padding * 1.6 }
+        local hov = self.gripDragging or (mx ~= nil and mx >= self.gripRect.x
+            and mx <= self.gripRect.x + self.gripRect.w and my >= self.gripRect.y
+            and my <= self.gripRect.y + self.gripRect.h)
+        local role = hov and "headerText" or "mutedText"
+        local dw, dh = gw * 0.2, gh * 0.2
+        for row = 0, 2 do
+            for col = 0, 2 - row do
+                -- col counts leftward from the right edge, row upward from the bottom.
+                fillRole(self.rowOverlay, gx + gw - dw - col * gw * 0.4, gy + row * gh * 0.4,
+                    dw, dh, role, hov and 1 or 0.75)
+            end
+        end
+    end
+
     self:drawContextMenu(editor)
 
     -- Contextual help sits beside the panel and is non-modal, so you can read it while working. The
@@ -922,6 +901,80 @@ function ADFlyoverHud:draw(editor)
     if editor.helpOpen and not editor.dialogOpen and not editor.manualOpen then
         self:drawHelp(editor)
     end
+end
+
+--- Screen-space bounding box of what a Select-mode menu is about to act on (point / span / run), or
+--- nil when none of it is in front of the camera. Same projection the amber highlights use.
+local function menuSelectionBox(m)
+    if project == nil then return nil end
+    local ids = {}
+    if m.kind == "point" then
+        ids[1] = m.id
+    elseif m.kind == "span" and m.ids ~= nil then
+        ids = m.ids
+    elseif m.kind == "run" and m.runSet ~= nil then
+        for id in pairs(m.runSet) do ids[#ids + 1] = id end
+    end
+    local x0, y0, x1, y1
+    for _, id in ipairs(ids) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
+            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+                x0 = x0 and math.min(x0, sx) or sx
+                x1 = x1 and math.max(x1, sx) or sx
+                y0 = y0 and math.min(y0, sy) or sy
+                y1 = y1 and math.max(y1, sy) or sy
+            end
+        end
+    end
+    if x0 == nil then return nil end
+    return x0, y0, x1, y1
+end
+
+--- Where a w x h menu goes so it does not cover the selection box (x0,y0)-(x1,y1) - bottom-right of
+--- it first, then the other corners, then the sides, then above/below - and stays on screen and clear
+--- of the `avoid` rects (the corner panel and tool card). Returns the menu's left edge and top edge.
+--- If nothing is fully clear it takes the candidate that overlaps the selection least.
+local function placeMenuAround(x0, y0, x1, y1, w, h, avoid)
+    local gap = 0.012
+    local function overlap(ax, ay, aw, ah, bx, by, bw, bh)
+        local ox = math.min(ax + aw, bx + bw) - math.max(ax, bx)
+        local oy = math.min(ay + ah, by + bh) - math.max(ay, by)
+        if ox <= 0 or oy <= 0 then return 0 end
+        return ox * oy
+    end
+    local midY = (y0 + y1) * 0.5 + h * 0.5
+    local midX = (x0 + x1) * 0.5 - w * 0.5
+    local cands = {
+        { x1 + gap, y0 - gap },            -- bottom-right
+        { x0 - gap - w, y0 - gap },        -- bottom-left
+        { x1 + gap, y1 + gap + h },        -- top-right
+        { x0 - gap - w, y1 + gap + h },    -- top-left
+        { x1 + gap, midY },                -- right
+        { x0 - gap - w, midY },            -- left
+        { midX, y0 - gap },                -- below
+        { midX, y1 + gap + h },            -- above
+    }
+    local best, bestScore
+    for _, c in ipairs(cands) do
+        local cx, ct = c[1], c[2]
+        local fits = cx >= 0 and cx + w <= 1 and ct <= 1 and ct - h >= 0
+        local ux = math.max(0, math.min(1 - w, cx))
+        local ut = math.max(h, math.min(1, ct))
+        local score = overlap(ux, ut - h, w, h, x0, y0, x1 - x0, y1 - y0)
+        for _, r in ipairs(avoid) do
+            score = score + overlap(ux, ut - h, w, h, r[1], r[2], r[3], r[4])
+        end
+        if not fits then score = score + 0.0001 end
+        if score == 0 and fits then
+            return ux, ut
+        end
+        if bestScore == nil or score < bestScore then
+            best, bestScore = { ux, ut }, score
+        end
+    end
+    return best[1], best[2]
 end
 
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
@@ -1042,6 +1095,26 @@ function ADFlyoverHud:drawContextMenu(editor)
     local menuGapX, menuGapY = 0.014, 0.02
     local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
     local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
+    -- Point/span/run menus keep clear of the selection they act on. Placed once when first drawn and
+    -- then held, so the rows do not slide under the mouse while the camera moves.
+    if m.kind ~= "armed" then
+        if m.placeX == nil then
+            local bx0, by0, bx1, by1 = menuSelectionBox(m)
+            if bx0 ~= nil then
+                local avoid = {}
+                if self.frameW ~= nil and self.frameW > 0 then
+                    avoid[#avoid + 1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                end
+                if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
+                    avoid[#avoid + 1] = { self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH }
+                end
+                m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid)
+            end
+        end
+        if m.placeX ~= nil then
+            x, top = m.placeX, m.placeTop
+        end
+    end
     local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
@@ -1743,6 +1816,36 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
             editor.toolCardDragged = true
             editor.toolCardX = math.max(0, math.min(1 - self.ctxFrameW, mouseX - self.ctxDragOffsetX))
             editor.toolCardY = math.max(self.ctxFrameH or 0, math.min(1, mouseY - self.ctxDragOffsetY + (self.ctxFrameH or 0)))
+        end
+        return true
+    end
+
+    -- Corner grip: resizes the whole editor UI by scale. The panel is anchored top-left, so the
+    -- bottom-right corner follows the cursor: the new width is the cursor's distance from the left
+    -- edge, and the scale is the grabbed scale times new width over grabbed width. Clamped by the
+    -- theme's own limits, and so the right edge cannot leave the screen.
+    local gr = self.gripRect
+    if button == 1 and isDown and gr ~= nil and ADFlyoverTheme ~= nil
+        and mouseX >= gr.x and mouseX <= gr.x + gr.w and mouseY >= gr.y and mouseY <= gr.y + gr.h then
+        self.gripDragging = true
+        self.gripStartScale = ADFlyoverTheme.scale
+        self.gripStartW = self.frameW
+        self.gripOffsetX = (self.frameX + self.frameW) - mouseX
+        return true
+    end
+    if self.gripDragging then
+        if button == 1 and isUp then
+            self.gripDragging = false
+            return true
+        end
+        local w = math.min(mouseX + self.gripOffsetX, 1) - self.posX
+        if w > 0 and self.gripStartW > 0 then
+            -- setScale() persists each call; only call when the snapped step actually changes so a
+            -- drag does not rewrite the settings file on every mouse event.
+            local want = self.gripStartScale * w / self.gripStartW
+            if math.abs(want - ADFlyoverTheme.scale) >= ADFlyoverTheme.SCALE_STEP * 0.5 then
+                ADFlyoverTheme:setScale(want)
+            end
         end
         return true
     end

@@ -37,6 +37,13 @@ finished loop (1.0m, corners included — hand-tunable via `fieldLoopMinPointSpa
 `modSettings/FS25_ADFlyoverEditor/settings.xml`, no tool-card control for it) is now actually
 enforced everywhere rather than only away from corners.
 
+- **UI cleanup** — the panel's Settings section keeps just **ui scale**, **theme** and **accent**;
+  line weight and the per-role colour editor live only in the settings dialog, reached by the new
+  **more settings...** row (or the header gear). The panel's bottom-right corner is now a **drag grip**
+  that resizes the whole UI by scale (the typed field still sets an exact value). Point, span and run
+  menus now open **clear of the selection** - bottom-right first, then the other corners and sides -
+  and stay off the panel and tool card.
+
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
 Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and

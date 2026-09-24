@@ -115,6 +115,7 @@ L.STRINGS = {
         ["show tool card"] = "Werkzeugkarte anzeigen",
         ["hide tool card"] = "Werkzeugkarte verbergen",
         ["reset to default"] = "auf Standard zurücksetzen",
+        ["more settings..."] = "weitere Einstellungen...",
         ["clear this colour"] = "diese Farbe zurücksetzen",
         ["reset all to default"] = "alles auf Standard zurücksetzen",
         ["close"] = "schließen",
