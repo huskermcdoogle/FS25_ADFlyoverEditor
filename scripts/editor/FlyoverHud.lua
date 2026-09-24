@@ -1383,7 +1383,14 @@ function ADFlyoverHud:drawContextMenu(editor)
                 avoid[#avoid + 1] = { self.frameX, self.frameY, self.frameW, self.frameH }
             end
             -- Not the tool card: a selection menu only exists in Select mode, where there is no card.
-            m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy, bpts)
+            -- Same walk as the tool card: start just below the cursor and step outward to the nearest
+            -- spot with no selected point under it, so the menu lands in the open ground inside a
+            -- curve rather than hugging the line.
+            local wx, wy, found = placeCardInOpenSpace(bpts, pw, ph, avoid, m.sx, m.sy)
+            Logging.info("[FlyoverHud] menu place: %d pts, menu %.3fx%.3f, %s -> (%.3f,%.3f) cursor (%.3f,%.3f)",
+                bpts ~= nil and #bpts or 0, pw, ph, found and "clear spot found" or "nothing clear within reach",
+                wx, wy, m.sx or -1, m.sy or -1)
+            m.placeX, m.placeTop = wx, wy
         end
     end
     if m.placeX ~= nil then
