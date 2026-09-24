@@ -749,7 +749,7 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
-                    local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil)
+                    local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, cardX, cardY)
                     self.cardShift = { sx, sy }
                 end
             end
@@ -1122,8 +1122,15 @@ end
 --- screen, taking the first spot with no selected point under it (plus a margin), off the `avoid`
 --- rects and off a keep-out around the cursor. Nothing clear within that reach: stay at the start
 --- rather than wander off across the screen. Always returns a position.
-function placeCardInOpenSpace(pts, w, h, avoid, curX, curY)
-    local startX, startTop = belowCursor(w, h, curX, curY)
+function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop)
+    -- `fromX/fromTop` starts the walk at the card's own home instead of below the cursor, so a card
+    -- that only needs to step aside moves the least it can - never teleporting to the cursor.
+    local startX, startTop
+    if fromX ~= nil and fromTop ~= nil then
+        startX, startTop = fromX, fromTop
+    else
+        startX, startTop = belowCursor(w, h, curX, curY)
+    end
     if pts == nil or #pts == 0 then return startX, startTop, true end
     local pm = 0.012
     -- Sampled: a 400-point selection does not need every point tested against every step.
