@@ -727,6 +727,9 @@ function ADFlyoverHud:draw(editor)
                     else
                         sx, sy = belowCursor(width, ch, editor.cardSpawnCX, editor.cardSpawnCY)
                     end
+                    Logging.info("[FlyoverHud] card spawn: %d pts, card %.3fx%.3f, %s -> (%.3f,%.3f) menu spot was (%.3f,%.3f) cursor (%.3f,%.3f)",
+                        #tpts, width, ch, ox ~= nil and "open-space search" or "FALLBACK below cursor", sx, sy,
+                        editor.cardSpawnX, editor.cardSpawnY, editor.cardSpawnCX or -1, editor.cardSpawnCY or -1)
                 end
                 self.spawnPos = { sx, sy }
             end
