@@ -1589,8 +1589,33 @@ function ADFlyoverEditor:endRun()
     self.lastWaypointId = nil
 end
 
+--- One Esc press reaches us twice - as the MENU_CANCEL/MENU_BACK action event and as a keyEvent - in
+--- either order. Whichever sees it first and uses it for something smaller than leaving the editor
+--- (cancelling a typed number, closing a dialog) marks it here, so the other does not then treat the
+--- same press as "exit the editor".
+function ADFlyoverEditor:markEscHandled()
+    self.escHandledAt = self:nowMs()
+end
+
+function ADFlyoverEditor:escRecentlyHandled()
+    return self.escHandledAt ~= nil and (self:nowMs() - self.escHandledAt) < 400
+end
+
 function ADFlyoverEditor:onCancelAction(actionName)
     if not self.active or self:isGuiBlocking() then
+        return
+    end
+    if self.editing ~= nil then
+        self:cancelEditNumber()
+        self:markEscHandled()
+        return
+    end
+    if self:isModalOpen() then
+        if self.manualOpen then self:closeManual() else self:closeSettingsDialog() end
+        self:markEscHandled()
+        return
+    end
+    if self:escRecentlyHandled() then
         return
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: exiting via the %s action event.", actionName)
@@ -1669,6 +1694,7 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
     if self:isModalOpen() then
         if isKey("KEY_esc") then
             if self.manualOpen then self:closeManual() else self:closeSettingsDialog() end
+            self:markEscHandled()
         elseif self.manualOpen and isKey("KEY_left") then
             self:manualStep(-1)
         elseif self.manualOpen and isKey("KEY_right") then
@@ -1678,6 +1704,9 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
     end
 
     if isKey("KEY_esc") then
+        if self:escRecentlyHandled() then
+            return
+        end
         ADFlyoverSettings.debugLog("[FlyoverEditor]: escape observed via keyEvent (fallback path).")
         self:disable()
         return
@@ -5448,6 +5477,7 @@ function ADFlyoverEditor:handleEditKey(unicode, sym)
     end
     if isKey("KEY_esc") then
         self:cancelEditNumber()
+        self:markEscHandled()
         return true
     end
     if isKey("KEY_backspace") then
