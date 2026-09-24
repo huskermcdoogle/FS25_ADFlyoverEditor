@@ -266,37 +266,70 @@ function W.install(AD)
     -- instance's metatable, so replacing them on the class intercepts, the same as everywhere else.
     local Dialog = ADEnterTargetNameGui
     if Dialog ~= nil and type(Dialog.onOpen) == "function" and type(Dialog.onClickOk) == "function" then
+        -- Point an open dialog instance at the clicked waypoint: edit the marker already on it, or
+        -- create a new one there. Public on the class because the editor ALSO calls it straight after
+        -- showDialog: the dialog's XML binds onOpen/onClickOk when the screen loads, and whether that
+        -- binding sees a later replacement on the class is the engine's business - so the state is
+        -- set on the instance directly rather than trusting the wrapper to have run.
+        Dialog.applyFlyoverOverride = function(dialogSelf)
+            local overrideId = Dialog.overrideWayPointId
+            if dialogSelf == nil or overrideId == nil then
+                return
+            end
+            dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = nil, nil, false
+            for i, marker in pairs(ADGraphManager:getMapMarkers()) do
+                if marker.id == overrideId then
+                    dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = i, marker.name, true
+                    break
+                end
+            end
+            if dialogSelf.titleElement ~= nil then
+                dialogSelf.titleElement:setText(g_i18n:getText(dialogSelf.edit
+                    and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"))
+            end
+            if dialogSelf.textInputElement ~= nil then
+                dialogSelf.textInputElement:setText(dialogSelf.edit and dialogSelf.editName or "")
+            end
+            if dialogSelf.buttonsCreateElement ~= nil then
+                dialogSelf.buttonsCreateElement:setVisible(not dialogSelf.edit)
+            end
+            if dialogSelf.buttonsEditElement ~= nil then
+                dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
+            end
+            log("name dialog aimed at waypoint id=%s (%s)", tostring(overrideId),
+                dialogSelf.edit and "rename" or "new marker")
+        end
+
         local originalOnOpen = Dialog.onOpen
         Dialog.onOpen = function(dialogSelf, ...)
             local result = originalOnOpen(dialogSelf, ...)
-            local overrideId = Dialog.overrideWayPointId
-            if overrideId ~= nil then
-                -- Same two cases stock has, just sourced from the click instead of the vehicle:
-                -- edit the marker already on that waypoint, or create a new one there.
-                dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = nil, nil, false
-                for i, marker in pairs(ADGraphManager:getMapMarkers()) do
-                    if marker.id == overrideId then
-                        dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = i, marker.name, true
-                        break
+            Dialog.applyFlyoverOverride(dialogSelf)
+            return result
+        end
+
+        -- Stock's create path is createMapMarkerOnClosest(controlledVehicle, name): a marker on
+        -- whatever waypoint is nearest the VEHICLE, wherever it happens to be parked. That call is a
+        -- by-name lookup at call time, so redirecting it works however the OK button got bound.
+        local originalCreateOnClosest = ADGraphManager.createMapMarkerOnClosest
+        if type(originalCreateOnClosest) == "function" then
+            ADGraphManager.createMapMarkerOnClosest = function(manager, vehicle, name, ...)
+                local overrideId = Dialog.overrideWayPointId
+                if overrideId == nil then
+                    return originalCreateOnClosest(manager, vehicle, name, ...)
+                end
+                local text = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                for _, marker in pairs(manager:getMapMarkers()) do
+                    if marker.name ~= nil and marker.name:lower() == text:lower() then
+                        Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not creating a duplicate.",
+                            W.MOD_NAME, marker.name, tostring(marker.id))
+                        return
                     end
                 end
-                -- onOpen already set the title, text and button rows from ITS answer; redo them now
-                -- that ours has replaced it.
-                if dialogSelf.titleElement ~= nil then
-                    dialogSelf.titleElement:setText(g_i18n:getText(dialogSelf.edit
-                        and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"))
-                end
-                if dialogSelf.textInputElement ~= nil then
-                    dialogSelf.textInputElement:setText(dialogSelf.edit and dialogSelf.editName or "")
-                end
-                if dialogSelf.buttonsCreateElement ~= nil then
-                    dialogSelf.buttonsCreateElement:setVisible(not dialogSelf.edit)
-                end
-                if dialogSelf.buttonsEditElement ~= nil then
-                    dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
+                if text:len() >= 1 then
+                    log("new marker '%s' on clicked waypoint id=%s (not the vehicle's nearest)", text, tostring(overrideId))
+                    return manager:createMapMarker(overrideId, text)
                 end
             end
-            return result
         end
 
         local originalOnClickOk = Dialog.onClickOk

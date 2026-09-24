@@ -6327,6 +6327,16 @@ function ADFlyoverEditor:nameAtCursor()
             .. "registered as 'ADEnterTargetNameGui'. Is AutoDrive fully loaded?")
         return
     end
+    -- Aim the open dialog at the clicked waypoint directly, not only through the class-level onOpen
+    -- wrapper: without this the dialog can still open on the marker nearest the vehicle.
+    if ADEnterTargetNameGui.applyFlyoverOverride ~= nil then
+        local screen = g_gui.guis ~= nil and g_gui.guis["ADEnterTargetNameGui"] or nil
+        local instance = screen ~= nil and (screen.target or screen) or nil
+        local ok, err = pcall(ADEnterTargetNameGui.applyFlyoverOverride, instance)
+        if not ok then
+            Logging.warning("[FlyoverEditor]: could not aim the name dialog at the clicked waypoint: %s", tostring(err))
+        end
+    end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: opened the name dialog for waypoint id=%s.", tostring(self.hoverId))
 end
 
