@@ -721,15 +721,11 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
-                    local ox, oy = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY)
-                    if ox ~= nil then
-                        sx, sy = ox, oy
-                    else
-                        sx, sy = belowCursor(width, ch, editor.cardSpawnCX, editor.cardSpawnCY)
-                    end
+                    local found
+                    sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY)
                     Logging.info("[FlyoverHud] card spawn: %d pts, card %.3fx%.3f, %s -> (%.3f,%.3f) menu spot was (%.3f,%.3f) cursor (%.3f,%.3f)",
-                        #tpts, width, ch, ox ~= nil and "open-space search" or "FALLBACK below cursor", sx, sy,
-                        editor.cardSpawnX, editor.cardSpawnY, editor.cardSpawnCX or -1, editor.cardSpawnCY or -1)
+                        #tpts, width, ch, found and "clear spot found" or "nothing clear within reach, staying below cursor",
+                        sx, sy, editor.cardSpawnX, editor.cardSpawnY, editor.cardSpawnCX or -1, editor.cardSpawnCY or -1)
                 end
                 self.spawnPos = { sx, sy }
             end
@@ -754,9 +750,6 @@ function ADFlyoverHud:draw(editor)
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
                     local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil)
-                    if sx == nil then
-                        sx, sy = belowCursor(width, ch)
-                    end
                     self.cardShift = { sx, sy }
                 end
             end
@@ -1106,58 +1099,61 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
     return best[1], best[2]
 end
 
---- Find open ground for a w x h card: scan the whole screen on a grid and take the clear spot closest
---- to the middle of the selected points. "Clear" = no selected point under it (with a margin), off the
---- `avoid` rects and off a keep-out around the cursor. This is what puts the card in the big empty
---- space inside a curve rather than out at the screen's fringe. Returns left, top - or nil when no
---- spot is fully clear, so the caller can fall back to the edge-hugging placement.
-function placeCardInOpenSpace(pts, w, h, avoid, curX, curY)
-    if pts == nil or #pts == 0 then return nil end
-    local pm, step = 0.012, 0.02
-    -- Sampled: a 400-point selection does not need every point tested against 2000 grid spots.
-    local use, stride = {}, math.max(1, math.floor(#pts / 200))
-    local sx, sy, n = 0, 0, 0
-    for i = 1, #pts, stride do
-        use[#use + 1] = pts[i]
-        sx, sy, n = sx + pts[i][1], sy + pts[i][2], n + 1
+--- Offsets for the card walk, nearest first, out to CARD_WALK_RADIUS in steps of CARD_WALK_STEP. Built
+--- once: the walk tries them in order and the first clear one wins, so it always finds the closest.
+local CARD_WALK_STEP, CARD_WALK_RADIUS = 0.01, 0.22
+local CARD_WALK_OFFSETS = nil
+local function cardWalkOffsets()
+    if CARD_WALK_OFFSETS ~= nil then return CARD_WALK_OFFSETS end
+    local list, n = {}, math.floor(CARD_WALK_RADIUS / CARD_WALK_STEP + 0.5)
+    for ix = -n, n do
+        for iy = -n, n do
+            local dx, dy = ix * CARD_WALK_STEP, iy * CARD_WALK_STEP
+            list[#list + 1] = { dx, dy, dx * dx + dy * dy }
+        end
     end
-    local mx, my = sx / n, sy / n
+    table.sort(list, function(a, b) return a[3] < b[3] end)
+    CARD_WALK_OFFSETS = list
+    return list
+end
+
+--- Find open ground for a w x h card. Start where a single point would put it (centred just below the
+--- cursor) and walk the card outward in small steps, nearest first, out to about a fifth of the
+--- screen, taking the first spot with no selected point under it (plus a margin), off the `avoid`
+--- rects and off a keep-out around the cursor. Nothing clear within that reach: stay at the start
+--- rather than wander off across the screen. Always returns a position.
+function placeCardInOpenSpace(pts, w, h, avoid, curX, curY)
+    local startX, startTop = belowCursor(w, h, curX, curY)
+    if pts == nil or #pts == 0 then return startX, startTop, true end
+    local pm = 0.012
+    -- Sampled: a 400-point selection does not need every point tested against every step.
+    local use, stride = {}, math.max(1, math.floor(#pts / 200))
+    for i = 1, #pts, stride do use[#use + 1] = pts[i] end
     local rects = {}
     for _, r in ipairs(avoid or {}) do rects[#rects + 1] = r end
-    if curX ~= nil and curY ~= nil then
-        rects[#rects + 1] = { curX - 0.04, curY - 0.07, 0.08, 0.14 }
+    local cx, cy = curX or g_lastMousePosX, curY or g_lastMousePosY
+    if cx ~= nil and cy ~= nil then
+        rects[#rects + 1] = { cx - 0.04, cy - 0.07, 0.08, 0.14 }
     end
-    local function hitsRect(x, y)
+    local function clearAt(x, top)
+        if x < 0 or x + w > 1 or top > 1 or top - h < 0 then return false end
         for _, r in ipairs(rects) do
-            if x < r[1] + r[3] and x + w > r[1] and y < r[2] + r[4] and y + h > r[2] then return true end
+            if x < r[1] + r[3] and x + w > r[1] and top - h < r[2] + r[4] and top > r[2] then return false end
         end
-        return false
-    end
-    local bestX, bestTop, bestD
-    local top = 1
-    while top - h >= 0 do
-        local x = 0
-        while x + w <= 1 do
-            if not hitsRect(x, top - h) then
-                local clear = true
-                for _, p in ipairs(use) do
-                    if p[1] >= x - pm and p[1] <= x + w + pm and p[2] >= top - h - pm and p[2] <= top + pm then
-                        clear = false
-                        break
-                    end
-                end
-                if clear then
-                    local dx, dy = (x + w * 0.5) - mx, (top - h * 0.5) - my
-                    local d = dx * dx + dy * dy
-                    if bestD == nil or d < bestD then bestX, bestTop, bestD = x, top, d end
-                end
+        for _, p in ipairs(use) do
+            if p[1] >= x - pm and p[1] <= x + w + pm and p[2] >= top - h - pm and p[2] <= top + pm then
+                return false
             end
-            x = x + step
         end
-        top = top - step
+        return true
     end
-    if bestX == nil then return nil end
-    return bestX, bestTop
+    for _, o in ipairs(cardWalkOffsets()) do
+        local x, top = startX + o[1], startTop + o[2]
+        if clearAt(x, top) then
+            return x, top, true
+        end
+    end
+    return startX, startTop, false
 end
 
 --- Screen box of the points the active tool is working on (selection, a picked span end, the point
