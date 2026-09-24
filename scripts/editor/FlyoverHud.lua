@@ -42,6 +42,7 @@ ADFlyoverHud = {
 -- isMouseOverToolCardGrab). Declared here, at the top: both users sit far apart in this file, and a
 -- `local` is only visible to code compiled after it.
 local placeMenuAround   -- defined with the menu helpers below; the tool card uses it too
+local placeCardInOpenSpace   -- likewise, defined below
 local CTX_GRAB_H = 0.022
 
 -- Localization shorthand: an English UI string in, its localized form out (or unchanged when there is
@@ -711,8 +712,13 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
-                    sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid,
-                        editor.cardSpawnCX, editor.cardSpawnCY, tpts, { editor.cardSpawnX, editor.cardSpawnY })
+                    local ox, oy = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY)
+                    if ox ~= nil then
+                        sx, sy = ox, oy
+                    else
+                        sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid,
+                            editor.cardSpawnCX, editor.cardSpawnCY, tpts, { editor.cardSpawnX, editor.cardSpawnY })
+                    end
                 end
                 self.spawnPos = { sx, sy }
             end
@@ -736,7 +742,10 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
-                    local sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid, nil, nil, tpts)
+                    local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil)
+                    if sx == nil then
+                        sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid, nil, nil, tpts)
+                    end
                     self.cardShift = { sx, sy }
                 end
             end
@@ -1017,7 +1026,7 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
     local midX = (x0 + x1) * 0.5 - w * 0.5
     local cursorKeep = nil
     if curX ~= nil and curY ~= nil then
-        cursorKeep = { curX - 0.028, curY - 0.04, 0.056, 0.08 }
+        cursorKeep = { curX - 0.04, curY - 0.07, 0.08, 0.14 }
         avoid = { unpack(avoid) }
         avoid[#avoid + 1] = cursorKeep
     end
@@ -1031,7 +1040,7 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
             end
         end
         if cursorKeep ~= nil then
-            top = top and math.min(top, curY - 0.04) or (curY - 0.04)
+            top = top and math.min(top, curY - 0.07) or (curY - 0.07)
         end
         return top or (y0 - gap)
     end
@@ -1079,6 +1088,60 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
         end
     end
     return best[1], best[2]
+end
+
+--- Find open ground for a w x h card: scan the whole screen on a grid and take the clear spot closest
+--- to the middle of the selected points. "Clear" = no selected point under it (with a margin), off the
+--- `avoid` rects and off a keep-out around the cursor. This is what puts the card in the big empty
+--- space inside a curve rather than out at the screen's fringe. Returns left, top - or nil when no
+--- spot is fully clear, so the caller can fall back to the edge-hugging placement.
+function placeCardInOpenSpace(pts, w, h, avoid, curX, curY)
+    if pts == nil or #pts == 0 then return nil end
+    local pm, step = 0.012, 0.02
+    -- Sampled: a 400-point selection does not need every point tested against 2000 grid spots.
+    local use, stride = {}, math.max(1, math.floor(#pts / 200))
+    local sx, sy, n = 0, 0, 0
+    for i = 1, #pts, stride do
+        use[#use + 1] = pts[i]
+        sx, sy, n = sx + pts[i][1], sy + pts[i][2], n + 1
+    end
+    local mx, my = sx / n, sy / n
+    local rects = {}
+    for _, r in ipairs(avoid or {}) do rects[#rects + 1] = r end
+    if curX ~= nil and curY ~= nil then
+        rects[#rects + 1] = { curX - 0.04, curY - 0.07, 0.08, 0.14 }
+    end
+    local function hitsRect(x, y)
+        for _, r in ipairs(rects) do
+            if x < r[1] + r[3] and x + w > r[1] and y < r[2] + r[4] and y + h > r[2] then return true end
+        end
+        return false
+    end
+    local bestX, bestTop, bestD
+    local top = 1
+    while top - h >= 0 do
+        local x = 0
+        while x + w <= 1 do
+            if not hitsRect(x, top - h) then
+                local clear = true
+                for _, p in ipairs(use) do
+                    if p[1] >= x - pm and p[1] <= x + w + pm and p[2] >= top - h - pm and p[2] <= top + pm then
+                        clear = false
+                        break
+                    end
+                end
+                if clear then
+                    local dx, dy = (x + w * 0.5) - mx, (top - h * 0.5) - my
+                    local d = dx * dx + dy * dy
+                    if bestD == nil or d < bestD then bestX, bestTop, bestD = x, top, d end
+                end
+            end
+            x = x + step
+        end
+        top = top - step
+    end
+    if bestX == nil then return nil end
+    return bestX, bestTop
 end
 
 --- Screen box of the points the active tool is working on (selection, a picked span end, the point
