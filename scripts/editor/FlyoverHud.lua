@@ -344,7 +344,7 @@ function ADFlyoverHud:buildRows(editor)
         editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
 
     -- The per-tool context (below) becomes the floating tool card, and only exists while a tool is
-    -- active, no menu/armed popup is up (those carry their own controls), and it has not been hidden
+    -- active, no point/span/run menu is up (an armed tool's menu state does not count), and it has not been hidden
     -- with middle-click. In Select mode the point/span/run menus stand in for it, so there is no card.
     -- The card also auto-hides while a point is being dragged (editor.dragId): it is only ever in the
     -- way during a move, and this takes it away for exactly that gesture, then brings it straight back
@@ -724,9 +724,6 @@ function ADFlyoverHud:draw(editor)
                     end
                     local found
                     sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY, nil, nil, tsegs)
-                    Logging.info("[FlyoverHud] card spawn: %d pts, card %.3fx%.3f, %s -> (%.3f,%.3f) menu spot was (%.3f,%.3f) cursor (%.3f,%.3f)",
-                        #tpts, width, ch, found and "clear spot found" or "nothing clear within reach, staying below cursor",
-                        sx, sy, editor.cardSpawnX, editor.cardSpawnY, editor.cardSpawnCX or -1, editor.cardSpawnCY or -1)
                 end
                 self.spawnPos = { sx, sy }
             end
@@ -1338,20 +1335,10 @@ function ADFlyoverHud:drawContextMenu(editor)
     if m == nil then
         return
     end
-    -- Selection menus (point/span/run) show only in Select mode; the armed popup shows while its
-    -- tool is active, replacing the action list with that tool's own controls.
-    if m.kind ~= "armed" and editor.tool ~= editor.TOOL.NONE then
-        return
-    end
-    -- The card-hide (H, or the panel button) hides the armed popup too, so hiding is consistent
-    -- across tools - the floating card and this popup are the same "tool options" to the player.
-    -- Right-click still applies the armed tool while it is hidden, and the panel note says H shows it.
-    if m.kind == "armed" and editor.cardHidden then
-        return
-    end
-    -- The armed state stays (right-click applies, Esc cancels), but its options now live on the tool
-    -- card, which opens where this popup used to. Nothing to draw here.
-    if m.kind == "armed" then
+    -- Point / span / run menus show only in Select mode. A tool armed from one of them (kind "armed")
+    -- keeps the menu state so right-click applies and Esc cancels, but its options are on the tool
+    -- card, which opens where the menu was - so there is nothing to draw for it here.
+    if m.kind == "armed" or editor.tool ~= editor.TOOL.NONE then
         return
     end
     self:ensureOverlays()
@@ -1365,9 +1352,8 @@ function ADFlyoverHud:drawContextMenu(editor)
     local pad = self.padding
     local colGap = pad * 0.7
     local vGap = pad * 0.4
-    -- Sized to the text: the action menus are two short labels per row, the armed popup also has to
-    -- fit a label, a value and two steppers on one row.
-    local pw = (m.kind == "armed" and 0.165 or 0.14) * uiScale
+    -- Sized to the text: two short labels per row.
+    local pw = 0.14 * uiScale
     -- Same size as the main panel's text, so the two read as one UI.
     local fontSize = 0.0110 * uiScale
 
@@ -1382,9 +1368,6 @@ function ADFlyoverHud:drawContextMenu(editor)
     end
     local function gap() items[#items + 1] = { kind = "mgap" } end
     local function head(text) items[#items + 1] = { kind = "mhead", text = text } end
-    local function itv(kind, text, value, action)
-        items[#items + 1] = { kind = kind, text = text, value = value, action = action }
-    end
     if m.kind == "point" then
         head(string.format(TR("point %d"), m.id))
         btn("name...", function() editor:menuName() end, 12)
@@ -1423,34 +1406,6 @@ function ADFlyoverHud:drawContextMenu(editor)
         btn("flip direction", function() editor:menuConvertRun(OP.REVERSE) end)
         gap()
         danger("delete run", function() editor:menuDeleteRun() end)
-    else
-        -- Armed: only the selected tool's own controls - its wheel value and any toggles - plus apply
-        -- and cancel. The values are read live each frame, so the wheel updates them in place.
-        local t = m.tool
-        head(string.format(TR("%s - selected"), TR(editor.TOOL_NAMES[t] or "tool")))
-        if t == T.SMOOTH then
-            itv("mtoggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], function() editor:cycleSmoothMode() end)
-            if editor.smoothMode == editor.SMOOTH_MODE.REBUILD then
-                itv("mwheel", "max spacing", string.format("%.1f m", editor.smoothSpacing))
-            else
-                itv("mwheel", "strength", tostring(editor.smoothStrength))
-            end
-        elseif t == T.STRAIGHTEN then
-            itv("mwheel", "tolerance", string.format("%.1f m", editor.straightenTolerance))
-        elseif t == T.DIVIDE then
-            itv("mwheel", "points", tostring(editor.divideCount))
-        elseif t == T.GROUND then
-            itv("mwheel", "tolerance", string.format("%.1f m", editor.groundTolerance))
-            itv("mtoggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], function() editor:cycleGroundLevel() end)
-            itv("mtoggle", "snap to", editor.snapToTerrain and "terrain" or "surface", function() editor:toggleSnapToTerrain() end)
-        elseif t == T.PARALLEL then
-            itv("mwheel", "distance", string.format("%.1f m", editor.offsetDistance))
-            itv("mtoggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", function() editor:flipOffsetSide() end)
-        end
-        gap()
-        items[#items + 1] = { kind = "mapply", text = "apply", action = function() editor:menuApplyArmed() end }
-        items[#items + 1] = { kind = "mfull", text = "cancel", action = function() editor:menuCancelArmed() end }
-        items[#items + 1] = { kind = "mnote", text = "scroll or +/- to adjust - right-click applies" }
     end
 
     -- Localize every label and toggle value in one place, before layout so widths measure the text
@@ -1497,7 +1452,7 @@ function ADFlyoverHud:drawContextMenu(editor)
     local menuGapX, menuGapY = 0.014, 0.02
     local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
     local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
-    if m.placeX == nil and m.kind ~= "armed" then
+    if m.placeX == nil then
         local bx0, by0, bx1, by1, bpts, bsegs = menuSelectionBox(m)
         if bx0 ~= nil then
             local avoid = {}
@@ -1509,9 +1464,6 @@ function ADFlyoverHud:drawContextMenu(editor)
             -- spot with no selected point under it, so the menu lands in the open ground inside a
             -- curve rather than hugging the line.
             local wx, wy, found = placeCardInOpenSpace(bpts, pw, ph, avoid, m.sx, m.sy, nil, nil, bsegs)
-            Logging.info("[FlyoverHud] menu place: %d pts, menu %.3fx%.3f, %s -> (%.3f,%.3f) cursor (%.3f,%.3f)",
-                bpts ~= nil and #bpts or 0, pw, ph, found and "clear spot found" or "nothing clear within reach",
-                wx, wy, m.sx or -1, m.sy or -1)
             m.placeX, m.placeTop = wx, wy
         end
     end
@@ -1560,22 +1512,6 @@ function ADFlyoverHud:drawContextMenu(editor)
                     fillRole(self.headerOverlay, cx, cy, cw, ch, "headerBg", 1)
                     labelRole(cx + pad * 2, cy + (ch - fontSize * 0.95) * 0.5, fontSize * 0.95, item.text, "headerText")
                     self.menuHeadRect = { x = cx, y = cy, w = cw, h = ch }
-                elseif item.kind == "mnote" then
-                    labelRole(cx + pad * 2, cy + (ch - fontSize * 0.8) * 0.5, fontSize * 0.8, item.text, "mutedText")
-                elseif item.kind == "mwheel" then
-                    -- The wheel drives this while armed; the - / + steppers and per-field wheel adjust it too.
-                    fillRole(self.rowOverlay, cx, cy, cw, ch, "toolBg", 0.9)
-                    item.stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
-                    self:drawNumberField(item, cx, cy, cw, ch, fontSize, mx, my, "bodyText", "valueText")
-                elseif item.kind == "mtoggle" then
-                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, hovered and "hoverBorder" or "toolBorder", 0.9)
-                    fillRole(self.rowOverlay, cx, cy, cw, ch, hovered and "hoverBg" or "toolBg", 0.95)
-                    labelRole(cx + pad * 2, textY, fontSize, item.text, "bodyText")
-                    labelRole(cx + cw - pad * 2, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
-                elseif item.kind == "mapply" then
-                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, "accentBorder", 0.9)
-                    fillRole(self.rowOverlay, cx, cy, cw, ch, "accent", hovered and 0.98 or 0.9)
-                    labelRole(cx + cw * 0.5, textY, fontSize, item.text, "accentText", 1, RenderText.ALIGN_CENTER)
                 elseif item.kind == "mdanger" then
                     -- A translucent red wash on hover keeps the "this deletes" cue without a dedicated role.
                     fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, "danger", hovered and 0.9 or 0.45)
@@ -2250,7 +2186,7 @@ end
 --- the player has taken control of it (editor.toolCardDragged) so the next click of the same action
 --- does not jump it back - see ADFlyoverEditor:onLeftPress.
 function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
-    -- The point/span/run/armed menu's header is its drag handle. The position lives on the menu
+    -- The point/span/run menu's header is its drag handle. The position lives on the menu
     -- itself (editor.ctxMenu.placeX/placeTop), so it is held while the menu is open and gone with it.
     local hr, mr, menu = self.menuHeadRect, self.menuRect, editor ~= nil and editor.ctxMenu or nil
     if button == 1 and isDown and menu ~= nil and hr ~= nil and mr ~= nil
@@ -2258,56 +2194,15 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
         self.menuDragging = true
         self.menuDragDX = mouseX - mr.x
         self.menuDragDY = mouseY - (mr.y + mr.h)
-        self.menuDragLogged = 0
-        Logging.info("[FlyoverHud] menu drag PRESS mouse=(%.4f,%.4f) rect=(%.4f,%.4f %.4fx%.4f) placeX=%s placeTop=%s",
-            mouseX, mouseY, mr.x, mr.y, mr.w, mr.h, tostring(menu.placeX), tostring(menu.placeTop))
         return true
     end
     if self.menuDragging then
         if (button == 1 and isUp) or menu == nil or mr == nil then
             self.menuDragging = false
-            Logging.info("[FlyoverHud] menu drag RELEASE mouse=(%.4f,%.4f) button=%s", mouseX, mouseY, tostring(button))
             return true
         end
         menu.placeX = math.max(0, math.min(1 - mr.w, mouseX - self.menuDragDX))
         menu.placeTop = math.max(mr.h, math.min(1, mouseY - self.menuDragDY))
-        if (self.menuDragLogged or 0) < 4 then
-            self.menuDragLogged = (self.menuDragLogged or 0) + 1
-            Logging.info("[FlyoverHud] menu drag MOVE mouse=(%.4f,%.4f) button=%s down=%s up=%s -> place=(%.4f,%.4f)",
-                mouseX, mouseY, tostring(button), tostring(isDown), tostring(isUp), menu.placeX, menu.placeTop)
-        end
-        return true
-    end
-
-    if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
-        if editor ~= nil then
-            -- Pin the card where it is DRAWN right now before the spawn/step-aside positions are dropped.
-            -- Otherwise, until the first mouse move writes a drag position, the card falls back to its
-            -- saved home for a frame or more - the jump on first click.
-            editor.toolCardX = self.ctxFrameX
-            editor.toolCardY = self.ctxFrameY + self.ctxFrameH
-            editor.cardSpawnX, editor.cardSpawnY = nil, nil
-            self.cardShift = nil
-        end
-        self.ctxDragging = true
-        self.ctxDragOffsetX = mouseX - self.ctxFrameX
-        self.ctxDragOffsetY = mouseY - self.ctxFrameY
-        return true
-    end
-    if self.ctxDragging then
-        if button == 1 and isUp then
-            self.ctxDragging = false
-            -- Remember where it was left, once, on release (not per mouse-move: saving writes a file).
-            if editor ~= nil and ADFlyoverTheme ~= nil then
-                ADFlyoverTheme:setCardPos(editor.toolCardX, editor.toolCardY)
-            end
-            return true
-        end
-        if editor ~= nil then
-            editor.toolCardDragged = true
-            editor.toolCardX = math.max(0, math.min(1 - self.ctxFrameW, mouseX - self.ctxDragOffsetX))
-            editor.toolCardY = math.max(self.ctxFrameH or 0, math.min(1, mouseY - self.ctxDragOffsetY + (self.ctxFrameH or 0)))
-        end
         return true
     end
 
