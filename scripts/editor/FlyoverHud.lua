@@ -959,11 +959,12 @@ local function menuSelectionBox(m)
     return x0, y0, x1, y1
 end
 
---- Where a w x h menu goes so it does not cover the selection box (x0,y0)-(x1,y1) - bottom-right of
---- it first, then the other corners, then the sides, then above/below - and stays on screen and clear
---- of the `avoid` rects (the corner panel and tool card). Returns the menu's left edge and top edge.
---- If nothing is fully clear it takes the candidate that overlaps the selection least.
-function placeMenuAround(x0, y0, x1, y1, w, h, avoid)
+--- Where a w x h menu goes so it does not cover the selection box (x0,y0)-(x1,y1): below it and
+--- centred first, then below-right / below-left, above, the corners and the sides. It stays on screen
+--- and clear of the `avoid` rects (the corner panel and tool card) and of a keep-out around the
+--- cursor (curX, curY), which is what gets the generous spacing. Returns the menu's left and top
+--- edge. If nothing is fully clear it takes the candidate that overlaps the selection least.
+function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY)
     local gap = 0.012
     local function overlap(ax, ay, aw, ah, bx, by, bw, bh)
         local ox = math.min(ax + aw, bx + bw) - math.max(ax, bx)
@@ -973,15 +974,27 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid)
     end
     local midY = (y0 + y1) * 0.5 + h * 0.5
     local midX = (x0 + x1) * 0.5 - w * 0.5
+    -- Keep-out around the cursor, twice the clearance the menu used to leave (0.014 x 0.02), so it
+    -- never opens right under the pointer. Spacing to the selection itself matters much less.
+    local cursorKeep = nil
+    local belowTop = y0 - gap
+    if curX ~= nil and curY ~= nil then
+        cursorKeep = { curX - 0.028, curY - 0.04, 0.056, 0.08 }
+        belowTop = math.min(belowTop, curY - 0.04)
+    end
+    if cursorKeep ~= nil then
+        avoid = { unpack(avoid) }
+        avoid[#avoid + 1] = cursorKeep
+    end
     local cands = {
-        { x1 + gap, y0 - gap },            -- bottom-right
-        { x0 - gap - w, y0 - gap },        -- bottom-left
+        { midX, belowTop },                -- below, centred on the selection
+        { x1 + gap, belowTop },            -- below-right
+        { x0 - gap - w, belowTop },        -- below-left
+        { midX, y1 + gap + h },            -- above, centred
         { x1 + gap, y1 + gap + h },        -- top-right
         { x0 - gap - w, y1 + gap + h },    -- top-left
         { x1 + gap, midY },                -- right
         { x0 - gap - w, midY },            -- left
-        { midX, y0 - gap },                -- below
-        { midX, y1 + gap + h },            -- above
     }
     local best, bestScore
     for _, c in ipairs(cands) do
@@ -1177,7 +1190,7 @@ function ADFlyoverHud:drawContextMenu(editor)
                 if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
                     avoid[#avoid + 1] = { self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH }
                 end
-                m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid)
+                m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy)
             end
         end
         if m.placeX ~= nil then
