@@ -1650,7 +1650,14 @@ function ADFlyoverEditor:escapeStep()
         return true
     end
     if self.ctxMenu ~= nil then
-        if self.ctxMenu.kind == "armed" then self:menuCancelArmed() else self:closeMenu() end
+        if self.ctxMenu.kind == "armed" then
+            -- Back to the picker the tool was chosen from (same selection, same spot), not to Select.
+            local back = self.menuBackTo
+            self:menuCancelArmed()
+            if back ~= nil then self.ctxMenu = back end
+        else
+            self:closeMenu()
+        end
         return true
     end
     if self.helpOpen then
@@ -1665,7 +1672,9 @@ function ADFlyoverEditor:escapeStep()
         return true
     end
     if self.tool ~= self.TOOL.NONE then
+        local back = self.menuBackTo
         self:setTool(self.TOOL.NONE)
+        if back ~= nil then self.ctxMenu = back end
         return true
     end
     return false
@@ -2409,6 +2418,13 @@ function ADFlyoverEditor:setTool(tool)
         self.cardSpawnToken = (self.cardSpawnToken or 0) + 1
     else
         self.cardSpawnX, self.cardSpawnY = nil, nil
+    end
+    -- Remember the picker the tool came from, so Esc can step BACK to it (one level) instead of
+    -- dropping all the way to plain Select.
+    if tool ~= self.TOOL.NONE and pickedFrom ~= nil and pickedFrom.kind ~= "armed" then
+        self.menuBackTo = pickedFrom
+    else
+        self.menuBackTo = nil
     end
     self.tool = tool
     -- Any half-finished interaction belongs to the tool being left, not the one being entered.
