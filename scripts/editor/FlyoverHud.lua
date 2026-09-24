@@ -1083,11 +1083,13 @@ function ADFlyoverHud:drawContextMenu(editor)
     local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
     local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
     local aspect = g_screenAspectRatio or (16 / 9)
-    local rowH = self.rowHeight * uiScale * 1.25
+    local rowH = self.rowHeight * uiScale * 1.1
     local pad = self.padding
-    local colGap = pad * 0.8
-    local vGap = pad * 0.5
-    local pw = 0.215 * uiScale
+    local colGap = pad * 0.7
+    local vGap = pad * 0.4
+    -- Sized to the text: the action menus are two short labels per row, the armed popup also has to
+    -- fit a label, a value and two steppers on one row.
+    local pw = (m.kind == "armed" and 0.165 or 0.14) * uiScale
     local fontSize = 0.0126 * uiScale
 
     -- Items. "mbtn" buttons pair into two columns (an unpaired last one spans the row); the rest are
@@ -1199,7 +1201,7 @@ function ADFlyoverHud:drawContextMenu(editor)
                 lines[#lines + 1] = { cells = { it }, bleed = true, h = rowH * 0.9 + vGap }
                 i = i + 1
             elseif it.kind == "mgap" then
-                lines[#lines + 1] = { gap = true, h = vGap * 2 }
+                lines[#lines + 1] = { gap = true, h = vGap * 1.5 }
                 i = i + 1
             else
                 lines[#lines + 1] = { cells = { it }, full = true, h = rowH + vGap }
@@ -1305,7 +1307,7 @@ function ADFlyoverHud:drawContextMenu(editor)
                         local iw = ih / aspect
                         local tr, tg, tb = ADFlyoverTheme:rgb("bodyText")
                         self:renderIcon(item.iconCell, cx + pad * 1.2, cy + (ch - ih) * 0.5, iw, ih, tr, tg, tb, 1)
-                        labelRole(cx + pad * 1.2 + iw + pad, textY, fontSize, item.text, "bodyText")
+                        labelRole(cx + cw * 0.5 + iw * 0.5, textY, fontSize, item.text, "bodyText", 1, RenderText.ALIGN_CENTER)
                     else
                         labelRole(cx + cw * 0.5, textY, fontSize, item.text, "bodyText", 1, RenderText.ALIGN_CENTER)
                     end
