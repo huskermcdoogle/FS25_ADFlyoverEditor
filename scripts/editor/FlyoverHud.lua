@@ -2122,15 +2122,24 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
         self.menuDragging = true
         self.menuDragDX = mouseX - mr.x
         self.menuDragDY = mouseY - (mr.y + mr.h)
+        self.menuDragLogged = 0
+        Logging.info("[FlyoverHud] menu drag PRESS mouse=(%.4f,%.4f) rect=(%.4f,%.4f %.4fx%.4f) placeX=%s placeTop=%s",
+            mouseX, mouseY, mr.x, mr.y, mr.w, mr.h, tostring(menu.placeX), tostring(menu.placeTop))
         return true
     end
     if self.menuDragging then
         if (button == 1 and isUp) or menu == nil or mr == nil then
             self.menuDragging = false
+            Logging.info("[FlyoverHud] menu drag RELEASE mouse=(%.4f,%.4f) button=%s", mouseX, mouseY, tostring(button))
             return true
         end
         menu.placeX = math.max(0, math.min(1 - mr.w, mouseX - self.menuDragDX))
         menu.placeTop = math.max(mr.h, math.min(1, mouseY - self.menuDragDY))
+        if (self.menuDragLogged or 0) < 4 then
+            self.menuDragLogged = (self.menuDragLogged or 0) + 1
+            Logging.info("[FlyoverHud] menu drag MOVE mouse=(%.4f,%.4f) button=%s down=%s up=%s -> place=(%.4f,%.4f)",
+                mouseX, mouseY, tostring(button), tostring(isDown), tostring(isUp), menu.placeX, menu.placeTop)
+        end
         return true
     end
 
