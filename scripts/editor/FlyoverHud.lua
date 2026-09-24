@@ -714,7 +714,7 @@ function ADFlyoverHud:draw(editor)
             -- pick: the menu's own spot if the whole card fits clear there, otherwise the best clear one.
             if self.spawnFor ~= editor.cardSpawnToken then
                 self.spawnFor = editor.cardSpawnToken
-                local bx0, by0, bx1, by1, _, _, tpts = self:actionTargetsBox(editor, 0, 0, 0, 0, true)
+                local bx0, by0, bx1, by1, _, _, tpts, tsegs = self:actionTargetsBox(editor, 0, 0, 0, 0, true)
                 local sx, sy = editor.cardSpawnX, editor.cardSpawnY
                 if bx0 ~= nil then
                     local avoid = {}
@@ -722,7 +722,7 @@ function ADFlyoverHud:draw(editor)
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
                     local found
-                    sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY)
+                    sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY, nil, nil, tsegs)
                     Logging.info("[FlyoverHud] card spawn: %d pts, card %.3fx%.3f, %s -> (%.3f,%.3f) menu spot was (%.3f,%.3f) cursor (%.3f,%.3f)",
                         #tpts, width, ch, found and "clear spot found" or "nothing clear within reach, staying below cursor",
                         sx, sy, editor.cardSpawnX, editor.cardSpawnY, editor.cardSpawnCX or -1, editor.cardSpawnCY or -1)
@@ -737,10 +737,10 @@ function ADFlyoverHud:draw(editor)
         -- span end, a drag), and the card would cover it, the card steps aside ONCE and then holds
         -- that spot - so it does not chase points as the camera pans. It goes home when the work
         -- ends or changes, and never moves while the player is dragging it.
-        if self.ctxDragging or editor.cardSpawnX ~= nil then
+        if self.ctxDragging then
             self.cardShift, self.cardKey = nil, nil
         else
-            local bx0, by0, bx1, by1, covered, key, tpts = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
+            local bx0, by0, bx1, by1, covered, key, tpts, tsegs = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
             if key ~= self.cardKey then
                 self.cardKey = key
                 self.cardShift = nil
@@ -749,7 +749,7 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
-                    local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, cardX, cardY)
+                    local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, cardX, cardY, tsegs)
                     self.cardShift = { sx, sy }
                 end
             end
@@ -993,20 +993,21 @@ local function menuSelectionBox(m)
         end
     end
     if x0 == nil then return nil end
-    -- Midpoints between connected selected points, so the drawn line between two far-apart points
+    -- Segments between connected selected points, so the drawn line between two far-apart points
     -- counts as covered too, not only the dots.
+    local segs = {}
     for _, id in ipairs(ids) do
         local wp, a = ADGraphManager:getWayPointById(id), screenOf[id]
         if wp ~= nil and a ~= nil and wp.out ~= nil then
             for _, otherId in pairs(wp.out) do
                 local b = inSet[otherId] and screenOf[otherId] or nil
                 if b ~= nil then
-                    pts[#pts + 1] = { (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5 }
+                    segs[#segs + 1] = { a[1], a[2], b[1], b[2] }
                 end
             end
         end
     end
-    return x0, y0, x1, y1, pts
+    return x0, y0, x1, y1, pts, segs
 end
 
 --- Where a w x h card goes so it does not cover what is selected. "What is selected" is the actual
@@ -1099,6 +1100,25 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
     return best[1], best[2]
 end
 
+--- Does the segment (ax,ay)-(bx,by) touch the rectangle [x0,x1] x [y0,y1]? (Liang-Barsky clipping.)
+local function segmentHitsRect(ax, ay, bx, by, x0, y0, x1, y1)
+    local dx, dy = bx - ax, by - ay
+    local t0, t1 = 0, 1
+    local function clip(p, q)
+        if p == 0 then return q >= 0 end
+        local r = q / p
+        if p < 0 then
+            if r > t1 then return false end
+            if r > t0 then t0 = r end
+        else
+            if r < t0 then return false end
+            if r < t1 then t1 = r end
+        end
+        return true
+    end
+    return clip(-dx, ax - x0) and clip(dx, x1 - ax) and clip(-dy, ay - y0) and clip(dy, y1 - ay)
+end
+
 --- Offsets for the card walk, nearest first, out to CARD_WALK_RADIUS in steps of CARD_WALK_STEP. Built
 --- once: the walk tries them in order and the first clear one wins, so it always finds the closest.
 local CARD_WALK_STEP, CARD_WALK_RADIUS = 0.01, 0.22
@@ -1122,7 +1142,7 @@ end
 --- screen, taking the first spot with no selected point under it (plus a margin), off the `avoid`
 --- rects and off a keep-out around the cursor. Nothing clear within that reach: stay at the start
 --- rather than wander off across the screen. Always returns a position.
-function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop)
+function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop, segs)
     -- `fromX/fromTop` starts the walk at the card's own home instead of below the cursor, so a card
     -- that only needs to step aside moves the least it can - never teleporting to the cursor.
     local startX, startTop
@@ -1150,6 +1170,15 @@ function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop)
         for _, p in ipairs(use) do
             if p[1] >= x - pm and p[1] <= x + w + pm and p[2] >= top - h - pm and p[2] <= top + pm then
                 return false
+            end
+        end
+        -- The drawn LINES between selected points too: on a sparse run a segment can cross the whole
+        -- card without a single point landing inside it.
+        if segs ~= nil then
+            for _, sg in ipairs(segs) do
+                if segmentHitsRect(sg[1], sg[2], sg[3], sg[4], x - pm, top - h - pm, x + w + pm, top + pm) then
+                    return false
+                end
             end
         end
         return true
@@ -1180,6 +1209,14 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
     if editor.selection ~= nil then
         for id in pairs(editor.selection) do add(id) end
     end
+    -- Move: the points that actually travel - the picked span, the falloff followers while a drag is
+    -- live, and the last point moved - so the card also steps clear of where they END UP, not just
+    -- of the point that was clicked.
+    if type(editor.moveSpanIds) == "table" then
+        for id in pairs(editor.moveSpanIds) do add(id) end
+    end
+    for _, nb in ipairs(editor.dragNeighbours or {}) do add(nb.id) end
+    add(editor.moveFocusId)
     if includeSpan and editor.spanIds ~= nil then
         for _, id in ipairs(editor.spanIds) do add(id) end
     end
@@ -1190,7 +1227,8 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
     for i = 1, n do sum = sum + ids[i] * i end
     local key = n .. ":" .. sum .. ":" .. (editor.selectionCount or 0)
     local x0, y0, x1, y1, covered
-    local tpts = {}
+    local tpts, tsegs, screenOf, inSet = {}, {}, {}, {}
+    for i = 1, n do inSet[ids[i]] = true end
     local m = 0.012
     for i = 1, n do
         local wp = ADGraphManager:getWayPointById(ids[i])
@@ -1202,13 +1240,24 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
                 y0 = y0 and math.min(y0, sy) or sy
                 y1 = y1 and math.max(y1, sy) or sy
                 tpts[#tpts + 1] = { sx, sy }
+                screenOf[ids[i]] = { sx, sy }
                 if sx >= rx - m and sx <= rx + rw + m and sy >= ry - m and sy <= ry + rh + m then
                     covered = true
                 end
             end
         end
     end
-    return x0, y0, x1, y1, covered, key, tpts
+    -- Line segments between connected selected points, for the card's clearance test.
+    for i = 1, n do
+        local a, wp = screenOf[ids[i]], ADGraphManager:getWayPointById(ids[i])
+        if a ~= nil and wp ~= nil and wp.out ~= nil then
+            for _, otherId in pairs(wp.out) do
+                local b = inSet[otherId] and screenOf[otherId] or nil
+                if b ~= nil then tsegs[#tsegs + 1] = { a[1], a[2], b[1], b[2] } end
+            end
+        end
+    end
+    return x0, y0, x1, y1, covered, key, tpts, tsegs
 end
 
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
@@ -1383,7 +1432,7 @@ function ADFlyoverHud:drawContextMenu(editor)
     local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
     local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
     if m.placeX == nil and m.kind ~= "armed" then
-        local bx0, by0, bx1, by1, bpts = menuSelectionBox(m)
+        local bx0, by0, bx1, by1, bpts, bsegs = menuSelectionBox(m)
         if bx0 ~= nil then
             local avoid = {}
             if self.frameW ~= nil and self.frameW > 0 then
@@ -1393,7 +1442,7 @@ function ADFlyoverHud:drawContextMenu(editor)
             -- Same walk as the tool card: start just below the cursor and step outward to the nearest
             -- spot with no selected point under it, so the menu lands in the open ground inside a
             -- curve rather than hugging the line.
-            local wx, wy, found = placeCardInOpenSpace(bpts, pw, ph, avoid, m.sx, m.sy)
+            local wx, wy, found = placeCardInOpenSpace(bpts, pw, ph, avoid, m.sx, m.sy, nil, nil, bsegs)
             Logging.info("[FlyoverHud] menu place: %d pts, menu %.3fx%.3f, %s -> (%.3f,%.3f) cursor (%.3f,%.3f)",
                 bpts ~= nil and #bpts or 0, pw, ph, found and "clear spot found" or "nothing clear within reach",
                 wx, wy, m.sx or -1, m.sy or -1)
