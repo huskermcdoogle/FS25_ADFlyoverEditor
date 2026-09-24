@@ -477,7 +477,7 @@ T["convert"] = {
   controls = {
     "make it: two-way, one-way, primary or",
     "  secondary.",
-    "scope: the point, the span, or the whole run.",
+    "applies to: this waypoint, or the whole run.",
   },
 }
 
@@ -559,11 +559,11 @@ T["delete"] = {
   },
   how = {
     "- Pick the point, span or run.",
-    "- Set the scope and apply - it is removed (and",
-    "  undoable).",
+    "- Choose what it removes and apply - it is",
+    "  removed (and undoable).",
   },
   controls = {
-    "scope: the point, the span, or the whole run.",
+    "removes: one waypoint, or the whole run.",
   },
 }
 

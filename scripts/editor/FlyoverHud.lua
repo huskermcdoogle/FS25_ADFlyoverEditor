@@ -418,7 +418,9 @@ function ADFlyoverHud:buildRows(editor)
             shown = editor.editing.buffer .. "_"
         else
             local v = entry.get()
-            shown = type(v) == "number" and string.format("%.2f %s", v, entry.unit or "") or "-"
+            shown = type(v) == "number"
+                and string.format("%." .. tostring(entry.decimals or 2) .. "f %s", v, entry.unit or ""):gsub(" $", "")
+                or "-"
         end
         add("number", entry.label, shown, editing, function() editor:beginEditNumber(entry) end)
         if entry.step ~= nil then
@@ -467,13 +469,9 @@ function ADFlyoverHud:buildRows(editor)
     elseif editor.tool == editor.TOOL.SMOOTH then
         add("toggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], false,
             function() editor:cycleSmoothMode() end)
-        -- REBUILD's max spacing is the typed number field above (getEditableNumbers), which carries
-        -- its own steppers; MOVE_POINTS has strength instead, driven here.
-        if editor.smoothMode ~= editor.SMOOTH_MODE.REBUILD then
-            addWheelNumber("strength", tostring(editor.smoothStrength))
-        end
+        -- Max spacing (rebuild) and strength (relax) are both typed number fields from
+        -- getEditableNumbers, below.
     elseif editor.tool == editor.TOOL.GROUND then
-        addWheelNumber("tolerance", string.format("%.1f m", editor.groundTolerance))
         add("toggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], false,
             function() editor:cycleGroundLevel() end)
         add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
@@ -482,10 +480,6 @@ function ADFlyoverHud:buildRows(editor)
             add("toggle", "off the ground", string.format("%d of %d",
                 #editor.groundPreview, editor.groundChecked or 0))
         end
-    elseif editor.tool == editor.TOOL.DIVIDE then
-        addWheelNumber("points", tostring(editor.divideCount))
-    elseif editor.tool == editor.TOOL.PARALLEL then
-        addWheelNumber("distance", string.format("%.1f m", editor.offsetDistance))
     elseif editor.tool == editor.TOOL.FIELDLOOP then
         add("toggle", "priority", editor.fieldLoopSubPrio and "secondary" or "primary", false,
             function() editor:toggleFieldLoopPriority() end)
@@ -503,16 +497,16 @@ function ADFlyoverHud:buildRows(editor)
     elseif editor.tool == editor.TOOL.CONVERT then
         add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
             function() editor:cycleConvertOp() end)
-        add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.convertScope], false,
+        add("toggle", "applies to", editor.DELETE_SCOPE_NAMES[editor.convertScope], false,
             function() editor:cycleConvertScope() end)
     elseif editor.tool == editor.TOOL.DELETE then
-        add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
+        add("toggle", "removes", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
             function() editor:cycleDeleteScope() end)
         -- A selection wins over "scope" entirely (see deleteAtCursor) - easy to miss since nothing
         -- else on this card says so, so a click can look like it deleted "scope"'s single waypoint
         -- when it actually took out the whole selection (reported 2026-09-21).
         if editor.selectionCount > 0 then
-            add("header", string.format("%d selected - click deletes the SELECTION, not scope", editor.selectionCount))
+            add("header", string.format("%d selected - click deletes the SELECTION, not the setting above", editor.selectionCount))
         end
     elseif editor.tool == editor.TOOL.JUNCTION then
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.

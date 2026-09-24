@@ -295,7 +295,7 @@ Convert rewrites the direction and priority of connections that already exist - 
 **Controls**
 
 - **make it** — two-way, one-way, primary or secondary.
-- **scope** — the point, the span, or the whole run.
+- **applies to** — this waypoint, or the whole run.
 
 <a id="merge"></a>
 ## Merge
@@ -342,8 +342,8 @@ Delete removes waypoints and the connections through them - a single point, a pi
 **How to use it**
 
 1. Pick the point, span or run.
-1. Set the scope and apply - it is removed (and undoable).
+1. Choose what it removes and apply - it is removed (and undoable).
 
 **Controls**
 
-- **scope** — the point, the span, or the whole run.
+- **removes** — one waypoint, or the whole run.

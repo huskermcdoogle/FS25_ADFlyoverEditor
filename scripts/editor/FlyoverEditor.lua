@@ -5195,6 +5195,40 @@ function ADFlyoverEditor:getEditableNumbers()
         }
     end
 
+    -- The wheel-driven tool values (a tolerance, a count, a distance) as typed fields, so they look
+    -- and behave like every other number on a card: click to type, - / + to step, wheel over it.
+    -- `bounds` clamps in both directions, `decimals` is how many places the card shows.
+    local function fieldEntry(label, unit, decimals, key, lo, hi, stepBy, integer, onChange)
+        local function set(value)
+            value = math.max(lo, math.min(hi, value))
+            if integer then value = math.floor(value + 0.5) end
+            editor[key] = value
+            if onChange ~= nil then onChange() end
+            return editor[key]
+        end
+        return {
+            label = label, unit = unit, decimals = decimals,
+            get = function() return editor[key] end,
+            apply = set,
+            step = function(dir) set(editor[key] + dir * stepBy) end,
+        }
+    end
+    local AD = AutoDrive
+    if self.tool == self.TOOL.PARALLEL then
+        return { fieldEntry("distance", "m", 1, "offsetDistance", AD.FLYOVER_OFFSET_MIN, AD.FLYOVER_OFFSET_MAX,
+            AD.FLYOVER_OFFSET_STEP, false, function() editor.offsetCache = nil end) }
+    elseif self.tool == self.TOOL.GROUND then
+        return { fieldEntry("tolerance", "m", 1, "groundTolerance", AD.FLYOVER_GROUND_MIN, AD.FLYOVER_GROUND_MAX,
+            AD.FLYOVER_GROUND_STEP, false) }
+    elseif self.tool == self.TOOL.STRAIGHTEN then
+        return { fieldEntry("tolerance", "m", 1, "straightenTolerance", AD.FLYOVER_STRAIGHTEN_MIN,
+            AD.FLYOVER_STRAIGHTEN_MAX, AD.FLYOVER_STRAIGHTEN_STEP, false) }
+    elseif self.tool == self.TOOL.DIVIDE then
+        return { fieldEntry("points", "", 0, "divideCount", 0, AD.FLYOVER_DIVIDE_MAX, 1, true) }
+    elseif self.tool == self.TOOL.SMOOTH and self.smoothMode ~= self.SMOOTH_MODE.REBUILD then
+        return { fieldEntry("strength", "", 0, "smoothStrength", 0, AD.FLYOVER_SMOOTH_MAX, 1, true) }
+    end
+
     if self.tool == self.TOOL.SIDING then
         -- Both persist, so a siding shape settled on once stays settled. The wheel drives the
         -- length because that is what changes per site; the offset is typed here.

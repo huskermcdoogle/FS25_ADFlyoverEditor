@@ -48,6 +48,10 @@ enforced everywhere rather than only away from corners.
   sessions, and only steps aside while it would cover a point being worked on.
 - **Name tool** — names the clicked point instead of the one nearest the vehicle; rejects duplicate
   names on create and rename; a blank rename clears the name.
+- **Consistent number fields** — Parallel distance, Ground and Straighten tolerance, Divide points and
+  Smooth strength are now typed, steppable fields like every other number on a card (they were
+  wheel-only, and Straighten's tolerance was only in the right-click popup). Convert and Delete no
+  longer both call their toggle "scope": Convert says **applies to**, Delete says **removes**.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
