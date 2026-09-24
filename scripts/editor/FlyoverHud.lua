@@ -1216,7 +1216,8 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
         for id in pairs(editor.moveSpanIds) do add(id) end
     end
     for _, nb in ipairs(editor.dragNeighbours or {}) do add(nb.id) end
-    add(editor.moveFocusId)
+    -- (Not moveFocusId: that just follows whichever point the mouse hovers over, so counting it made
+    -- the card dodge every point the pointer passed over.)
     for _, id in ipairs(editor.lastMovedIds or {}) do add(id) end
     if includeSpan and editor.spanIds ~= nil then
         for _, id in ipairs(editor.spanIds) do add(id) end
