@@ -307,6 +307,16 @@ function W.install(AD)
             if dialogSelf.buttonsEditElement ~= nil then
                 dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
             end
+            -- Caret in the field so typing starts at once. Stock activates it in onOpen; only do it
+            -- again if it is NOT already capturing input, and never touch the focus manager - the
+            -- earlier attempt (both together) made the dialog not appear at all.
+            local input = dialogSelf.textInputElement
+            if input ~= nil and not input.isCapturingInput then
+                pcall(function()
+                    input.blockTime = 0
+                    input:onFocusActivate()
+                end)
+            end
             log("name dialog aimed at waypoint id=%s (%s)", tostring(overrideId),
                 dialogSelf.edit and "rename" or "new marker")
         end
