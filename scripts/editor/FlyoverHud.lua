@@ -2224,7 +2224,13 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
 
     if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
         if editor ~= nil then
+            -- Pin the card where it is DRAWN right now before the spawn/step-aside positions are dropped.
+            -- Otherwise, until the first mouse move writes a drag position, the card falls back to its
+            -- saved home for a frame or more - the jump on first click.
+            editor.toolCardX = self.ctxFrameX
+            editor.toolCardY = self.ctxFrameY + self.ctxFrameH
             editor.cardSpawnX, editor.cardSpawnY = nil, nil
+            self.cardShift = nil
         end
         self.ctxDragging = true
         self.ctxDragOffsetX = mouseX - self.ctxFrameX
