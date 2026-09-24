@@ -2471,6 +2471,7 @@ function ADFlyoverEditor:setTool(tool)
         self.menuBackTo = nil
     end
     self.tool = tool
+    self.lastMovedIds = nil
     -- Any half-finished interaction belongs to the tool being left, not the one being entered.
     if self.editing ~= nil then
         self:cancelEditNumber()
@@ -4622,6 +4623,13 @@ function ADFlyoverEditor:finishDrag()
     if self.dragId == nil then
         return
     end
+    -- Remember what was just carried, so the tool card can step clear of where it LANDED. The drag
+    -- state is cleared below, and until now nothing recorded the dropped points at all.
+    local moved = { self.dragId }
+    for _, n in ipairs(self.dragNeighbours or {}) do
+        if #moved < 400 then moved[#moved + 1] = n.id end
+    end
+    self.lastMovedIds = moved
 
     -- Offset: releasing the mouse does NOT commit here - see gatherOffsetChain/commitMoveOffset.
     -- Only the "actively held, cursor is driving the distance" bookkeeping ends; the chain itself

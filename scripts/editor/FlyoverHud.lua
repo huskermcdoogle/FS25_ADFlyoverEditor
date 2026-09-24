@@ -1217,6 +1217,7 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
     end
     for _, nb in ipairs(editor.dragNeighbours or {}) do add(nb.id) end
     add(editor.moveFocusId)
+    for _, id in ipairs(editor.lastMovedIds or {}) do add(id) end
     if includeSpan and editor.spanIds ~= nil then
         for _, id in ipairs(editor.spanIds) do add(id) end
     end
