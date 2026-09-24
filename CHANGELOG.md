@@ -61,7 +61,8 @@ enforced everywhere rather than only away from corners.
   cancels. Menus keep clear of the selected points themselves, not their bounding box. Esc now backs
   out one level per press (typed number, dialog, menu, pending action, selection, tool) before it
   leaves the editor.
-- **Tool card: static option** — a new **tool card** setting in the settings dialog (Display section).
+- **Tool card: pin** — a **pin** on the card's header (also a **tool card** row in the settings dialog's
+  Display section) makes the card static.
   Off (default): the card opens beside the popup that picked the tool and steps aside when it would
   cover your work. On (**stays put**): it stays exactly where you last dragged it and never moves on
   its own. The selection popup stays dynamic either way.

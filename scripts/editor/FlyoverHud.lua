@@ -798,6 +798,33 @@ function ADFlyoverHud:draw(editor)
         local gTitle = TR(editor.TOOL_NAMES[editor.tool] or "tool")
         labelRole(self.ctxFrameX + pad * 2, gy + (CTX_GRAB_H - fontSize * 0.85) * 0.5,
             fontSize * 0.85, gTitle, "headerText")
+
+        -- Pin: one click makes the card static - it stays exactly where it is now and never moves by
+        -- itself (the same setting as the settings dialog's "tool card" row). Not a drag handle.
+        local pinned = ADFlyoverSettings.get("toolCardStatic") == true
+        local pinText = TR(pinned and "pinned" or "pin")
+        local pinSize = fontSize * 0.85
+        local pinW = (getTextWidth ~= nil and getTextWidth(pinSize, pinText) or 0) + pad * 3
+        local pinX = self.ctxFrameX + self.ctxFrameW - pinW - pad * 0.5
+        local pmx, pmy = editor.mouseX, editor.mouseY
+        local pinHover = pmx ~= nil and pmx >= pinX and pmx <= pinX + pinW and pmy >= gy and pmy <= gy + CTX_GRAB_H
+        labelRole(pinX + pinW * 0.5, gy + (CTX_GRAB_H - pinSize) * 0.5, pinSize, pinText,
+            pinned and "accent" or (pinHover and "headerText" or "mutedText"), 1, RenderText.ALIGN_CENTER)
+        self.pinRect = { x = pinX, y = gy, w = pinW, h = CTX_GRAB_H }
+        table.insert(self.rows, { x = pinX, y = gy, w = pinW, h = CTX_GRAB_H, action = function()
+            local nowPinned = not (ADFlyoverSettings.get("toolCardStatic") == true)
+            if nowPinned then
+                -- Pin HERE: whatever spot it is shown at becomes its home.
+                editor.toolCardX = self.ctxFrameX
+                editor.toolCardY = self.ctxFrameY + self.ctxFrameH
+                if ADFlyoverTheme ~= nil then
+                    ADFlyoverTheme:setCardPos(editor.toolCardX, editor.toolCardY)
+                end
+            end
+            ADFlyoverSettings.cycle("toolCardStatic", 1)
+        end })
+    else
+        self.pinRect = nil
     end
 
     -- Normalised coords are square only on a 1:1 screen; on 16:9 a shape with equal w and h renders
@@ -2207,6 +2234,10 @@ end
 function ADFlyoverHud:isMouseOverToolCardGrab(mouseX, mouseY)
     if self.ctxFrameW == nil or self.ctxFrameW <= 0 then
         return false
+    end
+    local pr = self.pinRect
+    if pr ~= nil and mouseX >= pr.x and mouseX <= pr.x + pr.w and mouseY >= pr.y and mouseY <= pr.y + pr.h then
+        return false   -- the pin is a button, not part of the drag handle
     end
     return mouseX >= self.ctxFrameX and mouseX <= self.ctxFrameX + self.ctxFrameW
         and mouseY >= self.ctxFrameY + self.ctxFrameH - CTX_GRAB_H
