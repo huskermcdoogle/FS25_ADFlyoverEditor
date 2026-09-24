@@ -284,8 +284,19 @@ function W.install(AD)
                 end
             end
             if dialogSelf.titleElement ~= nil then
-                dialogSelf.titleElement:setText(g_i18n:getText(dialogSelf.edit
-                    and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"))
+                -- The title strings live in AutoDrive's own l10n. Asked from this mod, g_i18n looks in
+                -- OUR translations and shows "Missing 'gui_ad_...' in l10n_en.xml" - so name AutoDrive's
+                -- mod explicitly, and fall back to plain English rather than ever showing a raw key.
+                local key = dialogSelf.edit and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"
+                local title
+                for _, modName in ipairs({ "FS25_AutoDrive", (AutoDrive ~= nil and AutoDrive.modName) or nil }) do
+                    local ok, text = pcall(g_i18n.getText, g_i18n, key, modName)
+                    if ok and type(text) == "string" and text ~= "" and not text:lower():find("^missing") then
+                        title = text
+                        break
+                    end
+                end
+                dialogSelf.titleElement:setText(title or (dialogSelf.edit and "Edit target name" or "Add target name"))
             end
             if dialogSelf.textInputElement ~= nil then
                 dialogSelf.textInputElement:setText(dialogSelf.edit and dialogSelf.editName or "")
