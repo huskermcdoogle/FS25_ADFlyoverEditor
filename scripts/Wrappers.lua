@@ -383,6 +383,13 @@ function W.install(AD)
             ADGraphManager.renameMapMarker = function(manager, newName, markerId, sendEvent, ...)
                 if (sendEvent == nil or sendEvent == true) and type(newName) == "string" and markerId ~= nil then
                     local text = newName:gsub("^%s+", ""):gsub("%s+$", "")
+                    -- A blank name (empty, or only spaces) is how you clear one: stock ignores an
+                    -- empty rename, and a lone space used to slip through as an invisible destination.
+                    -- Treat it as removing the marker, the same as the dialog's Delete button.
+                    if text == "" then
+                        log("blank rename on marker %s - removing the marker", tostring(markerId))
+                        return manager:removeMapMarker(markerId)
+                    end
                     local duplicate = findDuplicate(manager, text, markerId)
                     if duplicate ~= nil then
                         return refuseDuplicate(duplicate)
