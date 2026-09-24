@@ -701,7 +701,7 @@ function ADFlyoverHud:draw(editor)
         if self.ctxDragging then
             self.cardShift, self.cardKey = nil, nil
         else
-            local bx0, by0, bx1, by1, covered, key = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
+            local bx0, by0, bx1, by1, covered, key, tpts = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
             if key ~= self.cardKey then
                 self.cardKey = key
                 self.cardShift = nil
@@ -710,7 +710,7 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
-                    local sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid)
+                    local sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid, nil, nil, tpts)
                     self.cardShift = { sx, sy }
                 end
             end
@@ -937,6 +937,8 @@ local function menuSelectionBox(m)
         for id in pairs(m.runSet) do ids[#ids + 1] = id end
     end
     local x0, y0, x1, y1
+    local pts, screenOf, inSet = {}, {}, {}
+    for _, id in ipairs(ids) do inSet[id] = true end
     for _, id in ipairs(ids) do
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
@@ -946,20 +948,39 @@ local function menuSelectionBox(m)
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
                 y1 = y1 and math.max(y1, sy) or sy
+                pts[#pts + 1] = { sx, sy }
+                screenOf[id] = { sx, sy }
             end
         end
     end
     if x0 == nil then return nil end
-    return x0, y0, x1, y1
+    -- Midpoints between connected selected points, so the drawn line between two far-apart points
+    -- counts as covered too, not only the dots.
+    for _, id in ipairs(ids) do
+        local wp, a = ADGraphManager:getWayPointById(id), screenOf[id]
+        if wp ~= nil and a ~= nil and wp.out ~= nil then
+            for _, otherId in pairs(wp.out) do
+                local b = inSet[otherId] and screenOf[otherId] or nil
+                if b ~= nil then
+                    pts[#pts + 1] = { (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5 }
+                end
+            end
+        end
+    end
+    return x0, y0, x1, y1, pts
 end
 
---- Where a w x h menu goes so it does not cover the selection box (x0,y0)-(x1,y1): below it and
---- centred first, then below-right / below-left, above, the corners and the sides. It stays on screen
---- and clear of the `avoid` rects (the corner panel and tool card) and of a keep-out around the
---- cursor (curX, curY), which is what gets the generous spacing. Returns the menu's left and top
---- edge. If nothing is fully clear it takes the candidate that overlaps the selection least.
-function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY)
-    local gap = 0.012
+--- Where a w x h card goes so it does not cover what is selected. "What is selected" is the actual
+--- points (and the lines between them) in `pts`, NOT their bounding box: a long curved run has a huge
+--- box that is mostly empty ground, and keeping clear of that pushed the card far from the work. So a
+--- candidate is fine as long as no selected point falls under it; it may sit inside the box's empty
+--- space. Candidates are tried near the cursor first (below it, then to its sides), then around the
+--- box. Every one must stay on screen and clear of the `avoid` rects (panel, tool card) and of a
+--- keep-out around the cursor (curX, curY). Returns the card's left and top edge; if nothing is fully
+--- clear it takes the candidate covering the fewest points.
+function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts)
+    local gap, pm = 0.012, 0.010
+    pts = pts or {}
     local function overlap(ax, ay, aw, ah, bx, by, bw, bh)
         local ox = math.min(ax + aw, bx + bw) - math.max(ax, bx)
         local oy = math.min(ay + ah, by + bh) - math.max(ay, by)
@@ -968,35 +989,56 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY)
     end
     local midY = (y0 + y1) * 0.5 + h * 0.5
     local midX = (x0 + x1) * 0.5 - w * 0.5
-    -- Keep-out around the cursor, twice the clearance the menu used to leave (0.014 x 0.02), so it
-    -- never opens right under the pointer. Spacing to the selection itself matters much less.
     local cursorKeep = nil
-    local belowTop = y0 - gap
     if curX ~= nil and curY ~= nil then
         cursorKeep = { curX - 0.028, curY - 0.04, 0.056, 0.08 }
-        belowTop = math.min(belowTop, curY - 0.04)
-    end
-    if cursorKeep ~= nil then
         avoid = { unpack(avoid) }
         avoid[#avoid + 1] = cursorKeep
     end
+    -- The top edge that puts a card at column x just below the lowest selected point in that column,
+    -- and below the cursor's keep-out - "drop below what is above it".
+    local function columnBelow(cx)
+        local top = nil
+        for _, p in ipairs(pts) do
+            if p[1] >= cx - pm and p[1] <= cx + w + pm then
+                top = top and math.min(top, p[2] - gap) or (p[2] - gap)
+            end
+        end
+        if cursorKeep ~= nil then
+            top = top and math.min(top, curY - 0.04) or (curY - 0.04)
+        end
+        return top or (y0 - gap)
+    end
     local cands = {
-        { midX, belowTop },                -- below, centred on the selection
-        { x1 + gap, belowTop },            -- below-right
-        { x0 - gap - w, belowTop },        -- below-left
-        { midX, y1 + gap + h },            -- above, centred
-        { x1 + gap, y1 + gap + h },        -- top-right
-        { x0 - gap - w, y1 + gap + h },    -- top-left
-        { x1 + gap, midY },                -- right
-        { x0 - gap - w, midY },            -- left
+        { midX, columnBelow(midX) },                                  -- below, centred on the selection
     }
+    if curX ~= nil then
+        cands[#cands + 1] = { curX - w * 0.5, columnBelow(curX - w * 0.5) }   -- below the cursor
+        cands[#cands + 1] = { curX + 0.03, curY + h * 0.5 }                  -- right of the cursor
+        cands[#cands + 1] = { curX - 0.03 - w, curY + h * 0.5 }              -- left of the cursor
+    end
+    local below = y0 - gap
+    cands[#cands + 1] = { x1 + gap, below }              -- below-right of the box
+    cands[#cands + 1] = { x0 - gap - w, below }          -- below-left
+    cands[#cands + 1] = { midX, y1 + gap + h }           -- above, centred
+    cands[#cands + 1] = { x1 + gap, y1 + gap + h }       -- top-right
+    cands[#cands + 1] = { x0 - gap - w, y1 + gap + h }   -- top-left
+    cands[#cands + 1] = { x1 + gap, midY }               -- right
+    cands[#cands + 1] = { x0 - gap - w, midY }           -- left
+
     local best, bestScore
     for _, c in ipairs(cands) do
         local cx, ct = c[1], c[2]
         local fits = cx >= 0 and cx + w <= 1 and ct <= 1 and ct - h >= 0
         local ux = math.max(0, math.min(1 - w, cx))
         local ut = math.max(h, math.min(1, ct))
-        local score = overlap(ux, ut - h, w, h, x0, y0, x1 - x0, y1 - y0)
+        local covered = 0
+        for _, p in ipairs(pts) do
+            if p[1] >= ux - pm and p[1] <= ux + w + pm and p[2] >= ut - h - pm and p[2] <= ut + pm then
+                covered = covered + 1
+            end
+        end
+        local score = covered * 0.001
         for _, r in ipairs(avoid) do
             score = score + overlap(ux, ut - h, w, h, r[1], r[2], r[3], r[4])
         end
@@ -1034,6 +1076,7 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
     for i = 1, n do sum = sum + ids[i] * i end
     local key = n .. ":" .. sum .. ":" .. (editor.selectionCount or 0)
     local x0, y0, x1, y1, covered
+    local tpts = {}
     local m = 0.012
     for i = 1, n do
         local wp = ADGraphManager:getWayPointById(ids[i])
@@ -1044,13 +1087,14 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
                 y1 = y1 and math.max(y1, sy) or sy
+                tpts[#tpts + 1] = { sx, sy }
                 if sx >= rx - m and sx <= rx + rw + m and sy >= ry - m and sy <= ry + rh + m then
                     covered = true
                 end
             end
         end
     end
-    return x0, y0, x1, y1, covered, key
+    return x0, y0, x1, y1, covered, key, tpts
 end
 
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
@@ -1220,7 +1264,7 @@ function ADFlyoverHud:drawContextMenu(editor)
     local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
     local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
     if m.placeX == nil and m.kind ~= "armed" then
-        local bx0, by0, bx1, by1 = menuSelectionBox(m)
+        local bx0, by0, bx1, by1, bpts = menuSelectionBox(m)
         if bx0 ~= nil then
             local avoid = {}
             if self.frameW ~= nil and self.frameW > 0 then
@@ -1229,7 +1273,7 @@ function ADFlyoverHud:drawContextMenu(editor)
             if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
                 avoid[#avoid + 1] = { self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH }
             end
-            m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy)
+            m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy, bpts)
         end
     end
     if m.placeX ~= nil then
