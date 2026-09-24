@@ -699,7 +699,24 @@ function ADFlyoverHud:draw(editor)
         -- Picked from a menu: the card takes the menu's place, where the player was already looking.
         -- Held only until they drag the card themselves (that clears it), and never saved.
         if editor.cardSpawnX ~= nil then
-            cardX, cardY = editor.cardSpawnX, editor.cardSpawnY
+            -- The menu was small; the card is not. Reusing the menu's corner let the card run off the
+            -- bottom, get clamped back up and land ON the selection. So work out its real spot once per
+            -- pick: the menu's own spot if the whole card fits clear there, otherwise the best clear one.
+            if self.spawnFor ~= editor.cardSpawnToken then
+                self.spawnFor = editor.cardSpawnToken
+                local bx0, by0, bx1, by1, _, _, tpts = self:actionTargetsBox(editor, 0, 0, 0, 0, true)
+                local sx, sy = editor.cardSpawnX, editor.cardSpawnY
+                if bx0 ~= nil then
+                    local avoid = {}
+                    if self.frameW ~= nil and self.frameW > 0 then
+                        avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                    end
+                    sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid,
+                        editor.cardSpawnCX, editor.cardSpawnCY, tpts, { editor.cardSpawnX, editor.cardSpawnY })
+                end
+                self.spawnPos = { sx, sy }
+            end
+            cardX, cardY = self.spawnPos[1], self.spawnPos[2]
         end
         cardX = math.max(0, math.min(1 - width, cardX))
         cardY = math.max(ch, math.min(1, cardY))
@@ -707,7 +724,7 @@ function ADFlyoverHud:draw(editor)
         -- span end, a drag), and the card would cover it, the card steps aside ONCE and then holds
         -- that spot - so it does not chase points as the camera pans. It goes home when the work
         -- ends or changes, and never moves while the player is dragging it.
-        if self.ctxDragging then
+        if self.ctxDragging or editor.cardSpawnX ~= nil then
             self.cardShift, self.cardKey = nil, nil
         else
             local bx0, by0, bx1, by1, covered, key, tpts = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
@@ -987,7 +1004,7 @@ end
 --- box. Every one must stay on screen and clear of the `avoid` rects (panel, tool card) and of a
 --- keep-out around the cursor (curX, curY). Returns the card's left and top edge; if nothing is fully
 --- clear it takes the candidate covering the fewest points.
-function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts)
+function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
     local gap, pm = 0.012, 0.010
     pts = pts or {}
     local function overlap(ax, ay, aw, ah, bx, by, bw, bh)
@@ -1018,9 +1035,11 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts)
         end
         return top or (y0 - gap)
     end
-    local cands = {
-        { midX, columnBelow(midX) },                                  -- below, centred on the selection
-    }
+    local cands = {}
+    if prefer ~= nil then
+        cands[#cands + 1] = { prefer[1], prefer[2] }                  -- where the menu it replaces sat
+    end
+    cands[#cands + 1] = { midX, columnBelow(midX) }                   -- below, centred on the selection
     if curX ~= nil then
         cands[#cands + 1] = { curX - w * 0.5, columnBelow(curX - w * 0.5) }   -- below the cursor
         cands[#cands + 1] = { curX + 0.03, curY + h * 0.5 }                  -- right of the cursor
@@ -1065,7 +1084,7 @@ end
 --- Screen box of the points the active tool is working on (selection, a picked span end, the point
 --- being dragged), and whether any of them sits under the given rect (x, y = bottom-left). Returns
 --- x0, y0, x1, y1, covered. Sampled, so a huge box selection stays cheap.
-function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
+function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
     if project == nil then return nil, nil, nil, nil, nil, "" end
     local ids, n = {}, 0
     local function add(id)
@@ -1079,6 +1098,10 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
     if editor.selection ~= nil then
         for id in pairs(editor.selection) do add(id) end
     end
+    if includeSpan and editor.spanIds ~= nil then
+        for _, id in ipairs(editor.spanIds) do add(id) end
+    end
+    if includeSpan then add(editor.cardSpawnPointId) end
     -- What the work IS, not where it is on screen: count and a cheap sum of the ids, so the key only
     -- changes when the target set does (panning never changes it).
     local sum = 0

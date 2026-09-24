@@ -2403,6 +2403,10 @@ function ADFlyoverEditor:setTool(tool)
     local pickedFrom = self.ctxMenu
     if tool ~= self.TOOL.NONE and pickedFrom ~= nil and pickedFrom.placeX ~= nil then
         self.cardSpawnX, self.cardSpawnY = pickedFrom.placeX, pickedFrom.placeTop
+        self.cardSpawnCX, self.cardSpawnCY = pickedFrom.sx, pickedFrom.sy
+        self.cardSpawnPointId = pickedFrom.id   -- a point menu's own point (move has no other record of it)
+        -- The HUD works out the card's real spot once per pick (the card is much taller than the menu).
+        self.cardSpawnToken = (self.cardSpawnToken or 0) + 1
     else
         self.cardSpawnX, self.cardSpawnY = nil, nil
     end
