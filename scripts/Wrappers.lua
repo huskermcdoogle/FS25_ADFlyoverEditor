@@ -307,15 +307,27 @@ function W.install(AD)
             if dialogSelf.buttonsEditElement ~= nil then
                 dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
             end
-            -- Caret in the field so typing starts at once. Stock activates it in onOpen; only do it
-            -- again if it is NOT already capturing input, and never touch the focus manager - the
+            -- New name: caret in the field so typing starts at once. Stock activates it in onOpen; only
+            -- do it again if it is NOT already capturing input, and never touch the focus manager - an
             -- earlier attempt (both together) made the dialog not appear at all.
+            -- Renaming a name that already exists: leave the field UNfocused. A focused text box
+            -- swallows Space (and every other key), so the dialog's own Delete key could not clear the
+            -- name; unfocused, Space reaches the buttons and the name can be deleted at once. Click the
+            -- field to edit the text.
             local input = dialogSelf.textInputElement
-            if input ~= nil and not input.isCapturingInput then
-                pcall(function()
-                    input.blockTime = 0
-                    input:onFocusActivate()
-                end)
+            if input ~= nil then
+                if dialogSelf.edit then
+                    if input.isCapturingInput then
+                        pcall(function() input:onFocusLeave() end)
+                    end
+                elseif not input.isCapturingInput then
+                    pcall(function()
+                        input.blockTime = 0
+                        input:onFocusActivate()
+                    end)
+                end
+                log("name dialog field: %s, capturing input = %s", dialogSelf.edit and "rename (left unfocused)" or "new name (focused)",
+                    tostring(input.isCapturingInput))
             end
             log("name dialog aimed at waypoint id=%s (%s)", tostring(overrideId),
                 dialogSelf.edit and "rename" or "new marker")
