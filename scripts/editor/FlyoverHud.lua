@@ -1090,7 +1090,8 @@ function ADFlyoverHud:drawContextMenu(editor)
     -- Sized to the text: the action menus are two short labels per row, the armed popup also has to
     -- fit a label, a value and two steppers on one row.
     local pw = (m.kind == "armed" and 0.165 or 0.14) * uiScale
-    local fontSize = 0.0126 * uiScale
+    -- Same size as the main panel's text, so the two read as one UI.
+    local fontSize = 0.0110 * uiScale
 
     -- Items. "mbtn" buttons pair into two columns (an unpaired last one spans the row); the rest are
     -- full width. Groups are separated by an "mgap".
