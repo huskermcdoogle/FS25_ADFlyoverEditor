@@ -50,6 +50,10 @@ S.settings.fieldLoopDetectCustomField = { values = { false, true }, default = 2,
 -- something that isn't really in the way (a re-textured/invisible collider, say), or just to see
 -- the raw offset boundary without the detour warping it while diagnosing something else.
 S.settings.fieldLoopAvoidObstacles = { values = { false, true }, default = 2, current = 2 }
+-- Tool card placement. Off (the default): the card opens next to the selection popup that picked the
+-- tool, and steps aside when it would cover work. On: it stays exactly where the player last put it
+-- and never moves by itself. The selection popup is dynamic either way.
+S.settings.toolCardStatic = { values = { false, true }, default = 1, current = 1 }
 -- How far AutoDrive:findConnectedFieldRegions will probe outward from an already-found region
 -- looking for another disconnected tilled patch to auto-combine into the same course - a lane
 -- wide enough to drive on is the common case this exists for. There is no reliable way to tell
@@ -214,7 +218,7 @@ end
 function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
-                            "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles",
+                            "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles", "toolCardStatic",
                             "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
                             "flyoverDebugLogging",

@@ -708,7 +708,8 @@ function ADFlyoverHud:draw(editor)
         local cardY = editor.toolCardY or (T ~= nil and T.cardY) or top
         -- Picked from a menu: the card takes the menu's place, where the player was already looking.
         -- Held only until they drag the card themselves (that clears it), and never saved.
-        if editor.cardSpawnX ~= nil then
+        local staticCard = ADFlyoverSettings.get("toolCardStatic") == true
+        if editor.cardSpawnX ~= nil and not staticCard then
             -- The menu was small; the card is not. Reusing the menu's corner let the card run off the
             -- bottom, get clamped back up and land ON the selection. So work out its real spot once per
             -- pick: the menu's own spot if the whole card fits clear there, otherwise the best clear one.
@@ -737,7 +738,7 @@ function ADFlyoverHud:draw(editor)
         -- span end, a drag), and the card would cover it, the card steps aside ONCE and then holds
         -- that spot - so it does not chase points as the camera pans. It goes home when the work
         -- ends or changes, and never moves while the player is dragging it.
-        if self.ctxDragging then
+        if self.ctxDragging or staticCard then
             self.cardShift, self.cardKey = nil, nil
         else
             local bx0, by0, bx1, by1, homeCovered, key, tpts, tsegs = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
@@ -1667,6 +1668,10 @@ function ADFlyoverHud:drawSettingsDialog(editor)
             end,
             stepAction = function(d) editor:stepLineWeight(d) end })
     end
+    push({ kind = "field", text = "tool card",
+        value = ADFlyoverSettings.get("toolCardStatic") and "stays put" or "follows work",
+        action = function() ADFlyoverSettings.cycle("toolCardStatic", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("toolCardStatic", d) end })
     push({ kind = "section", text = "THEME" })
     push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
         action = function() editor:cycleThemePreset(1) end,
