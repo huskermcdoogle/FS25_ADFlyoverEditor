@@ -2398,6 +2398,14 @@ function ADFlyoverEditor:setTool(tool)
     if self.tool == tool then
         return
     end
+    -- A tool picked from a selection menu opens its card where that menu was, so the eyes do not have
+    -- to move. Held until the player drags the card or the tool changes; never saved.
+    local pickedFrom = self.ctxMenu
+    if tool ~= self.TOOL.NONE and pickedFrom ~= nil and pickedFrom.placeX ~= nil then
+        self.cardSpawnX, self.cardSpawnY = pickedFrom.placeX, pickedFrom.placeTop
+    else
+        self.cardSpawnX, self.cardSpawnY = nil, nil
+    end
     self.tool = tool
     -- Any half-finished interaction belongs to the tool being left, not the one being entered.
     if self.editing ~= nil then

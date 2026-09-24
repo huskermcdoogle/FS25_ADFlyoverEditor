@@ -344,7 +344,8 @@ function ADFlyoverHud:buildRows(editor)
     -- the screen but the tool card kept drawing too, visibly overlapping it - manualOpen/dialogOpen
     -- were missing from this guard even though the popups themselves already exclude each other
     -- (see manualOpen = false at line ~9700, "the two modals are mutually exclusive").
-    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil and not editor.cardHidden
+    local armedMenu = editor.ctxMenu ~= nil and editor.ctxMenu.kind == "armed"
+    if editor.tool ~= editor.TOOL.NONE and (editor.ctxMenu == nil or armedMenu) and not editor.cardHidden
         and editor.dragId == nil and not editor.manualOpen and not editor.dialogOpen then
     -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
     -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
@@ -370,6 +371,9 @@ function ADFlyoverHud:buildRows(editor)
 
     add("gap")
     add("section", "THIS TOOL")
+    if armedMenu then
+        add("note", "right-click applies - Esc cancels")
+    end
 
     if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
         add("toggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", false,
@@ -692,6 +696,11 @@ function ADFlyoverHud:draw(editor)
         local T = ADFlyoverTheme
         local cardX = editor.toolCardX or (T ~= nil and T.cardX) or (self.posX + width + 0.02)
         local cardY = editor.toolCardY or (T ~= nil and T.cardY) or top
+        -- Picked from a menu: the card takes the menu's place, where the player was already looking.
+        -- Held only until they drag the card themselves (that clears it), and never saved.
+        if editor.cardSpawnX ~= nil then
+            cardX, cardY = editor.cardSpawnX, editor.cardSpawnY
+        end
         cardX = math.max(0, math.min(1 - width, cardX))
         cardY = math.max(ch, math.min(1, cardY))
         -- Home is where the player left it. When a NEW thing becomes the work (a selection, a picked
@@ -1120,6 +1129,11 @@ function ADFlyoverHud:drawContextMenu(editor)
     if m.kind == "armed" and editor.cardHidden then
         return
     end
+    -- The armed state stays (right-click applies, Esc cancels), but its options now live on the tool
+    -- card, which opens where this popup used to. Nothing to draw here.
+    if m.kind == "armed" then
+        return
+    end
     self:ensureOverlays()
 
     local T = editor.TOOL
@@ -1270,9 +1284,7 @@ function ADFlyoverHud:drawContextMenu(editor)
             if self.frameW ~= nil and self.frameW > 0 then
                 avoid[#avoid + 1] = { self.frameX, self.frameY, self.frameW, self.frameH }
             end
-            if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
-                avoid[#avoid + 1] = { self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH }
-            end
+            -- Not the tool card: a selection menu only exists in Select mode, where there is no card.
             m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy, bpts)
         end
     end
@@ -2024,6 +2036,9 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
     end
 
     if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
+        if editor ~= nil then
+            editor.cardSpawnX, editor.cardSpawnY = nil, nil
+        end
         self.ctxDragging = true
         self.ctxDragOffsetX = mouseX - self.ctxFrameX
         self.ctxDragOffsetY = mouseY - self.ctxFrameY

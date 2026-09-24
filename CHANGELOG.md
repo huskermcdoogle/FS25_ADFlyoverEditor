@@ -56,6 +56,11 @@ enforced everywhere rather than only away from corners.
   compact two-column **buttons** (tool actions carry their icon, delete sits apart in red) with larger
   text, roughly half the old height. Drag the menu by its header to move it out of the way; where you
   leave it holds while that menu is open and is not remembered afterwards.
+- **Tool card replaces the armed popup** — picking a tool from a point / span / run menu now opens
+  the tool card where that menu was (the separate armed popup is gone); right-click applies, Esc
+  cancels. Menus keep clear of the selected points themselves, not their bounding box. Esc now backs
+  out one level per press (typed number, dialog, menu, pending action, selection, tool) before it
+  leaves the editor.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
