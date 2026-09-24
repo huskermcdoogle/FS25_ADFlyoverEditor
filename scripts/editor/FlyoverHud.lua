@@ -1274,6 +1274,16 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
             end
         end
     end
+    -- Covered also when a drawn LINE crosses the rect, not only when a point lands in it: a moved span
+    -- can pass under the card with every one of its points clear of it.
+    if not covered and rw > 0 then
+        for _, sg in ipairs(tsegs) do
+            if segmentHitsRect(sg[1], sg[2], sg[3], sg[4], rx - m, ry - m, rx + rw + m, ry + rh + m) then
+                covered = true
+                break
+            end
+        end
+    end
     return x0, y0, x1, y1, covered, key, tpts, tsegs
 end
 
