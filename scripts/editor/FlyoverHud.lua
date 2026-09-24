@@ -43,6 +43,15 @@ ADFlyoverHud = {
 -- `local` is only visible to code compiled after it.
 local placeMenuAround   -- defined with the menu helpers below; the tool card uses it too
 local placeCardInOpenSpace   -- likewise, defined below
+
+--- The fallback when nowhere is fully clear: exactly what a single point gets - centred just below the
+--- cursor, clear of it, clamped on screen. No cleverness, so it always behaves the same way.
+local function belowCursor(w, h, curX, curY)
+    curX, curY = curX or g_lastMousePosX or 0.5, curY or g_lastMousePosY or 0.5
+    local x = math.max(0, math.min(1 - w, curX - w * 0.5))
+    local top = math.max(h, math.min(1, curY - 0.07))
+    return x, top
+end
 local CTX_GRAB_H = 0.022
 
 -- Localization shorthand: an English UI string in, its localized form out (or unchanged when there is
@@ -716,8 +725,7 @@ function ADFlyoverHud:draw(editor)
                     if ox ~= nil then
                         sx, sy = ox, oy
                     else
-                        sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid,
-                            editor.cardSpawnCX, editor.cardSpawnCY, tpts, { editor.cardSpawnX, editor.cardSpawnY })
+                        sx, sy = belowCursor(width, ch, editor.cardSpawnCX, editor.cardSpawnCY)
                     end
                 end
                 self.spawnPos = { sx, sy }
@@ -744,7 +752,7 @@ function ADFlyoverHud:draw(editor)
                     end
                     local sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil)
                     if sx == nil then
-                        sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid, nil, nil, tpts)
+                        sx, sy = belowCursor(width, ch)
                     end
                     self.cardShift = { sx, sy }
                 end
@@ -1086,6 +1094,11 @@ function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
         if bestScore == nil or score < bestScore then
             best, bestScore = { ux, ut }, score
         end
+    end
+    -- Nothing fully clear: fall back to the single-point placement (below the cursor) rather than the
+    -- least-bad edge spot.
+    if curX ~= nil and curY ~= nil then
+        return belowCursor(w, h, curX, curY)
     end
     return best[1], best[2]
 end
