@@ -307,6 +307,29 @@ function W.install(AD)
             return result
         end
 
+        -- Duplicate names: two markers called "Hof" sit side by side in every destination list, a
+        -- rename looks like it "did not take" (the other one was edited), and a vehicle sent "to Hof"
+        -- goes to whichever the list found first. Names are trimmed and compared case-insensitively.
+        -- `exceptIndex` is the marker being renamed, which may keep its own name (or change its case).
+        local function findDuplicate(manager, name, exceptIndex)
+            local lower = name:lower()
+            for index, marker in pairs(manager:getMapMarkers()) do
+                if index ~= exceptIndex and marker.name ~= nil and marker.name:lower() == lower then
+                    return marker
+                end
+            end
+            return nil
+        end
+        local function refuseDuplicate(marker)
+            Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not applying. Pick another name.",
+                W.MOD_NAME, marker.name, tostring(marker.id))
+            -- On-screen, because the dialog closes either way and silence reads as "it did nothing".
+            if g_currentMission ~= nil and g_currentMission.showBlinkingWarning ~= nil then
+                pcall(g_currentMission.showBlinkingWarning, g_currentMission,
+                    string.format("'%s' is already a destination name - pick another", marker.name), 4000)
+            end
+        end
+
         -- Stock's create path is createMapMarkerOnClosest(controlledVehicle, name): a marker on
         -- whatever waypoint is nearest the VEHICLE, wherever it happens to be parked. That call is a
         -- by-name lookup at call time, so redirecting it works however the OK button got bound.
@@ -318,17 +341,32 @@ function W.install(AD)
                     return originalCreateOnClosest(manager, vehicle, name, ...)
                 end
                 local text = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                for _, marker in pairs(manager:getMapMarkers()) do
-                    if marker.name ~= nil and marker.name:lower() == text:lower() then
-                        Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not creating a duplicate.",
-                            W.MOD_NAME, marker.name, tostring(marker.id))
-                        return
-                    end
+                local duplicate = findDuplicate(manager, text, nil)
+                if duplicate ~= nil then
+                    return refuseDuplicate(duplicate)
                 end
                 if text:len() >= 1 then
                     log("new marker '%s' on clicked waypoint id=%s (not the vehicle's nearest)", text, tostring(overrideId))
                     return manager:createMapMarker(overrideId, text)
                 end
+            end
+        end
+
+        -- The rename path had no duplicate check at all. Only the player's own call is guarded
+        -- (sendEvent nil/true); the same call arriving from the network event carries false and must
+        -- always apply, or clients and server would disagree about the name.
+        local originalRename = ADGraphManager.renameMapMarker
+        if type(originalRename) == "function" then
+            ADGraphManager.renameMapMarker = function(manager, newName, markerId, sendEvent, ...)
+                if (sendEvent == nil or sendEvent == true) and type(newName) == "string" and markerId ~= nil then
+                    local text = newName:gsub("^%s+", ""):gsub("%s+$", "")
+                    local duplicate = findDuplicate(manager, text, markerId)
+                    if duplicate ~= nil then
+                        return refuseDuplicate(duplicate)
+                    end
+                    newName = text
+                end
+                return originalRename(manager, newName, markerId, sendEvent, ...)
             end
         end
 
@@ -339,24 +377,15 @@ function W.install(AD)
                 -- Stock would call createMapMarkerOnClosest, which needs a controlled vehicle and
                 -- would put the marker somewhere other than where the user clicked.
                 local text = dialogSelf.textInputElement ~= nil and dialogSelf.textInputElement.text or ""
-                -- Duplicate-name guard. AutoDrive's createMapMarker accepts ANY name: two markers
-                -- called "Hof" then sit side by side in every destination list, renaming one looks
-                -- like the rename "did not take" (the other was edited), and a vehicle sent "to Hof"
-                -- goes to whichever the list found first - the reported naming weirdness. Trimmed
-                -- (a trailing space made look-alike duplicates) and compared case-insensitively;
-                -- a duplicate is refused with the existing marker's location in the log.
                 text = text:gsub("^%s+", ""):gsub("%s+$", "")
-                local lower = text:lower()
-                for _, marker in pairs(ADGraphManager:getMapMarkers()) do
-                    if marker.name ~= nil and marker.name:lower() == lower then
-                        Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not creating a duplicate. Pick another name, or rename the existing one.",
-                            W.MOD_NAME, marker.name, tostring(marker.id))
-                        Dialog.overrideWayPointId = nil
-                        if dialogSelf.superClass ~= nil then
-                            return dialogSelf:onClickBack()
-                        end
-                        return
+                local duplicate = findDuplicate(ADGraphManager, text, nil)
+                if duplicate ~= nil then
+                    refuseDuplicate(duplicate)
+                    Dialog.overrideWayPointId = nil
+                    if dialogSelf.superClass ~= nil then
+                        return dialogSelf:onClickBack()
                     end
+                    return
                 end
                 if text:len() >= 1 then
                     ADGraphManager:createMapMarker(overrideId, text)
