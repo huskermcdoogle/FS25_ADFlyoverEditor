@@ -1601,21 +1601,85 @@ function ADFlyoverEditor:escRecentlyHandled()
     return self.escHandledAt ~= nil and (self:nowMs() - self.escHandledAt) < 400
 end
 
+--- Throw away whatever the active tool has half-done, WITHOUT applying it (right-click is the one that
+--- commits a preview; Esc must never change the network). Returns true if there was something.
+function ADFlyoverEditor:cancelPendingAction()
+    local t, T = self.tool, self.TOOL
+    if t == T.DRAW and self.lastWaypointId ~= nil then
+        self:endRun()
+    elseif t == T.SIDING and self.sidingAnchorId ~= nil then
+        self:cancelSiding()
+    elseif t == T.MOVE and self.moveOffsetChainIds ~= nil then
+        self:cancelMoveOffset()
+    elseif t == T.MOVE and (self.moveSpanFromId ~= nil or self.moveSpanToId ~= nil) then
+        self:cancelMoveSpan()
+    elseif t == T.PARALLEL and (self.offsetFromId ~= nil or self.offsetToId ~= nil) then
+        self:cancelOffset()
+    elseif t == T.GROUND and (self.groundFromId ~= nil or self.groundToId ~= nil) then
+        self:cancelGround()
+    elseif t == T.STRAIGHTEN and (self.straightenFromId ~= nil or self.straightenToId ~= nil) then
+        self:cancelStraighten()
+    elseif t == T.SMOOTH and (self.smoothFromId ~= nil or self.smoothToId ~= nil) then
+        self:cancelSmooth()
+    elseif t == T.SPLINE and (self.splineFromId ~= nil or self.splineToId ~= nil) then
+        self:cancelSplinePreview()
+    elseif t == T.DIVIDE and (self.divideFromId ~= nil or self.divideToId ~= nil) then
+        self:cancelDivide()
+    elseif t == T.MERGE and (self.mergeFromId ~= nil or self.mergeToId ~= nil) then
+        self.mergeFromId, self.mergeToId = nil, nil
+        self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+    else
+        return false
+    end
+    return true
+end
+
+--- Esc backs out ONE level, innermost first, and only leaves the editor once there is nothing left
+--- to back out of: the state it was in when it first opened - Select tool, nothing picked, nothing
+--- open. Returns true if it undid something, false when the editor is already there (so the caller
+--- exits). Each press is one level, innermost first:
+---   typed number -> dialog / manual -> open menu -> help -> pending action -> selection -> tool.
+--- Esc only ever cancels; it never applies a preview.
+function ADFlyoverEditor:escapeStep()
+    if self.editing ~= nil then
+        self:cancelEditNumber()
+        return true
+    end
+    if self:isModalOpen() then
+        if self.manualOpen then self:closeManual() else self:closeSettingsDialog() end
+        return true
+    end
+    if self.ctxMenu ~= nil then
+        if self.ctxMenu.kind == "armed" then self:menuCancelArmed() else self:closeMenu() end
+        return true
+    end
+    if self.helpOpen then
+        self:toggleHelp()
+        return true
+    end
+    if self:cancelPendingAction() then
+        return true
+    end
+    if self.selectionCount > 0 then
+        self:clearSelection()
+        return true
+    end
+    if self.tool ~= self.TOOL.NONE then
+        self:setTool(self.TOOL.NONE)
+        return true
+    end
+    return false
+end
+
 function ADFlyoverEditor:onCancelAction(actionName)
     if not self.active or self:isGuiBlocking() then
         return
     end
-    if self.editing ~= nil then
-        self:cancelEditNumber()
-        self:markEscHandled()
-        return
-    end
-    if self:isModalOpen() then
-        if self.manualOpen then self:closeManual() else self:closeSettingsDialog() end
-        self:markEscHandled()
-        return
-    end
     if self:escRecentlyHandled() then
+        return
+    end
+    if self:escapeStep() then
+        self:markEscHandled()
         return
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: exiting via the %s action event.", actionName)
@@ -1705,6 +1769,10 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
 
     if isKey("KEY_esc") then
         if self:escRecentlyHandled() then
+            return
+        end
+        if self:escapeStep() then
+            self:markEscHandled()
             return
         end
         ADFlyoverSettings.debugLog("[FlyoverEditor]: escape observed via keyEvent (fallback path).")
