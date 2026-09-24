@@ -700,17 +700,29 @@ function ADFlyoverHud:draw(editor)
         local cardY = editor.toolCardY or (T ~= nil and T.cardY) or top
         cardX = math.max(0, math.min(1 - width, cardX))
         cardY = math.max(ch, math.min(1, cardY))
-        -- Home is where the player left it. Only while it would cover a point being worked on does it
-        -- step aside - recomputed each frame from home, so it snaps back the moment nothing is under
-        -- it, and never while the player is dragging it.
-        if not self.ctxDragging then
-            local bx0, by0, bx1, by1, covered = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
-            if covered then
-                local avoid = {}
-                if self.frameW ~= nil and self.frameW > 0 then
-                    avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+        -- Home is where the player left it. When a NEW thing becomes the work (a selection, a picked
+        -- span end, a drag), and the card would cover it, the card steps aside ONCE and then holds
+        -- that spot - so it does not chase points as the camera pans. It goes home when the work
+        -- ends or changes, and never moves while the player is dragging it.
+        if self.ctxDragging then
+            self.cardShift, self.cardKey = nil, nil
+        else
+            local bx0, by0, bx1, by1, covered, key = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
+            if key ~= self.cardKey then
+                self.cardKey = key
+                self.cardShift = nil
+                if covered then
+                    local avoid = {}
+                    if self.frameW ~= nil and self.frameW > 0 then
+                        avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                    end
+                    local sx, sy = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid)
+                    self.cardShift = { sx, sy }
                 end
-                cardX, cardY = placeMenuAround(bx0, by0, bx1, by1, width, ch, avoid)
+            end
+            if self.cardShift ~= nil then
+                cardX = math.max(0, math.min(1 - width, self.cardShift[1]))
+                cardY = math.max(ch, math.min(1, self.cardShift[2]))
             end
         end
         local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
@@ -996,7 +1008,7 @@ end
 --- being dragged), and whether any of them sits under the given rect (x, y = bottom-left). Returns
 --- x0, y0, x1, y1, covered. Sampled, so a huge box selection stays cheap.
 function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
-    if project == nil then return nil end
+    if project == nil then return nil, nil, nil, nil, nil, "" end
     local ids, n = {}, 0
     local function add(id)
         if id ~= nil and n < 400 then n = n + 1; ids[n] = id end
@@ -1009,6 +1021,11 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
     if editor.selection ~= nil then
         for id in pairs(editor.selection) do add(id) end
     end
+    -- What the work IS, not where it is on screen: count and a cheap sum of the ids, so the key only
+    -- changes when the target set does (panning never changes it).
+    local sum = 0
+    for i = 1, n do sum = sum + ids[i] * i end
+    local key = n .. ":" .. sum .. ":" .. (editor.selectionCount or 0)
     local x0, y0, x1, y1, covered
     local m = 0.012
     for i = 1, n do
@@ -1026,7 +1043,7 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh)
             end
         end
     end
-    return x0, y0, x1, y1, covered
+    return x0, y0, x1, y1, covered, key
 end
 
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
