@@ -265,6 +265,7 @@ L.STRINGS = {
         ["%s - selected"] = "%s – gewählt",
         ["name..."] = "benennen…",
         ["connect from here"] = "von hier verbinden",
+        ["connect"] = "verbinden",
         ["spline from here"] = "von hier Spline",
         ["make two-way"] = "beidseitig machen",
         ["make one-way"] = "einseitig machen",

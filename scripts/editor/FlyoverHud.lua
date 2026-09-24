@@ -1058,6 +1058,9 @@ end
 --- rows are appended to self.rows so the panel's own click routing (isMouseOver / onClick) consumes
 --- and dispatches them exactly like the main panel's buttons, and they light up on hover.
 function ADFlyoverHud:drawContextMenu(editor)
+    -- Cleared each frame; set again only when a menu is actually drawn, so a stale header rect never
+    -- keeps capturing drags after the menu is gone.
+    self.menuHeadRect, self.menuRect = nil, nil
     local m = editor.ctxMenu
     if m == nil then
         return
@@ -1075,122 +1078,163 @@ function ADFlyoverHud:drawContextMenu(editor)
     end
     self:ensureOverlays()
 
+    local T = editor.TOOL
+    local OP = editor.CONVERT_OP
     local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
     local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
-    local rowH = self.rowHeight * uiScale
+    local aspect = g_screenAspectRatio or (16 / 9)
+    local rowH = self.rowHeight * uiScale * 1.25
     local pad = self.padding
-    local pw = 0.150 * uiScale
-    local fontSize = 0.0110 * uiScale
-    local OP = editor.CONVERT_OP
+    local colGap = pad * 0.8
+    local vGap = pad * 0.5
+    local pw = 0.215 * uiScale
+    local fontSize = 0.0126 * uiScale
 
+    -- Items. "mbtn" buttons pair into two columns (an unpaired last one spans the row); the rest are
+    -- full width. Groups are separated by an "mgap".
     local items = {}
-    local function it(kind, text, action, danger)
-        table.insert(items, { kind = kind, text = text, action = action, danger = danger })
+    local function btn(text, action, icon)
+        items[#items + 1] = { kind = "mbtn", text = text, action = action, iconCell = icon }
     end
-    -- A row that also carries a right-aligned value: a toggle's state, or a wheel-driven number.
+    local function danger(text, action)
+        items[#items + 1] = { kind = "mdanger", text = text, action = action }
+    end
+    local function gap() items[#items + 1] = { kind = "mgap" } end
+    local function head(text) items[#items + 1] = { kind = "mhead", text = text } end
     local function itv(kind, text, value, action)
-        table.insert(items, { kind = kind, text = text, value = value, action = action })
+        items[#items + 1] = { kind = kind, text = text, value = value, action = action }
     end
     if m.kind == "point" then
-        it("mhead", string.format(TR("point %d"), m.id))
-        it("mitem", "name...", function() editor:menuName() end)
-        it("mitem", "move", function() editor:menuArmMove() end)
-        it("mitem", "connect from here", function() editor:menuArmDraw() end)
-        it("mitem", "spline from here", function() editor:menuArmSpline() end)
-        it("mitem", "make two-way", function() editor:menuConvert(OP.TWOWAY) end)
-        it("mitem", "make one-way", function() editor:menuConvert(OP.ONEWAY) end)
-        it("mitem", "primary", function() editor:menuConvert(OP.PRIMARY) end)
-        it("mitem", "secondary", function() editor:menuConvert(OP.SECONDARY) end)
-        it("mitem", "delete point", function() editor:menuDelete() end, true)
+        head(string.format(TR("point %d"), m.id))
+        btn("name...", function() editor:menuName() end, 12)
+        btn("move", function() editor:menuArmMove() end, 6)
+        btn("connect", function() editor:menuArmDraw() end, 1)
+        btn("spline", function() editor:menuArmSpline() end, 2)
+        gap()
+        btn("make two-way", function() editor:menuConvert(OP.TWOWAY) end)
+        btn("make one-way", function() editor:menuConvert(OP.ONEWAY) end)
+        btn("primary", function() editor:menuConvert(OP.PRIMARY) end)
+        btn("secondary", function() editor:menuConvert(OP.SECONDARY) end)
+        gap()
+        danger("delete point", function() editor:menuDelete() end)
     elseif m.kind == "span" then
-        it("mhead", string.format(TR("span  %d pts"), m.ids ~= nil and #m.ids or 0))
-        it("mitem", "straighten", function() editor:menuArmStraighten() end)
-        it("mitem", "smooth", function() editor:menuArmSmooth() end)
-        it("mitem", "divide", function() editor:menuArmDivide() end)
-        it("mitem", "ground", function() editor:menuArmGround() end)
-        it("mitem", "make two-way", function() editor:menuConvertSpan(OP.TWOWAY) end)
-        it("mitem", "make one-way", function() editor:menuConvertSpan(OP.ONEWAY) end)
-        it("mitem", "flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
-        it("mitem", "delete span", function() editor:menuDeleteSpan() end, true)
+        head(string.format(TR("span  %d pts"), m.ids ~= nil and #m.ids or 0))
+        btn("straighten", function() editor:menuArmStraighten() end, 8)
+        btn("smooth", function() editor:menuArmSmooth() end, 7)
+        btn("divide", function() editor:menuArmDivide() end, 9)
+        btn("ground", function() editor:menuArmGround() end, 14)
+        gap()
+        btn("make two-way", function() editor:menuConvertSpan(OP.TWOWAY) end)
+        btn("make one-way", function() editor:menuConvertSpan(OP.ONEWAY) end)
+        btn("flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
+        gap()
+        danger("delete span", function() editor:menuDeleteSpan() end)
     elseif m.kind == "run" then
-        it("mhead", string.format(TR("run  %s pts"), tostring(m.count or "?")))
-        it("mitem", "straighten", function() editor:menuArmStraighten() end)
-        it("mitem", "smooth", function() editor:menuArmSmooth() end)
-        it("mitem", "divide", function() editor:menuArmDivide() end)
-        it("mitem", "parallel", function() editor:menuArmParallel() end)
-        it("mitem", "ground", function() editor:menuArmGround() end)
-        it("mitem", "make two-way", function() editor:menuConvertRun(OP.TWOWAY) end)
-        it("mitem", "make one-way", function() editor:menuConvertRun(OP.ONEWAY) end)
-        it("mitem", "flip direction", function() editor:menuConvertRun(OP.REVERSE) end)
-        it("mitem", "delete run", function() editor:menuDeleteRun() end, true)
+        head(string.format(TR("run  %s pts"), tostring(m.count or "?")))
+        btn("straighten", function() editor:menuArmStraighten() end, 8)
+        btn("smooth", function() editor:menuArmSmooth() end, 7)
+        btn("divide", function() editor:menuArmDivide() end, 9)
+        btn("parallel", function() editor:menuArmParallel() end, 4)
+        btn("ground", function() editor:menuArmGround() end, 14)
+        gap()
+        btn("make two-way", function() editor:menuConvertRun(OP.TWOWAY) end)
+        btn("make one-way", function() editor:menuConvertRun(OP.ONEWAY) end)
+        btn("flip direction", function() editor:menuConvertRun(OP.REVERSE) end)
+        gap()
+        danger("delete run", function() editor:menuDeleteRun() end)
     else
         -- Armed: only the selected tool's own controls - its wheel value and any toggles - plus apply
         -- and cancel. The values are read live each frame, so the wheel updates them in place.
         local t = m.tool
-        it("mhead", string.format(TR("%s - selected"), TR(editor.TOOL_NAMES[t] or "tool")))
-        if t == editor.TOOL.SMOOTH then
+        head(string.format(TR("%s - selected"), TR(editor.TOOL_NAMES[t] or "tool")))
+        if t == T.SMOOTH then
             itv("mtoggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], function() editor:cycleSmoothMode() end)
             if editor.smoothMode == editor.SMOOTH_MODE.REBUILD then
                 itv("mwheel", "max spacing", string.format("%.1f m", editor.smoothSpacing))
             else
                 itv("mwheel", "strength", tostring(editor.smoothStrength))
             end
-        elseif t == editor.TOOL.STRAIGHTEN then
+        elseif t == T.STRAIGHTEN then
             itv("mwheel", "tolerance", string.format("%.1f m", editor.straightenTolerance))
-        elseif t == editor.TOOL.DIVIDE then
+        elseif t == T.DIVIDE then
             itv("mwheel", "points", tostring(editor.divideCount))
-        elseif t == editor.TOOL.GROUND then
+        elseif t == T.GROUND then
             itv("mwheel", "tolerance", string.format("%.1f m", editor.groundTolerance))
             itv("mtoggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], function() editor:cycleGroundLevel() end)
             itv("mtoggle", "snap to", editor.snapToTerrain and "terrain" or "surface", function() editor:toggleSnapToTerrain() end)
-        elseif t == editor.TOOL.PARALLEL then
+        elseif t == T.PARALLEL then
             itv("mwheel", "distance", string.format("%.1f m", editor.offsetDistance))
             itv("mtoggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", function() editor:flipOffsetSide() end)
         end
-        it("mapply", "apply", function() editor:menuApplyArmed() end)
-        it("mitem", "cancel", function() editor:menuCancelArmed() end)
-        it("mnote", "scroll or +/- to adjust - right-click applies")
+        gap()
+        items[#items + 1] = { kind = "mapply", text = "apply", action = function() editor:menuApplyArmed() end }
+        items[#items + 1] = { kind = "mfull", text = "cancel", action = function() editor:menuCancelArmed() end }
+        items[#items + 1] = { kind = "mnote", text = "scroll or +/- to adjust - right-click applies" }
     end
 
-    -- Localize every menu label and toggle value in one place, in-place: the headers were already
-    -- localized as they were built (they carry formatted ids), so TR passes them through unchanged;
-    -- the action labels and toggle values map here. Dynamic values (the wheel numbers) are not keys and
-    -- pass straight through. Done before layout so widths measure the text that is actually drawn.
+    -- Localize every label and toggle value in one place, before layout so widths measure the text
+    -- that is actually drawn. The headers were already localized as they were built (they carry
+    -- formatted ids), so TR passes them through unchanged; dynamic values (the numbers) are not keys.
     for _, item in ipairs(items) do
-        item.text = TR(item.text)
-        if item.value ~= nil then
-            item.value = TR(item.value)
+        if item.text ~= nil then item.text = TR(item.text) end
+        if item.value ~= nil then item.value = TR(item.value) end
+    end
+
+    -- Lines: a header, a gap, a full-width row, or a pair of half-width buttons.
+    local lines = {}
+    do
+        local i = 1
+        while i <= #items do
+            local it = items[i]
+            if it.kind == "mbtn" then
+                local nxt = items[i + 1]
+                if nxt ~= nil and nxt.kind == "mbtn" then
+                    lines[#lines + 1] = { cells = { it, nxt }, h = rowH + vGap }
+                    i = i + 2
+                else
+                    lines[#lines + 1] = { cells = { it }, full = true, h = rowH + vGap }
+                    i = i + 1
+                end
+            elseif it.kind == "mhead" then
+                lines[#lines + 1] = { cells = { it }, bleed = true, h = rowH * 0.9 + vGap }
+                i = i + 1
+            elseif it.kind == "mgap" then
+                lines[#lines + 1] = { gap = true, h = vGap * 2 }
+                i = i + 1
+            else
+                lines[#lines + 1] = { cells = { it }, full = true, h = rowH + vGap }
+                i = i + 1
+            end
         end
     end
+    local ph = pad
+    for _, ln in ipairs(lines) do ph = ph + ln.h end
 
-    local ph = #items * rowH + pad * 2
-    -- Offset down and right of the click, not sitting on it: the box's bottom edge used to sit right
-    -- at the cursor y and grow UPWARD, so it covered the clicked point and the cursor itself. A menu
-    -- item under the pointer on open reads as a misclick waiting to happen. Now the box's TOP edge
-    -- starts a margin below the click and it grows downward, clear of both the point and the cursor.
+    -- Position. Armed opens beside the click; point/span/run below the selection they act on. Either
+    -- is then held (m.placeX) - including wherever the player drags it by the header - and dropped with
+    -- the menu, never saved: a menu belongs to one selection.
     local menuGapX, menuGapY = 0.014, 0.02
     local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
     local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
-    -- Point/span/run menus keep clear of the selection they act on. Placed once when first drawn and
-    -- then held, so the rows do not slide under the mouse while the camera moves.
-    if m.kind ~= "armed" then
-        if m.placeX == nil then
-            local bx0, by0, bx1, by1 = menuSelectionBox(m)
-            if bx0 ~= nil then
-                local avoid = {}
-                if self.frameW ~= nil and self.frameW > 0 then
-                    avoid[#avoid + 1] = { self.frameX, self.frameY, self.frameW, self.frameH }
-                end
-                if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
-                    avoid[#avoid + 1] = { self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH }
-                end
-                m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy)
+    if m.placeX == nil and m.kind ~= "armed" then
+        local bx0, by0, bx1, by1 = menuSelectionBox(m)
+        if bx0 ~= nil then
+            local avoid = {}
+            if self.frameW ~= nil and self.frameW > 0 then
+                avoid[#avoid + 1] = { self.frameX, self.frameY, self.frameW, self.frameH }
             end
-        end
-        if m.placeX ~= nil then
-            x, top = m.placeX, m.placeTop
+            if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
+                avoid[#avoid + 1] = { self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH }
+            end
+            m.placeX, m.placeTop = placeMenuAround(bx0, by0, bx1, by1, pw, ph, avoid, m.sx, m.sy)
         end
     end
+    if m.placeX ~= nil then
+        x, top = m.placeX, m.placeTop
+    end
+    x = math.max(0, math.min(1 - pw, x))
+    top = math.max(ph, math.min(1, top))
+    self.menuRect = { x = x, y = top - ph, w = pw, h = ph }
     local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
@@ -1198,42 +1242,77 @@ function ADFlyoverHud:drawContextMenu(editor)
         "cardBorder", 0.98)
     fillRole(self.background, x, top - ph, pw, ph, "cardBg", 0.99)
 
-    local y = top - pad
-    for _, item in ipairs(items) do
-        y = y - rowH
-        item.x, item.y, item.w, item.h = x, y, pw, rowH
-        -- Register the row up front so any stepper buttons drawn for it land AFTER it in self.rows;
-        -- isMouseOver scans back-to-front, so the buttons on top then win the click over the row.
-        table.insert(self.rows, item)
-        local textY = y + (rowH - fontSize) * 0.5
-        local textX = x + pad * 2
-        local rightX = x + pw - pad * 2
-        local hovered = mx ~= nil and mx >= x and mx <= x + pw and my >= y and my <= y + rowH
-        if item.kind == "mhead" then
-            fillRole(self.headerOverlay, x, y, pw, rowH, "headerBg", 1)
-            labelRole(textX, textY, fontSize * 0.9, item.text, "headerText")
-        elseif item.kind == "mnote" then
-            labelRole(textX, textY, fontSize * 0.82, item.text, "mutedText")
-        elseif item.kind == "mwheel" then
-            -- The wheel drives this while armed; the - / + steppers and per-field wheel adjust it too.
-            fillRole(self.rowOverlay, x, y, pw, rowH, "toolBg", 0.9)
-            item.stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
-            self:drawNumberField(item, x, y, pw, rowH, fontSize, mx, my, "bodyText", "valueText")
-        elseif item.kind == "mtoggle" then
-            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "hoverBg" or "toolBg", 0.95)
-            labelRole(textX, textY, fontSize, item.text, "bodyText")
-            labelRole(rightX, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
-        elseif item.kind == "mapply" then
-            fillRole(self.rowOverlay, x, y, pw, rowH, "accent", hovered and 0.98 or 0.9)
-            labelRole(textX, textY, fontSize, item.text, "accentText")
-        elseif item.danger then
-            -- A translucent red wash on hover keeps the "this deletes" cue without a dedicated role.
-            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "danger" or "toolBg", hovered and 0.30 or 0.9)
-            labelRole(textX, textY, fontSize, item.text, "danger")
-        else
-            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "hoverBg" or "toolBg", 0.95)
-            labelRole(textX, textY, fontSize, item.text, "bodyText")
+    local halfW = (pw - pad * 2 - colGap) * 0.5
+    local function inside(cx, cy, cw, ch)
+        return mx ~= nil and mx >= cx and mx <= cx + cw and my >= cy and my <= cy + ch
+    end
+
+    local y = top - pad * 0.5
+    for _, ln in ipairs(lines) do
+        if not ln.gap then
+            for ci, item in ipairs(ln.cells) do
+                local cx, cw, ch
+                if ln.bleed then
+                    cx, cw, ch = x, pw, rowH * 0.9
+                elseif ln.full then
+                    cx, cw, ch = x + pad, pw - pad * 2, rowH
+                else
+                    cw, ch = halfW, rowH
+                    cx = x + pad + (ci - 1) * (halfW + colGap)
+                end
+                local cy = y - ch
+                item.x, item.y, item.w, item.h = cx, cy, cw, ch
+                -- Registered up front so any stepper buttons drawn for it land AFTER it in self.rows;
+                -- isMouseOver scans back-to-front, so the buttons on top then win the click over the row.
+                table.insert(self.rows, item)
+                local hovered = inside(cx, cy, cw, ch)
+                local textY = cy + (ch - fontSize) * 0.5
+                local be = 0.0016
+
+                if item.kind == "mhead" then
+                    -- The drag handle, styled like the card's own header strip.
+                    fillRole(self.headerOverlay, cx, cy, cw, ch, "headerBg", 1)
+                    labelRole(cx + pad * 2, cy + (ch - fontSize * 0.95) * 0.5, fontSize * 0.95, item.text, "headerText")
+                    self.menuHeadRect = { x = cx, y = cy, w = cw, h = ch }
+                elseif item.kind == "mnote" then
+                    labelRole(cx + pad * 2, cy + (ch - fontSize * 0.8) * 0.5, fontSize * 0.8, item.text, "mutedText")
+                elseif item.kind == "mwheel" then
+                    -- The wheel drives this while armed; the - / + steppers and per-field wheel adjust it too.
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, "toolBg", 0.9)
+                    item.stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
+                    self:drawNumberField(item, cx, cy, cw, ch, fontSize, mx, my, "bodyText", "valueText")
+                elseif item.kind == "mtoggle" then
+                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, hovered and "hoverBorder" or "toolBorder", 0.9)
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, hovered and "hoverBg" or "toolBg", 0.95)
+                    labelRole(cx + pad * 2, textY, fontSize, item.text, "bodyText")
+                    labelRole(cx + cw - pad * 2, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
+                elseif item.kind == "mapply" then
+                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, "accentBorder", 0.9)
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, "accent", hovered and 0.98 or 0.9)
+                    labelRole(cx + cw * 0.5, textY, fontSize, item.text, "accentText", 1, RenderText.ALIGN_CENTER)
+                elseif item.kind == "mdanger" then
+                    -- A translucent red wash on hover keeps the "this deletes" cue without a dedicated role.
+                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, "danger", hovered and 0.9 or 0.45)
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, hovered and "danger" or "toolBg", hovered and 0.30 or 0.9)
+                    labelRole(cx + cw * 0.5, textY, fontSize, item.text, "danger", 1, RenderText.ALIGN_CENTER)
+                else
+                    -- mbtn / mfull: a plated, bordered button like the toolbar's, icon on the left when
+                    -- the action is a tool, label centred otherwise.
+                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, hovered and "hoverBorder" or "toolBorder", 0.9)
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, hovered and "hoverBg" or "toolBg", 0.95)
+                    if item.iconCell ~= nil then
+                        local ih = ch * 0.66
+                        local iw = ih / aspect
+                        local tr, tg, tb = ADFlyoverTheme:rgb("bodyText")
+                        self:renderIcon(item.iconCell, cx + pad * 1.2, cy + (ch - ih) * 0.5, iw, ih, tr, tg, tb, 1)
+                        labelRole(cx + pad * 1.2 + iw + pad, textY, fontSize, item.text, "bodyText")
+                    else
+                        labelRole(cx + cw * 0.5, textY, fontSize, item.text, "bodyText", 1, RenderText.ALIGN_CENTER)
+                    end
+                end
+            end
         end
+        y = y - ln.h
     end
 end
 
@@ -1877,6 +1956,26 @@ end
 --- the player has taken control of it (editor.toolCardDragged) so the next click of the same action
 --- does not jump it back - see ADFlyoverEditor:onLeftPress.
 function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
+    -- The point/span/run/armed menu's header is its drag handle. The position lives on the menu
+    -- itself (editor.ctxMenu.placeX/placeTop), so it is held while the menu is open and gone with it.
+    local hr, mr, menu = self.menuHeadRect, self.menuRect, editor ~= nil and editor.ctxMenu or nil
+    if button == 1 and isDown and menu ~= nil and hr ~= nil and mr ~= nil
+        and mouseX >= hr.x and mouseX <= hr.x + hr.w and mouseY >= hr.y and mouseY <= hr.y + hr.h then
+        self.menuDragging = true
+        self.menuDragDX = mouseX - mr.x
+        self.menuDragDY = mouseY - (mr.y + mr.h)
+        return true
+    end
+    if self.menuDragging then
+        if (button == 1 and isUp) or menu == nil or mr == nil then
+            self.menuDragging = false
+            return true
+        end
+        menu.placeX = math.max(0, math.min(1 - mr.w, mouseX - self.menuDragDX))
+        menu.placeTop = math.max(mr.h, math.min(1, mouseY - self.menuDragDY))
+        return true
+    end
+
     if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
         self.ctxDragging = true
         self.ctxDragOffsetX = mouseX - self.ctxFrameX

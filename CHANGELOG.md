@@ -52,6 +52,10 @@ enforced everywhere rather than only away from corners.
   Smooth strength are now typed, steppable fields like every other number on a card (they were
   wheel-only, and Straighten's tolerance was only in the right-click popup). Convert and Delete no
   longer both call their toggle "scope": Convert says **applies to**, Delete says **removes**.
+- **Selection menus redesigned** — the point / span / run menus and the armed-tool popup are now
+  compact two-column **buttons** (tool actions carry their icon, delete sits apart in red) with larger
+  text, roughly half the old height. Drag the menu by its header to move it out of the way; where you
+  leave it holds while that menu is open and is not remembered afterwards.
 
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
