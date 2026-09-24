@@ -904,6 +904,48 @@ function ADFlyoverEditor:suspendHudDraw()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: suspended hud.draw entirely.")
 end
 
+--- The lead from Easy Dev Controls: it hides every display with the base game's own
+--- hud:consoleCommandToggleVisibility() (the gsHudVisibility console command), which covers the
+--- vehicle panels the per-component hiding above could not reach. It is a TOGGLE, not a setter, so
+--- only flip it if the hud says it is currently visible, remember that we did, and flip it back on
+--- exit - never leave the player's HUD hidden. The state fields are logged so a wrong guess about
+--- their names shows up in the log instead of silently doing nothing.
+function ADFlyoverEditor:suspendWholeHud()
+    self.hudToggledOff = false
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil or type(hud.consoleCommandToggleVisibility) ~= "function" then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: no hud:consoleCommandToggleVisibility to use.")
+        return
+    end
+    local before = hud.isVisible
+    if before == false then
+        Logging.info("[FlyoverEditor]: whole-hud hide: hud already hidden (isVisible=false), leaving it alone.")
+        return
+    end
+    local ok, err = pcall(hud.consoleCommandToggleVisibility, hud)
+    local after = hud.isVisible
+    Logging.info("[FlyoverEditor]: whole-hud hide: called consoleCommandToggleVisibility ok=%s err=%s isVisible %s -> %s",
+        tostring(ok), tostring(err), tostring(before), tostring(after))
+    -- Trust it flipped only if the field agrees, or the field is not exposed at all (nil both ways).
+    self.hudToggledOff = ok and (after == false or (before == nil and after == nil))
+end
+
+function ADFlyoverEditor:restoreWholeHud()
+    if not self.hudToggledOff then
+        return
+    end
+    self.hudToggledOff = false
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil or type(hud.consoleCommandToggleVisibility) ~= "function" then
+        return
+    end
+    -- Only flip back if it is still hidden; if the player already toggled it themselves, leave it.
+    if hud.isVisible == false or hud.isVisible == nil then
+        local ok, err = pcall(hud.consoleCommandToggleVisibility, hud)
+        Logging.info("[FlyoverEditor]: whole-hud restore: ok=%s err=%s isVisible=%s", tostring(ok), tostring(err), tostring(hud.isVisible))
+    end
+end
+
 function ADFlyoverEditor:restoreHudDraw()
     local original = self.hudDrawOriginal
     self.hudDrawOriginal = nil
@@ -1365,6 +1407,7 @@ function ADFlyoverEditor:enable()
     self:suspendControlledEntityHud()
     self:suspendControlGroupsUpdate()
     self:suspendHudDraw()
+    self:suspendWholeHud()
 
     self.active = true
     self.lastWaypointId = nil
@@ -1527,6 +1570,7 @@ function ADFlyoverEditor:disable()
     self:restoreControlledEntityHud()
     self:restoreControlGroupsUpdate()
     self:restoreHudDraw()
+    self:restoreWholeHud()
 
     self.camera, self.cursor = nil, nil
     self.active = false
