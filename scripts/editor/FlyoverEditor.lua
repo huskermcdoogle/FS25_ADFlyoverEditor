@@ -4450,11 +4450,79 @@ end
 --- selected. It used to fall through to the two-click path instead, which treated the click as
 --- re-picking the far end and quietly cut a 28-waypoint run down to 16. Whole run means the run
 --- you clicked; to pick an arbitrary sub-span, switch to the picked span.
+--- A refusal the player can SEE: the log line plus an on-screen warning (a log-only refusal reads as the
+--- click doing nothing).
+function ADFlyoverEditor:warnPlayer(message)
+    if ADFlyoverLocale ~= nil and ADFlyoverLocale.t ~= nil then
+        message = ADFlyoverLocale.t(message)
+    end
+    Logging.warning("[FlyoverEditor]: %s", message)
+    if g_currentMission ~= nil and g_currentMission.showBlinkingWarning ~= nil then
+        pcall(g_currentMission.showBlinkingWarning, g_currentMission, message, 4000)
+    end
+end
+
 local function listHas(list, id)
     for _, v in pairs(list or {}) do
         if v == id then return true end
     end
     return false
+end
+
+--- The shortest path from startId to endId that follows the direction of the links (out only), or nil.
+local function directedPath(startId, endId, maxNodes)
+    local cameFrom = { [startId] = false }
+    local frontier, visited, found = { startId }, 1, startId == endId
+    while #frontier > 0 and not found and visited < maxNodes do
+        local nextFrontier = {}
+        for _, id in ipairs(frontier) do
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                for _, other in pairs(wp.out or {}) do
+                    if cameFrom[other] == nil then
+                        cameFrom[other] = id
+                        visited = visited + 1
+                        if other == endId then
+                            found = true
+                            break
+                        end
+                        table.insert(nextFrontier, other)
+                    end
+                end
+            end
+            if found then break end
+        end
+        frontier = nextFrontier
+    end
+    if not found then
+        return nil
+    end
+    local path, id = {}, endId
+    while id do
+        table.insert(path, 1, id)
+        id = cameFrom[id]
+    end
+    return path
+end
+
+--- The route between two picked points, following the RUN'S direction: along the links from a to b, or from
+--- b to a (returned in a..b order), and only if neither exists falls back to the plain path search that
+--- ignores direction. Where a track has more than one route between two points (a siding, a loop, a
+--- shortcut), the plain search takes the shortest and can pick one that runs against the traffic; this
+--- takes the one the traffic actually uses.
+function ADFlyoverEditor:spanPath(a, b)
+    local maxNodes = AutoDrive.FLYOVER_MERGE_MAX_RUN
+    local path = directedPath(a, b, maxNodes)
+    if path ~= nil then
+        return path
+    end
+    path = directedPath(b, a, maxNodes)
+    if path ~= nil then
+        local reversed = {}
+        for i = #path, 1, -1 do reversed[#reversed + 1] = path[i] end
+        return reversed
+    end
+    return self:runPathBetween(a, b)
 end
 
 --- Put a span's ids in the direction TRAFFIC runs along it. runPathBetween walks the graph ignoring link
@@ -4531,8 +4599,8 @@ function ADFlyoverEditor:spanPickClick(cfg)
                 self.TOOL_NAMES[self.tool] or "tool", #ids, tostring(fromId), tostring(toId))
             return
         end
-        Logging.warning("[FlyoverEditor]: no clear run through id=%s - it is a junction, or the run "
-            .. "closes on itself. Click the two ends of a span instead.", tostring(id))
+        self:warnPlayer(string.format("No clear run through here - it is a junction, or a loop that leaves and returns to one "
+            .. "junction. Click the two ends of the part you want instead."))
         if filter == "run" or isDouble then
             return
         end
@@ -4553,13 +4621,12 @@ function ADFlyoverEditor:spanPickClick(cfg)
         if id == from then
             return
         end
-        local span = self:runPathBetween(from, id)
+        local span = self:spanPath(from, id)
         if span == nil and cfg.anyPoints then
             span = { from, id }   -- a tool that does not need a path takes any two points
         end
         if span == nil then
-            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
-                tostring(id), tostring(from))
+            self:warnPlayer(string.format("Those two points are not connected, so they are not two ends of one span."))
             return
         end
         local a, b = from, id
@@ -4567,7 +4634,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
         if turned then
             a, b, span = id, from, ordered   -- the traffic runs the other way: the span starts at the second click
         end
-        self.spanIds = nil
+        self.spanIds = span   -- the route that was picked, so the preview and the commit follow exactly it
         cfg.setEnds(a, b, nil)
         self.pickKind = "span"
         if cfg.onSpan ~= nil then cfg.onSpan(a, b, span) end
@@ -4592,20 +4659,19 @@ function ADFlyoverEditor:spanPickClick(cfg)
     if newFrom == newTo then
         return
     end
-    local span = self:runPathBetween(newFrom, newTo)
+    local span = self:spanPath(newFrom, newTo)
     if span == nil and cfg.anyPoints then
         span = { newFrom, newTo }
     end
     if span == nil then
-        Logging.warning("[FlyoverEditor]: id=%s is not connected to the other end, so the span was not changed.",
-            tostring(id))
+        self:warnPlayer("That point is not connected to the other end, so the span was not changed.")
         return
     end
     local ordered, turned = self:trafficOrder(span)
     if turned then
         newFrom, newTo, span = newTo, newFrom, ordered
     end
-    self.spanIds = nil
+    self.spanIds = span
     cfg.setEnds(newFrom, newTo, nil)
     self.pickKind = "span"
     if cfg.onSpan ~= nil then cfg.onSpan(newFrom, newTo, span) end
@@ -4706,12 +4772,13 @@ end
 --- track, picked side / other side on a two-way one.
 function ADFlyoverEditor:sideName()
     local side = self.offsetSide or 1
-    -- Where the side lies on screen, whatever the track (see the side selector on the card).
-    local plus, minus = self:screenSideLabels()
-    if plus ~= nil then
-        return side >= 0 and plus or minus
-    end
+    -- Two-way: where the side lies on screen (see the side selector on the card); one-way: left / right of
+    -- the run, below.
     if self.sideTwoWay then
+        local plus, minus = self:screenSideLabels()
+        if plus ~= nil then
+            return side >= 0 and plus or minus
+        end
         return side == (self.offsetSidePicked or 1) and "picked side" or "other side"
     end
     return side >= 0 and "right" or "left"

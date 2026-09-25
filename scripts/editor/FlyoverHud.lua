@@ -503,11 +503,15 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
-        -- Sides are named by where they lie on SCREEN, for every track (one-way or two-way): left | right
-        -- for a track running up and down the screen, up | down for one running across it. The words
-        -- follow the camera. Only when the screen position cannot be worked out does it fall back to
-        -- left | right of travel (one-way) or picked | other side (two-way).
-        local plusWord, minusWord = editor:screenSideLabels()
+        -- One-way track: the sides are left | right OF THE RUN (its direction of travel), which does not
+        -- change with the camera. Two-way track: no direction of travel, so the sides are named by where
+        -- they lie on SCREEN - left | right for a track running up and down the screen, up | down for one
+        -- running across it - and follow the camera. If the screen position cannot be worked out, a
+        -- two-way track falls back to picked | other side.
+        local plusWord, minusWord
+        if editor.sideTwoWay then
+            plusWord, minusWord = editor:screenSideLabels()
+        end
         if plusWord ~= nil then
             local vertical = plusWord == "left" or plusWord == "right"
             local first, second = vertical and "left" or "up", vertical and "right" or "down"
