@@ -6050,13 +6050,72 @@ end
 function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
     local anchorPositions, anchors = self:collectSpanAnchors(ids)
 
+    -- Each piece between two anchors must be the span's OWN route - the stretch of `ids` between them -
+    -- not a fresh shortest path between the two anchors. Where two anchors are joined by more than one
+    -- route (a siding beside the main line, a loop), the path finder takes the shorter one, and Divide
+    -- then split a different track from the one the preview drew. The pieces are remembered as
+    -- POSITIONS, because ids renumber as each piece is replaced, and looked up again when their turn comes
+    -- (back to front, so pieces not yet reached are untouched).
+    local piecePositions = {}
+    local slicesOk = true
+    do
+        local anchorIndex, from = {}, 1
+        for a = 1, #anchorPositions do
+            local pos, found = anchorPositions[a], nil
+            for k = from, #ids do
+                local wp = ADGraphManager:getWayPointById(ids[k])
+                if wp ~= nil and math.abs(wp.x - pos.x) < 0.03 and math.abs(wp.z - pos.z) < 0.03 then
+                    found = k
+                    break
+                end
+            end
+            if found == nil then
+                slicesOk = false
+                break
+            end
+            anchorIndex[a], from = found, found
+        end
+        if slicesOk then
+            for a = 1, #anchorPositions - 1 do
+                local list = {}
+                for k = anchorIndex[a], anchorIndex[a + 1] do
+                    local wp = ADGraphManager:getWayPointById(ids[k])
+                    if wp ~= nil then
+                        list[#list + 1] = { x = wp.x, z = wp.z }
+                    end
+                end
+                piecePositions[a] = list
+            end
+        end
+    end
+    local function pieceFor(i)
+        if slicesOk and piecePositions[i] ~= nil then
+            local out = {}
+            for _, pos in ipairs(piecePositions[i]) do
+                local id = self:findWayPointExact(pos)
+                if id == nil then
+                    out = nil
+                    break
+                end
+                out[#out + 1] = id
+            end
+            if out ~= nil and #out >= 2 then
+                return out
+            end
+        end
+        -- Could not follow the span's own route: fall back to the path between the anchors.
+        local startId = self:findWayPointAt(anchorPositions[i])
+        local endId = self:findWayPointAt(anchorPositions[i + 1])
+        if startId ~= nil and endId ~= nil and startId ~= endId then
+            return self:runPathBetween(startId, endId)
+        end
+        return nil
+    end
+
     -- Measure every piece first, so the count can be shared out by length.
     local pieces, totalLength = {}, 0
     for i = 1, #anchorPositions - 1 do
-        local startId = self:findWayPointAt(anchorPositions[i])
-        local endId = self:findWayPointAt(anchorPositions[i + 1])
-        local piece = (startId ~= nil and endId ~= nil and startId ~= endId)
-            and self:runPathBetween(startId, endId) or nil
+        local piece = pieceFor(i)
 
         local length = 0
         if piece ~= nil then
@@ -6084,16 +6143,12 @@ function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
     for i = #anchorPositions - 1, 1, -1 do
         local share = math.floor(totalCount * (pieces[i].length / totalLength) + 0.5)
 
-        local startId = self:findWayPointAt(anchorPositions[i])
-        local endId = self:findWayPointAt(anchorPositions[i + 1])
-        if startId ~= nil and endId ~= nil and startId ~= endId then
-            local piece = self:runPathBetween(startId, endId)
-            if piece ~= nil and #piece >= 2 then
-                local newPoints = self:evenlySpacedAlong(piece, share)
-                if newPoints ~= nil and self:replaceChainInterior(piece, newPoints, self:spanStyle(piece)) then
-                    placed = placed + share
-                    done = done + 1
-                end
+        local piece = pieceFor(i)
+        if piece ~= nil and #piece >= 2 then
+            local newPoints = self:evenlySpacedAlong(piece, share)
+            if newPoints ~= nil and self:replaceChainInterior(piece, newPoints, self:spanStyle(piece)) then
+                placed = placed + share
+                done = done + 1
             end
         end
     end
@@ -6160,6 +6215,20 @@ end
 
 --- The waypoint at a remembered position, or nil. Used to re-find anchors after a rebuild has
 --- renumbered everything around them.
+--- The waypoint sitting exactly at `pos` (within a few centimetres), or nil. Unlike findWayPointAt this
+--- never snaps to a NEIGHBOUR: on a siding or a parallel lane, the nearest waypoint within the anchor
+--- tolerance can belong to the other lane.
+function ADFlyoverEditor:findWayPointExact(pos)
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        if math.abs(wp.x - pos.x) < 0.03 and math.abs(wp.z - pos.z) < 0.03 then
+            return wp.id
+        end
+    end
+    return nil
+end
+
 function ADFlyoverEditor:findWayPointAt(pos)
     local best, bestSq = nil, AutoDrive.FLYOVER_ANCHOR_TOLERANCE * AutoDrive.FLYOVER_ANCHOR_TOLERANCE
     local wayPoints = ADGraphManager:getWayPoints()
