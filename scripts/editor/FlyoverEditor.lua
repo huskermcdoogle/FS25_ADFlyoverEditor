@@ -4618,11 +4618,12 @@ end
 --- track, picked side / other side on a two-way one.
 function ADFlyoverEditor:sideName()
     local side = self.offsetSide or 1
+    -- Where the side lies on screen, whatever the track (see the side selector on the card).
+    local plus, minus = self:screenSideLabels()
+    if plus ~= nil then
+        return side >= 0 and plus or minus
+    end
     if self.sideTwoWay then
-        local plus, minus = self:screenSideLabels()
-        if plus ~= nil then
-            return side >= 0 and plus or minus
-        end
         return side == (self.offsetSidePicked or 1) and "picked side" or "other side"
     end
     return side >= 0 and "right" or "left"
