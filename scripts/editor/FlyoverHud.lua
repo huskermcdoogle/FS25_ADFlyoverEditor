@@ -801,9 +801,12 @@ function ADFlyoverHud:draw(editor)
     local ctlH = rowH * 0.9  -- plated controls are a little shorter than a text row, to keep cards compact
     -- A segmented selector puts its caption on the SAME line when caption and every option fit
     -- side by side (saves a whole line per selector); otherwise the caption sits above.
+    -- Every inline caption on a card shares ONE column width (the widest caption), so all the option
+    -- buttons start at the same x and the card reads as aligned rather than staggered.
+    local sharedCapW = 0
     local function segInline(row)
         if #row.options > 3 or getTextWidth == nil then return false, 0 end
-        local capW = getTextWidth(fontSize, row.text) + pad * 2
+        local capW = math.max(sharedCapW, getTextWidth(fontSize, row.text) + pad * 2)
         local need = capW
         for _, o in ipairs(row.options) do need = need + getTextWidth(fontSize, o.label) + pad * 2.5 end
         return need <= width - inset * 2, capW
@@ -811,6 +814,17 @@ function ADFlyoverHud:draw(editor)
     local function place(first, last, x, top)
         local y = top - pad
         local leftTaken = false
+        -- The widest caption among the selectors that fit inline on their own, for the shared column.
+        sharedCapW = 0
+        local widest = 0
+        for k = first, last do
+            local r = rows[k]
+            if r.kind == "seg" then
+                local inline, capW = segInline(r)
+                if inline then widest = math.max(widest, capW) end
+            end
+        end
+        sharedCapW = widest
         local i = first
         while i <= last do
             local row = rows[i]
