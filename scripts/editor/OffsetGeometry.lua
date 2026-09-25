@@ -472,7 +472,7 @@ end
 --
 -- The ring version above cannot be used for a span: it closes the loop, and it decides which way is
 -- "inward" from the winding, which an open chain does not have. Here the side is simply the sign of
--- the distance - positive is to the left of travel, negative to the right - which is what lets a
+-- the distance - positive is to the RIGHT of travel as seen from above (the (-uz, ux) normal, with z growing toward the bottom of a north-up view), negative to the left - which is what lets a
 -- parallel-track tool flip sides by wheeling the offset through zero.
 --
 -- The construction is the same otherwise: shift every segment along its normal, intersect
@@ -541,7 +541,7 @@ local function removeOpenFolds(points)
     return points
 end
 
---- Offset an open chain sideways by `distance`: positive to the LEFT of travel, negative to the
+--- Offset an open chain sideways by `distance`: positive to the RIGHT of travel as seen from above (see the note in offsetSide), negative to the
 --- right. Heights are carried across from the source point each offset point came from, so the new
 --- track follows the old one's profile rather than sitting flat.
 ---@return table|nil offsetPoints, string|nil errorMessage

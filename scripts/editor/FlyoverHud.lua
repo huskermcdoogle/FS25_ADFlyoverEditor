@@ -478,7 +478,7 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
-        segFlip("side", "left", "right", (editor.offsetSide or 1) < 0, function() editor:flipOffsetSide() end)
+        segFlip("side", "left", "right", (editor.offsetSide or 1) >= 0, function() editor:flipOffsetSide() end)
     end
 
     if editor:toolTakesSpanScope() then

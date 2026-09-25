@@ -4416,9 +4416,11 @@ ADFlyoverEditor.OFFSET_SCOPE = { SPAN = 1, RUN = 2 }
 ADFlyoverEditor.OFFSET_SCOPE_NAMES = { "picked span", "whole run" }
 
 function ADFlyoverEditor:flipOffsetSide()
+    -- offsetSide +1 is the side the (-uz, ux) normal points to, which in this map's x/z (z grows toward
+    -- the bottom of a north-up view) is the RIGHT-hand side of the direction of travel; -1 is the left.
     self.offsetSide = -(self.offsetSide or 1)
     self.offsetCache = nil
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset side -> %s.", self.offsetSide >= 0 and "left" or "right")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset side -> %s.", self.offsetSide >= 0 and "right" or "left")
 end
 
 function ADFlyoverEditor:cycleOffsetScope()
@@ -6167,7 +6169,7 @@ end
 function ADFlyoverEditor:getNextStepLines()
     local t = self.TOOL
     local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
-    local function side() return (self.offsetSide or 1) >= 0 and L("left") or L("right") end
+    local function side() return (self.offsetSide or 1) >= 0 and L("right") or L("left") end
 
     -- Circle-select is tool-agnostic (selection is a shared substrate, same as Ctrl+drag box), so
     -- this overrides whatever the current tool would otherwise say - the mid-drag state is what the
@@ -6961,7 +6963,7 @@ function ADFlyoverEditor:sidingClick()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: siding centred on id=%s - %.0fm long, %.1fm to the %s, merging "
         .. "over %.0fm at each end. Wheel changes the length, right-click applies.",
         tostring(self.sidingAnchorId), plan.length, plan.offset,
-        plan.side >= 0 and "left" or "right", plan.merge)
+        plan.side >= 0 and "right" or "left", plan.merge)
 end
 
 function ADFlyoverEditor:updateSidingPreview()
@@ -7032,7 +7034,7 @@ function ADFlyoverEditor:commitSiding()
 
     ADFlyoverSettings.debugLog("[FlyoverEditor]: laid a %.0fm siding %.1fm to the %s with %.0fm merges, %d track "
         .. "waypoint(s), attached at id=%s and id=%s.",
-        plan.length, plan.offset, plan.side >= 0 and "left" or "right", plan.merge,
+        plan.length, plan.offset, plan.side >= 0 and "right" or "left", plan.merge,
         #plan.track, tostring(aId), tostring(dId))
 
     self.sidingAnchorId, self.sidingPreview = nil, nil
@@ -7576,7 +7578,7 @@ function ADFlyoverEditor:commitOffset()
 
     ADFlyoverSettings.debugLog("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
         siding and "siding" or "parallel track", #laying, self.offsetDistance,
-        (self.offsetSide or 1) >= 0 and "left" or "right",
+        (self.offsetSide or 1) >= 0 and "right" or "left",
         siding and ", splined in at both ends"
             or (mixed and string.format(", mixed (%d two-way, %d one-way segment(s)), running opposite",
                     dualCount, oneWayCount)
