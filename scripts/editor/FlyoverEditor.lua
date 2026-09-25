@@ -1940,6 +1940,7 @@ function ADFlyoverEditor:menuArmStraighten()
     local from, to, ids, sx, sy = m.fromId, m.toId, m.ids, m.sx, m.sy
     self:setTool(self.TOOL.STRAIGHTEN)
     self.spanIds = ids
+    self.pickKind = (m.kind == "run") and "run" or "span"   -- what the picker menu handed over, for the card's indicator
     self.straightenFromId, self.straightenToId, self.straightenPreview = from, to, nil
     self:setArmedMenu(sx, sy)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: straighten armed on a %d-point span.", #ids)
@@ -1951,6 +1952,7 @@ function ADFlyoverEditor:menuArmSmooth()
     local from, to, ids, sx, sy = m.fromId, m.toId, m.ids, m.sx, m.sy
     self:setTool(self.TOOL.SMOOTH)
     self.spanIds = ids
+    self.pickKind = (m.kind == "run") and "run" or "span"   -- what the picker menu handed over, for the card's indicator
     self.smoothFromId, self.smoothToId = from, to
     self.smoothPreview, self.smoothPinned, self.smoothBlockedBy = nil, nil, nil
     self:setArmedMenu(sx, sy)
@@ -1963,6 +1965,7 @@ function ADFlyoverEditor:menuArmDivide()
     local from, to, ids, sx, sy = m.fromId, m.toId, m.ids, m.sx, m.sy
     self:setTool(self.TOOL.DIVIDE)
     self.spanIds = ids
+    self.pickKind = (m.kind == "run") and "run" or "span"   -- what the picker menu handed over, for the card's indicator
     self.divideFromId, self.divideToId = from, to
     self.dividePreview = nil
     self.divideCount = math.max(0, #ids - 2)
@@ -1977,6 +1980,7 @@ function ADFlyoverEditor:menuArmGround()
     self:setTool(self.TOOL.GROUND)
     self.offsetScope = isRun and self.OFFSET_SCOPE.RUN or self.OFFSET_SCOPE.SPAN
     self.spanIds = ids
+    self.pickKind = (m.kind == "run") and "run" or "span"   -- what the picker menu handed over, for the card's indicator
     self.groundFromId, self.groundToId = from, to
     self.groundPreview = nil
     self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
