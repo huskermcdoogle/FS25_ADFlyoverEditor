@@ -51,7 +51,7 @@ local function segLayout(row, rowH, pad)
     local perLine = n <= 3 and n or (n == 4 and 2 or 3)
     if perLine < 1 then perLine = 1 end
     local lines = math.ceil(n / perLine)
-    local capH = rowH * 0.62
+    local capH = rowH * 0.8
     local vg = pad * 0.4
     return capH, perLine, lines, capH + lines * rowH + (lines - 1) * vg + vg
 end
@@ -737,6 +737,7 @@ function ADFlyoverHud:draw(editor)
 
     -- Lay rows[first..last] as one column from (x, top); tools pair two to a row. Returns the height.
     local vg = pad * 0.4   -- gap under each plated control
+    local inset = pad      -- plated controls keep a margin inside the card, like the popup's buttons
     local function place(first, last, x, top)
         local y = top - pad
         local leftTaken = false
@@ -758,12 +759,12 @@ function ADFlyoverHud:draw(editor)
                 local nxt = rows[i + 1]
                 y = y - rowH
                 if i + 1 <= last and nxt ~= nil and nxt.kind == "tgl" then
-                    local cw = (width - toolGap) * 0.5
-                    row.x, row.y, row.w, row.h = x, y, cw, rowH
-                    nxt.x, nxt.y, nxt.w, nxt.h = x + cw + toolGap, y, cw, rowH
+                    local cw = (width - inset * 2 - toolGap) * 0.5
+                    row.x, row.y, row.w, row.h = x + inset, y, cw, rowH
+                    nxt.x, nxt.y, nxt.w, nxt.h = x + inset + cw + toolGap, y, cw, rowH
                     i = i + 2
                 else
-                    row.x, row.y, row.w, row.h = x, y, width, rowH
+                    row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, rowH
                     i = i + 1
                 end
                 y = y - vg
@@ -771,14 +772,18 @@ function ADFlyoverHud:draw(editor)
                 leftTaken = false
                 local _, _, _, th = segLayout(row, rowH, pad)
                 y = y - th
-                row.x, row.y, row.w, row.h = x, y + vg, width, th - vg
+                row.x, row.y, row.w, row.h = x + inset, y + vg, width - inset * 2, th - vg
                 i = i + 1
             else
                 leftTaken = false
                 local h = row.kind == "gap" and rowH * 0.35 or rowH
                 y = y - h
-                row.x, row.y, row.w, row.h = x, y, width, h
-                if row.kind == "btn" or row.kind == "number" then y = y - vg end
+                if row.kind == "btn" or row.kind == "number" or (row.kind == "toggle" and row.stepAction ~= nil) then
+                    row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, h
+                    y = y - vg
+                else
+                    row.x, row.y, row.w, row.h = x, y, width, h
+                end
                 i = i + 1
             end
         end
@@ -1040,7 +1045,7 @@ function ADFlyoverHud:draw(editor)
             local capH, perLine, lines = segLayout(row, rowH, self.padding)
             local vgap = self.padding * 0.4
             local gapX = self.padding * 0.5
-            labelRole(textX, y + h - capH + (capH - fontSize * 0.82) * 0.5, fontSize * 0.82, row.text, "mutedText")
+            labelRole(textX, y + h - capH + (capH - fontSize * 0.82) * 0.5 + fontSize * 0.25, fontSize * 0.82, row.text, "mutedText")
             local n = #row.options
             for oi, o in ipairs(row.options) do
                 local li = math.ceil(oi / perLine)
