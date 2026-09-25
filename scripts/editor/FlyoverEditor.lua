@@ -4450,6 +4450,44 @@ end
 --- selected. It used to fall through to the two-click path instead, which treated the click as
 --- re-picking the far end and quietly cut a 28-waypoint run down to 16. Whole run means the run
 --- you clicked; to pick an arbitrary sub-span, switch to the picked span.
+local function listHas(list, id)
+    for _, v in pairs(list or {}) do
+        if v == id then return true end
+    end
+    return false
+end
+
+--- Put a span's ids in the direction TRAFFIC runs along it. runPathBetween walks the graph ignoring link
+--- direction, so a span clicked from downstream to upstream came out running AGAINST the traffic - and a
+--- run's own end order was arbitrary - which made anything direction-sensitive (Parallel's "same way",
+--- the side, the order of a one-way) come out backwards. One-way segments vote (a -> b only, or b -> a
+--- only); two-way segments do not vote, so a two-way span keeps the order it was picked in. Returns the
+--- ids (a reversed copy when they had to be turned round) and whether they were reversed.
+function ADFlyoverEditor:trafficOrder(ids)
+    if ids == nil or #ids < 2 then
+        return ids, false
+    end
+    local forward, backward = 0, 0
+    for i = 1, #ids - 1 do
+        local a = ADGraphManager:getWayPointById(ids[i])
+        local b = ADGraphManager:getWayPointById(ids[i + 1])
+        if a ~= nil and b ~= nil then
+            local aToB, bToA = listHas(a.out, b.id), listHas(b.out, a.id)
+            if aToB and not bToA then
+                forward = forward + 1
+            elseif bToA and not aToB then
+                backward = backward + 1
+            end
+        end
+    end
+    if backward > forward then
+        local reversed = {}
+        for i = #ids, 1, -1 do reversed[#reversed + 1] = ids[i] end
+        return reversed, true
+    end
+    return ids, false
+end
+
 --- THE span-pick gesture, shared by every span tool (Smooth, Divide, Ground, Straighten; the others follow).
 ---
 ---   click a point            starts a span
@@ -4480,6 +4518,11 @@ function ADFlyoverEditor:spanPickClick(cfg)
     if filter == "run" or (filter == nil and isDouble) then
         local fromId, toId, ids = self:resolveWholeRun(id)
         if fromId ~= nil then
+            local ordered, turned = self:trafficOrder(ids)
+            if turned then
+                ids = ordered
+                fromId, toId = ids[1], ids[#ids]
+            end
             self.spanIds = ids
             cfg.setEnds(fromId, toId, ids)
             self.pickKind = "run"
@@ -4519,12 +4562,18 @@ function ADFlyoverEditor:spanPickClick(cfg)
                 tostring(id), tostring(from))
             return
         end
+        local a, b = from, id
+        local ordered, turned = self:trafficOrder(span)
+        if turned then
+            a, b, span = id, from, ordered   -- the traffic runs the other way: the span starts at the second click
+        end
         self.spanIds = nil
-        cfg.setEnds(from, id, nil)
+        cfg.setEnds(a, b, nil)
         self.pickKind = "span"
-        if cfg.onSpan ~= nil then cfg.onSpan(from, id, span) end
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span of %d waypoint(s), id=%s to id=%s.",
-            self.TOOL_NAMES[self.tool] or "tool", #span, tostring(from), tostring(id))
+        if cfg.onSpan ~= nil then cfg.onSpan(a, b, span) end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span of %d waypoint(s), id=%s to id=%s%s.",
+            self.TOOL_NAMES[self.tool] or "tool", #span, tostring(a), tostring(b),
+            turned and " (turned round to follow the traffic)" or "")
         return
     end
 
@@ -4552,12 +4601,17 @@ function ADFlyoverEditor:spanPickClick(cfg)
             tostring(id))
         return
     end
+    local ordered, turned = self:trafficOrder(span)
+    if turned then
+        newFrom, newTo, span = newTo, newFrom, ordered
+    end
     self.spanIds = nil
     cfg.setEnds(newFrom, newTo, nil)
     self.pickKind = "span"
     if cfg.onSpan ~= nil then cfg.onSpan(newFrom, newTo, span) end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span end replaced: %d waypoint(s), id=%s to id=%s.",
-        self.TOOL_NAMES[self.tool] or "tool", #span, tostring(newFrom), tostring(newTo))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span end replaced: %d waypoint(s), id=%s to id=%s%s.",
+        self.TOOL_NAMES[self.tool] or "tool", #span, tostring(newFrom), tostring(newTo),
+        turned and " (turned round to follow the traffic)" or "")
 end
 
 --- Lock the selection type (or, with nil, go back to auto). Clicking the lit type on a tool card
