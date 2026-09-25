@@ -478,7 +478,13 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
-        segFlip("side", "left", "right", (editor.offsetSide or 1) >= 0, function() editor:flipOffsetSide() end)
+        if editor.sideTwoWay then
+            -- Two-way: no direction of travel, so name the sides by what the player did.
+            segFlip("side", "picked side", "other side", (editor.offsetSide or 1) ~= (editor.offsetSidePicked or 1),
+                function() editor:flipOffsetSide() end)
+        else
+            segFlip("side", "left", "right", (editor.offsetSide or 1) >= 0, function() editor:flipOffsetSide() end)
+        end
     end
 
     if editor:toolTakesSpanScope() then

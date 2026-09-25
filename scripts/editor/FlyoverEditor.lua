@@ -1993,7 +1993,7 @@ function ADFlyoverEditor:menuArmParallel()
     self.offsetPreview, self.offsetCache = nil, nil
     local seedPts = self:offsetSpanPoints()
     if seedPts ~= nil then
-        self.offsetSide = self:offsetSideFromCursor(seedPts)
+        self:pickSideFromCursor(seedPts)
     end
     self:setArmedMenu(sx, sy)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: parallel armed on a %d-point span.", #ids)
@@ -4415,12 +4415,49 @@ end
 ADFlyoverEditor.OFFSET_SCOPE = { SPAN = 1, RUN = 2 }
 ADFlyoverEditor.OFFSET_SCOPE_NAMES = { "picked span", "whole run" }
 
+--- Is this ordered run two-way? Sides of a two-way track have no "left of travel" (there is no single
+--- direction), so the selector names them by what the player did instead. Two-way when at least half
+--- the segments also run the other way, so one stray one-way piece does not flip the wording.
+function ADFlyoverEditor:runIsTwoWay(pts)
+    if pts == nil or #pts < 2 then return false end
+    local total, reverse = 0, 0
+    for i = 1, #pts - 1 do
+        local a = ADGraphManager:getWayPointById(pts[i].id)
+        local b = ADGraphManager:getWayPointById(pts[i + 1].id)
+        if a ~= nil and b ~= nil then
+            total = total + 1
+            for _, otherId in pairs(b.out or {}) do
+                if otherId == pts[i].id then reverse = reverse + 1 break end
+            end
+        end
+    end
+    return total > 0 and reverse * 2 >= total
+end
+
+--- Take the side from where the cursor points, and remember which side that was and whether the track
+--- is two-way, so the side selector can say "picked side / other side" on a two-way track.
+function ADFlyoverEditor:pickSideFromCursor(seedPts)
+    self.offsetSide = self:offsetSideFromCursor(seedPts)
+    self.offsetSidePicked = self.offsetSide
+    self.sideTwoWay = self:runIsTwoWay(seedPts)
+end
+
+--- The name of the current side, the same words the selector shows: left / right of travel on a one-way
+--- track, picked side / other side on a two-way one.
+function ADFlyoverEditor:sideName()
+    local side = self.offsetSide or 1
+    if self.sideTwoWay then
+        return side == (self.offsetSidePicked or 1) and "picked side" or "other side"
+    end
+    return side >= 0 and "right" or "left"
+end
+
 function ADFlyoverEditor:flipOffsetSide()
     -- offsetSide +1 is the side the (-uz, ux) normal points to, which in this map's x/z (z grows toward
     -- the bottom of a north-up view) is the RIGHT-hand side of the direction of travel; -1 is the left.
     self.offsetSide = -(self.offsetSide or 1)
     self.offsetCache = nil
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset side -> %s.", self.offsetSide >= 0 and "right" or "left")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: offset side -> %s.", self:sideName())
 end
 
 function ADFlyoverEditor:cycleOffsetScope()
@@ -6169,7 +6206,7 @@ end
 function ADFlyoverEditor:getNextStepLines()
     local t = self.TOOL
     local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
-    local function side() return (self.offsetSide or 1) >= 0 and L("right") or L("left") end
+    local function side() return L(self:sideName()) end
 
     -- Circle-select is tool-agnostic (selection is a shared substrate, same as Ctrl+drag box), so
     -- this overrides whatever the current tool would otherwise say - the mid-drag state is what the
@@ -6953,7 +6990,7 @@ function ADFlyoverEditor:sidingClick()
     self.sidingPreview = nil
     local seedPts = self:orderedRunThrough(self.sidingAnchorId)
     if seedPts ~= nil then
-        self.offsetSide = self:offsetSideFromCursor(seedPts)
+        self:pickSideFromCursor(seedPts)
     end
     local plan, err = self:sidingPlan()
     if plan == nil then
@@ -6963,7 +7000,7 @@ function ADFlyoverEditor:sidingClick()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: siding centred on id=%s - %.0fm long, %.1fm to the %s, merging "
         .. "over %.0fm at each end. Wheel changes the length, right-click applies.",
         tostring(self.sidingAnchorId), plan.length, plan.offset,
-        plan.side >= 0 and "right" or "left", plan.merge)
+        self:sideName(), plan.merge)
 end
 
 function ADFlyoverEditor:updateSidingPreview()
@@ -7034,7 +7071,7 @@ function ADFlyoverEditor:commitSiding()
 
     ADFlyoverSettings.debugLog("[FlyoverEditor]: laid a %.0fm siding %.1fm to the %s with %.0fm merges, %d track "
         .. "waypoint(s), attached at id=%s and id=%s.",
-        plan.length, plan.offset, plan.side >= 0 and "right" or "left", plan.merge,
+        plan.length, plan.offset, self:sideName(), plan.merge,
         #plan.track, tostring(aId), tostring(dId))
 
     self.sidingAnchorId, self.sidingPreview = nil, nil
@@ -7066,7 +7103,7 @@ function ADFlyoverEditor:offsetClick()
             -- Seed the side from where the cursor is, exactly as the two-click path does.
             local seedPts = self:offsetSpanPoints()
             if seedPts ~= nil then
-                self.offsetSide = self:offsetSideFromCursor(seedPts)
+                self:pickSideFromCursor(seedPts)
             end
         end
         return
@@ -7095,7 +7132,7 @@ function ADFlyoverEditor:offsetClick()
     self.offsetPreview, self.offsetCache = nil, nil
     local seedPts = self:offsetSpanPoints()
     if seedPts ~= nil then
-        self.offsetSide = self:offsetSideFromCursor(seedPts)
+        self:pickSideFromCursor(seedPts)
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
         .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
@@ -7578,7 +7615,7 @@ function ADFlyoverEditor:commitOffset()
 
     ADFlyoverSettings.debugLog("[FlyoverEditor]: laid a %s of %d waypoint(s) %.1fm to the %s%s.",
         siding and "siding" or "parallel track", #laying, self.offsetDistance,
-        (self.offsetSide or 1) >= 0 and "right" or "left",
+        self:sideName(),
         siding and ", splined in at both ends"
             or (mixed and string.format(", mixed (%d two-way, %d one-way segment(s)), running opposite",
                     dualCount, oneWayCount)
