@@ -74,9 +74,11 @@ TOOLS = [
         ],
         "controls": [
             ("curvature (wheel)", "how tight the curve is, clamped to a sane range."),
-            ("endpoints", "which end the curve is computed from (reshapes it)."),
+            ("spline direction", "as clicked builds the curve from the first point; reversed builds it from "
+                                 "the far end. That reshapes the curve and, on a one-way, sets which way it runs."),
             ("end / start tangent", "flip the direction the curve leaves each end."),
-            ("direction / priority", "as for Draw - one/two-way and primary/secondary."),
+            ("traffic / priority", "as for Draw - one/two-way/reverse and primary/secondary. Reverse flips "
+                                   "the traffic without changing the curve's shape."),
         ],
     },
     {

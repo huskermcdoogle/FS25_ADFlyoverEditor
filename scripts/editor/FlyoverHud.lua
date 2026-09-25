@@ -480,8 +480,11 @@ function ADFlyoverHud:buildRows(editor)
     if makesConnections then
         add("gap")
         add("section", "NEW CONNECTIONS")
-        segCycle("direction", editor.CONNECTION_NAMES, nil, editor.connectionMode,
+        segCycle("traffic", editor.CONNECTION_NAMES, nil, editor.connectionMode,
             function() editor:cycleConnectionMode() end)
+        if editor.tool == editor.TOOL.SPLINE then
+            add("hint", "reverse flips traffic, not the shape")
+        end
         segFlip("priority", "primary", "secondary", editor.subPrio, function() editor:togglePriority() end)
     end
 
@@ -587,7 +590,9 @@ function ADFlyoverHud:buildRows(editor)
         -- Two different things: 'endpoints' changes which end the curve is computed from, so it
         -- reshapes it; 'direction' under NEW CONNECTIONS flips which way traffic runs along it
         -- without touching the shape.
-        segFlip("endpoints (shape)", "normal", "swapped", editor.splineSwapEnds, function() editor:toggleSplineEnds() end)
+        segFlip("spline direction", "as clicked", "reversed", editor.splineSwapEnds, function() editor:toggleSplineEnds() end)
+        add("hint", "reversed builds the curve from the far end")
+        add("hint", "(shape, and on one-way the way it runs)")
         -- Which way the curve lies against the track where it arrives. On a two-way track the
         -- automatic choice is a guess between two equally valid tangents.
         segFlip("end tangent", "auto", "flipped", editor.splineFlipEndTangent, function() editor:toggleSplineEndTangent() end)
