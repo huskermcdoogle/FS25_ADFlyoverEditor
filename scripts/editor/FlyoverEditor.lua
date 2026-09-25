@@ -6047,15 +6047,18 @@ end
 --- The requested count is shared out between the pieces in proportion to their length, so asking
 --- for N points across a span that happens to cross an intersection still gives roughly N points
 --- overall and even spacing throughout - rather than refusing, which is what it did before.
-function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
+--- The pieces of a span BETWEEN its anchors (its ends, junction-joined points and map markers), each as
+--- the span's OWN route - the stretch of `ids` between two anchors - not a fresh shortest path.
+---
+--- Where two anchors are joined by more than one route (a siding beside the main line, a loop, a junction
+--- cluster at a run's end), a path search takes the shorter one, and the tool then rebuilt a DIFFERENT
+--- track from the one that was picked and previewed: Divide split the wrong route, Straighten replaced
+--- junction points. Pieces are remembered as POSITIONS, because ids renumber as each piece is replaced,
+--- and looked up again (exact match, a few centimetres) when their turn comes - back to front, so pieces
+--- not yet reached are untouched. Returns anchorPositions, interiorAnchorCount, pieceFor(i) -> ids | nil.
+function ADFlyoverEditor:ownRoutePieces(ids)
     local anchorPositions, anchors = self:collectSpanAnchors(ids)
 
-    -- Each piece between two anchors must be the span's OWN route - the stretch of `ids` between them -
-    -- not a fresh shortest path between the two anchors. Where two anchors are joined by more than one
-    -- route (a siding beside the main line, a loop), the path finder takes the shorter one, and Divide
-    -- then split a different track from the one the preview drew. The pieces are remembered as
-    -- POSITIONS, because ids renumber as each piece is replaced, and looked up again when their turn comes
-    -- (back to front, so pieces not yet reached are untouched).
     local piecePositions = {}
     local slicesOk = true
     do
@@ -6088,6 +6091,7 @@ function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
             end
         end
     end
+
     local function pieceFor(i)
         if slicesOk and piecePositions[i] ~= nil then
             local out = {}
@@ -6100,17 +6104,23 @@ function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
                 out[#out + 1] = id
             end
             if out ~= nil and #out >= 2 then
-                return out
+                return out, true
             end
         end
         -- Could not follow the span's own route: fall back to the path between the anchors.
         local startId = self:findWayPointAt(anchorPositions[i])
         local endId = self:findWayPointAt(anchorPositions[i + 1])
         if startId ~= nil and endId ~= nil and startId ~= endId then
-            return self:runPathBetween(startId, endId)
+            return self:runPathBetween(startId, endId), false
         end
-        return nil
+        return nil, false
     end
+
+    return anchorPositions, anchors, pieceFor
+end
+
+function ADFlyoverEditor:divideSpanInPieces(ids, totalCount)
+    local anchorPositions, anchors, pieceFor = self:ownRoutePieces(ids)
 
     -- Measure every piece first, so the count can be shared out by length.
     local pieces, totalLength = {}, 0
@@ -8277,37 +8287,39 @@ end
 --- junction-free piece is straightened on its own instead, and the anchors between pieces are left
 --- untouched.
 function ADFlyoverEditor:straightenSpanInPieces(ids)
-    local anchorPositions = self:collectSpanAnchors(ids)
+    local anchorPositions, _, pieceFor = self:ownRoutePieces(ids)
     local piecesDone = 0
     -- Backwards, so a rebuilt piece cannot renumber the anchors of a piece not yet reached.
     for i = #anchorPositions - 1, 1, -1 do
-        local startId = self:findWayPointAt(anchorPositions[i])
-        local endId = self:findWayPointAt(anchorPositions[i + 1])
-        if startId ~= nil and endId ~= nil and startId ~= endId then
-            local piece = self:runPathBetween(startId, endId)
-            if piece ~= nil and #piece > 2 then
-                local pts = {}
-                for j = 1, #piece do
-                    local wp = ADGraphManager:getWayPointById(piece[j])
-                    if wp ~= nil then
-                        pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
-                    end
+        local piece, followedOwnRoute = pieceFor(i)
+        if piece ~= nil and #piece > 2 then
+            local pts = {}
+            for j = 1, #piece do
+                local wp = ADGraphManager:getWayPointById(piece[j])
+                if wp ~= nil then
+                    pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
                 end
-                local simplified = ADPolygonUtils.simplifyOpenChainRDP(pts, self.straightenTolerance)
-                if simplified ~= nil and #simplified >= 2 then
-                    local result = respreadAlong(simplified, #pts - 2)
-                    if result ~= nil then
-                        for k = 2, #result - 1 do
-                            result[k].y = self:resolveHeightAt(result[k].x, result[k].z,
-                                heightAlongChain(pts, result[k].x, result[k].z))
-                        end
-                        local a = ADGraphManager:getWayPointById(piece[1])
-                        local b = ADGraphManager:getWayPointById(piece[2])
-                        local dual = ADGraphManager:isDualRoad(a, b)
-                        local flags = b.flags or AutoDrive.FLAG_NONE
-                        if self:replaceChainInterior(piece, result, dual, flags) then
-                            piecesDone = piecesDone + 1
-                        end
+            end
+            local simplified = ADPolygonUtils.simplifyOpenChainRDP(pts, self.straightenTolerance)
+            if simplified ~= nil and #simplified >= 2 then
+                local result = respreadAlong(simplified, #pts - 2)
+                if result ~= nil then
+                    for k = 2, #result - 1 do
+                        result[k].y = self:resolveHeightAt(result[k].x, result[k].z,
+                            heightAlongChain(pts, result[k].x, result[k].z))
+                    end
+                    local a = ADGraphManager:getWayPointById(piece[1])
+                    local b = ADGraphManager:getWayPointById(piece[2])
+                    local dual = ADGraphManager:isDualRoad(a, b)
+                    local flags = b.flags or AutoDrive.FLAG_NONE
+                    -- A capture of exactly what is replaced, so a point that goes missing at a run's end can be
+                    -- traced: the piece's end ids and how many points sat on it, and whether it was the span's
+                    -- own route or the fallback path.
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: straighten piece %d: ids %s -> %s (%d point(s)), %s, "
+                        .. "keeps %d, replaces the %d between.", i, tostring(piece[1]), tostring(piece[#piece]),
+                        #piece, followedOwnRoute and "own route" or "FALLBACK path", 2, #piece - 2)
+                    if self:replaceChainInterior(piece, result, dual, flags) then
+                        piecesDone = piecesDone + 1
                     end
                 end
             end
