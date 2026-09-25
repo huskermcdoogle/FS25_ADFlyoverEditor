@@ -2562,6 +2562,27 @@ function ADFlyoverEditor:drawNetwork()
     for id in pairs(self.selection) do
         accent(id, 0, 1, 0.2, 3.5)
     end
+    -- The span the active span tool has picked, marked the same way Move marks its span: the two ends
+    -- large, the points between them smaller, all in that blue. Without it a picked span or run was
+    -- invisible until the tool had something to preview (Ground only ever showed points OFF the ground),
+    -- so a working pick read as "nothing selected".
+    local pickFrom, pickTo = self:pickedSpanEnds()
+    if pickFrom ~= nil then
+        accent(pickFrom, 0, 0.6, 1, 4)
+        if pickTo ~= nil then
+            accent(pickTo, 0, 0.6, 1, 4)
+            local key = tostring(self.tool) .. ":" .. tostring(pickFrom) .. ":" .. tostring(pickTo)
+            if self.pickHighlightKey ~= key then
+                self.pickHighlightKey = key
+                self.pickHighlightIds = self:spanBetween(pickFrom, pickTo) or {}
+            end
+            for _, id in ipairs(self.pickHighlightIds) do
+                if id ~= pickFrom and id ~= pickTo then
+                    accent(id, 0, 0.6, 1, 2.5)
+                end
+            end
+        end
+    end
     accent(self.smoothFromId, 0, 0.6, 1, 4)
     accent(self.splineFromId, 0, 0.6, 1, 4)
     accent(self.mergeFromId, 1, 0.4, 0.9, 4)
@@ -4398,6 +4419,18 @@ function ADFlyoverEditor:toolTakesSpanScope()
 end
 
 --- Tools that pick a span with the shared gesture (spanPickClick) and show the selection-type row.
+--- The two ends of the span the active span tool has picked (either may be nil), for highlighting it.
+function ADFlyoverEditor:pickedSpanEnds()
+    local t, T = self.tool, self.TOOL
+    if t == T.SMOOTH then return self.smoothFromId, self.smoothToId
+    elseif t == T.DIVIDE then return self.divideFromId, self.divideToId
+    elseif t == T.GROUND then return self.groundFromId, self.groundToId
+    elseif t == T.STRAIGHTEN then return self.straightenFromId, self.straightenToId
+    elseif t == T.PARALLEL then return self.offsetFromId, self.offsetToId
+    end
+    return nil, nil
+end
+
 --- Is there a pick for the card's indicator to describe right now? A pending span, or (Ground) a selection.
 function ADFlyoverEditor:pickIsActive()
     return self:toolHasPendingStart() or (self.tool == self.TOOL.GROUND and self.groundUsesSelection == true)
