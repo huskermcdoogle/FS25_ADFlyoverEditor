@@ -46,14 +46,14 @@ local placeMenuAround   -- defined with the menu helpers below; the tool card us
 --- Layout of a segmented selector row: a small caption line, then its options in one or more lines
 --- (up to 3 per line; 4 options make 2 x 2, 5 make 3 + 2). Returns capH, perLine, lines, totalH -
 --- totalH includes the trailing gap, so rows stack with the same rhythm as buttons.
-local function segLayout(row, rowH, pad)
+local function segLayout(row, ctlH, pad, inline)
     local n = #row.options
     local perLine = n <= 3 and n or (n == 4 and 2 or 3)
     if perLine < 1 then perLine = 1 end
     local lines = math.ceil(n / perLine)
-    local capH = rowH * 0.8
+    local capH = inline and 0 or ctlH * 0.75
     local vg = pad * 0.4
-    return capH, perLine, lines, capH + lines * rowH + (lines - 1) * vg + vg
+    return capH, perLine, lines, capH + lines * ctlH + (lines - 1) * vg + vg
 end
 local placeCardInOpenSpace   -- likewise, defined below
 
@@ -738,6 +738,16 @@ function ADFlyoverHud:draw(editor)
     -- Lay rows[first..last] as one column from (x, top); tools pair two to a row. Returns the height.
     local vg = pad * 0.4   -- gap under each plated control
     local inset = pad      -- plated controls keep a margin inside the card, like the popup's buttons
+    local ctlH = rowH * 0.9  -- plated controls are a little shorter than a text row, to keep cards compact
+    -- A segmented selector puts its caption on the SAME line when caption and every option fit
+    -- side by side (saves a whole line per selector); otherwise the caption sits above.
+    local function segInline(row)
+        if #row.options > 3 or getTextWidth == nil then return false, 0 end
+        local capW = getTextWidth(fontSize, row.text) + pad * 2
+        local need = capW
+        for _, o in ipairs(row.options) do need = need + getTextWidth(fontSize, o.label) + pad * 2.5 end
+        return need <= width - inset * 2, capW
+    end
     local function place(first, last, x, top)
         local y = top - pad
         local leftTaken = false
@@ -757,28 +767,33 @@ function ADFlyoverHud:draw(editor)
             elseif row.kind == "tgl" then
                 leftTaken = false
                 local nxt = rows[i + 1]
-                y = y - rowH
+                y = y - ctlH
                 if i + 1 <= last and nxt ~= nil and nxt.kind == "tgl" then
                     local cw = (width - inset * 2 - toolGap) * 0.5
-                    row.x, row.y, row.w, row.h = x + inset, y, cw, rowH
-                    nxt.x, nxt.y, nxt.w, nxt.h = x + inset + cw + toolGap, y, cw, rowH
+                    row.x, row.y, row.w, row.h = x + inset, y, cw, ctlH
+                    nxt.x, nxt.y, nxt.w, nxt.h = x + inset + cw + toolGap, y, cw, ctlH
                     i = i + 2
                 else
-                    row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, rowH
+                    row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, ctlH
                     i = i + 1
                 end
                 y = y - vg
             elseif row.kind == "seg" then
                 leftTaken = false
-                local _, _, _, th = segLayout(row, rowH, pad)
+                row.inline, row.capW = segInline(row)
+                local _, _, _, th = segLayout(row, ctlH, pad, row.inline)
                 y = y - th
                 row.x, row.y, row.w, row.h = x + inset, y + vg, width - inset * 2, th - vg
                 i = i + 1
             else
                 leftTaken = false
-                local h = row.kind == "gap" and rowH * 0.35 or rowH
+                local plated = row.kind == "btn" or row.kind == "number" or (row.kind == "toggle" and row.stepAction ~= nil)
+                local h = rowH
+                if row.kind == "gap" then h = rowH * 0.25
+                elseif row.kind == "section" then h = rowH * 0.8
+                elseif plated then h = ctlH end
                 y = y - h
-                if row.kind == "btn" or row.kind == "number" or (row.kind == "toggle" and row.stepAction ~= nil) then
+                if plated then
                     row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, h
                     y = y - vg
                 else
@@ -985,7 +1000,7 @@ function ADFlyoverHud:draw(editor)
         elseif row.kind == "note" then
             labelRole(textX, textY, fontSize * 0.86, row.text, "mutedText")
         elseif row.kind == "section" then
-            labelRole(textX, textY, fontSize * 0.80, row.text, "sectionText")
+            labelRole(textX, textY, fontSize * 0.86, row.text, "headerText")
         elseif row.kind == "tool" then
             -- A plated, bordered button: a hairline outline behind the fill gives it a defined edge
             -- (the "button feel"), the glyph on the left carries the tool, the label names it, and the
@@ -1039,22 +1054,30 @@ function ADFlyoverHud:draw(editor)
             local size = (tw > width - self.padding * 2 and tw > 0) and fontSize * (width - self.padding * 2) / tw or fontSize
             labelRole(x + width * 0.5, y + (h - size) * 0.5, size, row.text, textR, 1, RenderText.ALIGN_CENTER)
         elseif row.kind == "seg" then
-            -- Segmented selector: a small caption, then the options side by side. The active option is
-            -- lit; an option marked `dull` (a type filter is locked to another) is greyed but still
-            -- clickable, so choosing it moves the lock.
-            local capH, perLine, lines = segLayout(row, rowH, self.padding)
+            -- Segmented selector: the caption (on the same line when it fits, else above), then the
+            -- options side by side. The active option is lit; an option marked `dull` (a type filter is
+            -- locked to another) is greyed but still clickable, so choosing it moves the lock.
+            local ctlH = rowH * 0.9
+            local capH, perLine, lines = segLayout(row, ctlH, self.padding, row.inline)
             local vgap = self.padding * 0.4
             local gapX = self.padding * 0.5
-            labelRole(textX, y + h - capH + (capH - fontSize * 0.82) * 0.5 + fontSize * 0.25, fontSize * 0.82, row.text, "mutedText")
+            local areaX, areaW = x, width
+            if row.inline then
+                labelRole(x + self.padding, y + (ctlH - fontSize) * 0.5, fontSize, row.text, "bodyText")
+                areaX = x + (row.capW or 0)
+                areaW = width - (row.capW or 0)
+            else
+                labelRole(x + self.padding, y + h - capH + (capH - fontSize) * 0.5 + fontSize * 0.2, fontSize, row.text, "bodyText")
+            end
             local n = #row.options
             for oi, o in ipairs(row.options) do
                 local li = math.ceil(oi / perLine)
                 local inLine = math.min(perLine, n - (li - 1) * perLine)
                 local ci = (oi - 1) % perLine
-                local cw = (width - gapX * (inLine - 1)) / inLine
-                local bx = x + ci * (cw + gapX)
-                local by = y + h - capH - li * rowH - (li - 1) * vgap
-                local hovered = mx ~= nil and mx >= bx and mx <= bx + cw and my >= by and my <= by + rowH
+                local cw = (areaW - gapX * (inLine - 1)) / inLine
+                local bx = areaX + ci * (cw + gapX)
+                local by = y + h - capH - li * ctlH - (li - 1) * vgap
+                local hovered = mx ~= nil and mx >= bx and mx <= bx + cw and my >= by and my <= by + ctlH
                 local be = 0.0016
                 local fillR, borderR, textR, fa
                 if o.active then
@@ -1066,15 +1089,23 @@ function ADFlyoverHud:draw(editor)
                 else
                     fillR, borderR, textR, fa = "toolBg", "toolBorder", "bodyText", 0.95
                 end
-                fillRole(self.borderOverlay, bx - be, by - be, cw + be * 2, rowH + be * 2, borderR, o.dull and 0.5 or 0.9)
-                fillRole(self.rowOverlay, bx, by, cw, rowH, fillR, fa)
+                fillRole(self.borderOverlay, bx - be, by - be, cw + be * 2, ctlH + be * 2, borderR, o.dull and 0.5 or 0.9)
+                fillRole(self.rowOverlay, bx, by, cw, ctlH, fillR, fa)
                 local tw = getTextWidth ~= nil and getTextWidth(fontSize, o.label) or 0
                 local size = (tw > cw - self.padding * 2 and tw > 0) and fontSize * (cw - self.padding * 2) / tw or fontSize
-                labelRole(bx + cw * 0.5, by + (rowH - size) * 0.5, size, o.label, textR, o.dull and 0.7 or 1,
-                    RenderText.ALIGN_CENTER)
+                if o.active then
+                    -- Text on the accent fill: the theme's own contrast colour, darkened when it is a dark
+                    -- one so the lit option reads as strongly as the unlit ones.
+                    local r, g, b = ADFlyoverTheme:rgb("accentText")
+                    if (r + g + b) / 3 < 0.5 then r, g, b = r * 0.45, g * 0.45, b * 0.45 end
+                    label(bx + cw * 0.5, by + (ctlH - size) * 0.5, size, o.label, r, g, b, 1, RenderText.ALIGN_CENTER)
+                else
+                    labelRole(bx + cw * 0.5, by + (ctlH - size) * 0.5, size, o.label, textR, o.dull and 0.7 or 1,
+                        RenderText.ALIGN_CENTER)
+                end
                 -- Registered after the seg row itself, so isMouseOver (which scans back to front)
                 -- finds the option first.
-                table.insert(self.rows, { x = bx, y = by, w = cw, h = rowH, action = o.action })
+                table.insert(self.rows, { x = bx, y = by, w = cw, h = ctlH, action = o.action })
             end
         elseif row.kind == "number" then
             if row.active then
