@@ -291,6 +291,20 @@ function ADFlyoverHud:buildRows(editor)
         seg(caption, opts)
     end
     -- A two-way flip as a segmented selector: `isB` is whether the second option is current.
+    -- The selection-type row: an INDICATOR while auto (lights whatever the last click gesture picked) and
+    -- a FILTER once the player clicks a type on purpose (that type is locked, the others dulled and the
+    -- other gestures ignored). Clicking the lit, locked type unlocks it again.
+    local function pickSeg(types)
+        local filter = editor.pickFilter
+        local opts = {}
+        for i, t in ipairs(types) do
+            opts[i] = { label = t == "set" and "selection" or t,
+                active = (filter == t) or (filter == nil and editor:toolHasPendingStart() and editor.pickKind == t),
+                dull = filter ~= nil and filter ~= t,
+                action = function() editor:setPickFilter(filter == t and nil or t) end }
+        end
+        seg("picks", opts)
+    end
     local function segFlip(caption, labelA, labelB, isB, flip)
         isB = isB and true or false
         seg(caption, {
@@ -506,6 +520,12 @@ function ADFlyoverHud:buildRows(editor)
 
     if editor:toolTakesSpanScope() then
         segCycle("covers", editor.OFFSET_SCOPE_NAMES, nil, editor.offsetScope, function() editor:cycleOffsetScope() end)
+    end
+    if editor:toolUsesSpanPick() then
+        pickSeg({ "span", "run" })
+        if editor.pickFilter == nil then
+            add("hint", "2 clicks = span, double-click = run")
+        end
     end
 
     if editor.tool == editor.TOOL.MOVE then

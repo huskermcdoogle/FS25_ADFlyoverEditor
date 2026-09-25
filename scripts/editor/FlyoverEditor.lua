@@ -177,6 +177,8 @@ ADFlyoverEditor = {
     offsetBlockedBy = nil,
     offsetDistance = 5.0,
     offsetScope = 1,
+    pickFilter = nil,   -- nil = auto (the gesture decides); else "point" | "span" | "run" | "set": locked
+    pickKind = nil,     -- what the last pick gesture produced, for the card's indicator
     -- Which side the new track goes. Seeded from the cursor when the span or anchor is first
     -- picked, then owned by the panel's flip button. Deriving it from the cursor every frame read
     -- well while selecting and badly afterwards: once anchored the cursor is usually sitting ON the
@@ -2050,6 +2052,7 @@ function ADFlyoverEditor:setTool(tool)
     end
     self.tool = tool
     self.lastMovedIds = nil
+    self.pickFilter, self.pickKind, self.lastPickId = nil, nil, nil
     -- Any half-finished interaction belongs to the tool being left, not the one being entered.
     if self.editing ~= nil then
         self:cancelEditNumber()
@@ -4383,7 +4386,11 @@ end
 --- two points. Delete and convert have their own point-vs-run scope, which means something else.
 function ADFlyoverEditor:toolTakesSpanScope()
     return self.tool == self.TOOL.PARALLEL
-        or self.tool == self.TOOL.SMOOTH
+end
+
+--- Tools that pick a span with the shared gesture (spanPickClick) and show the selection-type row.
+function ADFlyoverEditor:toolUsesSpanPick()
+    return self.tool == self.TOOL.SMOOTH
         or self.tool == self.TOOL.DIVIDE
         or self.tool == self.TOOL.STRAIGHTEN
         or self.tool == self.TOOL.GROUND
@@ -4395,6 +4402,117 @@ end
 --- selected. It used to fall through to the two-click path instead, which treated the click as
 --- re-picking the far end and quietly cut a 28-waypoint run down to 16. Whole run means the run
 --- you clicked; to pick an arbitrary sub-span, switch to the picked span.
+--- THE span-pick gesture, shared by every span tool (Smooth, Divide, Ground, Straighten; the others follow).
+---
+---   click a point            starts a span
+---   click a second point     completes it (the path between them)
+---   click again              replaces whichever end is nearer to the click
+---   double-click a point     takes the whole run through it, junction to junction
+---
+--- self.pickFilter locks one of these types deliberately ("span": no double-click runs; "run": a single
+--- click takes the run); nil is auto, where the gesture decides. self.pickKind records what the last
+--- pick produced, which the tool card shows as its indicator.
+---
+--- `cfg` is how a tool plugs in: getFrom()/getTo() read its own end fields; setEnds(from, to, ids)
+--- writes them and drops its previews; onSpan(from, to, span) (optional) runs when a full span exists.
+function ADFlyoverEditor:spanPickClick(cfg)
+    local id = self.hoverId
+    if id == nil then
+        return
+    end
+    local now = self:nowMs()
+    local isDouble = self.lastPickId == id and (now - (self.lastPickAt or -1e9)) < self.DOUBLE_CLICK_MS
+    self.lastPickId, self.lastPickAt = id, now
+
+    local filter = self.pickFilter
+    if filter ~= "span" and filter ~= "run" then
+        filter = nil   -- "point" / "set" mean nothing to a span tool
+    end
+
+    if filter == "run" or (filter == nil and isDouble) then
+        local fromId, toId, ids = self:resolveWholeRun(id)
+        if fromId ~= nil then
+            self.spanIds = ids
+            cfg.setEnds(fromId, toId, ids)
+            self.pickKind = "run"
+            if cfg.onSpan ~= nil then cfg.onSpan(fromId, toId, ids) end
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: %s takes the whole run: %d waypoint(s), id=%s to id=%s.",
+                self.TOOL_NAMES[self.tool] or "tool", #ids, tostring(fromId), tostring(toId))
+            return
+        end
+        Logging.warning("[FlyoverEditor]: no clear run through id=%s - it is a junction, or the run "
+            .. "closes on itself. Click the two ends of a span instead.", tostring(id))
+        if filter == "run" or isDouble then
+            return
+        end
+    end
+
+    local from, to = cfg.getFrom(), cfg.getTo()
+
+    if from == nil then
+        self.spanIds = nil
+        cfg.setEnds(id, nil, nil)
+        self.pickKind = "span"
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span from id=%s; click the far end (or double-click for the whole run).",
+            self.TOOL_NAMES[self.tool] or "tool", tostring(id))
+        return
+    end
+
+    if to == nil then
+        if id == from then
+            return
+        end
+        local span = self:runPathBetween(from, id)
+        if span == nil then
+            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
+                tostring(id), tostring(from))
+            return
+        end
+        self.spanIds = nil
+        cfg.setEnds(from, id, nil)
+        self.pickKind = "span"
+        if cfg.onSpan ~= nil then cfg.onSpan(from, id, span) end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span of %d waypoint(s), id=%s to id=%s.",
+            self.TOOL_NAMES[self.tool] or "tool", #span, tostring(from), tostring(id))
+        return
+    end
+
+    -- Both ends exist: replace whichever end is nearer this click (Move's refinement, now everywhere).
+    local wp = ADGraphManager:getWayPointById(id)
+    local fromWp = ADGraphManager:getWayPointById(from)
+    local toWp = ADGraphManager:getWayPointById(to)
+    if wp == nil or fromWp == nil or toWp == nil then
+        return
+    end
+    local dFrom = MathUtil.vector2Length(wp.x - fromWp.x, wp.z - fromWp.z)
+    local dTo = MathUtil.vector2Length(wp.x - toWp.x, wp.z - toWp.z)
+    local replacingFrom = dFrom <= dTo
+    local newFrom = replacingFrom and id or from
+    local newTo = replacingFrom and to or id
+    if newFrom == newTo then
+        return
+    end
+    local span = self:runPathBetween(newFrom, newTo)
+    if span == nil then
+        Logging.warning("[FlyoverEditor]: id=%s is not connected to the other end, so the span was not changed.",
+            tostring(id))
+        return
+    end
+    self.spanIds = nil
+    cfg.setEnds(newFrom, newTo, nil)
+    self.pickKind = "span"
+    if cfg.onSpan ~= nil then cfg.onSpan(newFrom, newTo, span) end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span end replaced: %d waypoint(s), id=%s to id=%s.",
+        self.TOOL_NAMES[self.tool] or "tool", #span, tostring(newFrom), tostring(newTo))
+end
+
+--- Lock the selection type (or, with nil, go back to auto). Clicking the lit type on a tool card
+--- again unlocks it.
+function ADFlyoverEditor:setPickFilter(filter)
+    self.pickFilter = filter
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: selection type %s.", filter ~= nil and ("locked to " .. filter) or "auto")
+end
+
 function ADFlyoverEditor:claimWholeRunClick(setEnds)
     if self.offsetScope ~= self.OFFSET_SCOPE.RUN or self.hoverId == nil then
         return false
@@ -5595,42 +5713,19 @@ function ADFlyoverEditor:cycleSmoothMode()
 end
 
 function ADFlyoverEditor:smoothClick()
-    if self.hoverId == nil then
-        return
-    end
-
-    if self:claimWholeRunClick(function(a, b)
+    self:spanPickClick({
+        getFrom = function() return self.smoothFromId end,
+        getTo = function() return self.smoothToId end,
+        setEnds = function(a, b)
             self.smoothFromId, self.smoothToId = a, b
             self.smoothPreview, self.smoothPinned = nil, nil
-        end) then
-        return
-    end
-
-    if self.smoothFromId == nil then
-        self.spanIds = nil
-        self.smoothFromId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: smoothing from id=%s; click the far end of the span.", tostring(self.smoothFromId))
-        return
-    end
-
-    if self.smoothToId == nil then
-        if self.hoverId == self.smoothFromId then
-            return
-        end
-        self.smoothToId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: smoothing id=%s..id=%s in %s mode. Wheel sets %s, right-click applies.",
-            tostring(self.smoothFromId), tostring(self.smoothToId),
-            self.SMOOTH_MODE_NAMES[self.smoothMode],
-            self.smoothMode == self.SMOOTH_MODE.REBUILD and "max spacing" or "strength")
-        return
-    end
-
-    if self.hoverId ~= self.smoothFromId then
-        self.smoothToId = self.hoverId
-        self.smoothPreview = nil
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: span far end moved to id=%s. Right-click to clear and start again.",
-            tostring(self.smoothToId))
-    end
+        end,
+        onSpan = function(a, b)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: smoothing id=%s..id=%s in %s mode. Wheel sets %s, right-click applies.",
+                tostring(a), tostring(b), self.SMOOTH_MODE_NAMES[self.smoothMode],
+                self.smoothMode == self.SMOOTH_MODE.REBUILD and "max spacing" or "strength")
+        end,
+    })
 end
 
 function ADFlyoverEditor:cancelSmooth()
@@ -6376,10 +6471,7 @@ function ADFlyoverEditor:getNextStepLines()
         if self.groundFromId ~= nil then
             return L("Click the far end of the span.")
         end
-        if self.offsetScope == self.OFFSET_SCOPE.RUN then
-            return L("Click a run to check the whole thing for waypoints off the ground.")
-        end
-        return L("Click one end of a span to find waypoints off the ground.")
+        return L("Click one end of a span to find waypoints off the ground, or double-click for the whole run.")
     elseif self.tool == t.STRAIGHTEN then
         if self.straightenToId ~= nil then
             return string.format(L("Wheel sets tolerance (%.2fm). Right-click straightens the span."), self.straightenTolerance)
@@ -6387,7 +6479,7 @@ function ADFlyoverEditor:getNextStepLines()
         if self.straightenFromId ~= nil then
             return L("Click the far end of the span.")
         end
-        return L("Click one end of a span to straighten it.")
+        return L("Click one end of a span to straighten it, or double-click for the whole run.")
     elseif self.tool == t.DIVIDE then
         if self.divideToId ~= nil then
             return string.format(L("Wheel sets the count (%d). Right-click applies it."), self.divideCount)
@@ -7941,39 +8033,25 @@ function ADFlyoverEditor:updateGroundPreview()
 end
 
 function ADFlyoverEditor:groundClick()
-    if self.hoverId == nil then
-        return
-    end
-
-    -- Each new inspection starts from the default tolerance. The wheel adjusts it while a span is
-    -- selected, and the wheel is also the zoom - so a value scrolled up by accident and carried over
-    -- hid points two and three metres off the ground behind a five-metre tolerance.
-    if self:claimWholeRunClick(function(a, b)
+    self:spanPickClick({
+        getFrom = function() return self.groundFromId end,
+        getTo = function() return self.groundToId end,
+        setEnds = function(a, b)
             self.groundFromId, self.groundToId = a, b
             self.groundPreview = nil
-            self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
-        end) then
-        return
-    end
-
-    if self.groundFromId == nil then
-        self.spanIds = nil
-        self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
-        self.groundFromId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: grounding from id=%s; click the far end of the span.",
-            tostring(self.groundFromId))
-        return
-    end
-
-    if self.hoverId == self.groundFromId then
-        return
-    end
-
-    self.groundToId = self.hoverId
-    self.groundPreview = nil
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: ground span set, id=%s to id=%s. Wheel sets the tolerance "
-        .. "(%.1fm). Right-click re-seats what is marked.",
-        tostring(self.groundFromId), tostring(self.groundToId), self.groundTolerance)
+            -- Each new inspection starts from the default tolerance. The wheel adjusts it while a
+            -- span is selected, and the wheel is also the zoom - so a value scrolled up by accident and
+            -- carried over hid points two and three metres off the ground behind a five-metre tolerance.
+            if b == nil then
+                self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
+            end
+        end,
+        onSpan = function(a, b, span)
+            if self.pickKind == "run" then
+                self.groundTolerance = AutoDrive.FLYOVER_GROUND_DEFAULT
+            end
+        end,
+    })
 end
 
 function ADFlyoverEditor:commitGround()
@@ -8020,40 +8098,14 @@ function ADFlyoverEditor:cancelGround()
 end
 
 function ADFlyoverEditor:straightenClick()
-    if self.hoverId == nil then
-        return
-    end
-
-    if self:claimWholeRunClick(function(a, b)
+    self:spanPickClick({
+        getFrom = function() return self.straightenFromId end,
+        getTo = function() return self.straightenToId end,
+        setEnds = function(a, b)
             self.straightenFromId, self.straightenToId = a, b
             self.straightenPreview = nil
-        end) then
-        return
-    end
-
-    if self.straightenFromId == nil then
-        self.spanIds = nil
-        self.straightenFromId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: straightening from id=%s; click the far end of the span.",
-            tostring(self.straightenFromId))
-        return
-    end
-
-    if self.hoverId == self.straightenFromId then
-        return
-    end
-
-    local span = self:runPathBetween(self.straightenFromId, self.hoverId)
-    if span == nil then
-        Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
-            tostring(self.hoverId), tostring(self.straightenFromId))
-        return
-    end
-
-    self.straightenToId = self.hoverId
-    self.straightenPreview = nil
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the tolerance (%.2fm), right-click applies.",
-        #span, self.straightenTolerance)
+        end,
+    })
 end
 
 --- Points of the current span, or nil.
@@ -8211,55 +8263,20 @@ function ADFlyoverEditor:cancelStraighten()
 end
 
 function ADFlyoverEditor:divideClick()
-    if self.hoverId == nil then
-        return
-    end
-
-    if self:claimWholeRunClick(function(a, b)
+    self:spanPickClick({
+        getFrom = function() return self.divideFromId end,
+        getTo = function() return self.divideToId end,
+        setEnds = function(a, b)
             self.divideFromId, self.divideToId = a, b
             self.dividePreview = nil
-        end) then
-        return
-    end
-
-    if self.divideFromId == nil then
-        self.spanIds = nil
-        self.divideFromId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: dividing from id=%s; click the far end of the span.", tostring(self.divideFromId))
-        return
-    end
-
-    if self.divideToId == nil then
-        if self.hoverId == self.divideFromId then
-            return
-        end
-        local span = self:runPathBetween(self.divideFromId, self.hoverId)
-        if span == nil then
-            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
-                tostring(self.hoverId), tostring(self.divideFromId))
-            return
-        end
-        self.divideToId = self.hoverId
-        -- Start from what is already there, so the wheel adjusts from the current spacing rather
-        -- than jumping to an arbitrary default.
-        self.divideCount = math.max(0, #span - 2)
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s), %d between the ends. Wheel to change, right-click to apply.",
-            #span, self.divideCount)
-        return
-    end
-
-    -- Both ends chosen: another click re-picks the far end.
-    if self.hoverId ~= self.divideFromId then
-        self.divideToId = self.hoverId
-        self.dividePreview = nil
-        -- Reset the count to what this span already has, exactly as the second click does.
-        -- Without this the count carried over from the previous span, so the same wheel position
-        -- meant something entirely different from one span to the next - 39 points wheeled up on a
-        -- long span were then applied to a single segment.
-        self.divideCount = self:currentInteriorCount(self.divideFromId, self.divideToId)
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: span far end moved to id=%s, %d point(s) between the ends. Right-click to clear and start again.",
-            tostring(self.divideToId), self.divideCount)
-    end
+        end,
+        onSpan = function(a, b, span)
+            -- Start the wheel from what the span already has, so it adjusts from the current spacing
+            -- rather than carrying a count over from the previous span (39 points wheeled up on a long
+            -- span were once applied to a single segment).
+            self.divideCount = math.max(0, #span - 2)
+        end,
+    })
 end
 
 --- How many waypoints currently sit between two ends, or 0 if they are not connected.
