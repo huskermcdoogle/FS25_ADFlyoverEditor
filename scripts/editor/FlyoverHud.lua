@@ -301,7 +301,15 @@ function ADFlyoverHud:buildRows(editor)
             opts[i] = { label = t == "set" and "selection" or t,
                 active = (filter == t) or (filter == nil and editor:pickIsActive() and editor.pickKind == t),
                 dull = filter ~= nil and filter ~= t,
-                action = function() editor:setPickFilter(filter == t and nil or t) end }
+                action = function()
+                    -- Not `filter == t and nil or t`: in Lua that always yields t, so the lit type could
+                    -- never be unlocked.
+                    if filter == t then
+                        editor:setPickFilter(nil)
+                    else
+                        editor:setPickFilter(t)
+                    end
+                end }
         end
         seg("picks", opts)
     end
