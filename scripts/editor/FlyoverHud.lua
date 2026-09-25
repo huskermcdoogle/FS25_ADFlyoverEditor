@@ -523,6 +523,11 @@ function ADFlyoverHud:buildRows(editor)
     if editor:toolTakesSpanScope() then
         segCycle("covers", editor.OFFSET_SCOPE_NAMES, nil, editor.offsetScope, function() editor:cycleOffsetScope() end)
     end
+    if editor.tool == editor.TOOL.PARALLEL then
+        -- Which way the new track runs beside a one-way road. Two-way roads are unaffected.
+        segCycle("flow", editor.PARALLEL_FLOW_NAMES, nil, editor.parallelFlow, function() editor:cycleParallelFlow() end)
+        add("hint", "(only matters beside a one-way track)")
+    end
     if editor:toolUsesSpanPick() then
         if editor.tool == editor.TOOL.GROUND then
             -- Ground needs no path, so it also takes any selection, connected or not.

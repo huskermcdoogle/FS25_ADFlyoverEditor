@@ -177,6 +177,7 @@ ADFlyoverEditor = {
     offsetBlockedBy = nil,
     offsetDistance = 5.0,
     offsetScope = 1,
+    parallelFlow = 1,   -- 1 = the new track runs the SAME way as a one-way source, 2 = OPPOSITE (a return lane)
     pickFilter = nil,   -- nil = auto (the gesture decides); else "point" | "span" | "run" | "set": locked
     pickKind = nil,     -- what the last pick gesture produced, for the card's indicator
     -- Which side the new track goes. Seeded from the cursor when the span or anchor is first
@@ -7653,6 +7654,14 @@ end
 --- route: from one end you can take the main line or the siding, rejoining at the other. No
 --- dividing is needed, because the attachment points are the span's own endpoints, which already
 --- exist - that is what selecting a span rather than a length buys.
+ADFlyoverEditor.PARALLEL_FLOW_NAMES = { "same way", "opposite" }
+
+function ADFlyoverEditor:cycleParallelFlow()
+    self.parallelFlow = (self.parallelFlow % #self.PARALLEL_FLOW_NAMES) + 1
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: a parallel track beside a one-way road runs %s.",
+        self.PARALLEL_FLOW_NAMES[self.parallelFlow])
+end
+
 function ADFlyoverEditor:commitOffset()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: commit %s: from=%s to=%s anchor=%s preview=%s",
         self.tool == self.TOOL.SIDING and "siding" or "parallel",
@@ -7695,7 +7704,9 @@ function ADFlyoverEditor:commitOffset()
     -- Whether to lay the track back to front is necessarily a decision for the whole run - a chain
     -- has one direction. Any one-way part is what settles it: those want a return lane, and the
     -- two-way parts are indifferent, so following the one-way parts costs the two-way ones nothing.
-    local layReversed = oneWayCount > 0
+    -- Only when asked: a parallel track beside a one-way road used to be laid back to front every time
+    -- (a return lane), which is a surprise as a default. parallelFlow chooses; same way is the default.
+    local layReversed = oneWayCount > 0 and self.parallelFlow == 2
 
     local laying = newPoints
     if layReversed and not siding then
@@ -7732,9 +7743,9 @@ function ADFlyoverEditor:commitOffset()
         siding and "siding" or "parallel track", #laying, self.offsetDistance,
         self:sideName(),
         siding and ", splined in at both ends"
-            or (mixed and string.format(", mixed (%d two-way, %d one-way segment(s)), running opposite",
-                    dualCount, oneWayCount)
-                or (dual and ", two-way" or ", running opposite")))
+            or (mixed and string.format(", mixed (%d two-way, %d one-way segment(s)), running %s",
+                    dualCount, oneWayCount, layReversed and "opposite" or "the same way")
+                or (dual and ", two-way" or (layReversed and ", running opposite" or ", running the same way"))))
 
     self.offsetFromId, self.offsetToId, self.offsetPreview, self.offsetCache = nil, nil, nil, nil
     self.spanIds = nil
