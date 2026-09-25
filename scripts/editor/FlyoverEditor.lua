@@ -7509,6 +7509,13 @@ function ADFlyoverEditor:resolveWholeRun(seedId)
     end
 
     local fromId, toId = reachToJunction(ends[1]), reachToJunction(ends[2])
+    -- Both ends reach the SAME junction: the run is a loop that leaves a junction and comes back to it
+    -- (captured 2026-09-24: "the whole run: 66 waypoint(s), id=12458 to id=12458"). A span from a point to
+    -- itself is not a span - Straighten collapsed it and the others went all the way around it - so it is
+    -- refused like a closed loop, and the caller asks for two clicks on the part wanted instead.
+    if fromId == toId then
+        return nil
+    end
     local ordered = walkRunFrom(run, count, ends[1])
     if ordered == nil then
         return nil
