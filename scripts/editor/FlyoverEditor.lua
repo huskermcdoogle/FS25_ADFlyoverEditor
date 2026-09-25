@@ -4437,9 +4437,43 @@ end
 --- Take the side from where the cursor points, and remember which side that was and whether the track
 --- is two-way, so the side selector can say "picked side / other side" on a two-way track.
 function ADFlyoverEditor:pickSideFromCursor(seedPts)
-    self.offsetSide = self:offsetSideFromCursor(seedPts)
-    self.offsetSidePicked = self.offsetSide
+    local side, a, b = self:offsetSideFromCursor(seedPts)
+    self.offsetSide = side
+    self.offsetSidePicked = side
     self.sideTwoWay = self:runIsTwoWay(seedPts)
+    -- The stretch of track the side was judged against: on a two-way track the sides are named by where
+    -- they lie on SCREEN, worked out from this each frame (see screenSideLabels).
+    if a ~= nil and b ~= nil then
+        self.sideRefA = { x = a.x, y = a.y or 0, z = a.z }
+        self.sideRefB = { x = b.x, y = b.y or 0, z = b.z }
+    else
+        self.sideRefA, self.sideRefB = nil, nil
+    end
+end
+
+--- Where the two sides of a two-way track lie on screen: returns the words for the + side and the -
+--- side (right/left when the track runs mostly up and down the screen, up/down when it runs mostly
+--- across it), or nil when that cannot be worked out. Recomputed as the camera moves, so the words
+--- always describe what is on screen.
+function ADFlyoverEditor:screenSideLabels()
+    local a, b = self.sideRefA, self.sideRefB
+    if a == nil or b == nil or project == nil then return nil end
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len < 1e-6 then return nil end
+    local nx, nz = -dz / len, dx / len   -- the + side's normal, as the offset maths uses it
+    local mx, my, mz = (a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5
+    local ok0, x0, y0, d0 = pcall(project, mx, my, mz)
+    local ok1, x1, y1, d1 = pcall(project, mx + nx * 5, my, mz + nz * 5)
+    if not (ok0 and ok1 and x0 and x1 and d0 and d1 and d0 > 0 and d1 > 0) then return nil end
+    -- Normalised screen x is squeezed by the aspect ratio; scale it back so the two axes compare fairly.
+    local vx, vy = (x1 - x0) * (g_screenAspectRatio or (16 / 9)), y1 - y0
+    if math.abs(vx) >= math.abs(vy) then
+        if vx > 0 then return "right", "left" end
+        return "left", "right"
+    end
+    if vy > 0 then return "up", "down" end
+    return "down", "up"
 end
 
 --- The name of the current side, the same words the selector shows: left / right of travel on a one-way
@@ -4447,6 +4481,10 @@ end
 function ADFlyoverEditor:sideName()
     local side = self.offsetSide or 1
     if self.sideTwoWay then
+        local plus, minus = self:screenSideLabels()
+        if plus ~= nil then
+            return side >= 0 and plus or minus
+        end
         return side == (self.offsetSidePicked or 1) and "picked side" or "other side"
     end
     return side >= 0 and "right" or "left"
@@ -7403,7 +7441,7 @@ function ADFlyoverEditor:offsetSideFromCursor(pts)
 
     local a, b = pts[bestIndex], pts[bestIndex + 1]
     local cross = (b.x - a.x) * (cz - a.z) - (b.z - a.z) * (cx - a.x)
-    return cross >= 0 and 1 or -1
+    return cross >= 0 and 1 or -1, a, b
 end
 
 function ADFlyoverEditor:updateOffsetPreview()
