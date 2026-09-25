@@ -490,9 +490,9 @@ function ADFlyoverHud:buildRows(editor)
         add("section", "NEW CONNECTIONS")
         segCycle("traffic", editor.CONNECTION_NAMES, nil, editor.connectionMode,
             function() editor:cycleConnectionMode() end)
-        if editor.tool == editor.TOOL.SPLINE then
-            add("hint", "reverse flips traffic, not the shape")
-        end
+        -- "reverse" is AutoDrive's reverse road: a one-way link vehicles drive in reverse gear (backing up
+        -- to a shed or an unloader). It is NOT a way to flip a one-way's direction.
+        add("hint", "reverse = a road vehicles back along")
         segFlip("priority", "primary", "secondary", editor.subPrio, function() editor:togglePriority() end)
     end
 
