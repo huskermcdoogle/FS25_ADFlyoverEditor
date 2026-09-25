@@ -7958,7 +7958,7 @@ end
 
 --- Every waypoint in the span that sits further off the ground than the tolerance.
 function ADFlyoverEditor:updateGroundPreview()
-    -- What is being checked: a picked span (or two points, connected or not), or - when no span is
+    -- What is being checked: a picked span, or - when no span is
     -- pending and no other type is locked - whatever is selected (box, circle, freehand, Ctrl-click),
     -- connected or not. Ground only asks where each point sits against the ground, so it never needs a path.
     local span
@@ -7966,7 +7966,7 @@ function ADFlyoverEditor:updateGroundPreview()
     if self.groundFromId ~= nil and self.groundToId ~= nil then
         span = self:spanBetween(self.groundFromId, self.groundToId)
         if span == nil or #span < 1 then
-            span = { self.groundFromId, self.groundToId }   -- not connected: still just two points to check
+            span = { self.groundFromId, self.groundToId }   -- defensive: an unresolved span is still just two points
         end
     elseif self.groundFromId == nil and self.selectionCount > 0
         and (self.pickFilter == nil or self.pickFilter == "set") then
@@ -8033,7 +8033,6 @@ function ADFlyoverEditor:groundClick()
         return   -- locked to selections: span clicks are ignored
     end
     self:spanPickClick({
-        anyPoints = true,
         getFrom = function() return self.groundFromId end,
         getTo = function() return self.groundToId end,
         setEnds = function(a, b)
