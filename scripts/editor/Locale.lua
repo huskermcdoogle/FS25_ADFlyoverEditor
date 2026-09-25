@@ -151,6 +151,8 @@ L.STRINGS = {
         ["picked side"] = "gewählte Seite",
         ["up"] = "oben",
         ["selection"] = "Auswahl",
+        ["2 clicks = span, double-click = run, or select points"] = "2 Klicks = Abschnitt, Doppelklick = Route, oder Punkte auswählen",
+        ["Click a span or double-click a run, or select points (box, circle, Ctrl-click) - connected or not - to find waypoints off the ground."] = "Abschnitt anklicken oder Route doppelklicken, oder Punkte auswählen (Rahmen, Kreis, Strg-Klick) - verbunden oder nicht - um Wegpunkte über dem Boden zu finden.",
         ["Click one end of a span to run a track alongside it, or double-click for the whole run."] = "Ein Ende eines Abschnitts anklicken, um eine Spur daneben zu legen, oder doppelklicken für die ganze Route.",
         ["2 clicks = span, double-click = run"] = "2 Klicks = Abschnitt, Doppelklick = Route",
         ["Click one end of a span to find waypoints off the ground, or double-click for the whole run."] = "Ein Ende eines Abschnitts anklicken, um Wegpunkte über dem Boden zu finden, oder doppelklicken für die ganze Route.",

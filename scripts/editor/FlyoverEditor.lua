@@ -3469,6 +3469,9 @@ function ADFlyoverEditor:stopCurrentAction()
         elseif self.groundFromId ~= nil then
             self:cancelGround()
             return true
+        elseif self.groundUsesSelection and self.groundPreview ~= nil then
+            self:commitGround()
+            return true
         end
     elseif tool == self.TOOL.STRAIGHTEN then
         if self.straightenToId ~= nil then
@@ -4394,6 +4397,11 @@ function ADFlyoverEditor:toolTakesSpanScope()
 end
 
 --- Tools that pick a span with the shared gesture (spanPickClick) and show the selection-type row.
+--- Is there a pick for the card's indicator to describe right now? A pending span, or (Ground) a selection.
+function ADFlyoverEditor:pickIsActive()
+    return self:toolHasPendingStart() or (self.tool == self.TOOL.GROUND and self.groundUsesSelection == true)
+end
+
 function ADFlyoverEditor:toolUsesSpanPick()
     return self.tool == self.TOOL.SMOOTH
         or self.tool == self.TOOL.PARALLEL
@@ -4469,6 +4477,9 @@ function ADFlyoverEditor:spanPickClick(cfg)
             return
         end
         local span = self:runPathBetween(from, id)
+        if span == nil and cfg.anyPoints then
+            span = { from, id }   -- a tool that does not need a path takes any two points
+        end
         if span == nil then
             Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
                 tostring(id), tostring(from))
@@ -4499,6 +4510,9 @@ function ADFlyoverEditor:spanPickClick(cfg)
         return
     end
     local span = self:runPathBetween(newFrom, newTo)
+    if span == nil and cfg.anyPoints then
+        span = { newFrom, newTo }
+    end
     if span == nil then
         Logging.warning("[FlyoverEditor]: id=%s is not connected to the other end, so the span was not changed.",
             tostring(id))
@@ -6464,7 +6478,7 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Click one end of a span to run a track alongside it, or double-click for the whole run.")
     elseif self.tool == t.GROUND then
-        if self.groundToId ~= nil then
+        if self.groundToId ~= nil or self.groundUsesSelection then
             local n = self.groundPreview ~= nil and #self.groundPreview or 0
             if n == 0 then
                 return string.format(L("Nothing over %.1fm off the ground. Wheel the tolerance down to see more."), self.groundTolerance)
@@ -6474,7 +6488,7 @@ function ADFlyoverEditor:getNextStepLines()
         if self.groundFromId ~= nil then
             return L("Click the far end of the span.")
         end
-        return L("Click one end of a span to find waypoints off the ground, or double-click for the whole run.")
+        return L("Click a span or double-click a run, or select points (box, circle, Ctrl-click) - connected or not - to find waypoints off the ground.")
     elseif self.tool == t.STRAIGHTEN then
         if self.straightenToId ~= nil then
             return string.format(L("Wheel sets tolerance (%.2fm). Right-click straightens the span."), self.straightenTolerance)
@@ -7944,14 +7958,25 @@ end
 
 --- Every waypoint in the span that sits further off the ground than the tolerance.
 function ADFlyoverEditor:updateGroundPreview()
-    if self.groundFromId == nil or self.groundToId == nil then
+    -- What is being checked: a picked span (or two points, connected or not), or - when no span is
+    -- pending and no other type is locked - whatever is selected (box, circle, freehand, Ctrl-click),
+    -- connected or not. Ground only asks where each point sits against the ground, so it never needs a path.
+    local span
+    self.groundUsesSelection = false
+    if self.groundFromId ~= nil and self.groundToId ~= nil then
+        span = self:spanBetween(self.groundFromId, self.groundToId)
+        if span == nil or #span < 1 then
+            span = { self.groundFromId, self.groundToId }   -- not connected: still just two points to check
+        end
+    elseif self.groundFromId == nil and self.selectionCount > 0
+        and (self.pickFilter == nil or self.pickFilter == "set") then
+        span = {}
+        for id in pairs(self.selection) do span[#span + 1] = id end
+        table.sort(span)
+        self.groundUsesSelection = true
+        self.pickKind = "set"
+    else
         self.groundPreview = nil
-        return
-    end
-
-    local span = self:spanBetween(self.groundFromId, self.groundToId)
-    if span == nil or #span < 1 then
-        self.groundPreview, self.groundBlockedBy = nil, "those two points are not two ends of one span."
         return
     end
 
@@ -7970,7 +7995,8 @@ function ADFlyoverEditor:updateGroundPreview()
     local firstWp, lastWp = pts[1], pts[#pts]
     local total = along[#along] or 0
     local function expectedAt(i)
-        if firstWp == nil or lastWp == nil or total < 0.01 then
+        -- A selection has no span line to interpolate along: each point is judged on its own.
+        if self.groundUsesSelection or firstWp == nil or lastWp == nil or total < 0.01 then
             return nil
         end
         local t = along[i] / total
@@ -8003,7 +8029,11 @@ function ADFlyoverEditor:updateGroundPreview()
 end
 
 function ADFlyoverEditor:groundClick()
+    if self.pickFilter == "set" then
+        return   -- locked to selections: span clicks are ignored
+    end
     self:spanPickClick({
+        anyPoints = true,
         getFrom = function() return self.groundFromId end,
         getTo = function() return self.groundToId end,
         setEnds = function(a, b)
@@ -9666,7 +9696,7 @@ function ADFlyoverEditor:handleWheel(offset)
     -- mid-drag and hover-over-card cases.
     if self.tool == self.TOOL.SIDING and self.sidingAnchorId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.PARALLEL and self.offsetToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
-    if self.tool == self.TOOL.GROUND and self.groundToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
+    if self.tool == self.TOOL.GROUND and (self.groundToId ~= nil or self.groundUsesSelection) then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.STRAIGHTEN and self.straightenToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     if self.tool == self.TOOL.DIVIDE and self.divideToId ~= nil then return self:applyWheelToActiveTool(toolStep) end
     -- Also claimed with a pending (released, not yet right-click-committed) offset - not just

@@ -299,7 +299,7 @@ function ADFlyoverHud:buildRows(editor)
         local opts = {}
         for i, t in ipairs(types) do
             opts[i] = { label = t == "set" and "selection" or t,
-                active = (filter == t) or (filter == nil and editor:toolHasPendingStart() and editor.pickKind == t),
+                active = (filter == t) or (filter == nil and editor:pickIsActive() and editor.pickKind == t),
                 dull = filter ~= nil and filter ~= t,
                 action = function() editor:setPickFilter(filter == t and nil or t) end }
         end
@@ -522,9 +522,17 @@ function ADFlyoverHud:buildRows(editor)
         segCycle("covers", editor.OFFSET_SCOPE_NAMES, nil, editor.offsetScope, function() editor:cycleOffsetScope() end)
     end
     if editor:toolUsesSpanPick() then
-        pickSeg({ "span", "run" })
-        if editor.pickFilter == nil then
-            add("hint", "2 clicks = span, double-click = run")
+        if editor.tool == editor.TOOL.GROUND then
+            -- Ground needs no path, so it also takes any selection, connected or not.
+            pickSeg({ "span", "run", "set" })
+            if editor.pickFilter == nil then
+                add("hint", "2 clicks = span, double-click = run, or select points")
+            end
+        else
+            pickSeg({ "span", "run" })
+            if editor.pickFilter == nil then
+                add("hint", "2 clicks = span, double-click = run")
+            end
         end
     end
 
