@@ -1995,6 +1995,7 @@ function ADFlyoverEditor:menuArmParallel()
     self:setTool(self.TOOL.PARALLEL)
     self.offsetScope = isRun and self.OFFSET_SCOPE.RUN or self.OFFSET_SCOPE.SPAN
     self.spanIds = ids
+    self.pickKind = (m.kind == "run") and "run" or "span"
     self.offsetFromId, self.offsetToId = from, to
     self.offsetPreview, self.offsetCache = nil, nil
     local seedPts = self:offsetSpanPoints()
@@ -4389,12 +4390,13 @@ end
 --- Which tools offer the picked-span / whole-run choice: everything that works on a span between
 --- two points. Delete and convert have their own point-vs-run scope, which means something else.
 function ADFlyoverEditor:toolTakesSpanScope()
-    return self.tool == self.TOOL.PARALLEL
+    return false   -- retired: every span tool now shows the shared pick row instead of "covers"
 end
 
 --- Tools that pick a span with the shared gesture (spanPickClick) and show the selection-type row.
 function ADFlyoverEditor:toolUsesSpanPick()
     return self.tool == self.TOOL.SMOOTH
+        or self.tool == self.TOOL.PARALLEL
         or self.tool == self.TOOL.DIVIDE
         or self.tool == self.TOOL.STRAIGHTEN
         or self.tool == self.TOOL.GROUND
@@ -6460,10 +6462,7 @@ function ADFlyoverEditor:getNextStepLines()
         if self.offsetFromId ~= nil then
             return L("Click the far end of the span.")
         end
-        if self.offsetScope == self.OFFSET_SCOPE.RUN then
-            return L("Click a run to offset the whole thing, junction to junction.")
-        end
-        return L("Click one end of a span to run a track alongside it.")
+        return L("Click one end of a span to run a track alongside it, or double-click for the whole run.")
     elseif self.tool == t.GROUND then
         if self.groundToId ~= nil then
             local n = self.groundPreview ~= nil and #self.groundPreview or 0
@@ -7221,65 +7220,32 @@ function ADFlyoverEditor:cancelSiding()
 end
 
 function ADFlyoverEditor:offsetClick()
-    if self.hoverId == nil then
-        return
-    end
-
-    -- Whole-run scope needs one click, not two. The resolution is shared with smooth, divide and
-    -- straighten: the run's ends are extended onto the junctions it stopped before, and the route
-    -- between them is kept from walking the collected run rather than re-derived. This tool is
-    -- where all three of those lessons were learned, so it has no business keeping its own copy.
-    if self.offsetScope == self.OFFSET_SCOPE.RUN then
-        if self:claimWholeRunClick(function(a, b)
-                self.offsetFromId, self.offsetToId = a, b
-                self.offsetPreview, self.offsetCache = nil, nil
-            end) then
-            -- Seed the side from where the cursor is, exactly as the two-click path does.
+    self:spanPickClick({
+        getFrom = function() return self.offsetFromId end,
+        getTo = function() return self.offsetToId end,
+        setEnds = function(a, b)
+            self.offsetFromId, self.offsetToId = a, b
+            self.offsetPreview, self.offsetCache = nil, nil
+        end,
+        onSpan = function(a, b, span)
+            -- The side follows where the cursor is when the span is completed, whichever gesture made it.
             local seedPts = self:offsetSpanPoints()
             if seedPts ~= nil then
                 self:pickSideFromCursor(seedPts)
             end
-        end
-        return
-    end
-
-    if self.offsetFromId == nil then
-        self.offsetFromId = self.hoverId
-        self.spanIds = nil
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s from id=%s; click the far end of the span.",
-            self.TOOL_NAMES[self.tool] or "offset", tostring(self.offsetFromId))
-        return
-    end
-
-    if self.hoverId == self.offsetFromId then
-        return
-    end
-
-    local span = self:runPathBetween(self.offsetFromId, self.hoverId)
-    if span == nil then
-        Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
-            tostring(self.hoverId), tostring(self.offsetFromId))
-        return
-    end
-
-    self.offsetToId = self.hoverId
-    self.offsetPreview, self.offsetCache = nil, nil
-    local seedPts = self:offsetSpanPoints()
-    if seedPts ~= nil then
-        self:pickSideFromCursor(seedPts)
-    end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
-        .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
-    -- The actual route, not just its length. runPathBetween is a path FINDER: asked to get from a
-    -- siding back to the main line it can leave along one merge taper and return along the other,
-    -- which is a legitimate shortest path and a span that doubles back. The offset then copies that
-    -- shape faithfully, so the track looks wrong while the offset itself was right. Printing the
-    -- ids is what tells those two apart without another screenshot to guess from.
-    local ids = {}
-    for i, id in ipairs(span) do
-        ids[i] = tostring(id)
-    end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: span route: %s", table.concat(ids, " -> "))
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: span of %d waypoint(s). Wheel sets the offset (%.1fm); the side "
+                .. "follows the cursor. Right-click applies.", #span, self.offsetDistance)
+            -- The actual route, not just its length. runPathBetween is a path FINDER: asked to get from a
+            -- siding back to the main line it can leave along one merge taper and return along the other,
+            -- which is a legitimate shortest path and a span that doubles back. Printing the ids is what
+            -- tells that apart from a wrong offset without another screenshot to guess from.
+            local ids = {}
+            for i, id in ipairs(span) do
+                ids[i] = tostring(id)
+            end
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: span route: %s", table.concat(ids, " -> "))
+        end,
+    })
 end
 
 --- Where a chain turns back on itself, or nil when it does not.
