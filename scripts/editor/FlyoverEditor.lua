@@ -169,6 +169,8 @@ ADFlyoverEditor = {
     snapToTerrain = false,
     convertScope = 2,
     convertOp = 1,
+    convertDirection = 3,   -- CONVERT_OP.TWOWAY / ONEWAY / REVERSE: the Convert tool's direction row
+    convertPriority = 2,    -- CONVERT_OP.PRIMARY / SECONDARY: its priority row
     -- parallel and siding share this: they are the same span-select, the same wheel and the same
     -- preview, and differ only in what happens on commit. They are mutually exclusive anyway.
     offsetFromId = nil,
@@ -3375,7 +3377,7 @@ function ADFlyoverEditor:onLeftRelease()
     elseif self.tool == self.TOOL.FIELDLOOP then
         self:generateFieldLoopAtCursor()
     elseif self.tool == self.TOOL.CONVERT then
-        self:convertAtCursor()
+        self:convertToolClick()
     elseif self.tool == self.TOOL.SIDING then
         self:sidingClick()
     elseif self.tool == self.TOOL.PARALLEL then
@@ -6742,7 +6744,7 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span to divide.")
     elseif self.tool == t.CONVERT then
         return string.format(L("Click to make it %s (%s)."),
-            L(self.CONVERT_OP_NAMES[self.convertOp]),
+            L(self.CONVERT_OP_NAMES[self.convertDirection]) .. ", " .. L(self.CONVERT_OP_NAMES[self.convertPriority]),
             self.convertScope == self.DELETE_SCOPE.RUN and L("whole run") or L("this waypoint"))
     elseif self.tool == t.MERGE then
         if self.mergeToId ~= nil then
@@ -10274,6 +10276,24 @@ local function removeLink(fromId, toId)
     table.removeValue(to.incoming, fromId)
 end
 
+--- The Convert tool's click: set BOTH the direction and the priority the card is configured for, as one
+--- action and one undo step. (The point/span/run popup's "make two-way" etc. stay single changes.)
+function ADFlyoverEditor:convertToolClick()
+    if self.hoverId == nil then
+        return
+    end
+    ADEditorHistory:snapshot(string.format("convert %s + %s",
+        self.CONVERT_OP_NAMES[self.convertDirection], self.CONVERT_OP_NAMES[self.convertPriority]))
+    local saved = self.convertOp
+    self.convertSkipSnapshot = true
+    self.convertOp = self.convertDirection
+    self:convertAtCursor()
+    self.convertOp = self.convertPriority
+    self:convertAtCursor()
+    self.convertSkipSnapshot = false
+    self.convertOp = saved
+end
+
 function ADFlyoverEditor:convertAtCursor()
     if self.hoverId == nil then
         return
@@ -10343,7 +10363,9 @@ function ADFlyoverEditor:convertAtCursor()
         return
     end
 
-    ADEditorHistory:snapshot("convert " .. self.CONVERT_OP_NAMES[self.convertOp])
+    if not self.convertSkipSnapshot then
+        ADEditorHistory:snapshot("convert " .. self.CONVERT_OP_NAMES[self.convertOp])
+    end
 
     local op = self.convertOp
     local changed = 0

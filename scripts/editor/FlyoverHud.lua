@@ -646,15 +646,19 @@ function ADFlyoverHud:buildRows(editor)
         tgl("avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles"),
             function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
     elseif editor.tool == editor.TOOL.CONVERT then
-        -- Two kinds of change, two rows: which way traffic runs, and the road's priority. A click applies ONE
-        -- change, so exactly one option across both rows is lit.
+        -- Two kinds of change, two rows: which way traffic runs, and the road's priority. Configure both;
+        -- one click converts to both at once.
         local OP = editor.CONVERT_OP
-        local function opOption(label, op)
-            return { label = label, active = editor.convertOp == op,
-                action = function() editor.convertOp = op end }
+        local function dirOption(label, op)
+            return { label = label, active = editor.convertDirection == op,
+                action = function() editor.convertDirection = op end }
         end
-        seg("direction", { opOption("two-way", OP.TWOWAY), opOption("one-way", OP.ONEWAY), opOption("reversed", OP.REVERSE) })
-        seg("priority", { opOption("primary", OP.PRIMARY), opOption("secondary", OP.SECONDARY) })
+        local function prioOption(label, op)
+            return { label = label, active = editor.convertPriority == op,
+                action = function() editor.convertPriority = op end }
+        end
+        seg("direction", { dirOption("two-way", OP.TWOWAY), dirOption("one-way", OP.ONEWAY), dirOption("reversed", OP.REVERSE) })
+        seg("priority", { prioOption("primary", OP.PRIMARY), prioOption("secondary", OP.SECONDARY) })
         segCycle("applies to", editor.DELETE_SCOPE_NAMES, nil, editor.convertScope,
             function() editor:cycleConvertScope() end)
     elseif editor.tool == editor.TOOL.DELETE then
