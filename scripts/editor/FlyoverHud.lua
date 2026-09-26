@@ -277,7 +277,7 @@ function ADFlyoverHud:buildRows(editor)
         for _, o in ipairs(options) do
             o.label = TR(o.label)
             if disabled then
-                o.dull, o.action = true, nil
+                o.dull, o.action, o.active = true, nil, false   -- greyed rows show nothing lit
             end
         end
         rows[#rows + 1] = { kind = "seg", text = TR(caption), options = options, disabled = disabled }
@@ -714,7 +714,7 @@ function ADFlyoverHud:buildRows(editor)
         -- else on this card says so, so a click can look like it deleted "scope"'s single waypoint
         -- when it actually took out the whole selection (reported 2026-09-21).
         if editor.selectionCount > 0 then
-            add("header", string.format("%d selected - click deletes the SELECTION, not the setting above", editor.selectionCount))
+            add("header", string.format("%d selected - right-click deletes them, Esc clears", editor.selectionCount))
         end
     elseif editor.tool == editor.TOOL.JUNCTION then
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.

@@ -3622,6 +3622,12 @@ end
 function ADFlyoverEditor:stopCurrentAction()
     local tool = self.tool
 
+    -- Delete with a selection: right-click is the apply.
+    if tool == self.TOOL.DELETE and self.selectionCount > 0 then
+        self:deleteSelection()
+        return true
+    end
+
     if tool == self.TOOL.DRAW then
         if self.lastWaypointId ~= nil then
             self:endRun()
@@ -6009,10 +6015,11 @@ function ADFlyoverEditor:deleteRunAtCursor()
 end
 
 function ADFlyoverEditor:deleteAtCursor()
-    -- A selection wins over the hovered point: having built one up, a click should act on it
-    -- rather than quietly deleting whatever happened to be under the cursor.
+    -- With a selection built up, a left click does nothing: it is too easy to be the click that ENDS a
+    -- Ctrl-selection. Right-click deletes the selection (stopCurrentAction), Esc clears it.
     if self.selectionCount > 0 then
-        self:deleteSelection()
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %d selected - right-click deletes them, Esc clears the selection.",
+            self.selectionCount)
         return
     end
 
