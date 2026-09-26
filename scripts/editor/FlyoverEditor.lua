@@ -4923,6 +4923,33 @@ function ADFlyoverEditor:spanPath(a, b)
     return self:runPathBetween(a, b)
 end
 
+--- A span picked by two clicks must be the short, obvious way between them. When the only route found runs
+--- a long way round (away through a junction and back, or down a different run), refuse it rather than
+--- quietly take it: over ROUTE_MAX_RATIO times the straight distance AND more than ROUTE_MAX_EXTRA metres
+--- longer than it. Returns ok, routeLength, straightLength.
+ADFlyoverEditor.ROUTE_MAX_RATIO = 2.0
+ADFlyoverEditor.ROUTE_MAX_EXTRA = 40
+function ADFlyoverEditor:spanRouteIsDirect(span)
+    if span == nil or #span < 2 then
+        return true, 0, 0
+    end
+    local length, prev = 0, nil
+    for _, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            if prev ~= nil then
+                length = length + MathUtil.vector2Length(wp.x - prev.x, wp.z - prev.z)
+            end
+            prev = wp
+        end
+    end
+    local a = ADGraphManager:getWayPointById(span[1])
+    local b = ADGraphManager:getWayPointById(span[#span])
+    local straight = (a ~= nil and b ~= nil) and MathUtil.vector2Length(b.x - a.x, b.z - a.z) or 0
+    local direct = not (length > straight * self.ROUTE_MAX_RATIO and length - straight > self.ROUTE_MAX_EXTRA)
+    return direct, length, straight
+end
+
 --- Put a span's ids in the direction TRAFFIC runs along it. runPathBetween walks the graph ignoring link
 --- direction, so a span clicked from downstream to upstream came out running AGAINST the traffic - and a
 --- run's own end order was arbitrary - which made anything direction-sensitive (Parallel's "same way",
@@ -5027,6 +5054,13 @@ function ADFlyoverEditor:spanPickClick(cfg)
             self:warnPlayer(string.format("Those two points are not connected, so they are not two ends of one span."))
             return
         end
+        local direct, routeLength, straightLength = self:spanRouteIsDirect(span)
+        if not direct then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span id=%s to id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)).",
+                tostring(from), tostring(id), routeLength, straightLength, #span)
+            self:warnPlayer("Those two points are only joined the long way round - pick points on the same stretch of track.")
+            return
+        end
         local a, b = from, id
         local ordered, turned = self:trafficOrder(span)
         if turned then
@@ -5063,6 +5097,13 @@ function ADFlyoverEditor:spanPickClick(cfg)
     end
     if span == nil then
         self:warnPlayer("That point is not connected to the other end, so the span was not changed.")
+        return
+    end
+    local direct, routeLength, straightLength = self:spanRouteIsDirect(span)
+    if not direct then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span end id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)).",
+            tostring(id), routeLength, straightLength, #span)
+        self:warnPlayer("That point is only joined to the span the long way round - the span was not changed.")
         return
     end
     local ordered, turned = self:trafficOrder(span)

@@ -157,6 +157,8 @@ L.STRINGS = {
         ["offset needs a run or span pick"] = "Versatz braucht eine Route oder einen Abschnitt",
         ["other way flips a one-way; reverse-way = vehicles back along it"] = "andersherum dreht eine Einbahn; Rückwärtsweg = Fahrzeuge fahren rückwärts",
         ["OPTIONS"] = "OPTIONEN",
+        ["Those two points are only joined the long way round - pick points on the same stretch of track."] = "Diese Punkte sind nur über einen langen Umweg verbunden - Punkte auf demselben Streckenstück wählen.",
+        ["That point is only joined to the span the long way round - the span was not changed."] = "Dieser Punkt ist nur über einen langen Umweg mit dem Abschnitt verbunden - der Abschnitt wurde nicht geändert.",
         ["selection  %d pts"] = "Auswahl  %d Pkt.",
         ["clear"] = "aufheben",
         ["delete selection"] = "Auswahl löschen",
