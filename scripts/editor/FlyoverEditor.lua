@@ -2101,7 +2101,6 @@ function ADFlyoverEditor:menuConvertSpan(op)
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: span direction -> %s, %d link(s) changed.",
         self.CONVERT_OP_NAMES[op] or "?", changed)
-    self:invalidateIdReferences()
     ADGraphManager:markChanges()
 end
 
