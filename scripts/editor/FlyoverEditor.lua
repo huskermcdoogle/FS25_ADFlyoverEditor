@@ -2913,6 +2913,12 @@ function ADFlyoverEditor:drawNetwork()
             -- span - the real click logic already correctly ignored points outside the span, only
             -- the PREVIEW was wrong.
             local radius = self.moveFalloffOn and (self.falloffRadius or 0) or 0
+            -- With a selection the preview must show what a grab would ACTUALLY do: only the selection's
+            -- own points, and only when the pointer is on it and it is one run (a scattered one is rigid).
+            local selOnly = self.selectionCount > 0
+            if selOnly and (not self.selection[centreId] or self:selectionChain() == nil) then
+                radius = 0
+            end
             if radius > 0 then
                 local c = ADGraphManager:getWayPointById(centreId)
                 if c ~= nil then
@@ -2921,7 +2927,8 @@ function ADFlyoverEditor:drawNetwork()
                     -- radius merely reaches is never a follower, so it should not preview as one.
                     local reached = self:collectAlongTrack(centreId, radius)
                     for otherId, d in pairs(reached) do
-                        if otherId ~= centreId and not isJunction(otherId) then
+                        if otherId ~= centreId and not isJunction(otherId)
+                            and (not selOnly or self.selection[otherId]) then
                             local wp = ADGraphManager:getWayPointById(otherId)
                             if wp ~= nil then
                                 local w = 0.5 * (1 + math.cos(math.pi * math.min(d, radius) / radius))
