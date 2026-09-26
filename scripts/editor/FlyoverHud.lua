@@ -626,7 +626,7 @@ function ADFlyoverHud:buildRows(editor)
         segFlip("rotate pivot", "click point", "centroid", editor.moveRotatePivotMode ~= "click",
             function() editor:cycleMoveRotatePivot() end)
         segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
-    elseif editor.tool == editor.TOOL.DRAW then
+    elseif editor.tool == editor.TOOL.DRAW or editor.tool == editor.TOOL.MERGE then
         segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
     end
 

@@ -11375,8 +11375,11 @@ function ADFlyoverEditor:absorbTrack(span, aInside, aTarget, bInside, inB)
         local a = ADGraphManager:getWayPointById(idA)
         local target = aTarget[idA]
         if a ~= nil and target ~= nil then
+            local oldY = a.y
             a.x, a.z = target.x, target.z
-            a.y = AutoDrive:getTerrainHeightAtWorldPos(a.x, a.z)
+            -- The same height rule as Move and Draw, following "snap to": terrain drops it on the ground,
+            -- surface keeps it on a bridge or ramp deck it was already on.
+            a.y = self:resolveHeightAt(a.x, a.z, oldY)
         end
     end
 
