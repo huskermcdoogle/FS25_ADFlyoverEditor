@@ -1342,6 +1342,10 @@ function ADFlyoverEditor:escapeStep()
             self:menuCancelArmed()
             if back ~= nil then self.ctxMenu = back end
         else
+            -- The selection popup IS the selection: one Esc closes it and drops the selection together.
+            if self.ctxMenu.kind == "set" then
+                self:clearSelection()
+            end
             self:closeMenu()
         end
         return true
@@ -3684,6 +3688,11 @@ function ADFlyoverEditor:onLeftRelease()
         end
         if self.hoverId ~= nil then
             self:toggleSelected(self.hoverId)
+            -- In Select mode the selection popup takes over from whatever menu was open (a point menu from
+            -- the first plain click), and follows the count; it closes when the last point is deselected.
+            if self.tool == self.TOOL.NONE then
+                if self.selectionCount > 0 then self:openSetMenu() else self:closeMenu() end
+            end
             ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
                 self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
         end
