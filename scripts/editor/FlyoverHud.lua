@@ -41,6 +41,30 @@ ADFlyoverHud = {
 -- Height of the floating tool card's header strip - its drag handle (see buildRows and
 -- isMouseOverToolCardGrab). Declared here, at the top: both users sit far apart in this file, and a
 -- `local` is only visible to code compiled after it.
+local placeMenuAround   -- defined with the menu helpers below; the tool card uses it too
+
+--- Layout of a segmented selector row: a small caption line, then its options in one or more lines
+--- (up to 3 per line; 4 options make 2 x 2, 5 make 3 + 2). Returns capH, perLine, lines, totalH -
+--- totalH includes the trailing gap, so rows stack with the same rhythm as buttons.
+local function segLayout(row, ctlH, pad, inline)
+    local n = #row.options
+    local perLine = n <= 3 and n or (n == 4 and 2 or 3)
+    if perLine < 1 then perLine = 1 end
+    local lines = math.ceil(n / perLine)
+    local capH = inline and 0 or ctlH * 0.75
+    local vg = pad * 0.4
+    return capH, perLine, lines, capH + lines * ctlH + (lines - 1) * vg + vg
+end
+local placeCardInOpenSpace   -- likewise, defined below
+
+--- The fallback when nowhere is fully clear: exactly what a single point gets - centred just below the
+--- cursor, clear of it, clamped on screen. No cleverness, so it always behaves the same way.
+local function belowCursor(w, h, curX, curY)
+    curX, curY = curX or g_lastMousePosX or 0.5, curY or g_lastMousePosY or 0.5
+    local x = math.max(0, math.min(1 - w, curX - w * 0.5))
+    local top = math.max(h, math.min(1, curY - 0.07))
+    return x, top
+end
 local CTX_GRAB_H = 0.022
 
 -- Localization shorthand: an English UI string in, its localized form out (or unchanged when there is
@@ -186,6 +210,9 @@ end
 --- a frozen count), or it will walk into the buttons it just added.
 function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelRoleName, valueRoleName)
     local pad = self.padding
+    -- Plated like every other control on a card, so a number field reads as part of the same kit.
+    fillRole(self.borderOverlay, x - 0.0016, y - 0.0016, w + 0.0032, h + 0.0032, "toolBorder", 0.9)
+    fillRole(self.rowOverlay, x, y, w, h, "toolBg", 0.95)
     local aspect = g_screenAspectRatio or (16 / 9)
     local bh = h * 0.80
     local by = y + (h - bh) * 0.5
@@ -231,6 +258,73 @@ function ADFlyoverHud:buildRows(editor)
     local function addWheelNumber(text, value)
         add("toggle", text, value)
         rows[#rows].stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
+    end
+
+    -- The card control kit. Every tool card is built from these four, in the popup's plated style:
+    --   tgl  - toggle button (yes/no, lit in the accent colour when on; two per row)
+    --   seg  - segmented selector (a named choice: options side by side, one active)
+    --   btn  - action button
+    --   number - typed / steppable number field (see numberRow below)
+    local function tgl(text, on, action, disabled)
+        rows[#rows + 1] = { kind = "tgl", text = TR(text), active = (on and not disabled) and true or false,
+            action = (not disabled) and action or nil, disabled = disabled }
+    end
+    local function btn(text, action, isDanger)
+        rows[#rows + 1] = { kind = "btn", text = TR(text), action = action, danger = isDanger }
+    end
+    -- options: array of { label, active, action, dull }
+    local function seg(caption, options, disabled)
+        for _, o in ipairs(options) do
+            o.label = TR(o.label)
+            if disabled then
+                o.dull, o.action, o.active = true, nil, false   -- greyed rows show nothing lit
+            end
+        end
+        rows[#rows + 1] = { kind = "seg", text = TR(caption), options = options, disabled = disabled }
+    end
+    -- A cycling enum as a segmented selector. names[i] is option i; `cycle` advances to the next one,
+    -- so picking option i just cycles until it is reached (the editor's cycle functions stay the one
+    -- place that knows how to change the value).
+    local function segCycle(caption, names, labelOf, current, cycle, disabled)
+        local n = #names
+        local opts = {}
+        for i = 1, n do
+            opts[i] = { label = labelOf and labelOf(i) or names[i], active = (i == current),
+                action = function()
+                    for _ = 1, (i - current) % n do cycle() end
+                end }
+        end
+        seg(caption, opts, disabled)
+    end
+    -- A two-way flip as a segmented selector: `isB` is whether the second option is current.
+    -- The selection-type row: an INDICATOR while auto (lights whatever the last click gesture picked) and
+    -- a FILTER once the player clicks a type on purpose (that type is locked, the others dulled and the
+    -- other gestures ignored). Clicking the lit, locked type unlocks it again.
+    local function pickSeg(types)
+        local filter = editor.pickFilter
+        local opts = {}
+        for i, t in ipairs(types) do
+            opts[i] = { label = t == "set" and "selection" or t,
+                active = (filter == t) or (filter == nil and editor:pickIsActive() and editor.pickKind == t),
+                dull = filter ~= nil and filter ~= t,
+                action = function()
+                    -- Not `filter == t and nil or t`: in Lua that always yields t, so the lit type could
+                    -- never be unlocked.
+                    if filter == t then
+                        editor:setPickFilter(nil)
+                    else
+                        editor:setPickFilter(t)
+                    end
+                end }
+        end
+        seg("picks", opts)
+    end
+    local function segFlip(caption, labelA, labelB, isB, flip, disabled)
+        isB = isB and true or false
+        seg(caption, {
+            { label = labelA, active = not isB, action = function() if isB then flip() end end },
+            { label = labelB, active = isB, action = function() if not isB then flip() end end },
+        }, disabled)
     end
 
     add("header", "FLYOVER EDITOR")
@@ -316,17 +410,6 @@ function ADFlyoverHud:buildRows(editor)
         add("number", "ui scale", scaleShown, scaleEditing, function() editor:beginEditNumber(scaleEntry) end)
         rows[#rows].stepAction = function(d) editor:stepThemeScale(d) end
 
-        local lwEntry = {
-            label = "line weight", unit = "",
-            get = function() return ADFlyoverTheme.lineWeight end,
-            apply = function(v) return editor:applyLineWeight(v) end,
-            step = function(d) editor:stepLineWeight(d) end,
-        }
-        local lwEditing = editor.editing ~= nil and editor.editing.label == "line weight"
-        local lwShown = lwEditing and (editor.editing.buffer .. "_") or string.format("%.1f", ADFlyoverTheme.lineWeight)
-        add("number", "line weight", lwShown, lwEditing, function() editor:beginEditNumber(lwEntry) end)
-        rows[#rows].stepAction = function(d) editor:stepLineWeight(d) end
-
         add("toggle", "theme", ADFlyoverTheme.PRESET_NAMES[ADFlyoverTheme.preset] or ADFlyoverTheme.preset,
             false, function() editor:cycleThemePreset(1) end)
         rows[#rows].stepAction = function(d) editor:cycleThemePreset(d) end
@@ -335,42 +418,8 @@ function ADFlyoverHud:buildRows(editor)
         rows[#rows].stepAction = function(d) editor:cycleThemeAccent(d) end
 
         add("action", "reset to default", "", true, function() editor:resetTheme() end)
-        add("toggle", "advanced colours", editor.advancedOpen and "shown" or "hidden", false,
-            function() editor:toggleAdvanced() end)
+        add("action", "more settings...", "", true, function() editor:openSettingsDialog() end)
         add("note", "click / scroll / +- to change - saved automatically")
-
-        -- Layer 3: hand-tune one role at a time. Pick a role, then set its R/G/B (0-255); each write
-        -- is an override on top of the preset + accent, cleared back to those with the button below.
-        if editor.advancedOpen then
-            add("gap")
-            add("section", "COLOUR OVERRIDE")
-
-            local roleKey, roleLabel = editor:currentEditRole()
-            local overridden = roleKey ~= nil and ADFlyoverTheme.overrides[roleKey] ~= nil
-
-            add("toggle", "edit", roleLabel or "-", false, function() editor:cycleEditRole(1) end)
-            rows[#rows].stepAction = function(d) editor:cycleEditRole(d) end
-
-            add("swatch", overridden and "current (custom)" or "current",
-                roleKey ~= nil and ADFlyoverTheme:hexOf(roleKey) or "")
-            rows[#rows].swatchRole = roleKey
-
-            for _, cc in ipairs({ { "R", 1 }, { "G", 2 }, { "B", 3 } }) do
-                local chLabel, idx = cc[1], cc[2]
-                local entry = {
-                    label = "colour " .. chLabel, unit = "",
-                    get = function() return editor:roleChannel255(idx) end,
-                    apply = function(v) return editor:setRoleChannel255(idx, v) end,
-                    step = function(d) editor:stepRoleChannel(idx, d) end,
-                }
-                local editing = editor.editing ~= nil and editor.editing.label == entry.label
-                local shown = editing and (editor.editing.buffer .. "_") or tostring(editor:roleChannel255(idx))
-                add("number", chLabel, shown, editing, function() editor:beginEditNumber(entry) end)
-                rows[#rows].stepAction = function(d) editor:stepRoleChannel(idx, d) end
-            end
-
-            add("action", "clear this colour", "", overridden, function() editor:clearEditRole() end)
-        end
     end
 
     add("gap")
@@ -378,13 +427,19 @@ function ADFlyoverHud:buildRows(editor)
         editor.selectionCount, ADEditorHistory:depth(), editor.placedCount))
 
     -- The per-tool context (below) becomes the floating tool card, and only exists while a tool is
-    -- active, no menu/armed popup is up (those carry their own controls), and it has not been hidden
+    -- active, no point/span/run menu is up (an armed tool's menu state does not count), and it has not been hidden
     -- with middle-click. In Select mode the point/span/run menus stand in for it, so there is no card.
     -- The card also auto-hides while a point is being dragged (editor.dragId): it is only ever in the
     -- way during a move, and this takes it away for exactly that gesture, then brings it straight back
     -- on release - no key or button needed for the common case.
-    if editor.tool ~= editor.TOOL.NONE and editor.ctxMenu == nil and not editor.cardHidden
-        and editor.dragId == nil then
+    --
+    -- Reported live (2026-09-22, field loop): the manual/help popup and settings dialog draw over
+    -- the screen but the tool card kept drawing too, visibly overlapping it - manualOpen/dialogOpen
+    -- were missing from this guard even though the popups themselves already exclude each other
+    -- (see manualOpen = false at line ~9700, "the two modals are mutually exclusive").
+    local armedMenu = editor.ctxMenu ~= nil and editor.ctxMenu.kind == "armed"
+    if editor.tool ~= editor.TOOL.NONE and (editor.ctxMenu == nil or armedMenu) and not editor.cardHidden
+        and editor.dragId == nil and not editor.manualOpen and not editor.dialogOpen then
     -- Everything from here down changes height with the tool, so it all lives BELOW the rows that
     -- do not. The tool buttons, undo/redo and the status line keep a fixed position on screen no
     -- matter what is selected, which is what makes them clickable without looking - a button that
@@ -398,66 +453,20 @@ function ADFlyoverHud:buildRows(editor)
     local makesConnections = editor.tool == editor.TOOL.DRAW
         or editor.tool == editor.TOOL.SPLINE
 
-    if makesConnections then
-        add("gap")
-        add("section", "NEW CONNECTIONS")
-        add("toggle", "direction", editor.CONNECTION_NAMES[editor.connectionMode], false,
-            function() editor:cycleConnectionMode() end)
-        add("toggle", "priority", editor.subPrio and "secondary" or "primary", false,
-            function() editor:togglePriority() end)
-    end
-
-    add("gap")
-    add("section", "THIS TOOL")
-
-    if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
-        add("toggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", false,
-            function() editor:flipOffsetSide() end)
-    end
-
-    if editor:toolTakesSpanScope() then
-        add("toggle", "covers", editor.OFFSET_SCOPE_NAMES[editor.offsetScope], false,
-            function() editor:cycleOffsetScope() end)
-    end
-
-    if editor.tool == editor.TOOL.MOVE then
-        add("toggle", "picks", editor.MOVE_SELECT_NAMES[editor.moveSelectMode], false,
-            function() editor:cycleMoveSelectMode() end)
-        add("toggle", "falloff", editor.moveFalloffOn and "on" or "off", false,
-            function() editor:toggleMoveFalloff() end)
-        add("toggle", "copy (b)", editor.moveCopyOn and "on" or "off", false,
-            function() editor:toggleMoveCopy() end)
-        add("toggle", "disconnect", editor.moveBreakOn and "on" or "off", false,
-            function() editor:toggleMoveBreak() end)
-        if editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN then
-            add("toggle", "offset", editor.moveOffsetOn and "on" or "off", false,
-                function() editor:toggleMoveOffset() end)
-            if editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil then
-                add("toggle", "offset falloff", editor.moveOffsetFalloffOn and "on" or "off", false,
-                    function() editor:toggleMoveOffsetFalloff() end)
-            end
-        end
-        add("toggle", "auto-hookup", editor.moveAutoHookupOn and "on" or "off", false,
-            function() editor:toggleMoveAutoHookup() end)
-        add("toggle", "rotate pivot", editor.moveRotatePivotMode == "click" and "click point" or "centroid", false,
-            function() editor:cycleMoveRotatePivot() end)
-    end
-
-    if editor.tool == editor.TOOL.MOVE or editor.tool == editor.TOOL.DRAW then
-        add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
-            function() editor:toggleSnapToTerrain() end)
-    end
-
-    -- Typed numbers for whatever the current tool exposes. Click the value to type it, Enter to
-    -- apply; the - / + steppers and the wheel nudge it by the field's own step.
-    for _, entry in ipairs(editor:getEditableNumbers()) do
+    -- Typed numbers for whatever the current tool exposes, placed next to the control they belong to
+    -- (numberAfter) or, for anything not claimed, after the tool's own controls (remainingNumbers).
+    local numbers = editor:getEditableNumbers()
+    local numberUsed = {}
+    local function numberRow(entry)
         local editing = editor.editing ~= nil and editor.editing.label == entry.label
         local shown
         if editing then
             shown = editor.editing.buffer .. "_"
         else
             local v = entry.get()
-            shown = type(v) == "number" and string.format("%.2f %s", v, entry.unit or "") or "-"
+            shown = type(v) == "number"
+                and string.format("%." .. tostring(entry.decimals or 2) .. "f %s", v, entry.unit or ""):gsub(" $", "")
+                or "-"
         end
         add("number", entry.label, shown, editing, function() editor:beginEditNumber(entry) end)
         if entry.step ~= nil then
@@ -465,24 +474,181 @@ function ADFlyoverHud:buildRows(editor)
             rows[#rows].wheelReach = entry.wheelReach
         end
     end
+    local function numberAfter(label)
+        for _, e in ipairs(numbers) do
+            if e.label == label and not numberUsed[e] then
+                numberUsed[e] = true
+                numberRow(e)
+            end
+        end
+    end
+    local function remainingNumbers()
+        for _, e in ipairs(numbers) do
+            if not numberUsed[e] then
+                numberUsed[e] = true
+                numberRow(e)
+            end
+        end
+    end
+
+    if makesConnections then
+        add("gap")
+        add("section", "NEW CONNECTIONS")
+        segCycle("traffic", editor.CONNECTION_NAMES, nil, editor.connectionMode,
+            function() editor:cycleConnectionMode() end)
+        -- "reverse" is AutoDrive's reverse road: a one-way link vehicles drive in reverse gear (backing up
+        -- to a shed or an unloader). It is NOT a way to flip a one-way's direction.
+        add("hint", "reverse-way = a road vehicles back along")
+        segFlip("priority", "primary", "secondary", editor.subPrio, function() editor:togglePriority() end)
+    end
+
+    add("gap")
+    add("section", "THIS TOOL")
+    if armedMenu then
+        add("note", "right-click applies - Esc cancels")
+    end
+
+    if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
+        -- One-way track: the sides are left | right OF THE RUN (its direction of travel), which does not
+        -- change with the camera. Two-way track: no direction of travel, so the sides are named by where
+        -- they lie on SCREEN - left | right for a track running up and down the screen, up | down for one
+        -- running across it - and follow the camera. If the screen position cannot be worked out, a
+        -- two-way track falls back to picked | other side.
+        local plusWord, minusWord
+        if editor.sideTwoWay then
+            plusWord, minusWord = editor:screenSideLabels()
+        end
+        if plusWord ~= nil then
+            local vertical = plusWord == "left" or plusWord == "right"
+            local first, second = vertical and "left" or "up", vertical and "right" or "down"
+            local signFirst = (plusWord == first) and 1 or -1
+            local cur = (editor.offsetSide or 1)
+            seg("side", {
+                { label = first, active = cur == signFirst,
+                    action = function() if cur ~= signFirst then editor:flipOffsetSide() end end },
+                { label = second, active = cur ~= signFirst,
+                    action = function() if cur == signFirst then editor:flipOffsetSide() end end },
+            })
+        elseif editor.sideTwoWay then
+            -- Two-way, and the screen position cannot be worked out: name the sides by what was done.
+            segFlip("side", "picked side", "other side", (editor.offsetSide or 1) ~= (editor.offsetSidePicked or 1),
+                function() editor:flipOffsetSide() end)
+        else
+            segFlip("side", "left", "right", (editor.offsetSide or 1) >= 0, function() editor:flipOffsetSide() end)
+        end
+    end
+
+    if editor:toolTakesSpanScope() then
+        segCycle("covers", editor.OFFSET_SCOPE_NAMES, nil, editor.offsetScope, function() editor:cycleOffsetScope() end)
+    end
+    if editor.tool == editor.TOOL.PARALLEL then
+        -- Which way the new track runs beside a one-way road. Two-way roads are unaffected.
+        segCycle("flow", editor.PARALLEL_FLOW_NAMES, nil, editor.parallelFlow, function() editor:cycleParallelFlow() end,
+            editor.offsetToId ~= nil and editor.sideTwoWay)
+        add("hint", "(only matters beside a one-way track)")
+    end
+    if editor:toolUsesSpanPick() then
+        if editor.tool == editor.TOOL.GROUND then
+            -- Ground needs no path, so it also takes any selection, connected or not.
+            pickSeg({ "span", "run", "set" })
+            if editor.pickFilter == nil then
+                add("hint", "2 clicks = span, double-click = run, or select points")
+            end
+        else
+            pickSeg({ "span", "run" })
+            if editor.pickFilter == nil then
+                add("hint", "2 clicks = span, double-click = run")
+            end
+        end
+    end
+
+    if editor.tool == editor.TOOL.MOVE then
+        -- One flow, top to bottom: what you pick, the on/off options as a compact grid of toggles, the
+        -- numbers of whichever options are on (right under the grid), then the two choices. No
+        -- one-control sections - a heading over a single button read as disjointed.
+        -- Indicator + filter, like every span tool: click = point, second click = span, double-click = run;
+        -- click a type to lock it (the others dull), click it again to unlock.
+        pickSeg({ "point", "span", "run" })
+        if editor.pickFilter == nil then
+            add("hint", "click = point, 2nd click = span, double-click = run")
+        end
+
+        -- What a drag does: MOVE the pick, or OFFSET it sideways (a run or span only). A mode, not an option,
+        -- because it changes what the other options mean.
+        local chainPick = editor.moveSpanIds ~= nil or editor.pickFilter == "run" or editor.pickFilter == "span"
+            or editor.moveOffsetChainIds ~= nil
+        local offsetting = chainPick and (editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil)
+        seg("action", {
+            { label = "move", active = not offsetting,
+                action = function() if editor.moveOffsetOn then editor:toggleMoveOffset() end end },
+            { label = "offset", active = offsetting, dull = not chainPick,
+                action = function() if chainPick and not editor.moveOffsetOn then editor:toggleMoveOffset() end end },
+        })
+        if not chainPick then
+            add("hint", "offset needs a picked run or span")
+        end
+
+        add("gap")
+        add("section", "OPTIONS")
+        -- Greyed where a combination does not apply: offset replaces the along-track follow (so falloff
+        -- and auto-hookup do nothing there), and a tapered offset stays joined to its track, so it cannot
+        -- also be disconnected.
+        if offsetting then
+            tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end,
+                editor.moveBreakOn)
+            tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
+            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end,
+                editor.moveOffsetFalloffOn or editor:moveTargetHasOutsideLinks() == false)
+            tgl("falloff", editor.moveFalloffOn, nil, true)
+        else
+            -- A selection moves rigidly (no falloff); falloff and disconnect exclude each other.
+            -- A selection that is one connected run counts as a span (falloff tapers to its ends); only a
+            -- scattered selection is forced rigid.
+            local hasSelection = editor.selectionCount > 0 and editor:selectionChain() == nil
+            tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end,
+                hasSelection or editor.moveBreakOn)
+            tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
+            tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
+            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end,
+                (editor.moveFalloffOn and not hasSelection) or editor:moveTargetHasOutsideLinks() == false)
+            if hasSelection then
+                add("hint", "a scattered selection moves rigidly - no falloff")
+            elseif editor.selectionCount > 0 then
+                add("hint", "selection is one run - falloff tapers to its ends")
+            end
+        end
+        if offsetting then
+            numberAfter("sideways offset")
+            numberAfter("offset falloff")
+        else
+            numberAfter("falloff along track")
+            numberAfter("hookup distance")
+            numberAfter("hookup divergence")
+        end
+
+        add("gap")
+        segFlip("rotate pivot", "click point", "centroid", editor.moveRotatePivotMode ~= "click",
+            function() editor:cycleMoveRotatePivot() end)
+        segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
+    elseif editor.tool == editor.TOOL.DRAW or editor.tool == editor.TOOL.MERGE then
+        segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
+    end
 
     if editor.tool == editor.TOOL.SPLINE then
         -- Read-only: the wheel drives this while a preview is up, and the mod clamps it to
         -- 0.49-3.5. Showing the live value beats a list of preset steps.
         local c = AutoDrive.splineInterpolationUserCurvature
-        add("toggle", "curvature (wheel)",
-            type(c) == "number" and string.format("%.2f", c) or "-")
+        add("cursor", "curvature (wheel)", type(c) == "number" and string.format("%.2f", c) or "-")
         -- Two different things: 'endpoints' changes which end the curve is computed from, so it
         -- reshapes it; 'direction' under NEW CONNECTIONS flips which way traffic runs along it
         -- without touching the shape.
-        add("toggle", "endpoints (shape)", editor.splineSwapEnds and "swapped" or "normal", false,
-            function() editor:toggleSplineEnds() end)
+        segFlip("spline direction", "as clicked", "reversed", editor.splineSwapEnds, function() editor:toggleSplineEnds() end)
+        add("hint", "reversed builds the curve from the far end")
+        add("hint", "(shape, and on one-way the way it runs)")
         -- Which way the curve lies against the track where it arrives. On a two-way track the
         -- automatic choice is a guess between two equally valid tangents.
-        add("toggle", "end tangent", editor.splineFlipEndTangent and "flipped" or "auto", false,
-            function() editor:toggleSplineEndTangent() end)
-        add("toggle", "start tangent", editor.splineFlipStartTangent and "flipped" or "auto", false,
-            function() editor:toggleSplineStartTangent() end)
+        segFlip("end tangent", "auto", "flipped", editor.splineFlipEndTangent, function() editor:toggleSplineEndTangent() end)
+        segFlip("start tangent", "auto", "flipped", editor.splineFlipStartTangent, function() editor:toggleSplineStartTangent() end)
 
         -- Spell out which way traffic will run, because 'direction: reverse' is meaningless while
         -- direction is two-way and there is otherwise no way to tell that from the panel.
@@ -497,52 +663,62 @@ function ADFlyoverHud:buildRows(editor)
             else
                 flow = string.format("%d -> %d", a, b)
             end
-            add("toggle", "flow", flow)
+            add("cursor", "flow", flow)
             if mode == editor.CONNECTION.TWOWAY then
                 add("hint", "two-way: set direction to one-way")
                 add("hint", "if you want to flip it")
             end
         end
     elseif editor.tool == editor.TOOL.SMOOTH then
-        add("toggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], false,
-            function() editor:cycleSmoothMode() end)
-        -- REBUILD's max spacing is the typed number field above (getEditableNumbers), which carries
-        -- its own steppers; MOVE_POINTS has strength instead, driven here.
-        if editor.smoothMode ~= editor.SMOOTH_MODE.REBUILD then
-            addWheelNumber("strength", tostring(editor.smoothStrength))
-        end
+        segCycle("mode", editor.SMOOTH_MODE_NAMES, function(i) return i == 1 and "relax" or "rebuild" end,
+            editor.smoothMode, function() editor:cycleSmoothMode() end)
     elseif editor.tool == editor.TOOL.GROUND then
-        addWheelNumber("tolerance", string.format("%.1f m", editor.groundTolerance))
-        add("toggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], false,
-            function() editor:cycleGroundLevel() end)
-        add("toggle", "snap to", editor.snapToTerrain and "terrain" or "surface", false,
-            function() editor:toggleSnapToTerrain() end)
+        -- "level" picks which surface to sit on; snapping to terrain ignores it, so it greys then.
+        segCycle("level", editor.GROUND_LEVEL_NAMES, nil, editor.groundLevel, function() editor:cycleGroundLevel() end,
+            editor.snapToTerrain)
+        segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
         if editor.groundPreview ~= nil then
-            add("toggle", "off the ground", string.format("%d of %d",
-                #editor.groundPreview, editor.groundChecked or 0))
+            add("cursor", "off the ground", string.format("%d of %d", #editor.groundPreview, editor.groundChecked or 0))
         end
-    elseif editor.tool == editor.TOOL.DIVIDE then
-        addWheelNumber("points", tostring(editor.divideCount))
-    elseif editor.tool == editor.TOOL.PARALLEL then
-        addWheelNumber("distance", string.format("%.1f m", editor.offsetDistance))
     elseif editor.tool == editor.TOOL.FIELDLOOP then
-        add("toggle", "priority", editor.fieldLoopSubPrio and "secondary" or "primary", false,
-            function() editor:toggleFieldLoopPriority() end)
-        add("toggle", "track", editor.FIELD_LOOP_DIR_NAMES[editor.fieldLoopDirection], false,
+        segFlip("priority", "primary", "secondary", editor.fieldLoopSubPrio, function() editor:toggleFieldLoopPriority() end)
+        segCycle("track", editor.FIELD_LOOP_DIR_NAMES, nil, editor.fieldLoopDirection,
             function() editor:cycleFieldLoopDirection() end)
+        -- Off switches back to the map-field-only lookup, which misses ground plowed to connect
+        -- two separate map fields into one (the live tilled-ground trace finds that) - here so
+        -- that can be isolated per-site without a settings-dialog trip.
+        tgl("detect custom field", ADFlyoverSettings.get("fieldLoopDetectCustomField"),
+            function() ADFlyoverSettings.cycle("fieldLoopDetectCustomField", 1) end)
+        -- Off skips the tree/pole/fence/building detour entirely, taking the offset boundary as
+        -- laid rather than nudging it clear of whatever the obstacle check is flagging.
+        tgl("avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles"),
+            function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
     elseif editor.tool == editor.TOOL.CONVERT then
-        add("toggle", "make it", editor.CONVERT_OP_NAMES[editor.convertOp], false,
-            function() editor:cycleConvertOp() end)
-        add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.convertScope], false,
+        -- Two kinds of change, two rows: which way traffic runs, and the road's priority. Configure both;
+        -- one click converts to both at once.
+        local OP = editor.CONVERT_OP
+        local function dirOption(label, op)
+            return { label = label, active = editor.convertDirection == op,
+                action = function() editor.convertDirection = op end }
+        end
+        local function prioOption(label, op)
+            return { label = label, active = editor.convertPriority == op,
+                action = function() editor.convertPriority = op end }
+        end
+        seg("direction", { dirOption("two-way", OP.TWOWAY), dirOption("one-way", OP.ONEWAY),
+            dirOption("other way", OP.REVERSE), dirOption("reverse-way", OP.REVERSEROAD) })
+        add("hint", "other way flips a one-way; reverse-way = vehicles back along it")
+        seg("priority", { prioOption("primary", OP.PRIMARY), prioOption("secondary", OP.SECONDARY) })
+        segCycle("applies to", editor.DELETE_SCOPE_NAMES, nil, editor.convertScope,
             function() editor:cycleConvertScope() end)
     elseif editor.tool == editor.TOOL.DELETE then
-        add("toggle", "scope", editor.DELETE_SCOPE_NAMES[editor.deleteScope], false,
-            function() editor:cycleDeleteScope() end)
+        segCycle("removes", editor.DELETE_SCOPE_NAMES, nil, editor.deleteScope,
+            function() editor:cycleDeleteScope() end, editor.selectionCount > 0)
         -- A selection wins over "scope" entirely (see deleteAtCursor) - easy to miss since nothing
         -- else on this card says so, so a click can look like it deleted "scope"'s single waypoint
         -- when it actually took out the whole selection (reported 2026-09-21).
         if editor.selectionCount > 0 then
-            add("header", string.format("%d selected - click deletes the SELECTION, not scope", editor.selectionCount))
+            add("header", string.format("%d selected - right-click deletes them, Esc clears", editor.selectionCount))
         end
     elseif editor.tool == editor.TOOL.JUNCTION then
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
@@ -622,6 +798,8 @@ function ADFlyoverHud:buildRows(editor)
     -- MERGE's distance and divergence are the typed number fields above (getEditableNumbers), each
     -- with its own steppers, so there is no separate read-only row for them here any more.
 
+    remainingNumbers()
+
     add("gap")
     add("section", "NEXT")
     -- getNextStepLines now returns one whole (localized) message; wrap it to the card width here so it
@@ -682,10 +860,37 @@ function ADFlyoverHud:draw(editor)
     end
 
     -- Lay rows[first..last] as one column from (x, top); tools pair two to a row. Returns the height.
+    local vg = pad * 0.4   -- gap under each plated control
+    local inset = pad      -- plated controls keep a margin inside the card, like the popup's buttons
+    local ctlH = rowH * 0.9  -- plated controls are a little shorter than a text row, to keep cards compact
+    -- A segmented selector puts its caption on the SAME line when caption and every option fit
+    -- side by side (saves a whole line per selector); otherwise the caption sits above.
+    -- Every inline caption on a card shares ONE column width (the widest caption), so all the option
+    -- buttons start at the same x and the card reads as aligned rather than staggered.
+    local sharedCapW = 0
+    local function segInline(row)
+        if #row.options > 3 or getTextWidth == nil then return false, 0 end
+        local capW = math.max(sharedCapW, getTextWidth(fontSize, row.text) + pad * 2)
+        local need = capW
+        for _, o in ipairs(row.options) do need = need + getTextWidth(fontSize, o.label) + pad * 2.5 end
+        return need <= width - inset * 2, capW
+    end
     local function place(first, last, x, top)
         local y = top - pad
         local leftTaken = false
-        for i = first, last do
+        -- The widest caption among the selectors that fit inline on their own, for the shared column.
+        sharedCapW = 0
+        local widest = 0
+        for k = first, last do
+            local r = rows[k]
+            if r.kind == "seg" then
+                local inline, capW = segInline(r)
+                if inline then widest = math.max(widest, capW) end
+            end
+        end
+        sharedCapW = widest
+        local i = first
+        while i <= last do
             local row = rows[i]
             if row.kind == "tool" then
                 if leftTaken then
@@ -696,11 +901,43 @@ function ADFlyoverHud:draw(editor)
                     row.x, row.y, row.w, row.h = x, y, width * 0.5 - toolGap, rowH
                     leftTaken = true
                 end
+                i = i + 1
+            elseif row.kind == "tgl" then
+                leftTaken = false
+                local nxt = rows[i + 1]
+                y = y - ctlH
+                if i + 1 <= last and nxt ~= nil and nxt.kind == "tgl" then
+                    local cw = (width - inset * 2 - toolGap) * 0.5
+                    row.x, row.y, row.w, row.h = x + inset, y, cw, ctlH
+                    nxt.x, nxt.y, nxt.w, nxt.h = x + inset + cw + toolGap, y, cw, ctlH
+                    i = i + 2
+                else
+                    row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, ctlH
+                    i = i + 1
+                end
+                y = y - vg
+            elseif row.kind == "seg" then
+                leftTaken = false
+                row.inline, row.capW = segInline(row)
+                local _, _, _, th = segLayout(row, ctlH, pad, row.inline)
+                y = y - th
+                row.x, row.y, row.w, row.h = x + inset, y + vg, width - inset * 2, th - vg
+                i = i + 1
             else
                 leftTaken = false
-                local h = row.kind == "gap" and rowH * 0.35 or rowH
+                local plated = row.kind == "btn" or row.kind == "number" or (row.kind == "toggle" and row.stepAction ~= nil)
+                local h = rowH
+                if row.kind == "gap" then h = rowH * 0.25
+                elseif row.kind == "section" then h = rowH * 0.8
+                elseif plated then h = ctlH end
                 y = y - h
-                row.x, row.y, row.w, row.h = x, y, width, h
+                if plated then
+                    row.x, row.y, row.w, row.h = x + inset, y, width - inset * 2, h
+                    y = y - vg
+                else
+                    row.x, row.y, row.w, row.h = x, y, width, h
+                end
+                i = i + 1
             end
         end
         return (top - y) + pad
@@ -721,14 +958,79 @@ function ADFlyoverHud:draw(editor)
         -- zone was an invisible strip, and - in this bottom-origin coordinate system - accidentally
         -- along the BOTTOM edge. Nobody found it, reasonably.)
         local grabH = CTX_GRAB_H
-        local ch = pad * 2 + grabH
-        for i = split + 1, #rows do
-            ch = ch + (rows[i].kind == "gap" and rowH * 0.35 or rowH)
+        -- The card's height is whatever laying its rows out takes (pairs, segmented selectors and the
+        -- gaps under plated controls all change it), so measure by placing them once.
+        local ch = place(split + 1, #rows, 0, 1) + grabH
+        local T = ADFlyoverTheme
+        local cardX = editor.toolCardX or (T ~= nil and T.cardX) or (self.posX + width + 0.02)
+        local cardY = editor.toolCardY or (T ~= nil and T.cardY) or top
+        -- Picked from a menu: the card takes the menu's place, where the player was already looking.
+        -- Held only until they drag the card themselves (that clears it), and never saved.
+        local staticCard = ADFlyoverSettings.get("toolCardStatic") == true
+        if editor.cardSpawnX ~= nil and not staticCard then
+            -- The menu was small; the card is not. Reusing the menu's corner let the card run off the
+            -- bottom, get clamped back up and land ON the selection. So work out its real spot once per
+            -- pick: the menu's own spot if the whole card fits clear there, otherwise the best clear one.
+            if self.spawnFor ~= editor.cardSpawnToken then
+                self.spawnFor = editor.cardSpawnToken
+                local bx0, by0, bx1, by1, _, _, tpts, tsegs = self:actionTargetsBox(editor, 0, 0, 0, 0, true)
+                local sx, sy = editor.cardSpawnX, editor.cardSpawnY
+                if bx0 ~= nil then
+                    local avoid = {}
+                    if self.frameW ~= nil and self.frameW > 0 then
+                        avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                    end
+                    local found
+                    sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY, nil, nil, tsegs)
+                end
+                self.spawnPos = { sx, sy }
+            end
+            cardX, cardY = self.spawnPos[1], self.spawnPos[2]
         end
-        local cardX = editor.toolCardX or (self.posX + width + 0.02)
-        local cardY = editor.toolCardY or top
         cardX = math.max(0, math.min(1 - width, cardX))
         cardY = math.max(ch, math.min(1, cardY))
+        -- Home is where the player left it. When a NEW thing becomes the work (a selection, a picked
+        -- span end, a drag), and the card would cover it, the card steps aside ONCE and then holds
+        -- that spot - so it does not chase points as the camera pans. It goes home when the work
+        -- ends or changes, and never moves while the player is dragging it.
+        if self.ctxDragging or staticCard then
+            self.cardShift, self.cardKey = nil, nil
+        else
+            local bx0, by0, bx1, by1, homeCovered, key, tpts, tsegs = self:actionTargetsBox(editor, cardX, cardY - ch, width, ch)
+            if key ~= self.cardKey then
+                self.cardKey = key
+                if not homeCovered then
+                    -- Nothing is under the card's home any more: go back to it.
+                    self.cardShift = nil
+                else
+                    -- Something is under home. Judge the spot the card is actually SHOWN at (home, or
+                    -- where it already stepped to): a point dropped under a card that had already
+                    -- stepped aside must move it again, from where it is now.
+                    local shownX, shownY = cardX, cardY
+                    if self.cardShift ~= nil then
+                        shownX = math.max(0, math.min(1 - width, self.cardShift[1]))
+                        shownY = math.max(ch, math.min(1, self.cardShift[2]))
+                    end
+                    local _, _, _, _, shownCovered = self:actionTargetsBox(editor, shownX, shownY - ch, width, ch)
+                    if shownCovered or self.cardShift == nil then
+                        local avoid = {}
+                        if self.frameW ~= nil and self.frameW > 0 then
+                            avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+                        end
+                        local sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs)
+                        if not found then
+                            -- Nothing clear close by: it is sitting on the work, so go as far as it takes.
+                            sx, sy = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs, true)
+                        end
+                        self.cardShift = { sx, sy }
+                    end
+                end
+            end
+            if self.cardShift ~= nil then
+                cardX = math.max(0, math.min(1 - width, self.cardShift[1]))
+                cardY = math.max(ch, math.min(1, self.cardShift[2]))
+            end
+        end
         local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
         self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
     end
@@ -751,6 +1053,33 @@ function ADFlyoverHud:draw(editor)
         local gTitle = TR(editor.TOOL_NAMES[editor.tool] or "tool")
         labelRole(self.ctxFrameX + pad * 2, gy + (CTX_GRAB_H - fontSize * 0.85) * 0.5,
             fontSize * 0.85, gTitle, "headerText")
+
+        -- Pin: one click makes the card static - it stays exactly where it is now and never moves by
+        -- itself (the same setting as the settings dialog's "tool card" row). Not a drag handle.
+        local pinned = ADFlyoverSettings.get("toolCardStatic") == true
+        local pinText = TR(pinned and "pinned" or "pin")
+        local pinSize = fontSize * 0.85
+        local pinW = (getTextWidth ~= nil and getTextWidth(pinSize, pinText) or 0) + pad * 3
+        local pinX = self.ctxFrameX + self.ctxFrameW - pinW - pad * 0.5
+        local pmx, pmy = editor.mouseX, editor.mouseY
+        local pinHover = pmx ~= nil and pmx >= pinX and pmx <= pinX + pinW and pmy >= gy and pmy <= gy + CTX_GRAB_H
+        labelRole(pinX + pinW * 0.5, gy + (CTX_GRAB_H - pinSize) * 0.5, pinSize, pinText,
+            pinned and "accent" or (pinHover and "headerText" or "mutedText"), 1, RenderText.ALIGN_CENTER)
+        self.pinRect = { x = pinX, y = gy, w = pinW, h = CTX_GRAB_H }
+        table.insert(self.rows, { x = pinX, y = gy, w = pinW, h = CTX_GRAB_H, action = function()
+            local nowPinned = not (ADFlyoverSettings.get("toolCardStatic") == true)
+            if nowPinned then
+                -- Pin HERE: whatever spot it is shown at becomes its home.
+                editor.toolCardX = self.ctxFrameX
+                editor.toolCardY = self.ctxFrameY + self.ctxFrameH
+                if ADFlyoverTheme ~= nil then
+                    ADFlyoverTheme:setCardPos(editor.toolCardX, editor.toolCardY)
+                end
+            end
+            ADFlyoverSettings.cycle("toolCardStatic", 1)
+        end })
+    else
+        self.pinRect = nil
     end
 
     -- Normalised coords are square only on a 1:1 screen; on 16:9 a shape with equal w and h renders
@@ -809,7 +1138,7 @@ function ADFlyoverHud:draw(editor)
         elseif row.kind == "note" then
             labelRole(textX, textY, fontSize * 0.86, row.text, "mutedText")
         elseif row.kind == "section" then
-            labelRole(textX, textY, fontSize * 0.80, row.text, "sectionText")
+            labelRole(textX, textY, fontSize * 0.86, row.text, "headerText")
         elseif row.kind == "tool" then
             -- A plated, bordered button: a hairline outline behind the fill gives it a defined edge
             -- (the "button feel"), the glyph on the left carries the tool, the label names it, and the
@@ -839,6 +1168,85 @@ function ADFlyoverHud:draw(editor)
             if row.value ~= nil and row.value ~= "" then
                 label(x + width - self.padding * 1.5, textY, fontSize * 0.78, row.value,
                     tr * 0.72, tg * 0.72, tb * 0.78, 1, RenderText.ALIGN_RIGHT)
+            end
+        elseif row.kind == "tgl" or row.kind == "btn" then
+            -- Plated button: a toggle is lit in the accent colour while on, an action is plain, a
+            -- destructive one is red on hover. Same treatment as the selection popup's buttons.
+            local hovered = mx ~= nil and mx >= x and mx <= x + width and my >= y and my <= y + h
+            local be = 0.0016
+            local fillR, borderR, textR
+            if row.disabled then
+                hovered = false
+                fillR, borderR, textR = "toolBg", "toolBorder", "mutedText"
+            elseif row.danger then
+                fillR, borderR, textR = (hovered and "danger" or "toolBg"), "danger", "danger"
+            elseif row.active then
+                fillR, borderR, textR = "accent", "accentBorder", "accentText"
+            elseif hovered then
+                fillR, borderR, textR = "hoverBg", "hoverBorder", "bodyText"
+            else
+                fillR, borderR, textR = "toolBg", "toolBorder", "bodyText"
+            end
+            fillRole(self.borderOverlay, x - be, y - be, width + be * 2, h + be * 2, borderR,
+                row.danger and (hovered and 0.9 or 0.45) or 0.9)
+            fillRole(self.rowOverlay, x, y, width, h, fillR,
+                row.danger and (hovered and 0.30 or 0.9) or (row.active and 0.96 or 0.95))
+            local tw = getTextWidth ~= nil and getTextWidth(fontSize, row.text) or 0
+            local size = (tw > width - self.padding * 2 and tw > 0) and fontSize * (width - self.padding * 2) / tw or fontSize
+            labelRole(x + width * 0.5, y + (h - size) * 0.5, size, row.text, textR, 1, RenderText.ALIGN_CENTER)
+        elseif row.kind == "seg" then
+            -- Segmented selector: the caption (on the same line when it fits, else above), then the
+            -- options side by side. The active option is lit; an option marked `dull` (a type filter is
+            -- locked to another) is greyed but still clickable, so choosing it moves the lock.
+            local ctlH = rowH * 0.9
+            local capH, perLine, lines = segLayout(row, ctlH, self.padding, row.inline)
+            local vgap = self.padding * 0.4
+            local gapX = self.padding * 0.5
+            local areaX, areaW = x, width
+            if row.inline then
+                labelRole(x + self.padding, y + (ctlH - fontSize) * 0.5, fontSize, row.text, "bodyText")
+                areaX = x + (row.capW or 0)
+                areaW = width - (row.capW or 0)
+            else
+                labelRole(x + self.padding, y + h - capH + (capH - fontSize) * 0.5 + fontSize * 0.2, fontSize, row.text, "bodyText")
+            end
+            local n = #row.options
+            for oi, o in ipairs(row.options) do
+                local li = math.ceil(oi / perLine)
+                local inLine = math.min(perLine, n - (li - 1) * perLine)
+                local ci = (oi - 1) % perLine
+                local cw = (areaW - gapX * (inLine - 1)) / inLine
+                local bx = areaX + ci * (cw + gapX)
+                local by = y + h - capH - li * ctlH - (li - 1) * vgap
+                local hovered = mx ~= nil and mx >= bx and mx <= bx + cw and my >= by and my <= by + ctlH
+                local be = 0.0016
+                local fillR, borderR, textR, fa
+                if o.active then
+                    fillR, borderR, textR, fa = "accent", "accentBorder", "accentText", 0.96
+                elseif o.dull then
+                    fillR, borderR, textR, fa = "toolBg", "toolBorder", "mutedText", 0.55
+                elseif hovered then
+                    fillR, borderR, textR, fa = "hoverBg", "hoverBorder", "bodyText", 0.95
+                else
+                    fillR, borderR, textR, fa = "toolBg", "toolBorder", "bodyText", 0.95
+                end
+                fillRole(self.borderOverlay, bx - be, by - be, cw + be * 2, ctlH + be * 2, borderR, o.dull and 0.5 or 0.9)
+                fillRole(self.rowOverlay, bx, by, cw, ctlH, fillR, fa)
+                local tw = getTextWidth ~= nil and getTextWidth(fontSize, o.label) or 0
+                local size = (tw > cw - self.padding * 2 and tw > 0) and fontSize * (cw - self.padding * 2) / tw or fontSize
+                if o.active then
+                    -- Text on the accent fill: the theme's own contrast colour, darkened when it is a dark
+                    -- one so the lit option reads as strongly as the unlit ones.
+                    local r, g, b = ADFlyoverTheme:rgb("accentText")
+                    if (r + g + b) / 3 < 0.5 then r, g, b = r * 0.45, g * 0.45, b * 0.45 end
+                    label(bx + cw * 0.5, by + (ctlH - size) * 0.5, size, o.label, r, g, b, 1, RenderText.ALIGN_CENTER)
+                else
+                    labelRole(bx + cw * 0.5, by + (ctlH - size) * 0.5, size, o.label, textR, o.dull and 0.7 or 1,
+                        RenderText.ALIGN_CENTER)
+                end
+                -- Registered after the seg row itself, so isMouseOver (which scans back to front)
+                -- finds the option first.
+                table.insert(self.rows, { x = bx, y = by, w = cw, h = ctlH, action = o.action })
             end
         elseif row.kind == "number" then
             if row.active then
@@ -900,6 +1308,30 @@ function ADFlyoverHud:draw(editor)
         end
     end
 
+    -- Resize grip in the panel's bottom-right corner: a triangle of dots, drawn last so no row fill
+    -- covers it. Dragging it sets the mod's ui scale (see handleDrag); the typed field stays the exact
+    -- route. Only the corner panel gets one - the card and menus follow its scale.
+    do
+        local gh = rowH * 0.62
+        local gw = gh / aspect
+        local gx = self.frameX + self.frameW - gw - self.padding * 0.6
+        local gy = self.frameY + self.padding * 0.6
+        self.gripRect = { x = gx - self.padding * 0.6, y = gy - self.padding * 0.6,
+            w = gw + self.padding * 1.6, h = gh + self.padding * 1.6 }
+        local hov = self.gripDragging or (mx ~= nil and mx >= self.gripRect.x
+            and mx <= self.gripRect.x + self.gripRect.w and my >= self.gripRect.y
+            and my <= self.gripRect.y + self.gripRect.h)
+        local role = hov and "headerText" or "mutedText"
+        local dw, dh = gw * 0.2, gh * 0.2
+        for row = 0, 2 do
+            for col = 0, 2 - row do
+                -- col counts leftward from the right edge, row upward from the bottom.
+                fillRole(self.rowOverlay, gx + gw - dw - col * gw * 0.4, gy + row * gh * 0.4,
+                    dw, dh, role, hov and 1 or 0.75)
+            end
+        end
+    end
+
     self:drawContextMenu(editor)
 
     -- Contextual help sits beside the panel and is non-modal, so you can read it while working. The
@@ -910,124 +1342,493 @@ function ADFlyoverHud:draw(editor)
     end
 end
 
+--- Screen-space bounding box of what a Select-mode menu is about to act on (point / span / run), or
+--- nil when none of it is in front of the camera. Same projection the amber highlights use.
+local function menuSelectionBox(m)
+    if project == nil then return nil end
+    local ids = {}
+    if m.kind == "point" then
+        ids[1] = m.id
+    elseif m.kind == "span" and m.ids ~= nil then
+        ids = m.ids
+    elseif m.kind == "run" and m.runSet ~= nil then
+        for id in pairs(m.runSet) do ids[#ids + 1] = id end
+    elseif m.kind == "set" and ADFlyoverEditor ~= nil and ADFlyoverEditor.selection ~= nil then
+        for id in pairs(ADFlyoverEditor.selection) do
+            ids[#ids + 1] = id
+            if #ids >= 400 then break end
+        end
+    end
+    local x0, y0, x1, y1
+    local pts, screenOf, inSet = {}, {}, {}
+    for _, id in ipairs(ids) do inSet[id] = true end
+    for _, id in ipairs(ids) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
+            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+                x0 = x0 and math.min(x0, sx) or sx
+                x1 = x1 and math.max(x1, sx) or sx
+                y0 = y0 and math.min(y0, sy) or sy
+                y1 = y1 and math.max(y1, sy) or sy
+                pts[#pts + 1] = { sx, sy }
+                screenOf[id] = { sx, sy }
+            end
+        end
+    end
+    if x0 == nil then return nil end
+    -- Segments between connected selected points, so the drawn line between two far-apart points
+    -- counts as covered too, not only the dots.
+    local segs = {}
+    for _, id in ipairs(ids) do
+        local wp, a = ADGraphManager:getWayPointById(id), screenOf[id]
+        if wp ~= nil and a ~= nil and wp.out ~= nil then
+            for _, otherId in pairs(wp.out) do
+                local b = inSet[otherId] and screenOf[otherId] or nil
+                if b ~= nil then
+                    segs[#segs + 1] = { a[1], a[2], b[1], b[2] }
+                end
+            end
+        end
+    end
+    return x0, y0, x1, y1, pts, segs
+end
+
+--- Where a w x h card goes so it does not cover what is selected. "What is selected" is the actual
+--- points (and the lines between them) in `pts`, NOT their bounding box: a long curved run has a huge
+--- box that is mostly empty ground, and keeping clear of that pushed the card far from the work. So a
+--- candidate is fine as long as no selected point falls under it; it may sit inside the box's empty
+--- space. Candidates are tried near the cursor first (below it, then to its sides), then around the
+--- box. Every one must stay on screen and clear of the `avoid` rects (panel, tool card) and of a
+--- keep-out around the cursor (curX, curY). Returns the card's left and top edge; if nothing is fully
+--- clear it takes the candidate covering the fewest points.
+function placeMenuAround(x0, y0, x1, y1, w, h, avoid, curX, curY, pts, prefer)
+    local gap, pm = 0.012, 0.010
+    pts = pts or {}
+    local function overlap(ax, ay, aw, ah, bx, by, bw, bh)
+        local ox = math.min(ax + aw, bx + bw) - math.max(ax, bx)
+        local oy = math.min(ay + ah, by + bh) - math.max(ay, by)
+        if ox <= 0 or oy <= 0 then return 0 end
+        return ox * oy
+    end
+    local midY = (y0 + y1) * 0.5 + h * 0.5
+    local midX = (x0 + x1) * 0.5 - w * 0.5
+    local cursorKeep = nil
+    if curX ~= nil and curY ~= nil then
+        cursorKeep = { curX - 0.04, curY - 0.07, 0.08, 0.14 }
+        avoid = { unpack(avoid) }
+        avoid[#avoid + 1] = cursorKeep
+    end
+    -- The top edge that puts a card at column x just below the lowest selected point in that column,
+    -- and below the cursor's keep-out - "drop below what is above it".
+    local function columnBelow(cx)
+        local top = nil
+        for _, p in ipairs(pts) do
+            if p[1] >= cx - pm and p[1] <= cx + w + pm then
+                top = top and math.min(top, p[2] - gap) or (p[2] - gap)
+            end
+        end
+        if cursorKeep ~= nil then
+            top = top and math.min(top, curY - 0.07) or (curY - 0.07)
+        end
+        return top or (y0 - gap)
+    end
+    local cands = {}
+    if prefer ~= nil then
+        cands[#cands + 1] = { prefer[1], prefer[2] }                  -- where the menu it replaces sat
+    end
+    cands[#cands + 1] = { midX, columnBelow(midX) }                   -- below, centred on the selection
+    if curX ~= nil then
+        cands[#cands + 1] = { curX - w * 0.5, columnBelow(curX - w * 0.5) }   -- below the cursor
+        cands[#cands + 1] = { curX + 0.03, curY + h * 0.5 }                  -- right of the cursor
+        cands[#cands + 1] = { curX - 0.03 - w, curY + h * 0.5 }              -- left of the cursor
+    end
+    local below = y0 - gap
+    cands[#cands + 1] = { x1 + gap, below }              -- below-right of the box
+    cands[#cands + 1] = { x0 - gap - w, below }          -- below-left
+    cands[#cands + 1] = { midX, y1 + gap + h }           -- above, centred
+    cands[#cands + 1] = { x1 + gap, y1 + gap + h }       -- top-right
+    cands[#cands + 1] = { x0 - gap - w, y1 + gap + h }   -- top-left
+    cands[#cands + 1] = { x1 + gap, midY }               -- right
+    cands[#cands + 1] = { x0 - gap - w, midY }           -- left
+
+    local best, bestScore
+    for _, c in ipairs(cands) do
+        local cx, ct = c[1], c[2]
+        local fits = cx >= 0 and cx + w <= 1 and ct <= 1 and ct - h >= 0
+        local ux = math.max(0, math.min(1 - w, cx))
+        local ut = math.max(h, math.min(1, ct))
+        local covered = 0
+        for _, p in ipairs(pts) do
+            if p[1] >= ux - pm and p[1] <= ux + w + pm and p[2] >= ut - h - pm and p[2] <= ut + pm then
+                covered = covered + 1
+            end
+        end
+        local score = covered * 0.001
+        for _, r in ipairs(avoid) do
+            score = score + overlap(ux, ut - h, w, h, r[1], r[2], r[3], r[4])
+        end
+        if not fits then score = score + 0.0001 end
+        if score == 0 and fits then
+            return ux, ut
+        end
+        if bestScore == nil or score < bestScore then
+            best, bestScore = { ux, ut }, score
+        end
+    end
+    -- Nothing fully clear: fall back to the single-point placement (below the cursor) rather than the
+    -- least-bad edge spot.
+    if curX ~= nil and curY ~= nil then
+        return belowCursor(w, h, curX, curY)
+    end
+    return best[1], best[2]
+end
+
+--- Does the segment (ax,ay)-(bx,by) touch the rectangle [x0,x1] x [y0,y1]? (Liang-Barsky clipping.)
+local function segmentHitsRect(ax, ay, bx, by, x0, y0, x1, y1)
+    local dx, dy = bx - ax, by - ay
+    local t0, t1 = 0, 1
+    local function clip(p, q)
+        if p == 0 then return q >= 0 end
+        local r = q / p
+        if p < 0 then
+            if r > t1 then return false end
+            if r > t0 then t0 = r end
+        else
+            if r < t0 then return false end
+            if r < t1 then t1 = r end
+        end
+        return true
+    end
+    return clip(-dx, ax - x0) and clip(dx, x1 - ax) and clip(-dy, ay - y0) and clip(dy, y1 - ay)
+end
+
+--- Offsets for the card walk, nearest first, out to CARD_WALK_RADIUS in steps of CARD_WALK_STEP. Built
+--- once: the walk tries them in order and the first clear one wins, so it always finds the closest.
+-- Two reaches: the normal one (a card OPENING near the click stays close to it) and a wide one for a
+-- card that is being pushed off something it is sitting ON - better to travel across the screen than to
+-- stay on top of the work.
+local CARD_WALK_STEP, CARD_WALK_RADIUS = 0.01, 0.22
+local CARD_WALK_WIDE_STEP, CARD_WALK_WIDE_RADIUS = 0.02, 0.70
+local CARD_WALK_OFFSETS = {}
+local function cardWalkOffsets(wide)
+    local key = wide and "wide" or "near"
+    if CARD_WALK_OFFSETS[key] ~= nil then return CARD_WALK_OFFSETS[key] end
+    local step = wide and CARD_WALK_WIDE_STEP or CARD_WALK_STEP
+    local radius = wide and CARD_WALK_WIDE_RADIUS or CARD_WALK_RADIUS
+    local list, n = {}, math.floor(radius / step + 0.5)
+    for ix = -n, n do
+        for iy = -n, n do
+            local dx, dy = ix * step, iy * step
+            list[#list + 1] = { dx, dy, dx * dx + dy * dy }
+        end
+    end
+    table.sort(list, function(a, b) return a[3] < b[3] end)
+    CARD_WALK_OFFSETS[key] = list
+    return list
+end
+
+--- Find open ground for a w x h card. Start where a single point would put it (centred just below the
+--- cursor) and walk the card outward in small steps, nearest first, out to about a fifth of the
+--- screen, taking the first spot with no selected point under it (plus a margin), off the `avoid`
+--- rects and off a keep-out around the cursor. Nothing clear within that reach: stay at the start
+--- rather than wander off across the screen. Always returns a position.
+function placeCardInOpenSpace(pts, w, h, avoid, curX, curY, fromX, fromTop, segs, wide)
+    -- `fromX/fromTop` starts the walk at the card's own home instead of below the cursor, so a card
+    -- that only needs to step aside moves the least it can - never teleporting to the cursor.
+    local startX, startTop
+    if fromX ~= nil and fromTop ~= nil then
+        startX, startTop = fromX, fromTop
+    else
+        startX, startTop = belowCursor(w, h, curX, curY)
+    end
+    if pts == nil or #pts == 0 then return startX, startTop, true end
+    local pm = 0.012
+    -- Sampled: a 400-point selection does not need every point tested against every step.
+    local use, stride = {}, math.max(1, math.floor(#pts / 200))
+    for i = 1, #pts, stride do use[#use + 1] = pts[i] end
+    local rects = {}
+    for _, r in ipairs(avoid or {}) do rects[#rects + 1] = r end
+    local cx, cy = curX or g_lastMousePosX, curY or g_lastMousePosY
+    if cx ~= nil and cy ~= nil then
+        rects[#rects + 1] = { cx - 0.04, cy - 0.07, 0.08, 0.14 }
+    end
+    local function clearAt(x, top)
+        if x < 0 or x + w > 1 or top > 1 or top - h < 0 then return false end
+        for _, r in ipairs(rects) do
+            if x < r[1] + r[3] and x + w > r[1] and top - h < r[2] + r[4] and top > r[2] then return false end
+        end
+        for _, p in ipairs(use) do
+            if p[1] >= x - pm and p[1] <= x + w + pm and p[2] >= top - h - pm and p[2] <= top + pm then
+                return false
+            end
+        end
+        -- The drawn LINES between selected points too: on a sparse run a segment can cross the whole
+        -- card without a single point landing inside it.
+        if segs ~= nil then
+            for _, sg in ipairs(segs) do
+                if segmentHitsRect(sg[1], sg[2], sg[3], sg[4], x - pm, top - h - pm, x + w + pm, top + pm) then
+                    return false
+                end
+            end
+        end
+        return true
+    end
+    for _, o in ipairs(cardWalkOffsets(wide)) do
+        local x, top = startX + o[1], startTop + o[2]
+        if clearAt(x, top) then
+            return x, top, true
+        end
+    end
+    return startX, startTop, false
+end
+
+--- Screen box of the points the active tool is working on (selection, a picked span end, the point
+--- being dragged), and whether any of them sits under the given rect (x, y = bottom-left). Returns
+--- x0, y0, x1, y1, covered. Sampled, so a huge box selection stays cheap.
+function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
+    if project == nil then return nil, nil, nil, nil, nil, "" end
+    local ids, n = {}, 0
+    local function add(id)
+        if id ~= nil and n < 400 then n = n + 1; ids[n] = id end
+    end
+    for _, key in ipairs({ "dragId", "moveSpanFromId", "moveSpanToId", "straightenFromId", "smoothFromId",
+        "divideFromId", "groundFromId", "offsetFromId", "sidingAnchorId", "splineFromId", "mergeFromId",
+        "lastWaypointId" }) do
+        add(editor[key])
+    end
+    if editor.selection ~= nil then
+        for id in pairs(editor.selection) do add(id) end
+    end
+    -- Move: the points that actually travel - the picked span, the falloff followers while a drag is
+    -- live, and the last point moved - so the card also steps clear of where they END UP, not just
+    -- of the point that was clicked.
+    if type(editor.moveSpanIds) == "table" then
+        for id in pairs(editor.moveSpanIds) do add(id) end
+    end
+    for _, nb in ipairs(editor.dragNeighbours or {}) do add(nb.id) end
+    -- (Not moveFocusId: that just follows whichever point the mouse hovers over, so counting it made
+    -- the card dodge every point the pointer passed over.)
+    for _, id in ipairs(editor.lastMovedIds or {}) do add(id) end
+    if includeSpan and editor.spanIds ~= nil then
+        for _, id in ipairs(editor.spanIds) do add(id) end
+    end
+    if includeSpan then add(editor.cardSpawnPointId) end
+    -- What the work IS, not where it is on screen: count and a cheap sum of the ids, so the key only
+    -- changes when the target set does (panning never changes it).
+    local sum = 0
+    for i = 1, n do sum = sum + ids[i] * i end
+    -- moveDropCount: every drop is new work even when it re-drops the SAME point (same ids, so the
+    -- id sum alone would look unchanged and the card would never re-check).
+    local key = n .. ":" .. sum .. ":" .. (editor.selectionCount or 0) .. ":" .. (editor.moveDropCount or 0)
+    local x0, y0, x1, y1, covered
+    local tpts, tsegs, screenOf, inSet = {}, {}, {}, {}
+    for i = 1, n do inSet[ids[i]] = true end
+    local m = 0.012
+    for i = 1, n do
+        local wp = ADGraphManager:getWayPointById(ids[i])
+        if wp ~= nil then
+            local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
+            if ok and sx ~= nil and depth ~= nil and depth > 0 and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
+                x0 = x0 and math.min(x0, sx) or sx
+                x1 = x1 and math.max(x1, sx) or sx
+                y0 = y0 and math.min(y0, sy) or sy
+                y1 = y1 and math.max(y1, sy) or sy
+                tpts[#tpts + 1] = { sx, sy }
+                screenOf[ids[i]] = { sx, sy }
+                if sx >= rx - m and sx <= rx + rw + m and sy >= ry - m and sy <= ry + rh + m then
+                    covered = true
+                end
+            end
+        end
+    end
+    -- Line segments between connected selected points, for the card's clearance test.
+    for i = 1, n do
+        local a, wp = screenOf[ids[i]], ADGraphManager:getWayPointById(ids[i])
+        if a ~= nil and wp ~= nil and wp.out ~= nil then
+            for _, otherId in pairs(wp.out) do
+                local b = inSet[otherId] and screenOf[otherId] or nil
+                if b ~= nil then tsegs[#tsegs + 1] = { a[1], a[2], b[1], b[2] } end
+            end
+        end
+    end
+    -- Covered also when a drawn LINE crosses the rect, not only when a point lands in it: a moved span
+    -- can pass under the card with every one of its points clear of it.
+    if not covered and rw > 0 then
+        for _, sg in ipairs(tsegs) do
+            if segmentHitsRect(sg[1], sg[2], sg[3], sg[4], rx - m, ry - m, rx + rw + m, ry + rh + m) then
+                covered = true
+                break
+            end
+        end
+    end
+    return x0, y0, x1, y1, covered, key, tpts, tsegs
+end
+
 --- The Select-mode context menu: a small panel of actions for the clicked point, span, or run,
 --- anchored just right of the click so the clicked point stays clear for a second/double click. Its
 --- rows are appended to self.rows so the panel's own click routing (isMouseOver / onClick) consumes
 --- and dispatches them exactly like the main panel's buttons, and they light up on hover.
 function ADFlyoverHud:drawContextMenu(editor)
+    -- Cleared each frame; set again only when a menu is actually drawn, so a stale header rect never
+    -- keeps capturing drags after the menu is gone.
+    self.menuHeadRect, self.menuRect = nil, nil
     local m = editor.ctxMenu
     if m == nil then
         return
     end
-    -- Selection menus (point/span/run) show only in Select mode; the armed popup shows while its
-    -- tool is active, replacing the action list with that tool's own controls.
-    if m.kind ~= "armed" and editor.tool ~= editor.TOOL.NONE then
-        return
-    end
-    -- The card-hide (H, or the panel button) hides the armed popup too, so hiding is consistent
-    -- across tools - the floating card and this popup are the same "tool options" to the player.
-    -- Right-click still applies the armed tool while it is hidden, and the panel note says H shows it.
-    if m.kind == "armed" and editor.cardHidden then
+    -- Point / span / run menus show only in Select mode. A tool armed from one of them (kind "armed")
+    -- keeps the menu state so right-click applies and Esc cancels, but its options are on the tool
+    -- card, which opens where the menu was - so there is nothing to draw for it here.
+    if m.kind == "armed" or editor.tool ~= editor.TOOL.NONE then
         return
     end
     self:ensureOverlays()
 
+    local T = editor.TOOL
+    local OP = editor.CONVERT_OP
     local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
     local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
-    local rowH = self.rowHeight * uiScale
+    local aspect = g_screenAspectRatio or (16 / 9)
+    local rowH = self.rowHeight * uiScale * 1.1
     local pad = self.padding
-    local pw = 0.150 * uiScale
+    local colGap = pad * 0.7
+    local vGap = pad * 0.4
+    -- Sized to the text: two short labels per row.
+    local pw = 0.14 * uiScale
+    -- Same size as the main panel's text, so the two read as one UI.
     local fontSize = 0.0110 * uiScale
-    local OP = editor.CONVERT_OP
 
+    -- Items. "mbtn" buttons pair into two columns (an unpaired last one spans the row); the rest are
+    -- full width. Groups are separated by an "mgap".
     local items = {}
-    local function it(kind, text, action, danger)
-        table.insert(items, { kind = kind, text = text, action = action, danger = danger })
+    local function btn(text, action, icon)
+        items[#items + 1] = { kind = "mbtn", text = text, action = action, iconCell = icon }
     end
-    -- A row that also carries a right-aligned value: a toggle's state, or a wheel-driven number.
-    local function itv(kind, text, value, action)
-        table.insert(items, { kind = kind, text = text, value = value, action = action })
+    local function danger(text, action)
+        items[#items + 1] = { kind = "mdanger", text = text, action = action }
+    end
+    local function gap() items[#items + 1] = { kind = "mgap" } end
+    local function head(text) items[#items + 1] = { kind = "mhead", text = text } end
+    -- Direction and priority each get one button naming the opposite of what is there now, so a
+    -- click flips the label; a mix (or nothing to judge) offers both ways.
+    local function convertButtons(ids, apply, flipLabel)
+        local dir, prio = editor:menuConvertState(ids)
+        -- dir nil = no connections among them at all: nothing for a direction button to act on.
+        if dir == "two" or dir == "mixed" then btn("make one-way", function() apply(OP.ONEWAY) end) end
+        if dir == "one" or dir == "mixed" then btn("make two-way", function() apply(OP.TWOWAY) end) end
+        if flipLabel ~= nil and (dir == "one" or dir == "mixed") then btn(flipLabel, function() apply(OP.REVERSE) end) end
+        if prio == "primary" or prio == "mixed" then btn("make secondary", function() apply(OP.SECONDARY) end) end
+        if prio == "secondary" or prio == "mixed" then btn("make primary", function() apply(OP.PRIMARY) end) end
     end
     if m.kind == "point" then
-        it("mhead", string.format(TR("point %d"), m.id))
-        it("mitem", "name...", function() editor:menuName() end)
-        it("mitem", "move", function() editor:menuArmMove() end)
-        it("mitem", "connect from here", function() editor:menuArmDraw() end)
-        it("mitem", "spline from here", function() editor:menuArmSpline() end)
-        it("mitem", "make two-way", function() editor:menuConvert(OP.TWOWAY) end)
-        it("mitem", "make one-way", function() editor:menuConvert(OP.ONEWAY) end)
-        it("mitem", "primary", function() editor:menuConvert(OP.PRIMARY) end)
-        it("mitem", "secondary", function() editor:menuConvert(OP.SECONDARY) end)
-        it("mitem", "delete point", function() editor:menuDelete() end, true)
+        head(string.format(TR("point %d"), m.id))
+        btn("name...", function() editor:menuName() end, 12)
+        btn("move", function() editor:menuArmMove() end, 6)
+        btn("connect", function() editor:menuArmDraw() end, 1)
+        btn("spline", function() editor:menuArmSpline() end, 2)
+        gap()
+        convertButtons({ m.id }, function(op) editor:menuConvert(op) end, nil)
+        gap()
+        danger("delete point", function() editor:menuDelete() end)
     elseif m.kind == "span" then
-        it("mhead", string.format(TR("span  %d pts"), m.ids ~= nil and #m.ids or 0))
-        it("mitem", "straighten", function() editor:menuArmStraighten() end)
-        it("mitem", "smooth", function() editor:menuArmSmooth() end)
-        it("mitem", "divide", function() editor:menuArmDivide() end)
-        it("mitem", "ground", function() editor:menuArmGround() end)
-        it("mitem", "make two-way", function() editor:menuConvertSpan(OP.TWOWAY) end)
-        it("mitem", "make one-way", function() editor:menuConvertSpan(OP.ONEWAY) end)
-        it("mitem", "flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
-        it("mitem", "delete span", function() editor:menuDeleteSpan() end, true)
+        head(string.format(TR("span  %d pts"), m.ids ~= nil and #m.ids or 0))
+        btn("move", function() editor:menuArmMoveSpan() end, 6)
+        btn("straighten", function() editor:menuArmStraighten() end, 8)
+        btn("smooth", function() editor:menuArmSmooth() end, 7)
+        btn("divide", function() editor:menuArmDivide() end, 9)
+        btn("ground", function() editor:menuArmGround() end, 14)
+        gap()
+        convertButtons(m.ids, function(op) editor:menuConvertSpan(op) end, "flip direction")
+        gap()
+        danger("delete span", function() editor:menuDeleteSpan() end)
+    elseif m.kind == "set" then
+        head(string.format(TR("selection  %d pts"), editor.selectionCount))
+        btn("move", function() editor:menuArmMoveSelection() end, 6)
+        btn("clear", function() editor:menuClearSelection() end)
+        gap()
+        convertButtons(editor.selection, function(op) editor:menuConvertSelection(op) end, "flip direction")
+        gap()
+        danger("delete selection", function() editor:menuDeleteSelection() end)
     elseif m.kind == "run" then
-        it("mhead", string.format(TR("run  %s pts"), tostring(m.count or "?")))
-        it("mitem", "straighten", function() editor:menuArmStraighten() end)
-        it("mitem", "smooth", function() editor:menuArmSmooth() end)
-        it("mitem", "divide", function() editor:menuArmDivide() end)
-        it("mitem", "parallel", function() editor:menuArmParallel() end)
-        it("mitem", "ground", function() editor:menuArmGround() end)
-        it("mitem", "make two-way", function() editor:menuConvertRun(OP.TWOWAY) end)
-        it("mitem", "make one-way", function() editor:menuConvertRun(OP.ONEWAY) end)
-        it("mitem", "flip direction", function() editor:menuConvertRun(OP.REVERSE) end)
-        it("mitem", "delete run", function() editor:menuDeleteRun() end, true)
-    else
-        -- Armed: only the selected tool's own controls - its wheel value and any toggles - plus apply
-        -- and cancel. The values are read live each frame, so the wheel updates them in place.
-        local t = m.tool
-        it("mhead", string.format(TR("%s - selected"), TR(editor.TOOL_NAMES[t] or "tool")))
-        if t == editor.TOOL.SMOOTH then
-            itv("mtoggle", "mode", editor.SMOOTH_MODE_NAMES[editor.smoothMode], function() editor:cycleSmoothMode() end)
-            if editor.smoothMode == editor.SMOOTH_MODE.REBUILD then
-                itv("mwheel", "max spacing", string.format("%.1f m", editor.smoothSpacing))
-            else
-                itv("mwheel", "strength", tostring(editor.smoothStrength))
-            end
-        elseif t == editor.TOOL.STRAIGHTEN then
-            itv("mwheel", "tolerance", string.format("%.1f m", editor.straightenTolerance))
-        elseif t == editor.TOOL.DIVIDE then
-            itv("mwheel", "points", tostring(editor.divideCount))
-        elseif t == editor.TOOL.GROUND then
-            itv("mwheel", "tolerance", string.format("%.1f m", editor.groundTolerance))
-            itv("mtoggle", "level", editor.GROUND_LEVEL_NAMES[editor.groundLevel], function() editor:cycleGroundLevel() end)
-            itv("mtoggle", "snap to", editor.snapToTerrain and "terrain" or "surface", function() editor:toggleSnapToTerrain() end)
-        elseif t == editor.TOOL.PARALLEL then
-            itv("mwheel", "distance", string.format("%.1f m", editor.offsetDistance))
-            itv("mtoggle", "side", (editor.offsetSide or 1) >= 0 and "left" or "right", function() editor:flipOffsetSide() end)
-        end
-        it("mapply", "apply", function() editor:menuApplyArmed() end)
-        it("mitem", "cancel", function() editor:menuCancelArmed() end)
-        it("mnote", "scroll or +/- to adjust - right-click applies")
+        head(string.format(TR("run  %s pts"), tostring(m.count or "?")))
+        btn("move", function() editor:menuArmMoveSpan() end, 6)
+        btn("straighten", function() editor:menuArmStraighten() end, 8)
+        btn("smooth", function() editor:menuArmSmooth() end, 7)
+        btn("divide", function() editor:menuArmDivide() end, 9)
+        btn("parallel", function() editor:menuArmParallel() end, 4)
+        btn("ground", function() editor:menuArmGround() end, 14)
+        gap()
+        convertButtons(m.ids or m.runSet, function(op) editor:menuConvertRun(op) end, "flip direction")
+        gap()
+        danger("delete run", function() editor:menuDeleteRun() end)
     end
 
-    -- Localize every menu label and toggle value in one place, in-place: the headers were already
-    -- localized as they were built (they carry formatted ids), so TR passes them through unchanged;
-    -- the action labels and toggle values map here. Dynamic values (the wheel numbers) are not keys and
-    -- pass straight through. Done before layout so widths measure the text that is actually drawn.
+    -- Localize every label and toggle value in one place, before layout so widths measure the text
+    -- that is actually drawn. The headers were already localized as they were built (they carry
+    -- formatted ids), so TR passes them through unchanged; dynamic values (the numbers) are not keys.
     for _, item in ipairs(items) do
-        item.text = TR(item.text)
-        if item.value ~= nil then
-            item.value = TR(item.value)
-        end
+        if item.text ~= nil then item.text = TR(item.text) end
+        if item.value ~= nil then item.value = TR(item.value) end
     end
 
-    local ph = #items * rowH + pad * 2
-    -- Offset down and right of the click, not sitting on it: the box's bottom edge used to sit right
-    -- at the cursor y and grow UPWARD, so it covered the clicked point and the cursor itself. A menu
-    -- item under the pointer on open reads as a misclick waiting to happen. Now the box's TOP edge
-    -- starts a margin below the click and it grows downward, clear of both the point and the cursor.
+    -- Lines: a header, a gap, a full-width row, or a pair of half-width buttons.
+    local lines = {}
+    do
+        local i = 1
+        while i <= #items do
+            local it = items[i]
+            if it.kind == "mbtn" then
+                local nxt = items[i + 1]
+                if nxt ~= nil and nxt.kind == "mbtn" then
+                    lines[#lines + 1] = { cells = { it, nxt }, h = rowH + vGap }
+                    i = i + 2
+                else
+                    lines[#lines + 1] = { cells = { it }, full = true, h = rowH + vGap }
+                    i = i + 1
+                end
+            elseif it.kind == "mhead" then
+                lines[#lines + 1] = { cells = { it }, bleed = true, h = rowH * 0.9 + vGap }
+                i = i + 1
+            elseif it.kind == "mgap" then
+                lines[#lines + 1] = { gap = true, h = vGap * 1.5 }
+                i = i + 1
+            else
+                lines[#lines + 1] = { cells = { it }, full = true, h = rowH + vGap }
+                i = i + 1
+            end
+        end
+    end
+    local ph = pad
+    for _, ln in ipairs(lines) do ph = ph + ln.h end
+
+    -- Position. Armed opens beside the click; point/span/run below the selection they act on. Either
+    -- is then held (m.placeX) - including wherever the player drags it by the header - and dropped with
+    -- the menu, never saved: a menu belongs to one selection.
     local menuGapX, menuGapY = 0.014, 0.02
     local x = math.max(0, math.min(1 - pw, (m.sx or 0.5) + menuGapX))
     local top = math.max(ph, math.min(1, (m.sy or 0.5) + menuGapY + ph))
+    if m.placeX == nil then
+        local bx0, by0, bx1, by1, bpts, bsegs = menuSelectionBox(m)
+        if bx0 ~= nil then
+            local avoid = {}
+            if self.frameW ~= nil and self.frameW > 0 then
+                avoid[#avoid + 1] = { self.frameX, self.frameY, self.frameW, self.frameH }
+            end
+            -- Not the tool card: a selection menu only exists in Select mode, where there is no card.
+            -- Same walk as the tool card: start just below the cursor and step outward to the nearest
+            -- spot with no selected point under it, so the menu lands in the open ground inside a
+            -- curve rather than hugging the line.
+            local wx, wy, found = placeCardInOpenSpace(bpts, pw, ph, avoid, m.sx, m.sy, nil, nil, bsegs)
+            m.placeX, m.placeTop = wx, wy
+        end
+    end
+    if m.placeX ~= nil then
+        x, top = m.placeX, m.placeTop
+    end
+    x = math.max(0, math.min(1 - pw, x))
+    top = math.max(ph, math.min(1, top))
+    self.menuRect = { x = x, y = top - ph, w = pw, h = ph }
     local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
@@ -1035,42 +1836,61 @@ function ADFlyoverHud:drawContextMenu(editor)
         "cardBorder", 0.98)
     fillRole(self.background, x, top - ph, pw, ph, "cardBg", 0.99)
 
-    local y = top - pad
-    for _, item in ipairs(items) do
-        y = y - rowH
-        item.x, item.y, item.w, item.h = x, y, pw, rowH
-        -- Register the row up front so any stepper buttons drawn for it land AFTER it in self.rows;
-        -- isMouseOver scans back-to-front, so the buttons on top then win the click over the row.
-        table.insert(self.rows, item)
-        local textY = y + (rowH - fontSize) * 0.5
-        local textX = x + pad * 2
-        local rightX = x + pw - pad * 2
-        local hovered = mx ~= nil and mx >= x and mx <= x + pw and my >= y and my <= y + rowH
-        if item.kind == "mhead" then
-            fillRole(self.headerOverlay, x, y, pw, rowH, "headerBg", 1)
-            labelRole(textX, textY, fontSize * 0.9, item.text, "headerText")
-        elseif item.kind == "mnote" then
-            labelRole(textX, textY, fontSize * 0.82, item.text, "mutedText")
-        elseif item.kind == "mwheel" then
-            -- The wheel drives this while armed; the - / + steppers and per-field wheel adjust it too.
-            fillRole(self.rowOverlay, x, y, pw, rowH, "toolBg", 0.9)
-            item.stepAction = function(dir) editor:applyWheelToActiveTool(dir) end
-            self:drawNumberField(item, x, y, pw, rowH, fontSize, mx, my, "bodyText", "valueText")
-        elseif item.kind == "mtoggle" then
-            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "hoverBg" or "toolBg", 0.95)
-            labelRole(textX, textY, fontSize, item.text, "bodyText")
-            labelRole(rightX, textY, fontSize, item.value or "-", "valueText", 1, RenderText.ALIGN_RIGHT)
-        elseif item.kind == "mapply" then
-            fillRole(self.rowOverlay, x, y, pw, rowH, "accent", hovered and 0.98 or 0.9)
-            labelRole(textX, textY, fontSize, item.text, "accentText")
-        elseif item.danger then
-            -- A translucent red wash on hover keeps the "this deletes" cue without a dedicated role.
-            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "danger" or "toolBg", hovered and 0.30 or 0.9)
-            labelRole(textX, textY, fontSize, item.text, "danger")
-        else
-            fillRole(self.rowOverlay, x, y, pw, rowH, hovered and "hoverBg" or "toolBg", 0.95)
-            labelRole(textX, textY, fontSize, item.text, "bodyText")
+    local halfW = (pw - pad * 2 - colGap) * 0.5
+    local function inside(cx, cy, cw, ch)
+        return mx ~= nil and mx >= cx and mx <= cx + cw and my >= cy and my <= cy + ch
+    end
+
+    local y = top - pad * 0.5
+    for _, ln in ipairs(lines) do
+        if not ln.gap then
+            for ci, item in ipairs(ln.cells) do
+                local cx, cw, ch
+                if ln.bleed then
+                    cx, cw, ch = x, pw, rowH * 0.9
+                elseif ln.full then
+                    cx, cw, ch = x + pad, pw - pad * 2, rowH
+                else
+                    cw, ch = halfW, rowH
+                    cx = x + pad + (ci - 1) * (halfW + colGap)
+                end
+                local cy = y - ch
+                item.x, item.y, item.w, item.h = cx, cy, cw, ch
+                -- Registered up front so any stepper buttons drawn for it land AFTER it in self.rows;
+                -- isMouseOver scans back-to-front, so the buttons on top then win the click over the row.
+                table.insert(self.rows, item)
+                local hovered = inside(cx, cy, cw, ch)
+                local textY = cy + (ch - fontSize) * 0.5
+                local be = 0.0016
+
+                if item.kind == "mhead" then
+                    -- The drag handle, styled like the card's own header strip.
+                    fillRole(self.headerOverlay, cx, cy, cw, ch, "headerBg", 1)
+                    labelRole(cx + pad * 2, cy + (ch - fontSize * 0.95) * 0.5, fontSize * 0.95, item.text, "headerText")
+                    self.menuHeadRect = { x = cx, y = cy, w = cw, h = ch }
+                elseif item.kind == "mdanger" then
+                    -- A translucent red wash on hover keeps the "this deletes" cue without a dedicated role.
+                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, "danger", hovered and 0.9 or 0.45)
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, hovered and "danger" or "toolBg", hovered and 0.30 or 0.9)
+                    labelRole(cx + cw * 0.5, textY, fontSize, item.text, "danger", 1, RenderText.ALIGN_CENTER)
+                else
+                    -- mbtn / mfull: a plated, bordered button like the toolbar's, icon on the left when
+                    -- the action is a tool, label centred otherwise.
+                    fillRole(self.borderOverlay, cx - be, cy - be, cw + be * 2, ch + be * 2, hovered and "hoverBorder" or "toolBorder", 0.9)
+                    fillRole(self.rowOverlay, cx, cy, cw, ch, hovered and "hoverBg" or "toolBg", 0.95)
+                    if item.iconCell ~= nil then
+                        local ih = ch * 0.66
+                        local iw = ih / aspect
+                        local tr, tg, tb = ADFlyoverTheme:rgb("bodyText")
+                        self:renderIcon(item.iconCell, cx + pad * 1.2, cy + (ch - ih) * 0.5, iw, ih, tr, tg, tb, 1)
+                        labelRole(cx + cw * 0.5 + iw * 0.5, textY, fontSize, item.text, "bodyText", 1, RenderText.ALIGN_CENTER)
+                    else
+                        labelRole(cx + cw * 0.5, textY, fontSize, item.text, "bodyText", 1, RenderText.ALIGN_CENTER)
+                    end
+                end
+            end
         end
+        y = y - ln.h
     end
 end
 
@@ -1167,6 +1987,10 @@ function ADFlyoverHud:drawSettingsDialog(editor)
             end,
             stepAction = function(d) editor:stepLineWeight(d) end })
     end
+    push({ kind = "field", text = "tool card",
+        value = ADFlyoverSettings.get("toolCardStatic") and "stays put" or "follows work",
+        action = function() ADFlyoverSettings.cycle("toolCardStatic", 1) end,
+        stepAction = function(d) ADFlyoverSettings.cycle("toolCardStatic", d) end })
     push({ kind = "section", text = "THEME" })
     push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
         action = function() editor:cycleThemePreset(1) end,
@@ -1703,6 +2527,10 @@ function ADFlyoverHud:isMouseOverToolCardGrab(mouseX, mouseY)
     if self.ctxFrameW == nil or self.ctxFrameW <= 0 then
         return false
     end
+    local pr = self.pinRect
+    if pr ~= nil and mouseX >= pr.x and mouseX <= pr.x + pr.w and mouseY >= pr.y and mouseY <= pr.y + pr.h then
+        return false   -- the pin is a button, not part of the drag handle
+    end
     return mouseX >= self.ctxFrameX and mouseX <= self.ctxFrameX + self.ctxFrameW
         and mouseY >= self.ctxFrameY + self.ctxFrameH - CTX_GRAB_H
         and mouseY <= self.ctxFrameY + self.ctxFrameH
@@ -1714,7 +2542,36 @@ end
 --- the player has taken control of it (editor.toolCardDragged) so the next click of the same action
 --- does not jump it back - see ADFlyoverEditor:onLeftPress.
 function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
+    -- The point/span/run menu's header is its drag handle. The position lives on the menu
+    -- itself (editor.ctxMenu.placeX/placeTop), so it is held while the menu is open and gone with it.
+    local hr, mr, menu = self.menuHeadRect, self.menuRect, editor ~= nil and editor.ctxMenu or nil
+    if button == 1 and isDown and menu ~= nil and hr ~= nil and mr ~= nil
+        and mouseX >= hr.x and mouseX <= hr.x + hr.w and mouseY >= hr.y and mouseY <= hr.y + hr.h then
+        self.menuDragging = true
+        self.menuDragDX = mouseX - mr.x
+        self.menuDragDY = mouseY - (mr.y + mr.h)
+        return true
+    end
+    if self.menuDragging then
+        if (button == 1 and isUp) or menu == nil or mr == nil then
+            self.menuDragging = false
+            return true
+        end
+        menu.placeX = math.max(0, math.min(1 - mr.w, mouseX - self.menuDragDX))
+        menu.placeTop = math.max(mr.h, math.min(1, mouseY - self.menuDragDY))
+        return true
+    end
+
     if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
+        if editor ~= nil then
+            -- Pin the card where it is DRAWN right now before the spawn/step-aside positions are dropped.
+            -- Otherwise, until the first mouse move writes a drag position, the card falls back to its
+            -- saved home for a frame or more - the jump on first click.
+            editor.toolCardX = self.ctxFrameX
+            editor.toolCardY = self.ctxFrameY + self.ctxFrameH
+            editor.cardSpawnX, editor.cardSpawnY = nil, nil
+            self.cardShift = nil
+        end
         self.ctxDragging = true
         self.ctxDragOffsetX = mouseX - self.ctxFrameX
         self.ctxDragOffsetY = mouseY - self.ctxFrameY
@@ -1723,12 +2580,46 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
     if self.ctxDragging then
         if button == 1 and isUp then
             self.ctxDragging = false
+            -- Remember where it was left, once, on release (not per mouse-move: saving writes a file).
+            if editor ~= nil and ADFlyoverTheme ~= nil then
+                ADFlyoverTheme:setCardPos(editor.toolCardX, editor.toolCardY)
+            end
             return true
         end
         if editor ~= nil then
             editor.toolCardDragged = true
             editor.toolCardX = math.max(0, math.min(1 - self.ctxFrameW, mouseX - self.ctxDragOffsetX))
             editor.toolCardY = math.max(self.ctxFrameH or 0, math.min(1, mouseY - self.ctxDragOffsetY + (self.ctxFrameH or 0)))
+        end
+        return true
+    end
+
+    -- Corner grip: resizes the whole editor UI by scale. The panel is anchored top-left, so the
+    -- bottom-right corner follows the cursor: the new width is the cursor's distance from the left
+    -- edge, and the scale is the grabbed scale times new width over grabbed width. Clamped by the
+    -- theme's own limits, and so the right edge cannot leave the screen.
+    local gr = self.gripRect
+    if button == 1 and isDown and gr ~= nil and ADFlyoverTheme ~= nil
+        and mouseX >= gr.x and mouseX <= gr.x + gr.w and mouseY >= gr.y and mouseY <= gr.y + gr.h then
+        self.gripDragging = true
+        self.gripStartScale = ADFlyoverTheme.scale
+        self.gripStartW = self.frameW
+        self.gripOffsetX = (self.frameX + self.frameW) - mouseX
+        return true
+    end
+    if self.gripDragging then
+        if button == 1 and isUp then
+            self.gripDragging = false
+            return true
+        end
+        local w = math.min(mouseX + self.gripOffsetX, 1) - self.posX
+        if w > 0 and self.gripStartW > 0 then
+            -- setScale() persists each call; only call when the snapped step actually changes so a
+            -- drag does not rewrite the settings file on every mouse event.
+            local want = self.gripStartScale * w / self.gripStartW
+            if math.abs(want - ADFlyoverTheme.scale) >= ADFlyoverTheme.SCALE_STEP * 0.5 then
+                ADFlyoverTheme:setScale(want)
+            end
         end
         return true
     end

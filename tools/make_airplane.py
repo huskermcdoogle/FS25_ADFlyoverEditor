@@ -4,9 +4,10 @@ Nose up (towards -y in the image) is the zero rotation. The marker is rotated at
 camera's aim, so this has to point exactly one way and have a nose that reads at a glance when it is
 16 pixels tall on the HUD map.
 
-Written as an uncompressed 32-bit BGRA DDS rather than the flat DXT1 the mod icon uses. A map marker
-sits over terrain of every colour, so it needs real alpha and anti-aliased edges; DXT1 offers only
-one-bit alpha and would give it a jagged cut-out edge. At 64x64 the uncompressed file is 16 KB.
+Written as BC3 (DXT5) with a full mip chain, not the flat DXT1 the mod icon uses. A map marker sits
+over terrain of every colour, so it needs real alpha and anti-aliased edges; DXT1 offers only one-bit
+alpha and would give it a jagged cut-out edge, while BC3's interpolated alpha keeps the soft edge. It
+used to be uncompressed BGRA, which FS25 flags as "raw format" (a performance warning).
 
 No PIL on this machine, so the shape is defined analytically and supersampled for anti-aliasing,
 and a PNG preview is written with zlib alone.
@@ -107,27 +108,98 @@ def render():
     return pixels
 
 
+def _downsample(px):
+    """Halve an RGBA image, averaging colour weighted by alpha so the edge does not darken."""
+    n = len(px) // 2
+    out = []
+    for y in range(n):
+        row = []
+        for x in range(n):
+            quad = [px[2 * y + dy][2 * x + dx] for dy in (0, 1) for dx in (0, 1)]
+            at = sum(q[3] for q in quad)
+            if at == 0:
+                row.append((0, 0, 0, 0))
+                continue
+            row.append((round(sum(q[0] * q[3] for q in quad) / at), round(sum(q[1] * q[3] for q in quad) / at),
+                        round(sum(q[2] * q[3] for q in quad) / at), round(at / 4)))
+        out.append(row)
+    return out
+
+
+def _to565(c):
+    return ((c[0] * 31 + 127) // 255) << 11 | ((c[1] * 63 + 127) // 255) << 5 | ((c[2] * 31 + 127) // 255)
+
+
+def _from565(v):
+    return (((v >> 11) & 31) * 255 // 31, ((v >> 5) & 63) * 255 // 63, (v & 31) * 255 // 31)
+
+
+def _bc3_block(block):
+    """One 4x4 block as BC3 (DXT5): 8 bytes of interpolated alpha, then an 8-byte colour block."""
+    alphas = [p[3] for p in block]
+    a0, a1 = max(alphas), min(alphas)
+    if a0 == a1:
+        a_idx = [0] * 16
+    else:
+        pal = [a0, a1] + [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
+        a_idx = [min(range(8), key=lambda k: abs(pal[k] - a)) for a in alphas]
+    bits = 0
+    for i, v in enumerate(a_idx):
+        bits |= v << (3 * i)
+    alpha_bytes = bytes((a0, a1)) + bits.to_bytes(6, "little")
+
+    # Colour endpoints from the pixels that are actually visible (fully clear ones are don't-care).
+    vis = [p for p in block if p[3] > 0] or block
+    lo = tuple(min(p[i] for p in vis) for i in range(3))
+    hi = tuple(max(p[i] for p in vis) for i in range(3))
+    c0, c1 = _to565(hi), _to565(lo)
+    if c0 < c1:
+        c0, c1 = c1, c0
+    if c0 == c1:
+        c_idx = [0] * 16
+    else:
+        e0, e1 = _from565(c0), _from565(c1)
+        pal = [e0, e1,
+               tuple((2 * e0[i] + e1[i]) // 3 for i in range(3)),
+               tuple((e0[i] + 2 * e1[i]) // 3 for i in range(3))]
+        c_idx = [min(range(4), key=lambda k: sum((pal[k][i] - p[i]) ** 2 for i in range(3))) for p in block]
+    cbits = 0
+    for i, v in enumerate(c_idx):
+        cbits |= v << (2 * i)
+    return alpha_bytes + struct.pack("<HHI", c0, c1, cbits)
+
+
+def _bc3_image(px):
+    n = len(px)
+    out = bytearray()
+    for by in range(0, max(n, 4), 4):
+        for bx in range(0, max(n, 4), 4):
+            block = [px[min(by + y, n - 1)][min(bx + x, n - 1)] for y in range(4) for x in range(4)]
+            out += _bc3_block(block)
+    return out
+
+
 def write_dds(path, pixels):
+    """BC3 (DXT5) with a full mip chain. FS25 warns about raw (uncompressed) textures as a performance
+    problem; BC3 keeps the smooth, interpolated alpha the anti-aliased edge needs, which DXT1 does not."""
+    levels = [pixels]
+    while len(levels[-1]) > 1:
+        levels.append(_downsample(levels[-1]))
     header = bytearray(128)
     header[0:4] = b"DDS "
-    struct.pack_into("<I", header, 4, 124)                 # dwSize
-    struct.pack_into("<I", header, 8, 0x0000100F)          # CAPS|HEIGHT|WIDTH|PITCH|PIXELFORMAT
-    struct.pack_into("<I", header, 12, SIZE)               # height
-    struct.pack_into("<I", header, 16, SIZE)               # width
-    struct.pack_into("<I", header, 20, SIZE * 4)           # pitch
-    struct.pack_into("<I", header, 28, 1)                  # mip count
-    struct.pack_into("<I", header, 76, 32)                 # ddpf size
-    struct.pack_into("<I", header, 80, 0x41)               # DDPF_RGB | DDPF_ALPHAPIXELS
-    struct.pack_into("<I", header, 88, 32)                 # bits per pixel
-    struct.pack_into("<I", header, 92, 0x00FF0000)         # R mask
-    struct.pack_into("<I", header, 96, 0x0000FF00)         # G mask
-    struct.pack_into("<I", header, 100, 0x000000FF)        # B mask
-    struct.pack_into("<I", header, 104, 0xFF000000)        # A mask
-    struct.pack_into("<I", header, 108, 0x1000)            # DDSCAPS_TEXTURE
+    struct.pack_into("<I", header, 4, 124)                            # dwSize
+    struct.pack_into("<I", header, 8, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000)  # CAPS|HEIGHT|WIDTH|PF|MIPCOUNT|LINEARSIZE
+    struct.pack_into("<I", header, 12, SIZE)                          # height
+    struct.pack_into("<I", header, 16, SIZE)                          # width
+    struct.pack_into("<I", header, 20, max(1, SIZE // 4) ** 2 * 16)   # linear size of the top level
+    struct.pack_into("<I", header, 28, len(levels))                   # mip count
+    struct.pack_into("<I", header, 76, 32)                            # ddpf size
+    struct.pack_into("<I", header, 80, 0x4)                           # DDPF_FOURCC
+    header[84:88] = b"DXT5"
+    struct.pack_into("<I", header, 108, 0x1000 | 0x400000 | 0x8)      # TEXTURE|MIPMAP|COMPLEX
     body = bytearray()
-    for row in pixels:
-        for r, g, b, a in row:
-            body += bytes((b, g, r, a))                    # BGRA in memory
+    for level in levels:
+        body += _bc3_image(level)
     with open(path, "wb") as fh:
         fh.write(header + body)
 

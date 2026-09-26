@@ -266,37 +266,148 @@ function W.install(AD)
     -- instance's metatable, so replacing them on the class intercepts, the same as everywhere else.
     local Dialog = ADEnterTargetNameGui
     if Dialog ~= nil and type(Dialog.onOpen) == "function" and type(Dialog.onClickOk) == "function" then
-        local originalOnOpen = Dialog.onOpen
-        Dialog.onOpen = function(dialogSelf, ...)
-            local result = originalOnOpen(dialogSelf, ...)
+        -- Point an open dialog instance at the clicked waypoint: edit the marker already on it, or
+        -- create a new one there. Public on the class because the editor ALSO calls it straight after
+        -- showDialog: the dialog's XML binds onOpen/onClickOk when the screen loads, and whether that
+        -- binding sees a later replacement on the class is the engine's business - so the state is
+        -- set on the instance directly rather than trusting the wrapper to have run.
+        Dialog.applyFlyoverOverride = function(dialogSelf)
             local overrideId = Dialog.overrideWayPointId
-            if overrideId ~= nil then
-                -- Same two cases stock has, just sourced from the click instead of the vehicle:
-                -- edit the marker already on that waypoint, or create a new one there.
-                dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = nil, nil, false
-                for i, marker in pairs(ADGraphManager:getMapMarkers()) do
-                    if marker.id == overrideId then
-                        dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = i, marker.name, true
+            if dialogSelf == nil or overrideId == nil then
+                return
+            end
+            dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = nil, nil, false
+            for i, marker in pairs(ADGraphManager:getMapMarkers()) do
+                if marker.id == overrideId then
+                    dialogSelf.editId, dialogSelf.editName, dialogSelf.edit = i, marker.name, true
+                    break
+                end
+            end
+            if dialogSelf.titleElement ~= nil then
+                -- The title strings live in AutoDrive's own l10n. Asked from this mod, g_i18n looks in
+                -- OUR translations and shows "Missing 'gui_ad_...' in l10n_en.xml" - so name AutoDrive's
+                -- mod explicitly, and fall back to plain English rather than ever showing a raw key.
+                local key = dialogSelf.edit and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"
+                local title
+                for _, modName in ipairs({ "FS25_AutoDrive", (AutoDrive ~= nil and AutoDrive.modName) or nil }) do
+                    local ok, text = pcall(g_i18n.getText, g_i18n, key, modName)
+                    if ok and type(text) == "string" and text ~= "" and not text:lower():find("^missing") then
+                        title = text
                         break
                     end
                 end
-                -- onOpen already set the title, text and button rows from ITS answer; redo them now
-                -- that ours has replaced it.
-                if dialogSelf.titleElement ~= nil then
-                    dialogSelf.titleElement:setText(g_i18n:getText(dialogSelf.edit
-                        and "gui_ad_enterTargetNameTitle_edit" or "gui_ad_enterTargetNameTitle_add"))
+                dialogSelf.titleElement:setText(title or (dialogSelf.edit and "Edit target name" or "Add target name"))
+            end
+            if dialogSelf.textInputElement ~= nil then
+                dialogSelf.textInputElement:setText(dialogSelf.edit and dialogSelf.editName or "")
+            end
+            if dialogSelf.buttonsCreateElement ~= nil then
+                dialogSelf.buttonsCreateElement:setVisible(not dialogSelf.edit)
+            end
+            if dialogSelf.buttonsEditElement ~= nil then
+                dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
+            end
+            -- New name: caret in the field so typing starts at once. Stock activates it in onOpen; only
+            -- do it again if it is NOT already capturing input, and never touch the focus manager - an
+            -- earlier attempt (both together) made the dialog not appear at all.
+            -- Renaming a name that already exists: leave the field UNfocused. A focused text box
+            -- swallows Space (and every other key), so the dialog's own Delete key could not clear the
+            -- name; unfocused, Space reaches the buttons and the name can be deleted at once. Click the
+            -- field to edit the text.
+            local input = dialogSelf.textInputElement
+            if input ~= nil then
+                if dialogSelf.edit then
+                    if input.isCapturingInput then
+                        pcall(function() input:onFocusLeave() end)
+                    end
+                elseif not input.isCapturingInput then
+                    pcall(function()
+                        input.blockTime = 0
+                        input:onFocusActivate()
+                    end)
                 end
-                if dialogSelf.textInputElement ~= nil then
-                    dialogSelf.textInputElement:setText(dialogSelf.edit and dialogSelf.editName or "")
-                end
-                if dialogSelf.buttonsCreateElement ~= nil then
-                    dialogSelf.buttonsCreateElement:setVisible(not dialogSelf.edit)
-                end
-                if dialogSelf.buttonsEditElement ~= nil then
-                    dialogSelf.buttonsEditElement:setVisible(dialogSelf.edit)
+                log("name dialog field: %s, capturing input = %s", dialogSelf.edit and "rename (left unfocused)" or "new name (focused)",
+                    tostring(input.isCapturingInput))
+            end
+            log("name dialog aimed at waypoint id=%s (%s)", tostring(overrideId),
+                dialogSelf.edit and "rename" or "new marker")
+        end
+
+        local originalOnOpen = Dialog.onOpen
+        Dialog.onOpen = function(dialogSelf, ...)
+            local result = originalOnOpen(dialogSelf, ...)
+            Dialog.applyFlyoverOverride(dialogSelf)
+            return result
+        end
+
+        -- Duplicate names: two markers called "Hof" sit side by side in every destination list, a
+        -- rename looks like it "did not take" (the other one was edited), and a vehicle sent "to Hof"
+        -- goes to whichever the list found first. Names are trimmed and compared case-insensitively.
+        -- `exceptIndex` is the marker being renamed, which may keep its own name (or change its case).
+        local function findDuplicate(manager, name, exceptIndex)
+            local lower = name:lower()
+            for index, marker in pairs(manager:getMapMarkers()) do
+                if index ~= exceptIndex and marker.name ~= nil and marker.name:lower() == lower then
+                    return marker
                 end
             end
-            return result
+            return nil
+        end
+        local function refuseDuplicate(marker)
+            Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not applying. Pick another name.",
+                W.MOD_NAME, marker.name, tostring(marker.id))
+            -- On-screen, because the dialog closes either way and silence reads as "it did nothing".
+            if g_currentMission ~= nil and g_currentMission.showBlinkingWarning ~= nil then
+                pcall(g_currentMission.showBlinkingWarning, g_currentMission,
+                    string.format("'%s' is already a destination name - pick another", marker.name), 4000)
+            end
+        end
+
+        -- Stock's create path is createMapMarkerOnClosest(controlledVehicle, name): a marker on
+        -- whatever waypoint is nearest the VEHICLE, wherever it happens to be parked. That call is a
+        -- by-name lookup at call time, so redirecting it works however the OK button got bound.
+        local originalCreateOnClosest = ADGraphManager.createMapMarkerOnClosest
+        if type(originalCreateOnClosest) == "function" then
+            ADGraphManager.createMapMarkerOnClosest = function(manager, vehicle, name, ...)
+                local overrideId = Dialog.overrideWayPointId
+                if overrideId == nil then
+                    return originalCreateOnClosest(manager, vehicle, name, ...)
+                end
+                local text = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                local duplicate = findDuplicate(manager, text, nil)
+                if duplicate ~= nil then
+                    return refuseDuplicate(duplicate)
+                end
+                if text:len() >= 1 then
+                    log("new marker '%s' on clicked waypoint id=%s (not the vehicle's nearest)", text, tostring(overrideId))
+                    return manager:createMapMarker(overrideId, text)
+                end
+            end
+        end
+
+        -- The rename path had no duplicate check at all. Only the player's own call is guarded
+        -- (sendEvent nil/true); the same call arriving from the network event carries false and must
+        -- always apply, or clients and server would disagree about the name.
+        local originalRename = ADGraphManager.renameMapMarker
+        if type(originalRename) == "function" then
+            ADGraphManager.renameMapMarker = function(manager, newName, markerId, sendEvent, ...)
+                if (sendEvent == nil or sendEvent == true) and type(newName) == "string" and markerId ~= nil then
+                    local text = newName:gsub("^%s+", ""):gsub("%s+$", "")
+                    -- A blank name (empty, or only spaces) is how you clear one: stock ignores an
+                    -- empty rename, and a lone space used to slip through as an invisible destination.
+                    -- Treat it as removing the marker, the same as the dialog's Delete button.
+                    if text == "" then
+                        log("blank rename on marker %s - removing the marker", tostring(markerId))
+                        return manager:removeMapMarker(markerId)
+                    end
+                    local duplicate = findDuplicate(manager, text, markerId)
+                    if duplicate ~= nil then
+                        return refuseDuplicate(duplicate)
+                    end
+                    newName = text
+                end
+                return originalRename(manager, newName, markerId, sendEvent, ...)
+            end
         end
 
         local originalOnClickOk = Dialog.onClickOk
@@ -306,24 +417,15 @@ function W.install(AD)
                 -- Stock would call createMapMarkerOnClosest, which needs a controlled vehicle and
                 -- would put the marker somewhere other than where the user clicked.
                 local text = dialogSelf.textInputElement ~= nil and dialogSelf.textInputElement.text or ""
-                -- Duplicate-name guard. AutoDrive's createMapMarker accepts ANY name: two markers
-                -- called "Hof" then sit side by side in every destination list, renaming one looks
-                -- like the rename "did not take" (the other was edited), and a vehicle sent "to Hof"
-                -- goes to whichever the list found first - the reported naming weirdness. Trimmed
-                -- (a trailing space made look-alike duplicates) and compared case-insensitively;
-                -- a duplicate is refused with the existing marker's location in the log.
                 text = text:gsub("^%s+", ""):gsub("%s+$", "")
-                local lower = text:lower()
-                for _, marker in pairs(ADGraphManager:getMapMarkers()) do
-                    if marker.name ~= nil and marker.name:lower() == lower then
-                        Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not creating a duplicate. Pick another name, or rename the existing one.",
-                            W.MOD_NAME, marker.name, tostring(marker.id))
-                        Dialog.overrideWayPointId = nil
-                        if dialogSelf.superClass ~= nil then
-                            return dialogSelf:onClickBack()
-                        end
-                        return
+                local duplicate = findDuplicate(ADGraphManager, text, nil)
+                if duplicate ~= nil then
+                    refuseDuplicate(duplicate)
+                    Dialog.overrideWayPointId = nil
+                    if dialogSelf.superClass ~= nil then
+                        return dialogSelf:onClickBack()
                     end
+                    return
                 end
                 if text:len() >= 1 then
                     ADGraphManager:createMapMarker(overrideId, text)

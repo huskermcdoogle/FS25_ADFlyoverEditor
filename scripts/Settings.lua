@@ -30,7 +30,45 @@ S.FILE = "settings.xml"
 S.settings.fieldLoopMargin = { values = { -10.0, -9.75, -9.50, -9.25, -9.0, -8.75, -8.50, -8.25, -8.0, -7.75, -7.50, -7.25, -7.0, -6.75, -6.50, -6.25, -6.0, -5.75, -5.50, -5.25, -5.0, -4.75, -4.50, -4.25, -4.0, -3.75, -3.50, -3.25, -3.0, -2.75, -2.50, -2.25, -2.0, -1.75, -1.50, -1.25, -1.0, -0.75, -0.50, -0.25, 0.0, 0.25, 0.50, 0.75, 1.0, 1.25, 1.50, 1.75, 2.0, 2.25, 2.50, 2.75, 3.0, 3.25, 3.50, 3.75, 4.0, 4.25, 4.50, 4.75, 5.0, 5.25, 5.50, 5.75, 6.0, 6.25, 6.50, 6.75, 7.0, 7.25, 7.50, 7.75, 8.0, 8.25, 8.50, 8.75, 9.0, 9.25, 9.50, 9.75, 10.0 }, default = 46, current = 46 }
 S.settings.fieldLoopTreeClearance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0 }, default = 4, current = 4 }
 S.settings.fieldLoopVehicleHeight = { values = { 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0 }, default = 4, current = 4 }
-S.settings.fieldLoopTurningRadius = { values = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 6, current = 6 }
+-- Starts at 5, not lower: FieldLoopGenerator's AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS clamps
+-- anything tighter anyway (a field corner sharper than that reads as an awkward kink, not a smooth
+-- turn - see buildFieldLoopRing), so letting the control offer 3 or 4 just showed a number that was
+-- never actually used.
+S.settings.fieldLoopTurningRadius = { values = { 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 }, default = 4, current = 4 }
+-- On by default: gates AutoDrive:traceFieldBoundary() (see FieldLoopGenerator's
+-- getFieldPolygonAtPosition), tried before the base-game farmland lookup. It traces the LIVE
+-- tilled-ground edge, built on FSDensityMapUtil (a base-game global - no Courseplay or any other
+-- mod involved), rather than a map field's static boundary - so ground plowed to connect two
+-- separate map fields scans as one contour, exactly what the farmland-based lookup below can
+-- never see (it can only ever answer "what map field owns this spot"). A toggle rather than a silent
+-- always-on change so a report of it misbehaving on a particular map/save can be isolated by
+-- switching back to the map-field-only path without a rollback.
+S.settings.fieldLoopDetectCustomField = { values = { false, true }, default = 2, current = 2 }
+-- On by default (matches what this always did before it was optional): nudges the loop away from
+-- trees/poles/fences/buildings (FIELD_LOOP_OBSTACLE_MASK) rather than laying it straight through
+-- them. Off skips that pass entirely - useful on a field this obstacle check keeps flagging
+-- something that isn't really in the way (a re-textured/invisible collider, say), or just to see
+-- the raw offset boundary without the detour warping it while diagnosing something else.
+S.settings.fieldLoopAvoidObstacles = { values = { false, true }, default = 2, current = 2 }
+-- Tool card placement. Off (the default): the card opens next to the selection popup that picked the
+-- tool, and steps aside when it would cover work. On: it stays exactly where the player last put it
+-- and never moves by itself. The selection popup is dynamic either way.
+S.settings.toolCardStatic = { values = { false, true }, default = 1, current = 1 }
+-- How far AutoDrive:findConnectedFieldRegions will probe outward from an already-found region
+-- looking for another disconnected tilled patch to auto-combine into the same course - a lane
+-- wide enough to drive on is the common case this exists for. There is no reliable way to tell
+-- "the same field, split by a lane" from "a genuinely different field that happens to be nearby,
+-- across an actual road" other than distance (confirmed live 2026-09-22: field ID cannot do it -
+-- see findConnectedFieldRegions), so this is a real per-map tuning knob, not just a safety margin
+-- - the default sits close to a typical field lane's width; raise it if a wider lane on a
+-- particular map gets missed, lower it if it ever reaches across a real road.
+S.settings.fieldLoopMaxGap = { values = { 3, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50 }, default = 3, current = 3 }
+-- Hidden - no tool-card row reads this, it exists purely so a determined user can hand-edit
+-- modSettings/FS25_ADFlyoverEditor/settings.xml (a stored index into the list below) without a
+-- rebuild. The floor ADOffsetGeometry.ensureMinimumEdgeLength applies to a finished field loop
+-- ring - no point ever survives closer than this to its neighbour, corners included (reported
+-- live 2026-09-22: two very close, sharply-angled points at a tight corner). Default 1.0m.
+S.settings.fieldLoopMinPointSpacing = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 }, default = 3, current = 3 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
@@ -180,7 +218,8 @@ end
 function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
-                            "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence",
+                            "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles", "toolCardStatic",
+                            "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
                             "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do

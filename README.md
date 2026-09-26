@@ -11,7 +11,7 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 *Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 1.0.1.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
+> **Status:** build 1.0.2.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
 
 ## Install
 
@@ -49,9 +49,9 @@ Grouped by job on the panel. **Select** is the default mode: no tool held, click
 | Group | Tools |
 |---|---|
 | **Create** | `draw` connect waypoints · `spline` curved connection · `field loop` headland loop around a field · `parallel` a track alongside a span · `siding` a spur splined in at both ends |
-| **Shape** | `move` drag a point, with falloff along the track · `smooth` · `straighten`, which keeps real bends · `divide` add evenly-spaced points · `ground` settle points onto the surface |
-| **Connect** | `convert` one-way / two-way and priority · `merge` fold two parallel lanes into one · `junction` one click builds a whole intersection of smooth, radius-bound turn connectors |
-| **Utility** | `name` label a waypoint · `delete` remove a point, span or run |
+| **Shape** | `move` drag a point, span, run or selection - copy, cut loose, slide sideways, rotate · `smooth` · `straighten`, which keeps real bends · `divide` add evenly-spaced points · `ground` settle points onto the surface |
+| **Connect** | `convert` direction (one-way / two-way / reverse-way) and priority in one click · `merge` fold two parallel lanes into one |
+| **Utility** | `name` label a waypoint · `delete` remove a point, a run or a selection |
 
 For a full description of every tool — what it does, how to use it, and its controls — see the
 **[user manual](docs/manual.md)** (the same content is available in-game via the **?** button on the
@@ -59,15 +59,16 @@ panel header, or the **/** key).
 
 ## Working with it
 
-- **Select mode** — click a **point**, a **span** (a second click, or a double-click for the whole
-  span), or a whole **run** between junctions to get a context menu of edits for it, with the target
-  highlighted in the world.
-- **Floating tool card** — a tool's controls appear on a small card near the cursor instead of in a
-  far corner. Numeric settings can be **typed, scrolled, or nudged with − / + steppers**, and the
-  wheel adjusts whichever field you are hovering. Press **H** (or the panel button) to hide the card
-  — it also auto-hides on its own while you drag a point.
-- **Span / run tools** (straighten, smooth, divide, ground, parallel) act on a picked span or a whole
-  run: arm the tool, dial its setting, right-click to apply.
+- **One way of picking, everywhere** — click a point, click a second point for the **span** between
+  them, double-click for the whole **run**. Every tool that works on a stretch picks like this, and
+  its card shows what you picked (click a type to lock it).
+- **Popups** — in Select mode a click opens a popup of edits for the point, span, run, or for a whole
+  **selection** (box, circle, freehand, Ctrl-click). Popups open clear of what they act on and can be
+  dragged by their header; picking a tool from one opens its card right there.
+- **Tool cards** — each tool's options on one card: toggles, side-by-side choices, and numbers you can
+  type, step or scroll. Anything that can't apply right now is greyed out. The card stays where you
+  put it (or pin it), steps aside when it would cover your work, and **H** hides it.
+- **Esc backs out one step at a time** — right-click applies, Esc cancels — before it leaves the editor.
 
 ## Compatibility & safety
 

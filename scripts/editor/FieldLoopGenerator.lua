@@ -42,13 +42,196 @@ AutoDrive.FIELD_LOOP_TREE_DETOUR_AMPLITUDE_STEP = 0.25 -- meters; granularity of
 AutoDrive.FIELD_LOOP_TREE_DETOUR_MAX_DEPTH = 15 -- meters; give up rather than bend the loop further than this into the field
 AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added along segments passing near a tree, before detouring
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
+-- How close to a full 180-degree fold-back counts as a spike (see ADOffsetGeometry.removeSpikes,
+-- the final cleanup pass on the ring that actually gets placed) rather than a genuine sharp field
+-- corner. 90-120 degrees is a normal corner; 150+ is the path doubling back on itself.
+AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG = 150
+-- The other half of removeSpikes: a point does not need to be a near-reversal to be an artifact -
+-- one that is BOTH turning sharply (above this) AND unusually close to a neighbour relative to the
+-- ring's own average spacing (below FIELD_LOOP_OUTLIER_SPACING_RATIO) is the signature of a stray
+-- point left by the pipeline, not an intentional tight corner - a real small-radius arc turns
+-- gradually across several evenly-spaced points, it does not put a whole corner's worth of turn on
+-- one point that is also oddly close to its neighbour.
+AutoDrive.FIELD_LOOP_OUTLIER_ANGLE_DEG = 70
+AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO = 0.5
+-- A vehicle that can only turn this tightly is already unusual; whatever the player's turning
+-- radius SETTING says, the corner-rounding math below never uses less than this. Reported live
+-- (2026-09-22): a 3m setting left an awkward kink at a field corner sharper than a 3m arc could
+-- smoothly represent.
+AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 5
 
---- Find the field boundary under an arbitrary world position.
----
---- Split out from the vehicle version so the flyover editor can generate a loop around whatever
---- field the cursor is over, with no vehicle involved. The vehicle wrapper below is now just a
---- position lookup feeding this.
+-- ---------------------------------------------------------------------------------------------
+-- Live tilled-ground boundary tracer, no Courseplay involved. Confirmed live (2026-09-22):
+-- FSDensityMapUtil.getFieldDataAtWorldPosition is a plain base-game global, reachable directly
+-- with no environment-resolution dance (unlike Courseplay's own g_fieldScanner/g_customFieldManager,
+-- which this mod tried and deliberately dropped - see git history). Same probe-walk TECHNIQUE
+-- Courseplay's own field scanner uses - a standard boundary-following approach, not anything
+-- Courseplay invented - reimplemented here from scratch against base-game primitives only:
+-- createTransformGroup/link/setTranslation/setRotation/getRotation/localToWorld (already used
+-- elsewhere in this codebase - see Proxy.lua) and FSDensityMapUtil.
+-- ---------------------------------------------------------------------------------------------
+
+AutoDrive.FIELD_TRACE_RESOLUTION = 0.2         -- meters; forward step while walking onto/off the field
+AutoDrive.FIELD_TRACE_HIGH_RESOLUTION = 0.1    -- meters; fine backup step to land right on the edge
+AutoDrive.FIELD_TRACE_LOOKAHEAD = 5.0          -- meters; how far ahead the probe checks while tracing
+AutoDrive.FIELD_TRACE_SHORT_LOOKAHEAD = 0.5    -- meters; short lookahead used only when first orienting
+AutoDrive.FIELD_TRACE_MAX_POINTS = 20000       -- safety cap so a pathological trace cannot run forever
+
+local function isOnFieldGround(x, z)
+    local okY, y = pcall(function() return AutoDrive:getTerrainHeightAtWorldPos(x, z) end)
+    local okField, isField = pcall(function()
+        return FSDensityMapUtil.getFieldDataAtWorldPosition(x, (okY and y) or 0, z)
+    end)
+    return okField and isField == true
+end
+
+local function isNodeOnFieldGround(node)
+    local x, _, z = getWorldTranslation(node)
+    return isOnFieldGround(x, z)
+end
+
+local function traceSetPosition(node, x, z)
+    local okY, y = pcall(function() return AutoDrive:getTerrainHeightAtWorldPos(x, z) end)
+    setTranslation(node, x, (okY and y) or 0, z)
+end
+
+local function traceMoveForward(node, d)
+    local x, _, z = localToWorld(node, 0, 0, d)
+    traceSetPosition(node, x, z)
+end
+
+local function traceRotateBy(node, angleStep)
+    local _, yRot, _ = getRotation(node)
+    setRotation(node, 0, yRot + angleStep, 0)
+end
+
+--- Rotate the probe until a point `lookahead` ahead of it just crosses the field edge, so the
+--- probe ends up aimed roughly along the boundary.
+local function traceRotateToEdgeDirection(node, lookahead)
+    local x, _, z = localToWorld(node, 0, 0, lookahead)
+    local startOnField = isOnFieldGround(x, z)
+    local target = not startOnField
+    local angleStep = AutoDrive.FIELD_TRACE_HIGH_RESOLUTION / AutoDrive.FIELD_TRACE_LOOKAHEAD
+    local swept, isOnField = 0, startOnField
+    while swept < 2 * math.pi and isOnField ~= target do
+        x, _, z = localToWorld(node, 0, 0, lookahead)
+        isOnField = isOnFieldGround(x, z)
+        traceRotateBy(node, (isOnField and 1 or -1) * angleStep)
+        swept = swept + angleStep
+    end
+    local _, yRot, _ = getRotation(node)
+    return yRot
+end
+
+--- Walk forward while on the field, then back off in small steps until the probe is just off it -
+--- lands right at the edge, ready to start tracing along it.
+local function traceFindEdge(node)
+    local i = 0
+    while i < 100000 and isNodeOnFieldGround(node) do
+        traceMoveForward(node, AutoDrive.FIELD_TRACE_RESOLUTION)
+        i = i + 1
+    end
+    local guard = 0
+    while not isNodeOnFieldGround(node) and guard < 100000 do
+        traceMoveForward(node, -AutoDrive.FIELD_TRACE_HIGH_RESOLUTION)
+        guard = guard + 1
+    end
+    traceRotateToEdgeDirection(node, AutoDrive.FIELD_TRACE_SHORT_LOOKAHEAD)
+end
+
+--- Walk the probe all the way around the field boundary, recording a point roughly every
+--- FIELD_TRACE_LOOKAHEAD meters, stopping once it has swept back close to a full turn and ended
+--- up near where it started. Returns closed(bool), points, lost(bool).
+local function traceFieldEdge(node)
+    local points = {}
+    local startX, _, startZ = getWorldTranslation(node)
+    table.insert(points, { x = startX, z = startZ })
+    local distanceFromStart = math.huge
+    local lookahead = AutoDrive.FIELD_TRACE_LOOKAHEAD
+    local totalRot = 0
+    local prevYRot = nil
+    local i = 0
+    while i < AutoDrive.FIELD_TRACE_MAX_POINTS
+        and (i == 0 or distanceFromStart > lookahead or math.abs(totalRot) < math.pi) do
+        local yRot = traceRotateToEdgeDirection(node, lookahead)
+        local deltaYRot = yRot - (prevYRot or yRot)
+        traceMoveForward(node, lookahead)
+        local px, _, pz = getWorldTranslation(node)
+        table.insert(points, { x = px, z = pz })
+        distanceFromStart = MathUtil.vector2Length(px - startX, pz - startZ)
+        totalRot = totalRot + deltaYRot
+        prevYRot = yRot
+        i = i + 1
+        if math.abs(totalRot) > 3 * math.pi then
+            return false, points, true
+        end
+    end
+    -- Clockwise winding (negative total rotation) and swept most of the way around.
+    return totalRot < 0 and math.abs(totalRot) > math.pi, points, false
+end
+
+--- Trace the boundary of whatever tilled ground is at (x, z). No Courseplay involved: built
+--- directly on FSDensityMapUtil.getFieldDataAtWorldPosition (a base-game global).
+function AutoDrive:traceFieldBoundary(x, z)
+    if type(FSDensityMapUtil) ~= "table" or type(FSDensityMapUtil.getFieldDataAtWorldPosition) ~= "function" then
+        return nil, "FSDensityMapUtil is not available."
+    end
+    if not isOnFieldGround(x, z) then
+        return nil, string.format("x=%.1f z=%.1f is not on field ground.", x, z)
+    end
+    if g_currentMission == nil or g_currentMission.terrainRootNode == nil then
+        return nil, "no terrain root node to trace against."
+    end
+
+    local okNode, node = pcall(createTransformGroup, "adFieldTraceProbe")
+    if not okNode or node == nil then
+        return nil, "could not create a probe node."
+    end
+    pcall(link, g_currentMission.terrainRootNode, node)
+    traceSetPosition(node, x, z)
+    -- Nudge off yRot 0: starting the probe right in a corner (common, since a player tends to
+    -- click near the edge) otherwise finds the field edge very close to the corner, which then
+    -- throws off corner detection later in the pipeline.
+    setRotation(node, 0, math.pi / 7, 0)
+
+    local points, ok = nil, false
+    for attempt = 1, 10 do
+        traceFindEdge(node)
+        local closed, tracedPoints, lost = traceFieldEdge(node)
+        if closed and not lost then
+            points = tracedPoints
+            ok = true
+            break
+        end
+        traceSetPosition(node, x, z)
+        setRotation(node, 0, attempt * math.pi / 6, 0)
+    end
+
+    pcall(function()
+        unlink(node)
+        delete(node)
+    end)
+
+    if not ok or points == nil or #points < 3 then
+        return nil, "could not trace a closed field boundary here."
+    end
+    return points, nil
+end
+
+--- Returns points, label, err. Falls back to the base-game farmland lookup if the trace finds
+--- nothing or the toggle is off - a report of this misbehaving on a particular map/save can be
+--- isolated by switching it off without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
+    if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
+        local traced, traceErr = AutoDrive:traceFieldBoundary(x, z)
+        if traced == nil then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop trace failed, using the map field: %s", tostring(traceErr))
+        else
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop traced a %d-point tilled-ground contour.", #traced)
+            return traced, "Traced field", nil
+        end
+    end
+
     if g_farmlandManager == nil then
         return nil, nil, "g_farmlandManager is not available."
     end
@@ -93,6 +276,103 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
     end
 
     return points, fieldLabel, nil
+end
+
+local function pointInPolygon(px, pz, poly)
+    local inside = false
+    local j = #poly
+    for i = 1, #poly do
+        local pi, pj = poly[i], poly[j]
+        if (pi.z > pz) ~= (pj.z > pz)
+            and px < (pj.x - pi.x) * (pz - pi.z) / (pj.z - pi.z) + pi.x then
+            inside = not inside
+        end
+        j = i
+    end
+    return inside
+end
+
+-- Auto-discovery is bounded on both axes: FIELD_LOOP_MAX_REGIONS caps how many disconnected
+-- patches one field loop will ever combine (a runaway match against unrelated fields elsewhere is
+-- a bug report, not a feature), and PROBE_STRIDE samples only every Nth raw scan point so the
+-- search cost tracks boundary length rather than findContour's (much higher) point density.
+AutoDrive.FIELD_LOOP_MAX_REGIONS = 6
+AutoDrive.FIELD_LOOP_PROBE_STRIDE = 6
+AutoDrive.FIELD_LOOP_PROBE_STEP = 1.0 -- meters between probe samples along each outward ray
+
+--- Auto-discover every tilled-ground region connected to the first one via a gap no wider than
+--- fieldLoopMaxGap - a lane splitting one field into disconnected patches, say. Fully automatic,
+--- no extra clicks: probes outward from points around each found region's boundary, on BOTH sides
+--- (winding direction is not assumed), and scans a fresh contour wherever a probe lands on tilled
+--- ground not already inside a found region.
+---
+--- Built entirely on the same Courseplay-free primitives as getFieldPolygonAtPosition
+--- (isOnFieldGround/traceFieldBoundary above) - no Courseplay involved.
+---
+--- Distance is the ONLY signal this has for "same field, split by a lane" vs. "a genuinely
+--- different field that happens to be nearby, across an actual road" - reported live
+--- (2026-09-22): the default combo gap pulled in an unrelated field across a real road. Field ID
+--- cannot tell them apart either: even Courseplay's own field scanner (when this mod still used
+--- it) ignored field ID while scanning for exactly this reason - the STATIC id does not update
+--- when two map fields get tilled together, so requiring a match would reject the exact case this
+--- exists for, not just the unwanted one. fieldLoopMaxGap is genuinely a per-map, per-player
+--- tuning knob: set it just above your widest field lane and it should not reach a real road,
+--- since roads are typically wider than a field lane.
+function AutoDrive:findConnectedFieldRegions(x, z, firstRegion)
+    local regions = { firstRegion }
+
+    local maxGap = ADFlyoverSettings.get("fieldLoopMaxGap") or 8
+    local step = AutoDrive.FIELD_LOOP_PROBE_STEP
+
+    local function alreadyCovered(px, pz)
+        for _, r in ipairs(regions) do
+            if pointInPolygon(px, pz, r) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local expanded = true
+    while expanded and #regions < AutoDrive.FIELD_LOOP_MAX_REGIONS do
+        expanded = false
+        for ri = 1, #regions do
+            local r = regions[ri]
+            local n = #r
+            local i = 1
+            while i <= n and not expanded do
+                local a, b = r[i], r[(i % n) + 1]
+                local ex, ez = b.x - a.x, b.z - a.z
+                local len = MathUtil.vector2Length(ex, ez)
+                if len > 1e-6 then
+                    local nx, nz = -ez / len, ex / len
+                    local side = 1
+                    while side >= -1 and not expanded do
+                        local dist = step
+                        while dist <= maxGap do
+                            local px, pz = a.x + nx * dist * side, a.z + nz * dist * side
+                            if not alreadyCovered(px, pz) and isOnFieldGround(px, pz) then
+                                local newRegion = AutoDrive:traceFieldBoundary(px, pz)
+                                if newRegion ~= nil and #newRegion >= 3 and not alreadyCovered(newRegion[1].x, newRegion[1].z) then
+                                    table.insert(regions, newRegion)
+                                    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop auto-discovered region %d, %.1fm from an existing one.",
+                                        #regions, dist)
+                                    expanded = true
+                                end
+                            end
+                            if expanded then break end
+                            dist = dist + step
+                        end
+                        side = side - 2
+                    end
+                end
+                i = i + AutoDrive.FIELD_LOOP_PROBE_STRIDE
+            end
+            if expanded then break end
+        end
+    end
+
+    return regions
 end
 
 -- Synchronous overlap check at (x, z), mirroring ADCollSensor's own overlapBox usage
@@ -356,6 +636,7 @@ local function densifyNearTrees(ring, treeClearance, fineSpacing)
 end
 
 function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
+    turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
     local points = ADPolygonUtils.stripDuplicateClosingVertex(rawPoints)
     -- Light cleanup only - the offset/corner pipeline below classifies real corners by actual
     -- turning-radius cross-track error rather than by pre-removing detail, so this just drops
@@ -410,50 +691,68 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     fieldCentroid.x = fieldCentroid.x / #simplified
     fieldCentroid.z = fieldCentroid.z / #simplified
 
-    -- Drop near-duplicates left at the junctions between the geometry stages. This has to happen
-    -- BEFORE tree avoidance: dropping a point merges two segments into one longer chord, and a
-    -- chord can cut a corner the detour had already verified as clear.
-    local tidiedXZ = ADOffsetGeometry.ensureMinimumEdgeLength(ringXZ, math.min(0.6, arcSpacing * 0.6))
+    -- Enforces the floor requested live (2026-09-22) after two very close, sharply-angled points
+    -- survived at a tight corner: thinToAdaptiveSpacing's minimum spacing deliberately exempts
+    -- anything it classifies as a corner, precisely so rounding a corner is not flattened - which
+    -- also means it is the wrong place to enforce an absolute floor. ensureMinimumEdgeLength makes
+    -- no such exemption, corners included, which is exactly what is wanted here. This also has to
+    -- run BEFORE tree avoidance regardless: dropping a point merges two segments into one longer
+    -- chord, and a chord can cut a corner the detour had already verified as clear.
+    local minPointSpacing = ADFlyoverSettings.get("fieldLoopMinPointSpacing") or 1.0
+    local tidiedXZ = ADOffsetGeometry.ensureMinimumEdgeLength(ringXZ, minPointSpacing)
 
     -- Tree avoidance runs last, on the finished (offset, corner-rounded, adaptively spaced)
     -- boundary, so it only ever perturbs an otherwise-good path. Add resolution around trees
     -- first, so the detour has points to be shaped from and no tree can hide between two samples.
-    local nearTreeRing = densifyNearTrees(tidiedXZ, treeClearance, AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING)
+    --
+    -- COMPANION EDIT: gated by "avoid obstacles" - off skips this whole pass (densify, detour, and
+    -- the detour-aware relaxation below) and takes the offset boundary as-is, for a field where the
+    -- obstacle check keeps flagging something that isn't really in the way.
+    local avoidObstacles = ADFlyoverSettings.get("fieldLoopAvoidObstacles")
+    local finalXZ, treeStats, smoothMoveCount
+    if avoidObstacles then
+        local nearTreeRing = densifyNearTrees(tidiedXZ, treeClearance, AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING)
 
-    local detouredXZ, treeStats = detourAroundTrees(nearTreeRing, fieldCentroid, treeClearance, turningRadius)
+        local detouredXZ
+        detouredXZ, treeStats = detourAroundTrees(nearTreeRing, fieldCentroid, treeClearance, turningRadius)
 
-    if #detouredXZ < 3 then
-        return nil, nil, nil, "Too many points along this loop could not clear trees - fewer than 3 points remained. Try a larger tree clearance or a different margin."
+        if #detouredXZ < 3 then
+            return nil, nil, nil, "Too many points along this loop could not clear obstacles - fewer than 3 points remained. Try a different obstacle clearance or a different margin."
+        end
+
+        -- The raised-cosine detour is already within turningRadius by construction, so this is a
+        -- safety net for anything the max-of-overlapping-detours combination left too tight - and
+        -- it still refuses any relaxation that would re-enter a tree's clearance radius.
+        finalXZ, smoothMoveCount = ADOffsetGeometry.smoothTightVertices(
+            detouredXZ,
+            turningRadius,
+            AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR,
+            AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS,
+            -- Check the spans this move creates, not just the point: relaxing a point on a detour
+            -- can leave it clear while the chord to its neighbour clips the tree the detour exists
+            -- to avoid.
+            function(x, z, prev, nxt)
+                if AutoDrive:hasTreeNear(x, z, treeClearance) then
+                    return false
+                end
+                if prev and AutoDrive:hasTreeNear((x + prev.x) / 2, (z + prev.z) / 2, treeClearance) then
+                    return false
+                end
+                if nxt and AutoDrive:hasTreeNear((x + nxt.x) / 2, (z + nxt.z) / 2, treeClearance) then
+                    return false
+                end
+                return true
+            end
+        )
+    else
+        finalXZ = tidiedXZ
+        treeStats = { nudged = 0, stuck = 0, detours = 0 }
+        smoothMoveCount = 0
     end
 
-    -- The raised-cosine detour is already within turningRadius by construction, so this is a
-    -- safety net for anything the max-of-overlapping-detours combination left too tight - and it
-    -- still refuses any relaxation that would re-enter a tree's clearance radius.
-    local smoothedXZ, smoothMoveCount = ADOffsetGeometry.smoothTightVertices(
-        detouredXZ,
-        turningRadius,
-        AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR,
-        AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS,
-        -- Check the spans this move creates, not just the point: relaxing a point on a detour
-        -- can leave it clear while the chord to its neighbour clips the tree the detour exists
-        -- to avoid.
-        function(x, z, prev, nxt)
-            if AutoDrive:hasTreeNear(x, z, treeClearance) then
-                return false
-            end
-            if prev and AutoDrive:hasTreeNear((x + prev.x) / 2, (z + prev.z) / 2, treeClearance) then
-                return false
-            end
-            if nxt and AutoDrive:hasTreeNear((x + nxt.x) / 2, (z + nxt.z) / 2, treeClearance) then
-                return false
-            end
-            return true
-        end
-    )
-
     local ring = {}
-    for i = 1, #smoothedXZ do
-        local p = smoothedXZ[i]
+    for i = 1, #finalXZ do
+        local p = finalXZ[i]
         ring[i] = { x = p.x, y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z), z = p.z }
     end
 
@@ -572,10 +871,84 @@ function AutoDrive:generateFieldLoop(marginArg, treeClearanceArg, turningRadiusA
     AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, "ADGenerateFieldLoop")
 end
 
---- Position lookup for a vehicle, kept so the console command reads the same as it always did.
-function AutoDrive:getFieldPolygonAtVehicle(vehicle)
-    local x, _, z = getWorldTranslation(vehicle.rootNode)
-    return AutoDrive:getFieldPolygonAtPosition(x, z)
+--- Closest pair of points between two FINISHED rings, by index, REJECTING any pair whose bridge
+--- would cut across either ring's own interior rather than crossing the clear gap between them -
+--- reported live (2026-09-22): the plain closest-pair version picked a corner of one ring that
+--- was geometrically nearer to a far point of the other than to the ring actually facing it,
+--- landing a waypoint in the middle of the wrong field. Concave/irregular shapes (a raw tilled-
+--- ground scan is rarely a clean rectangle) make that a real case, not a corner case.
+---
+--- Sampled rather than exact: three points along each candidate segment (25/50/75%) checked
+--- against BOTH rings with pointInPolygon. Exact segment/polygon intersection would catch a
+--- graze this can miss, but at ring sizes in the hundreds, testing every candidate exactly is a
+--- lot of work for a defect this sampling already prevents in the reported case; falls back to
+--- the plain closest pair if literally nothing passes, so this never leaves the two rings
+--- unbridged.
+local function ringClosestPair(a, b)
+    local bestI, bestJ, bestDistSq = nil, nil, math.huge
+    local fallbackI, fallbackJ, fallbackDistSq = 1, 1, math.huge
+    for i = 1, #a do
+        local pa = a[i]
+        for j = 1, #b do
+            local pb = b[j]
+            local dx, dz = pb.x - pa.x, pb.z - pa.z
+            local d = dx * dx + dz * dz
+            if d < fallbackDistSq then
+                fallbackDistSq, fallbackI, fallbackJ = d, i, j
+            end
+            if d < bestDistSq then
+                local clear = true
+                for _, t in ipairs({ 0.25, 0.5, 0.75 }) do
+                    local mx, mz = pa.x + dx * t, pa.z + dz * t
+                    if pointInPolygon(mx, mz, a) or pointInPolygon(mx, mz, b) then
+                        clear = false
+                        break
+                    end
+                end
+                if clear then
+                    bestDistSq, bestI, bestJ = d, i, j
+                end
+            end
+        end
+    end
+    if bestI == nil then
+        return fallbackI, fallbackJ, math.sqrt(fallbackDistSq)
+    end
+    return bestI, bestJ, math.sqrt(bestDistSq)
+end
+
+--- Splice ring b into ring a at their closest pair (ai in a, bj in b), keyhole-style: walk a up to
+--- and including ai, jump to b, walk the WHOLE of b starting and ending at bj, then continue a
+--- from ai+1 onward. The a[ai]<->b[bj] edge this creates is what createFieldLoopGraph will later
+--- connect like any other consecutive pair in the sequence - a real bridge, not a special case -
+--- and being the same physical edge whichever direction it is walked, it works for a one-way loop
+--- (drive into b, all the way around, out the same point) exactly as it does for two-way.
+local function spliceRingAt(a, ai, b, bj)
+    local out = {}
+    for i = 1, ai do out[#out + 1] = a[i] end
+    local n = #b
+    for k = 0, n do
+        out[#out + 1] = b[((bj - 1 + k) % n) + 1]
+    end
+    for i = ai + 1, #a do out[#out + 1] = a[i] end
+    return out
+end
+
+--- Combine however many finished rings into the ONE ring that actually gets placed. Splices the
+--- closest-remaining ring into the combined result one at a time (order does not affect the
+--- outcome, just which bridge gets drawn where) - by the time this runs, every ring has already
+--- gone through the full offset/corner-round/tree-avoid pipeline on its own, so nothing here
+--- touches boundary geometry, only which order the already-finished points are walked in.
+function AutoDrive:spliceFieldLoopRings(rings)
+    if rings == nil or #rings == 0 then
+        return nil
+    end
+    local combined = rings[1]
+    for k = 2, #rings do
+        local ai, bj = ringClosestPair(combined, rings[k])
+        combined = spliceRingAt(combined, ai, rings[k], bj)
+    end
+    return combined
 end
 
 --- Generate a loop around the field at a world position. Shared by the console command and the
@@ -586,29 +959,70 @@ end
 --- function's own defaults - secondary, two-way - so the console command, which has no editor
 --- panel to read them from, is unaffected).
 ---
---- Returns true on success. Everything interesting is already logged here.
+--- A field a lane splits into disconnected tilled patches auto-discovers every patch it can reach
+--- (AutoDrive:findConnectedFieldRegions), finishes EACH one through the normal offset/corner-round/
+--- tree-avoid pipeline on its own, then splices the finished rings into the one combined ring that
+--- actually gets placed (AutoDrive:spliceFieldLoopRings) - one click, one course, no follow-up
+--- clicks and no separate loops left for the player to connect by hand.
+---
+--- Returns true on success, false on failure. Everything interesting is already logged here.
 function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
+    -- Clamped here, not just inside buildFieldLoopRing, so the summary log line below reports the
+    -- radius actually used rather than a setting that got silently overridden.
+    turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
+
     local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
         return false
     end
 
-    local ring, perimeter, treeStats, ringErr = AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
-    if ring == nil then
-        Logging.error("[AD] %s: %s", source, tostring(ringErr))
+    local rawRegions = AutoDrive:findConnectedFieldRegions(x, z, rawPoints)
+
+    local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
+    local lastRingErr = nil
+    for _, region in ipairs(rawRegions) do
+        local ring, ringPerimeter, ringTreeStats, ringErr = AutoDrive:buildFieldLoopRing(region, marginDistance, treeClearance, turningRadius)
+        if ring == nil then
+            lastRingErr = ringErr
+            Logging.warning("[AD] %s: dropped one of %d discovered region(s) - %s", source, #rawRegions, tostring(ringErr))
+        else
+            table.insert(rings, ring)
+            perimeter = perimeter + ringPerimeter
+            for _, key in ipairs({ "nudged", "stuck", "detours", "smoothMoves", "rawVertexCount", "simplifiedVertexCount" }) do
+                treeStats[key] = treeStats[key] + (ringTreeStats[key] or 0)
+            end
+        end
+    end
+
+    if #rings == 0 then
+        Logging.error("[AD] %s: %s", source, tostring(lastRingErr))
         return false
     end
 
-    local summary = AutoDrive:createFieldLoopGraph(ring, flags, direction)
+    local combinedRing = AutoDrive:spliceFieldLoopRings(rings)
 
+    -- Final cleanup on the ring that actually gets placed: a spike or a compressed-and-sharp
+    -- outlier here can come from the finished-per-region pipeline just as easily as from a splice
+    -- bridge, so this runs whether or not any splicing happened - reported live (2026-09-22) as a
+    -- point sticking out at a corner.
+    local cleanedRing, spikesRemoved = ADOffsetGeometry.removeSpikes(combinedRing,
+        AutoDrive.FIELD_LOOP_MAX_REVERSAL_DEG, AutoDrive.FIELD_LOOP_OUTLIER_ANGLE_DEG, AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO)
+    if spikesRemoved > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop removed %d spike point(s) from the finished ring.", spikesRemoved)
+    end
+
+    local summary = AutoDrive:createFieldLoopGraph(cleanedRing, flags, direction)
+
+    local regionNote = #rings > 1 and string.format(", %d region(s) combined", #rings) or ""
     Logging.info(
-        "[AD] %s: created %d waypoints (ids %d-%d) around '%s', %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
+        "[AD] %s: created %d waypoints (ids %d-%d) around '%s'%s, %s %s, margin=%.2fm treeClearance=%.2fm turningRadius=%.1fm perimeter=%.1fm, boundary %d->%d verts after simplify, %d tree detour(s) displacing %d point(s) (%d unresolved - see warnings above), %d relaxation move(s), %d network error(s).",
         source,
         summary.ringCount,
         summary.idRange[1],
         summary.idRange[2],
         fieldLabel,
+        regionNote,
         (flags or AutoDrive.FLAG_SUBPRIO) == AutoDrive.FLAG_SUBPRIO and "secondary" or "primary",
         direction or "twoway",
         marginDistance,

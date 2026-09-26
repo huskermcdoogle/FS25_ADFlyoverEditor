@@ -1,5 +1,120 @@
 # Changelog
 
+## 1.0.2.0 — Reworked editor UI, one way of picking things everywhere, field loop on tilled ground (2026-09-26)
+
+The biggest change since the move tool: every tool card, popup and pick gesture was redone so the
+whole editor works one way. Nothing was taken away - a few things now live in a different place.
+
+### One way of picking
+
+- **Click / second click / double-click, in every tool.** A click picks a point, a second click the
+  **span** between, a double-click the whole **run**. Another click near either end moves that end.
+  Smooth, Straighten, Divide, Ground, Parallel, Merge and Move all pick this way now (six tools each
+  used to have their own two-click variant).
+- **Picks row: indicator and type lock.** Each of those cards shows what the last gesture picked
+  (point / span / run / selection). Click a type to lock it - the others dull - and click it again to
+  unlock.
+- **Spans follow the traffic.** A span picked against a one-way road is turned round, and the route
+  between two clicks follows the road's direction; a route that only joins the points the long way
+  round is refused, on screen.
+- **Ctrl selections in the chain tools** (Smooth, Straighten, Divide, Parallel, Merge) must stay one
+  connected run, and become the tool's span. A plain click afterwards starts a fresh pick.
+- **Move** picks with a click and moves with a drag: drag a picked span or run to move the lot,
+  drag any other point to move just it. Its falloff is one rule: a single point has an adjustable
+  reach along the track; a span, run or run-shaped selection tapers from the grab to its own ends.
+- **Merge** is span pick, then one click on the other track (or a right-click when there is only
+  one). **Ground** also takes any selection, connected or not.
+
+### Popups and the tool card
+
+- **Popups for points, spans, runs and selections.** Compact two-column buttons with icons, opened
+  clear of what they act on, draggable by the header. A box / circle / freehand / Ctrl selection in
+  Select mode opens a **selection popup** (move, clear, one-way or two-way, flip direction, primary or
+  secondary, delete). Direction and priority buttons offer the opposite of what is there and swap
+  after a click; on a point or span, one-way follows the road beyond the ends. Span and run popups gained **move**.
+- **The tool card is the one place a tool's options live.** Toggles light when on, choices sit side by
+  side, numbers can be typed, stepped or scrolled - the same controls on every card. The old
+  right-click "armed" popup is gone: a tool picked from a popup opens its card where the popup was.
+- **Options that cannot apply are greyed**, not silently ignored: falloff and disconnect exclude each
+  other, a scattered selection moves rigidly, Ground's level greys while snapping to terrain, Delete's
+  scope greys while a selection exists, Parallel's flow greys beside a two-way road.
+- **The card stays where you put it** (it used to jump beside each click), steps aside only when it
+  would cover your work, and has a **pin** to keep it fixed.
+- **Esc backs out one step per press** - typed number, dialog, popup, a tool picked from a popup
+  (back to the popup), pending action, selection, tool - and only then leaves the editor.
+- **Move card** regrouped into one flow: picks, action (move / offset), an options grid, the numbers
+  for what is on, then rotate pivot and snap to. Offset now honours copy (original stays, copy slides
+  out) and disconnect.
+
+### Tools
+
+- **Convert:** direction and priority on separate rows, applied together in one click and one undo.
+  New **reverse-way** type (AutoDrive's reverse road); **other way** flips a one-way and keeps a
+  reverse-way a reverse-way. The editor's graph walks now see reverse-way links from both ends, so a
+  reverse-way run no longer falls apart.
+- **Parallel:** a **flow** choice beside a one-way road (same way by default, or opposite as a return
+  lane - it used to always lay the return lane).
+- **Parallel / Siding side labels:** left / right of travel on a one-way track; on a two-way track the
+  sides are named by where they lie on screen (left / right or up / down) and follow the camera. The
+  old labels were the wrong way round.
+- **Straighten / Divide** work along the route you picked instead of a fresh shortest path, so they no
+  longer change a different track than the preview showed, or take a run's end junction point.
+- **Spline:** "endpoints (shape)" is now **spline direction** (as clicked / reversed); the connection
+  setting is **traffic** (one-way / two-way / reverse-way).
+- **Merge:** a **snap to** setting - merged points no longer always drop to the terrain.
+- **Delete** with a selection: right-click deletes it, Esc clears it; a left click no longer deletes
+  it by accident.
+- **Name:** names the point you clicked (not the one nearest the vehicle), refuses duplicate names,
+  and a blank rename clears the name.
+- **Field loop:** "tree clearance" is now **obstacle clearance** (it always covered poles, fences and
+  buildings too).
+
+### Field loop on ground plowed into one field
+
+Field loop only ever found a *map* field's static boundary — by asking `g_farmlandManager` which
+farmland owns the cursor's position, then reading that farmland's field. Plowing the gap between
+two separate map fields to work them as one was invisible to that lookup: it was still answering
+"what map field owns this spot", which doesn't change just because the ground between two of them
+got tilled.
+
+Field loop now traces the actual tilled-ground edge from the cursor position first, instead of a
+static boundary, so a plowed-together gap is just part of the contour — a from-scratch boundary
+walk built directly on `FSDensityMapUtil` (a base-game global), no other mod involved. Falls back
+to the map-field lookup if the trace finds nothing. A new **detect custom field** toggle on the
+tool card (on by default) switches back to map-field-only for isolating a report.
+
+Also new: an **avoid obstacles** toggle on the same card (on by default) that skips the
+tree/pole/fence/building detour entirely, for a field where the obstacle check keeps flagging
+something that isn't really in the way.
+
+Field loop also now handles a field a lane splits into disconnected tilled patches on its own,
+with no extra clicks: the live scan can only ever return the one piece a click lands on, so it now
+auto-discovers any other patch within **combo gap** of the first (a new field on the card, default
+8m — this is a real per-map tuning knob, since distance is the only signal available for "the same
+field, split by a lane" vs. "a different field across an actual road"), finishes each one through
+the normal offset/tree-avoidance pipeline on its own, then splices the finished boundaries into the
+single course that actually gets placed — one click, one course, crossing the lane instead of
+leaving two separate loops for you to connect by hand. The bridge point between two patches is now
+also chosen to never cut across either patch's own interior, not just whichever pair happened to
+be closest, and a final pass over the finished loop drops any point where the path folds sharply
+back on itself — a spike, not a real corner — whether that came from a splice or anywhere else in
+the pipeline. That same pass now also drops a "compressed outlier": a point turning sharply AND
+sitting unusually close to a neighbour, the signature of a stray pipeline point rather than an
+intentional tight corner. The corner-rounding math also never uses a turning radius under 5m, even
+if the tool's turning radius is set lower, and the minimum spacing between any two points on the
+finished loop (1.0m, corners included — hand-tunable via `fieldLoopMinPointSpacing` in
+`modSettings/FS25_ADFlyoverEditor/settings.xml`, no tool-card control for it) is now actually
+enforced everywhere rather than only away from corners.
+
+### Also
+
+- The **game HUD** is switched off while the editor is open (the vehicle and Precision Farming panels
+  used to draw over it); the **minimap** is drawn by the editor so it stays.
+- The panel's settings keep **ui scale, theme and accent**; everything else is in the settings dialog
+  (**more settings...** or the gear). Drag the panel's bottom-right corner to resize the whole UI.
+- The map marker texture is compressed (no more "raw format" performance warning).
+- German translations throughout.
+
 ## 1.0.1.0 — Move tool redesign: picks, copy, disconnect, offset, rotate, auto-hookup (2026-09-21)
 
 Fully tested in-game across several rounds on the `move-tool` branch, with real bugs found and
