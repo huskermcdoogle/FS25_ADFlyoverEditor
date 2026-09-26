@@ -10442,6 +10442,12 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         -- negates it back to the raw scroll direction. This is the one negation Move's wheel
         -- actually needs; an earlier attempt removed it entirely instead of scoping it to just
         -- this field, which is what made the wheel read backwards again.
+        -- A scattered selection moves rigidly: there is no reach to set, so the wheel must not quietly change
+        -- a hidden value (it did, and the yellow preview changed shape for no reason). Leave the wheel to
+        -- the camera instead.
+        if self.selectionCount > 0 and self:selectionChain() == nil then
+            return false
+        end
         self:setFalloffRadius(self.falloffRadius + step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
         return true
     elseif t == self.TOOL.SMOOTH then
