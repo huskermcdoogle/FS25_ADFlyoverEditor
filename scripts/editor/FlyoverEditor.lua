@@ -11054,7 +11054,7 @@ function ADFlyoverEditor:menuConvertSelection(op)
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: converted the selection to %s (%d change(s)).", self.CONVERT_OP_NAMES[op], changed)
     ADGraphManager:markChanges()
-    self:closeMenu()
+    -- Kept open like the point/span/run popups: the button swaps to the opposite, so it can be toggled.
 end
 
 --- The Convert tool's click: set BOTH the direction and the priority the card is configured for, as one
