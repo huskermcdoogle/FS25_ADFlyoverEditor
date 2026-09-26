@@ -11,7 +11,7 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 *Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 0.31.0.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
+> **Status:** build 1.0.1.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
 
 ## Install
 
@@ -32,6 +32,15 @@ Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/w6mvhuaa9k
 
 - **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - **Esc** to leave. Every edit is undoable — **Q** undo, **E** redo.
+
+## Works with placeable junctions too
+
+The move tool's box/circle/freehand grab, drag, rotate, and auto-hookup now all recognize the
+placeable intersections from
+[**AD_XandT-intersections**](https://github.com/williwillswisse/AD_XandT-intersections) by
+**williwillswisse** — select one in a box grab alongside regular waypoints, drag and rotate it into
+place, and let auto-hookup reconnect its approaches to the surrounding network on drop. A great
+pairing if you want hand-built intersection geometry with flyover-editor convenience on top.
 
 ## Tools
 
@@ -86,13 +95,18 @@ and why:
 
 ### Versioning
 
-Two numbers, because one cannot answer the question honestly. `P.BUILD` in `Prelude.lua` is
-re-sourced every time a savegame loads, so it always describes the Lua actually running. `modDesc`'s
-version is read by the mod manager at **game startup only**. So reloading a savegame from the main
-menu is enough for Lua changes; a full restart is needed only when `modDesc.xml` itself changes. When
-the two disagree the version line says so — e.g.
-`build 0.29.4.0 (modDesc says 0.29.3.0 - stale, full restart to refresh it)` — which is
-informational, not a fault.
+Two numbers, because one cannot answer the question honestly. `modDesc`'s `<version>` is the
+**release** number — four single digits, bumped by hand, and the only one KingMods or the mod
+manager ever sees; it's read at **game startup only**. `P.BUILD` in `Prelude.lua` is the
+**development** number — the release plus how many commits deep the build is plus the short commit
+SHA, e.g. `1.0.1.0+120.cc5285e` — and it's stamped automatically by `tools/stamp_version.py` before
+every package, never typed by hand. Because it's re-sourced every time a savegame loads, `P.BUILD`
+always describes the Lua actually running; a full restart is needed only when `modDesc.xml` itself
+changes. When the release parts disagree the version line says so — e.g.
+`build 1.0.1.0+120.cc5285e (modDesc says 1.0.0.0 - stale, full restart to refresh it)` — which is
+informational, not a fault. A **release** build (`build_zip.py --release`) refuses to package unless
+`modDesc`'s version is four single digits and a matching git tag exists, so the zip, the tag, the
+GitHub release, and the listing all agree.
 
 ### Repository layout
 
@@ -113,6 +127,10 @@ table at source time, and AutoDrive is unresolvable then.
 
 By huskermcdoogle. Built to run against [Stephan-S/FS25_AutoDrive](https://github.com/Stephan-S/FS25_AutoDrive)
 (MIT); not affiliated with or endorsed by the AutoDrive team.
+
+Move-tool support for placeable intersections targets
+[williwillswisse/AD_XandT-intersections](https://github.com/williwillswisse/AD_XandT-intersections) —
+credit to williwillswisse for that mod.
 
 The field-loop feature was *inspired* by [Courseplay](https://github.com/Courseplay/Courseplay_FS25)'s
 field-course generation, but its geometry here is an **independent implementation** written from

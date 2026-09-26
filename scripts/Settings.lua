@@ -42,14 +42,41 @@ S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 5
 -- testing where a fix looked like it had done nothing.
 S.settings.junctionRadius = { values = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 }, default = 10, current = 10 }          -- 6..40 m, default 15
 S.settings.junctionTurnRadius = { values = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }, default = 11, current = 11 }      -- 2..30 m, default 12
+-- Move's own tolerance for auto-hookup (item 6) - deliberately its own setting rather than
+-- reusing flyoverMergeDistance/Divergence: those back a deliberate three-click confirmed action,
+-- this fires silently with no confirmation at all, so a tighter default is the safer starting
+-- point even though the shape (a distance and a divergence angle) is the same idea.
+S.settings.flyoverAutoHookupDistance = { values = { 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0 }, default = 3, current = 3 }
+S.settings.flyoverAutoHookupDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 3, current = 3 }
 -- The launch button riding on AutoDrive's HUD: whether it shows at all, and which side of the HUD
 -- it anchors to. Not geometry, just a UI preference, but persisted anyway so a player who hides it
 -- or moves it out of a busy corner does not have to redo that every session.
 S.settings.launchButtonHidden = { values = { false, true }, default = 1, current = 1 }
 S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above", "below" }, default = 1, current = 1 }
+-- Off by default: a user reported hours of normal editing bloating log.txt, and the overwhelming
+-- majority of it is routine per-click/per-action info lines (see FlyoverEditor.lua's debugLog
+-- call sites) that only matter while actively diagnosing something, not on every session.
+S.settings.flyoverDebugLogging = { values = { false, true }, default = 1, current = 1 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
+end
+
+--- Gate for routine info-level logging (click traces, per-action confirmations, etc.) - NOT for
+--- Logging.warning/Logging.error, which stay on unconditionally regardless of this setting; those
+--- indicate an actual problem, not a bloat source. Deliberately reads Logging.info directly rather
+--- than wrapping/overriding the global itself - Logging is base-game, not this mod's, and every
+--- other mod plus the base game itself calls it too, so patching it globally would affect far more
+--- than this mod's own log lines. Call sites across the editor were switched from Logging.info(...)
+--- to ADFlyoverSettings.debugLog(...) instead - a one-word rename, not a global override.
+function S.debugLog(fmt, ...)
+    -- A DEBUG DROP HAS TO BE COMPLETE. The drop records what reaches Logging, so with capture on
+    -- and verbose logging off it would have been missing every one of these lines - including the
+    -- lock reasoning that says what kind of junction a site was read as, which is most of what a
+    -- drop is for. Recording a capture is asking for everything, so it switches these on too.
+    if S.get("flyoverDebugLogging") or (AutoDrive ~= nil and AutoDrive.FLYOVER_DEBUG_CAPTURE == true) then
+        Logging.info(fmt, ...)
+    end
 end
 
 --- Fallthrough is deliberate here and ONLY here: a name we do not own goes to AutoDrive, so the one
@@ -165,7 +192,10 @@ function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "flyoverMergeDistance", "flyoverMergeDivergence",
-                            "junctionRadius", "junctionTurnRadius", "launchButtonHidden", "launchButtonPosition" }) do
+                            "junctionRadius", "junctionTurnRadius",
+                            "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
+                            "flyoverDebugLogging",
+                            "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
     end
     return table.concat(parts, " ")
