@@ -4157,7 +4157,7 @@ function ADFlyoverEditor:gatherDragNeighbours()
             self:gatherOffsetChain(fromId, toId, run, true)
             return
         end
-        self:gatherChainFollowers(fromId, toId, run, true)
+        self:gatherChainFollowers(fromId, toId, run, true, self.falloffRadius)
         return
     end
 
@@ -4171,7 +4171,7 @@ function ADFlyoverEditor:gatherDragNeighbours()
             self:gatherOffsetChain(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false)
             return
         end
-        self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false)
+        self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false, self.falloffRadius)
         return
     end
 
@@ -6034,7 +6034,9 @@ function ADFlyoverEditor:getEditableNumbers()
         -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
         -- no radius for it to set - so the field would just be a dead number sitting on the panel.
         -- Not with a selection: a run-shaped one tapers to its own ends, a scattered one is rigid - no radius either way.
-        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn
+        -- One falloff value for every shape: a single point's reach, or - for a picked span / run or a
+        -- run-shaped selection - the reach along it from the grabbed point (0 = taper to its own ends).
+        if self.moveFalloffOn and self.moveOffsetChainIds == nil
             and (self.selectionCount == 0 or self:selectionChain() ~= nil) then
             table.insert(fields, {
                 label = "falloff along track",
