@@ -2628,7 +2628,12 @@ function ADFlyoverEditor:drawNetwork()
     -- one is pending (reported 2026-09-21: "other spans are highlighting, but not selecting").
     if self.tool == self.TOOL.MOVE and self.moveOffsetChainIds == nil then
         local centreId = self.dragId or self.moveFocusId
-        if centreId ~= nil and self.moveSelectMode == self.MOVE_SELECT.RUN then
+        -- The yellow run preview: while a run is being dragged, or - locked to run with nothing picked - the
+        -- run a grab WOULD take under the pointer. Not otherwise: a picked run already shows in blue, and
+        -- the old "moveSelectMode stays RUN" left this yellow on after Esc had cleared the pick.
+        local runPreview = (self.dragId ~= nil and self.moveSelectMode == self.MOVE_SELECT.RUN)
+            or (self.dragId == nil and self.pickFilter == "run" and self.moveSpanIds == nil)
+        if centreId ~= nil and runPreview then
             -- Run mode: highlight the whole run the point belongs to. Not weighted by taper here -
             -- this fires before a grab even starts, when there is no drag distance yet to weight
             -- by, so it shows WHAT would move rather than how much.
@@ -5077,6 +5082,9 @@ function ADFlyoverEditor:cancelMoveSpan()
         ADFlyoverSettings.debugLog("[FlyoverEditor]: move span cancelled.")
     end
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+    -- Nothing picked any more: a following drag is a single point again, and the indicator goes dark.
+    self.moveSelectMode = self.MOVE_SELECT.POINT
+    self.pickKind = nil
 end
 
 function ADFlyoverEditor:cycleMoveSelectMode()
