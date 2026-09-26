@@ -12,6 +12,14 @@ $zip = Join-Path $env:TEMP "FS25_ADFlyoverEditor.zip"
 $mods = Join-Path $env:USERPROFILE "OneDrive\Documents\My Games\FarmingSimulator2025\mods"
 if (-not (Test-Path $mods)) { $mods = Join-Path $env:USERPROFILE "Documents\My Games\FarmingSimulator2025\mods" }
 
+# Armed right after a launch, the game may not be up yet - wait for it to START first (up to 5
+# minutes), or this would see "not running" and build and launch a second copy straight away.
+$waited = 0
+while (-not (Get-Process FarmingSimulator2025Game -ErrorAction SilentlyContinue)) {
+    if ($waited -ge 300) { Write-Output "game never started - not deploying"; exit 1 }
+    Start-Sleep -Seconds 2
+    $waited += 2
+}
 Write-Output "watching: waiting for FarmingSimulator2025Game to close"
 while (Get-Process FarmingSimulator2025Game -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 2 }
 Write-Output "game closed - building"
