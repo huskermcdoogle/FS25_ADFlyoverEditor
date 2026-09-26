@@ -1716,7 +1716,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         local twoWay, sub = editor:menuConvertState(ids)
         if twoWay ~= false then btn("make one-way", function() apply(OP.ONEWAY) end) end
         if twoWay ~= true then btn("make two-way", function() apply(OP.TWOWAY) end) end
-        if flipLabel ~= nil then btn(flipLabel, function() apply(OP.REVERSE) end) end
+        if flipLabel ~= nil and twoWay ~= true then btn(flipLabel, function() apply(OP.REVERSE) end) end
         if sub ~= true then btn("make secondary", function() apply(OP.SECONDARY) end) end
         if sub ~= false then btn("make primary", function() apply(OP.PRIMARY) end) end
     end
