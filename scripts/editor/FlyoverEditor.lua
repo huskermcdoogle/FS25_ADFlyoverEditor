@@ -2161,6 +2161,116 @@ function ADFlyoverEditor:clearSelection()
     self.selectionCount = 0
 end
 
+--- Chain tools (Smooth, Straighten, Divide, Parallel, Merge) work along an ordered path, so a Ctrl-built
+--- selection there has to stay ONE contiguous run: every point joined to the rest, no branches.
+function ADFlyoverEditor:toolNeedsChainSelection()
+    local t, T = self.tool, self.TOOL
+    return t == T.SMOOTH or t == T.STRAIGHTEN or t == T.DIVIDE or t == T.PARALLEL or t == T.MERGE
+end
+
+--- The set, ordered end to end, if it is one simple chain (connected, no point joined to more than two
+--- others in the set); nil otherwise. A single point is a chain of one.
+function ADFlyoverEditor:orderedChain(set)
+    local ids, n = {}, 0
+    for id in pairs(set) do n = n + 1; ids[n] = id end
+    if n == 0 then return nil end
+    if n == 1 then return { ids[1] } end
+    local nb = {}
+    for _, id in ipairs(ids) do
+        local wp = ADGraphManager:getWayPointById(id)
+        local seen, list = {}, {}
+        if wp ~= nil then
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
+                    if set[other] and other ~= id and not seen[other] then
+                        seen[other] = true
+                        list[#list + 1] = other
+                    end
+                end
+            end
+        end
+        if #list > 2 then return nil end   -- a branch
+        nb[id] = list
+    end
+    local startId = nil
+    for _, id in ipairs(ids) do
+        if #nb[id] == 1 then startId = id break end
+        if #nb[id] == 0 then return nil end   -- an island
+    end
+    if startId == nil then return nil end    -- a closed loop has no ends
+    local order, prev, cur = { startId }, nil, startId
+    while true do
+        local nextId = nil
+        for _, o in ipairs(nb[cur]) do
+            if o ~= prev then nextId = o break end
+        end
+        if nextId == nil then break end
+        order[#order + 1] = nextId
+        prev, cur = cur, nextId
+        if #order > n then return nil end
+    end
+    if #order ~= n then return nil end         -- not all connected
+    return order
+end
+
+--- Hand a chain (ordered ids) to the active chain tool as its span, exactly as a picked span would be.
+function ADFlyoverEditor:setToolSpanFromChain(order)
+    local ordered = self:trafficOrder(order)
+    local a, b = ordered[1], ordered[#ordered]
+    local t, T = self.tool, self.TOOL
+    self.spanIds = ordered
+    if t == T.SMOOTH then
+        self.smoothFromId, self.smoothToId = a, b
+        self.smoothPreview, self.smoothPinned = nil, nil
+    elseif t == T.STRAIGHTEN then
+        self.straightenFromId, self.straightenToId, self.straightenPreview = a, b, nil
+    elseif t == T.DIVIDE then
+        self.divideFromId, self.divideToId, self.dividePreview = a, b, nil
+        self.divideCount = math.max(0, #ordered - 2)
+    elseif t == T.PARALLEL then
+        self.offsetFromId, self.offsetToId = a, b
+        self.offsetPreview, self.offsetCache = nil, nil
+        local seedPts = self:offsetSpanPoints()
+        if seedPts ~= nil then self:pickSideFromCursor(seedPts) end
+    elseif t == T.MERGE then
+        self.mergeFromId, self.mergeToId = a, b
+        self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+    end
+    self.pickKind = "set"
+end
+
+--- Ctrl-click in a chain tool: add or remove the point only if the selection stays one contiguous run,
+--- then use it as the tool's span. Returns true when it handled the click (added, removed or refused).
+function ADFlyoverEditor:chainToggleSelected(id)
+    if id == nil or not self:toolNeedsChainSelection() then
+        return false
+    end
+    local trial = {}
+    for sid in pairs(self.selection) do trial[sid] = true end
+    if trial[id] then trial[id] = nil else trial[id] = true end
+    local order = next(trial) ~= nil and self:orderedChain(trial) or {}
+    if order == nil then
+        self:warnPlayer("That would break the selection in two - for this tool a Ctrl selection has to be one connected run.")
+        return true
+    end
+    self:toggleSelected(id)
+    if #order >= 2 then
+        self:setToolSpanFromChain(order)
+    else
+        -- One point (or none) is not a span yet: clear any span the selection had set.
+        local t, T = self.tool, self.TOOL
+        self.spanIds = nil
+        if t == T.SMOOTH then self.smoothFromId, self.smoothToId = nil, nil
+        elseif t == T.STRAIGHTEN then self.straightenFromId, self.straightenToId = nil, nil
+        elseif t == T.DIVIDE then self.divideFromId, self.divideToId = nil, nil
+        elseif t == T.PARALLEL then self.offsetFromId, self.offsetToId = nil, nil
+        elseif t == T.MERGE then self.mergeFromId, self.mergeToId = nil, nil
+        end
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: chain selection now %d waypoint(s).", self.selectionCount)
+    return true
+end
+
 function ADFlyoverEditor:toggleSelected(id)
     if id == nil then
         return
@@ -3490,6 +3600,9 @@ function ADFlyoverEditor:onLeftRelease()
     -- leaving the tool you are working with.
     if self.ctrlToggleArmed then
         self.ctrlToggleArmed = false
+        if self:chainToggleSelected(self.hoverId) then
+            return
+        end
         if self.hoverId ~= nil then
             self:toggleSelected(self.hoverId)
             ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
