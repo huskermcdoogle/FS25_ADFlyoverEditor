@@ -11088,11 +11088,42 @@ function ADFlyoverEditor:convertAtCursor()
                 end
             end
             table.sort(near)
+            -- A two-way link at the point says nothing about which way the road runs, so walk out
+            -- along that side until a one-way link does: running away from the point means traffic
+            -- leaves this way ("out"), running toward it means it arrives ("in"); nil if none found.
+            local function flowOnSide(first)
+                local prev, cur = self.hoverId, first
+                for _ = 1, 50 do
+                    local cw = ADGraphManager:getWayPointById(cur)
+                    if cw == nil then return nil end
+                    local nextId, count = nil, 0
+                    for _, listName in ipairs(LINK_LISTS) do
+                        for _, x in pairs(linkList(cw, listName) or {}) do
+                            if x ~= prev and x ~= cur and x ~= nextId then
+                                nextId = x
+                                count = count + 1
+                            end
+                        end
+                    end
+                    if count ~= 1 then return nil end
+                    local xw = ADGraphManager:getWayPointById(nextId)
+                    local away = table.contains(cw.out, nextId)
+                    local toward = xw ~= nil and table.contains(xw.out, cur)
+                    if away and not toward then return "out" end
+                    if toward and not away then return "in" end
+                    prev, cur = cur, nextId
+                end
+                return nil
+            end
             local pairsList, leaving = {}, false
             for _, other in ipairs(near) do
                 local ow = ADGraphManager:getWayPointById(other)
                 local fwd = table.contains(wp.out, other)
                 local back = ow ~= nil and table.contains(ow.out, self.hoverId)
+                if fwd and back then
+                    local side = flowOnSide(other)
+                    if side == "in" then fwd = false elseif side == "out" then back = false end
+                end
                 if back and not fwd then
                     pairsList[#pairsList + 1] = { other, self.hoverId }
                 elseif fwd and not back then
