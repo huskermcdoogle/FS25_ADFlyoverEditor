@@ -157,6 +157,7 @@ L.STRINGS = {
         ["offset needs a run or span pick"] = "Versatz braucht eine Route oder einen Abschnitt",
         ["other way flips a one-way; reverse-way = vehicles back along it"] = "andersherum dreht eine Einbahn; Rückwärtsweg = Fahrzeuge fahren rückwärts",
         ["OPTIONS"] = "OPTIONEN",
+        ["a selection moves rigidly - no falloff"] = "eine Auswahl bewegt sich starr - kein Abfall",
         ["No clear run through here - it is a junction, or a loop that leaves and returns to one junction. Click the two ends of the part you want instead."] = "Hier gibt es keine eindeutige Route - es ist eine Kreuzung oder eine Schleife, die zur selben Kreuzung zurückführt. Stattdessen die beiden Enden des gewünschten Teils anklicken.",
         ["Those two points are not connected, so they are not two ends of one span."] = "Diese beiden Punkte sind nicht verbunden und daher keine zwei Enden eines Abschnitts.",
         ["That point is not connected to the other end, so the span was not changed."] = "Dieser Punkt ist nicht mit dem anderen Ende verbunden, der Abschnitt wurde nicht geändert.",

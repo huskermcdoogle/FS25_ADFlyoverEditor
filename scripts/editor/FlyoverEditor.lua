@@ -4897,6 +4897,11 @@ function ADFlyoverEditor:cycleMoveSelectMode()
 end
 
 function ADFlyoverEditor:toggleMoveFalloff()
+    -- Guards (the card greys these): a tapered drag stays joined to the track it came from, so it cannot
+    -- also be disconnected; and a selection always moves rigidly, so falloff means nothing with one.
+    if not self.moveFalloffOn and (self.moveBreakOn or self.selectionCount > 0) then
+        return
+    end
     self.moveFalloffOn = not self.moveFalloffOn
     ADFlyoverSettings.debugLog("[FlyoverEditor]: move falloff %s.", self.moveFalloffOn and "on" or "off")
     self:refreshActiveDrag()
@@ -5083,8 +5088,10 @@ end
 --- shows its row under Move (see move-tool-copy-and-break-spec in project memory for the older,
 --- copy-gated history of this toggle).
 function ADFlyoverEditor:toggleMoveBreak()
-    if not self.moveBreakOn and self.moveOffsetOn and self.moveOffsetFalloffOn then
-        return   -- not allowed with offset falloff (the card shows it greyed)
+    -- Not with a taper, plain or offset (the card shows it greyed): tapered points stay joined to the track.
+    if not self.moveBreakOn and ((self.moveOffsetOn and self.moveOffsetFalloffOn)
+        or (not self.moveOffsetOn and self.moveFalloffOn)) then
+        return
     end
     self.moveBreakOn = not self.moveBreakOn
     ADFlyoverSettings.debugLog("[FlyoverEditor]: move disconnect %s.", self.moveBreakOn and "on" or "off")
@@ -5270,6 +5277,9 @@ end
 --- already pending too (unlike toggleMoveOffset itself), since flipping it mid-adjust is exactly
 --- when you would want to see the effect.
 function ADFlyoverEditor:toggleMoveOffsetFalloff()
+    if not self.moveOffsetFalloffOn and self.moveBreakOn then
+        return   -- disconnect is on: a taper cannot stay joined to a track it is cut from
+    end
     self.moveOffsetFalloffOn = not self.moveOffsetFalloffOn
     -- An offset that tapers into the track it came from cannot also be cut loose from it.
     if self.moveOffsetFalloffOn then

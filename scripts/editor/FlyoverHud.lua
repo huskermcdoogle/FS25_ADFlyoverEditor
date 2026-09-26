@@ -273,14 +273,19 @@ function ADFlyoverHud:buildRows(editor)
         rows[#rows + 1] = { kind = "btn", text = TR(text), action = action, danger = isDanger }
     end
     -- options: array of { label, active, action, dull }
-    local function seg(caption, options)
-        for _, o in ipairs(options) do o.label = TR(o.label) end
-        rows[#rows + 1] = { kind = "seg", text = TR(caption), options = options }
+    local function seg(caption, options, disabled)
+        for _, o in ipairs(options) do
+            o.label = TR(o.label)
+            if disabled then
+                o.dull, o.action = true, nil
+            end
+        end
+        rows[#rows + 1] = { kind = "seg", text = TR(caption), options = options, disabled = disabled }
     end
     -- A cycling enum as a segmented selector. names[i] is option i; `cycle` advances to the next one,
     -- so picking option i just cycles until it is reached (the editor's cycle functions stay the one
     -- place that knows how to change the value).
-    local function segCycle(caption, names, labelOf, current, cycle)
+    local function segCycle(caption, names, labelOf, current, cycle, disabled)
         local n = #names
         local opts = {}
         for i = 1, n do
@@ -289,7 +294,7 @@ function ADFlyoverHud:buildRows(editor)
                     for _ = 1, (i - current) % n do cycle() end
                 end }
         end
-        seg(caption, opts)
+        seg(caption, opts, disabled)
     end
     -- A two-way flip as a segmented selector: `isB` is whether the second option is current.
     -- The selection-type row: an INDICATOR while auto (lights whatever the last click gesture picked) and
@@ -314,12 +319,12 @@ function ADFlyoverHud:buildRows(editor)
         end
         seg("picks", opts)
     end
-    local function segFlip(caption, labelA, labelB, isB, flip)
+    local function segFlip(caption, labelA, labelB, isB, flip, disabled)
         isB = isB and true or false
         seg(caption, {
             { label = labelA, active = not isB, action = function() if isB then flip() end end },
             { label = labelB, active = isB, action = function() if not isB then flip() end end },
-        })
+        }, disabled)
     end
 
     add("header", "FLYOVER EDITOR")
@@ -538,7 +543,8 @@ function ADFlyoverHud:buildRows(editor)
     end
     if editor.tool == editor.TOOL.PARALLEL then
         -- Which way the new track runs beside a one-way road. Two-way roads are unaffected.
-        segCycle("flow", editor.PARALLEL_FLOW_NAMES, nil, editor.parallelFlow, function() editor:cycleParallelFlow() end)
+        segCycle("flow", editor.PARALLEL_FLOW_NAMES, nil, editor.parallelFlow, function() editor:cycleParallelFlow() end,
+            editor.offsetToId ~= nil and editor.sideTwoWay)
         add("hint", "(only matters beside a one-way track)")
     end
     if editor:toolUsesSpanPick() then
@@ -583,15 +589,23 @@ function ADFlyoverHud:buildRows(editor)
         -- and auto-hookup do nothing there), and a tapered offset stays joined to its track, so it cannot
         -- also be disconnected.
         if offsetting then
-            tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end)
+            tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end,
+                editor.moveBreakOn)
             tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
             tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end, editor.moveOffsetFalloffOn)
             tgl("falloff", editor.moveFalloffOn, nil, true)
         else
-            tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end)
+            -- A selection moves rigidly (no falloff); falloff and disconnect exclude each other.
+            local hasSelection = editor.selectionCount > 0
+            tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end,
+                hasSelection or editor.moveBreakOn)
             tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
             tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
-            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end)
+            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end,
+                editor.moveFalloffOn and not hasSelection)
+            if hasSelection then
+                add("hint", "a selection moves rigidly - no falloff")
+            end
         end
         if offsetting then
             numberAfter("sideways offset")
@@ -649,7 +663,9 @@ function ADFlyoverHud:buildRows(editor)
         segCycle("mode", editor.SMOOTH_MODE_NAMES, function(i) return i == 1 and "relax" or "rebuild" end,
             editor.smoothMode, function() editor:cycleSmoothMode() end)
     elseif editor.tool == editor.TOOL.GROUND then
-        segCycle("level", editor.GROUND_LEVEL_NAMES, nil, editor.groundLevel, function() editor:cycleGroundLevel() end)
+        -- "level" picks which surface to sit on; snapping to terrain ignores it, so it greys then.
+        segCycle("level", editor.GROUND_LEVEL_NAMES, nil, editor.groundLevel, function() editor:cycleGroundLevel() end,
+            editor.snapToTerrain)
         segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
         if editor.groundPreview ~= nil then
             add("cursor", "off the ground", string.format("%d of %d", #editor.groundPreview, editor.groundChecked or 0))
@@ -687,7 +703,7 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:cycleConvertScope() end)
     elseif editor.tool == editor.TOOL.DELETE then
         segCycle("removes", editor.DELETE_SCOPE_NAMES, nil, editor.deleteScope,
-            function() editor:cycleDeleteScope() end)
+            function() editor:cycleDeleteScope() end, editor.selectionCount > 0)
         -- A selection wins over "scope" entirely (see deleteAtCursor) - easy to miss since nothing
         -- else on this card says so, so a click can look like it deleted "scope"'s single waypoint
         -- when it actually took out the whole selection (reported 2026-09-21).
