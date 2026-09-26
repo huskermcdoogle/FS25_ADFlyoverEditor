@@ -556,43 +556,33 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.MOVE then
-        -- Grouped by what each control is for; a number sits directly under the toggle it belongs to.
+        -- One flow, top to bottom: what you pick, the on/off options as a compact grid of toggles, the
+        -- numbers of whichever options are on (right under the grid), then the two choices. No
+        -- one-control sections - a heading over a single button read as disjointed.
         segCycle("picks", editor.MOVE_SELECT_NAMES, nil, editor.moveSelectMode,
             function() editor:cycleMoveSelectMode() end)
 
         add("gap")
-        add("section", "FOLLOW")
+        add("section", "OPTIONS")
         tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end)
-        numberAfter("falloff along track")
-
+        tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
+        tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
+        tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end)
         if editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN then
-            add("gap")
-            add("section", "OFFSET")
             tgl("offset", editor.moveOffsetOn, function() editor:toggleMoveOffset() end)
             if editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil then
                 tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end)
             end
-            numberAfter("sideways offset")
-            numberAfter("offset falloff")
         end
-
-        add("gap")
-        add("section", "COPY AND BREAK")
-        tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
-        tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end)
-
-        add("gap")
-        add("section", "ROTATE")
-        segFlip("pivot", "click point", "centroid", editor.moveRotatePivotMode ~= "click",
-            function() editor:cycleMoveRotatePivot() end)
-
-        add("gap")
-        add("section", "HOOKUP")
-        tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
+        numberAfter("falloff along track")
+        numberAfter("sideways offset")
+        numberAfter("offset falloff")
         numberAfter("hookup distance")
         numberAfter("hookup divergence")
 
         add("gap")
+        segFlip("rotate pivot", "click point", "centroid", editor.moveRotatePivotMode ~= "click",
+            function() editor:cycleMoveRotatePivot() end)
         segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
     elseif editor.tool == editor.TOOL.DRAW then
         segFlip("snap to", "terrain", "surface", not editor.snapToTerrain, function() editor:toggleSnapToTerrain() end)
@@ -656,7 +646,15 @@ function ADFlyoverHud:buildRows(editor)
         tgl("avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles"),
             function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
     elseif editor.tool == editor.TOOL.CONVERT then
-        segCycle("make it", editor.CONVERT_OP_NAMES, nil, editor.convertOp, function() editor:cycleConvertOp() end)
+        -- Two kinds of change, two rows: which way traffic runs, and the road's priority. A click applies ONE
+        -- change, so exactly one option across both rows is lit.
+        local OP = editor.CONVERT_OP
+        local function opOption(label, op)
+            return { label = label, active = editor.convertOp == op,
+                action = function() editor.convertOp = op end }
+        end
+        seg("direction", { opOption("two-way", OP.TWOWAY), opOption("one-way", OP.ONEWAY), opOption("reversed", OP.REVERSE) })
+        seg("priority", { opOption("primary", OP.PRIMARY), opOption("secondary", OP.SECONDARY) })
         segCycle("applies to", editor.DELETE_SCOPE_NAMES, nil, editor.convertScope,
             function() editor:cycleConvertScope() end)
     elseif editor.tool == editor.TOOL.DELETE then
