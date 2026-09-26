@@ -592,6 +592,47 @@ end
 --- touch it, even a little, even tapered near zero. An EXPLICIT pick stays movable regardless -
 --- grabbing one directly in Point mode, or clicking it as one of Span's own two ends - since that
 --- decides it the same way an explicit box/circle/freehand/ctrl-click selection already does.
+--- Reverse-way links (AutoDrive's reverse road): listed in the START's out but NOT in the end's incoming.
+--- Walking the graph by out + incoming therefore cannot see such a link from its END, and a run made
+--- reverse-way fell apart into single points for every run/span/junction walk in this file ("reverse-way
+--- blows it up"). reverseIn[id] lists the waypoints with a reverse link INTO id; rebuilt at most every half
+--- second, and straight away after any edit (dropReverseInCache).
+local reverseInCache, reverseInAt = nil, -1e9
+local function reverseInIndex()
+    local now = g_time or 0
+    if reverseInCache ~= nil and now - reverseInAt < 500 then
+        return reverseInCache
+    end
+    local idx = {}
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local a = wayPoints[i]
+        if a ~= nil then
+            for _, bId in pairs(a.out or {}) do
+                local b = ADGraphManager:getWayPointById(bId)
+                if b ~= nil and not table.contains(b.incoming or {}, a.id) then
+                    idx[bId] = idx[bId] or {}
+                    table.insert(idx[bId], a.id)
+                end
+            end
+        end
+    end
+    reverseInCache, reverseInAt = idx, now
+    return idx
+end
+function ADFlyoverEditor.dropReverseInCache()
+    reverseInCache = nil
+end
+
+--- The neighbour lists a graph walk should follow: out, incoming, and the reverse-way links into this point.
+local LINK_LISTS = { "out", "incoming", "reverseIn" }
+local function linkList(wp, listName)
+    if listName == "reverseIn" then
+        return reverseInIndex()[wp.id]
+    end
+    return wp[listName]
+end
+
 --- Declared this early (well before its first use) so every consumer - the pre-grab preview, Point's
 --- own follower gather, Run/Span/Offset's - can all see it regardless of where in the file they sit.
 local function isJunction(id)
@@ -600,8 +641,8 @@ local function isJunction(id)
         return false
     end
     local seen, count = {}, 0
-    for _, listName in ipairs({ "out", "incoming" }) do
-        for _, other in pairs(wp[listName] or {}) do
+    for _, listName in ipairs(LINK_LISTS) do
+        for _, other in pairs(linkList(wp, listName) or {}) do
             if not seen[other] then
                 seen[other] = true
                 count = count + 1
@@ -680,8 +721,8 @@ function ADFlyoverEditor:orderRun(runSet, seedId)
         local wp = ADGraphManager:getWayPointById(id)
         local result = {}
         if wp ~= nil then
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if runSet[other] and not table.contains(result, other) then
                         table.insert(result, other)
                     end
@@ -2461,6 +2502,7 @@ end
 --- Ids shift whenever a waypoint is removed (GraphManager.lua:288), so anything holding an id has
 --- to be dropped after a destructive edit rather than silently pointing at a different waypoint.
 function ADFlyoverEditor:invalidateIdReferences()
+    ADFlyoverEditor.dropReverseInCache()
     self:clearSelection()
     self.hoverId = nil
     self.smoothFromId, self.smoothToId = nil, nil
@@ -3413,8 +3455,8 @@ function ADFlyoverEditor:moveTargetHasOutsideLinks()
         if n > 600 then return true end   -- big set: assume connected rather than walk it every frame
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if not set[other] then return true end
                 end
             end
@@ -3706,8 +3748,8 @@ function ADFlyoverEditor:collectAlongTrack(seedId, maxDistance)
             local wp = ADGraphManager:getWayPointById(id)
             if wp ~= nil then
                 local neighbours = {}
-                for _, listName in ipairs({ "out", "incoming" }) do
-                    for _, other in pairs(wp[listName] or {}) do
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, other in pairs(linkList(wp, listName) or {}) do
                         if other ~= id and not table.contains(neighbours, other) then
                             table.insert(neighbours, other)
                         end
@@ -3909,8 +3951,8 @@ function ADFlyoverEditor:orderRunDistances(run, fromId)
         local wp = ADGraphManager:getWayPointById(currentId)
         if wp == nil then break end
         local nextId = nil
-        for _, listName in ipairs({ "out", "incoming" }) do
-            for _, other in pairs(wp[listName] or {}) do
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, other in pairs(linkList(wp, listName) or {}) do
                 if run[other] and other ~= prevId and other ~= currentId then
                     nextId = other
                 end
@@ -5326,8 +5368,8 @@ local function isEndpoint(id)
         return false
     end
     local seen = {}
-    for _, listName in ipairs({ "out", "incoming" }) do
-        for _, other in pairs(wp[listName] or {}) do
+    for _, listName in ipairs(LINK_LISTS) do
+        for _, other in pairs(linkList(wp, listName) or {}) do
             seen[other] = true
         end
     end
@@ -5898,8 +5940,8 @@ function ADFlyoverEditor:collectRunBetweenJunctions(seedId)
         local wp = ADGraphManager:getWayPointById(id)
         local list = {}
         if wp ~= nil then
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if other ~= id and not table.contains(list, other) then
                         table.insert(list, other)
                     end
@@ -6185,8 +6227,8 @@ function ADFlyoverEditor:updateSmoothPreview()
         for i = 2, #ids - 1 do
             local wp = ADGraphManager:getWayPointById(ids[i])
             if wp ~= nil then
-                for _, listName in ipairs({ "out", "incoming" }) do
-                    for _, other in pairs(wp[listName] or {}) do
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, other in pairs(linkList(wp, listName) or {}) do
                         if not inSpan[other] then
                             pinned[i] = true
                         end
@@ -6245,8 +6287,8 @@ function ADFlyoverEditor:findSpanBlocker(ids)
         local id = ids[i]
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if not inChain[other] then
                         -- Name the other end too. "junction at id N" alone is not checkable
                         -- against what is on screen; the id it connects to is what makes it
@@ -6344,8 +6386,8 @@ function ADFlyoverEditor:collectSpanAnchors(ids)
         local wp = ADGraphManager:getWayPointById(id)
         local isAnchor = false
         if wp ~= nil then
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if not inChain[other] then
                         isAnchor = true
                     end
@@ -7312,8 +7354,8 @@ function ADFlyoverEditor:runEnds(seedId)
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             local seen, inside = {}, 0
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if run[other] and not seen[other] then
                         seen[other] = true
                         inside = inside + 1
@@ -7354,8 +7396,8 @@ local function walkRunFrom(run, count, startId)
             break
         end
         local nextId = nil
-        for _, listName in ipairs({ "out", "incoming" }) do
-            for _, other in pairs(wp[listName] or {}) do
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, other in pairs(linkList(wp, listName) or {}) do
                 if run[other] and other ~= previous and not visited[other] then
                     nextId = other
                     break
@@ -7777,8 +7819,8 @@ function ADFlyoverEditor:straightRouteBetween(fromId, toId)
 
     for _ = 1, 4096 do
         local seen, best, bestScore = {}, nil, nil
-        for _, listName in ipairs({ "out", "incoming" }) do
-            for _, otherId in pairs(current[listName] or {}) do
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, otherId in pairs(linkList(current, listName) or {}) do
                 if not seen[otherId] and not visited[otherId] then
                     seen[otherId] = true
                     local wp = ADGraphManager:getWayPointById(otherId)
@@ -7850,8 +7892,8 @@ function ADFlyoverEditor:resolveWholeRun(seedId)
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             local seen, inside = {}, 0
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if run[other] and not seen[other] then
                         seen[other] = true
                         inside = inside + 1
@@ -7875,8 +7917,8 @@ function ADFlyoverEditor:resolveWholeRun(seedId)
             return endId
         end
         local seen, outside, found = {}, 0, nil
-        for _, listName in ipairs({ "out", "incoming" }) do
-            for _, other in pairs(wp[listName] or {}) do
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, other in pairs(linkList(wp, listName) or {}) do
                 if not run[other] and not seen[other] then
                     seen[other] = true
                     outside = outside + 1
@@ -10554,8 +10596,8 @@ function ADFlyoverEditor:convertAtCursor()
             if wp == nil then
                 return nil
             end
-            for _, listName in ipairs({ "out", "incoming" }) do
-                for _, other in pairs(wp[listName] or {}) do
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
                     if junctions[other] then
                         return other
                     end
@@ -10715,8 +10757,8 @@ function ADFlyoverEditor:collectRun(seedId, maxNodes, blocked)
             local wp = ADGraphManager:getWayPointById(id)
             if wp ~= nil then
                 local neighbours = {}
-                for _, listName in ipairs({ "out", "incoming" }) do
-                    for _, other in pairs(wp[listName] or {}) do
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, other in pairs(linkList(wp, listName) or {}) do
                         if not table.contains(neighbours, other) then
                             table.insert(neighbours, other)
                         end
@@ -10760,8 +10802,8 @@ function ADFlyoverEditor:runPathBetween(startId, endId, maxNodes)
         for _, id in ipairs(frontier) do
             local wp = ADGraphManager:getWayPointById(id)
             if wp ~= nil then
-                for _, listName in ipairs({ "out", "incoming" }) do
-                    for _, other in pairs(wp[listName] or {}) do
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, other in pairs(linkList(wp, listName) or {}) do
                         if cameFrom[other] == nil then
                             cameFrom[other] = id
                             visited = visited + 1
@@ -11052,8 +11094,8 @@ function ADFlyoverEditor:connectedWithin(seedId, allowed, tolerance)
         for _, id in ipairs(frontier) do
             local wp = ADGraphManager:getWayPointById(id)
             if wp ~= nil then
-                for _, listName in ipairs({ "out", "incoming" }) do
-                    for _, other in pairs(wp[listName] or {}) do
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, other in pairs(linkList(wp, listName) or {}) do
                         local ow = ADGraphManager:getWayPointById(other)
                         if ow ~= nil then
                             local step = MathUtil.vector2Length(ow.x - wp.x, ow.z - wp.z)
