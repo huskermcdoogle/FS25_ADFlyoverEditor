@@ -1713,12 +1713,13 @@ function ADFlyoverHud:drawContextMenu(editor)
     -- Direction and priority each get one button naming the opposite of what is there now, so a
     -- click flips the label; a mix (or nothing to judge) offers both ways.
     local function convertButtons(ids, apply, flipLabel)
-        local twoWay, sub = editor:menuConvertState(ids)
-        if twoWay ~= false then btn("make one-way", function() apply(OP.ONEWAY) end) end
-        if twoWay ~= true then btn("make two-way", function() apply(OP.TWOWAY) end) end
-        if flipLabel ~= nil and twoWay ~= true then btn(flipLabel, function() apply(OP.REVERSE) end) end
-        if sub ~= true then btn("make secondary", function() apply(OP.SECONDARY) end) end
-        if sub ~= false then btn("make primary", function() apply(OP.PRIMARY) end) end
+        local dir, prio = editor:menuConvertState(ids)
+        -- dir nil = no connections among them at all: nothing for a direction button to act on.
+        if dir == "two" or dir == "mixed" then btn("make one-way", function() apply(OP.ONEWAY) end) end
+        if dir == "one" or dir == "mixed" then btn("make two-way", function() apply(OP.TWOWAY) end) end
+        if flipLabel ~= nil and (dir == "one" or dir == "mixed") then btn(flipLabel, function() apply(OP.REVERSE) end) end
+        if prio == "primary" or prio == "mixed" then btn("make secondary", function() apply(OP.SECONDARY) end) end
+        if prio == "secondary" or prio == "mixed" then btn("make primary", function() apply(OP.PRIMARY) end) end
     end
     if m.kind == "point" then
         head(string.format(TR("point %d"), m.id))

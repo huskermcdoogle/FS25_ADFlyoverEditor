@@ -2105,38 +2105,43 @@ function ADFlyoverEditor:menuConvertSpan(op)
     ADGraphManager:markChanges()
 end
 
---- What a popup's targets are now, so its buttons can offer the opposite: `twoWay` when every link
---- among them runs both ways (for a lone point: every link at it), `sub` when every one is secondary.
---- `ids` is a list or a set; nil answers mean there is nothing to judge.
+--- What a popup's targets are now, so its buttons can offer the opposite. Direction looks at the links
+--- among them (for a lone point: every link at it) and answers "two", "one" or "mixed"; priority looks at
+--- the points and answers "primary", "secondary" or "mixed". nil = nothing to judge (no links / no points).
+--- `ids` is a list or a set.
 function ADFlyoverEditor:menuConvertState(ids)
     local set = {}
     for k, v in pairs(ids or {}) do
         if v == true then set[k] = true else set[v] = true end
     end
     local lone = next(set) ~= nil and next(set, next(set)) == nil
-    local twoWay, sub, anyLink, anyPoint = true, true, false, false
+    local nTwo, nOne, nSub, nPrim = 0, 0, 0, 0
     for a in pairs(set) do
         local aw = ADGraphManager:getWayPointById(a)
         if aw ~= nil then
-            anyPoint = true
             local flags = aw.flags or 0
-            if math.floor(flags / AutoDrive.FLAG_SUBPRIO) % 2 ~= 1 then sub = false end
+            if math.floor(flags / AutoDrive.FLAG_SUBPRIO) % 2 == 1 then nSub = nSub + 1 else nPrim = nPrim + 1 end
             for _, listName in ipairs(LINK_LISTS) do
                 for _, b in pairs(linkList(aw, listName) or {}) do
                     if b ~= a and (lone or set[b]) then
                         local bw = ADGraphManager:getWayPointById(b)
-                        anyLink = true
-                        if not (table.contains(aw.out, b) and bw ~= nil and table.contains(bw.out, a)) then
-                            twoWay = false
+                        if table.contains(aw.out, b) and bw ~= nil and table.contains(bw.out, a) then
+                            nTwo = nTwo + 1
+                        else
+                            nOne = nOne + 1
                         end
                     end
                 end
             end
         end
     end
-    if not anyLink then twoWay = nil end
-    if not anyPoint then sub = nil end
-    return twoWay, sub
+    local function verdict(a, b, nameA, nameB)
+        if a > 0 and b > 0 then return "mixed" end
+        if a > 0 then return nameA end
+        if b > 0 then return nameB end
+        return nil
+    end
+    return verdict(nTwo, nOne, "two", "one"), verdict(nPrim, nSub, "primary", "secondary")
 end
 
 --- Run direction, via the run-scoped convert; kept open so directions can be tried in a row.
