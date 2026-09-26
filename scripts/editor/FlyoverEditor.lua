@@ -1973,6 +1973,30 @@ function ADFlyoverEditor:menuDeleteSpan()
     self:closeMenu()
 end
 
+local function addLink(fromId, toId)
+    local from = ADGraphManager:getWayPointById(fromId)
+    local to = ADGraphManager:getWayPointById(toId)
+    if from == nil or to == nil or fromId == toId then
+        return
+    end
+    if not table.contains(from.out, toId) then
+        table.insert(from.out, toId)
+    end
+    if not table.contains(to.incoming, fromId) then
+        table.insert(to.incoming, fromId)
+    end
+end
+
+local function removeLink(fromId, toId)
+    local from = ADGraphManager:getWayPointById(fromId)
+    local to = ADGraphManager:getWayPointById(toId)
+    if from == nil or to == nil then
+        return
+    end
+    table.removeValue(from.out, toId)
+    table.removeValue(to.incoming, fromId)
+end
+
 --- Span direction: apply two-way / one-way / flip along the span's own ordered pairs. convertAtCursor
 --- only offers point and whole-run scope, so the span case is done here, mirroring its link logic.
 --- Kept open so directions can be tried in a row.
@@ -10923,30 +10947,6 @@ end
 function ADFlyoverEditor:cycleConvertScope()
     self.convertScope = (self.convertScope % #self.DELETE_SCOPE_NAMES) + 1
     ADFlyoverSettings.debugLog("[FlyoverEditor]: convert applies to %s.", self.DELETE_SCOPE_NAMES[self.convertScope])
-end
-
-local function addLink(fromId, toId)
-    local from = ADGraphManager:getWayPointById(fromId)
-    local to = ADGraphManager:getWayPointById(toId)
-    if from == nil or to == nil or fromId == toId then
-        return
-    end
-    if not table.contains(from.out, toId) then
-        table.insert(from.out, toId)
-    end
-    if not table.contains(to.incoming, fromId) then
-        table.insert(to.incoming, fromId)
-    end
-end
-
-local function removeLink(fromId, toId)
-    local from = ADGraphManager:getWayPointById(fromId)
-    local to = ADGraphManager:getWayPointById(toId)
-    if from == nil or to == nil then
-        return
-    end
-    table.removeValue(from.out, toId)
-    table.removeValue(to.incoming, fromId)
 end
 
 --- The selection popup's conversions: change only the connections BETWEEN selected points (a link to a
