@@ -566,12 +566,17 @@ function ADFlyoverHud:buildRows(editor)
         -- One flow, top to bottom: what you pick, the on/off options as a compact grid of toggles, the
         -- numbers of whichever options are on (right under the grid), then the two choices. No
         -- one-control sections - a heading over a single button read as disjointed.
-        segCycle("picks", editor.MOVE_SELECT_NAMES, nil, editor.moveSelectMode,
-            function() editor:cycleMoveSelectMode() end)
+        -- Indicator + filter, like every span tool: click = point, second click = span, double-click = run;
+        -- click a type to lock it (the others dull), click it again to unlock.
+        pickSeg({ "point", "span", "run" })
+        if editor.pickFilter == nil then
+            add("hint", "click = point, 2nd click = span, double-click = run")
+        end
 
         -- What a drag does: MOVE the pick, or OFFSET it sideways (a run or span only). A mode, not an option,
         -- because it changes what the other options mean.
-        local chainPick = editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN
+        local chainPick = editor.moveSpanIds ~= nil or editor.pickFilter == "run" or editor.pickFilter == "span"
+            or editor.moveOffsetChainIds ~= nil
         local offsetting = chainPick and (editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil)
         seg("action", {
             { label = "move", active = not offsetting,
@@ -580,7 +585,7 @@ function ADFlyoverHud:buildRows(editor)
                 action = function() if chainPick and not editor.moveOffsetOn then editor:toggleMoveOffset() end end },
         })
         if not chainPick then
-            add("hint", "offset needs a run or span pick")
+            add("hint", "offset needs a picked run or span")
         end
 
         add("gap")
@@ -592,7 +597,8 @@ function ADFlyoverHud:buildRows(editor)
             tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end,
                 editor.moveBreakOn)
             tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
-            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end, editor.moveOffsetFalloffOn)
+            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end,
+                editor.moveOffsetFalloffOn or editor:moveTargetHasOutsideLinks() == false)
             tgl("falloff", editor.moveFalloffOn, nil, true)
         else
             -- A selection moves rigidly (no falloff); falloff and disconnect exclude each other.
@@ -602,7 +608,7 @@ function ADFlyoverHud:buildRows(editor)
             tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
             tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
             tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end,
-                editor.moveFalloffOn and not hasSelection)
+                (editor.moveFalloffOn and not hasSelection) or editor:moveTargetHasOutsideLinks() == false)
             if hasSelection then
                 add("hint", "a selection moves rigidly - no falloff")
             end

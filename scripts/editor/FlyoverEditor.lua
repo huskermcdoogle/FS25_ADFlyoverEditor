@@ -1579,6 +1579,15 @@ function ADFlyoverEditor:update(dt)
         self:updateJunctionPreview()
     end
 
+    -- Move: a held press that has travelled past the threshold becomes a drag.
+    if self.tool == self.TOOL.MOVE and self.movePressId ~= nil and self.dragId == nil and self.leftDown
+        and self.mouseX ~= nil and self.movePressMX ~= nil then
+        local dx, dy = self.mouseX - self.movePressMX, self.mouseY - self.movePressMY
+        if math.sqrt(dx * dx + dy * dy) > self.MOVE_DRAG_THRESHOLD then
+            self:startMoveDrag(self.movePressId)
+        end
+    end
+
     -- A drag updates live so the move is visible while the button is held, but no snapshot is
     -- taken here - that happened once, on press.
     if self.dragId ~= nil then
@@ -3294,12 +3303,119 @@ function ADFlyoverEditor:onLeftPress()
         -- member did nothing at all, silently, while Span was active (reported 2026-09-21). Now
         -- also lets a drag start when the hovered point is in the selection, matching every other
         -- picks mode.
-        if self.moveSelectMode ~= self.MOVE_SELECT.SPAN
-            or (self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId])
-            or (self.selectionCount > 0 and self.selection[self.hoverId]) then
-            self:beginDrag(self.hoverId)
+        -- The shared gesture language: a press only RECORDS the point. Moving past a small threshold
+        -- while held starts the drag (update -> startMoveDrag); letting go without moving is a CLICK,
+        -- which picks (point / second click = span / double-click = run - see moveGestureClick).
+        self.movePressId = self.hoverId
+        self.movePressMX, self.movePressMY = self.mouseX, self.mouseY
+    end
+end
+
+--- Pixels (normalised screen units) the mouse must travel while held before a press becomes a drag.
+ADFlyoverEditor.MOVE_DRAG_THRESHOLD = 0.006
+
+--- A held press has moved far enough: start dragging, and decide WHAT moves from the current pick.
+---   the point is in the selection      -> the selection (rigid)
+---   the point is in the picked span/run -> that span / run
+---   the type filter is locked to run    -> the run through the point
+---   otherwise                           -> just that point (falloff applies); any old pick is dropped
+function ADFlyoverEditor:startMoveDrag(id)
+    self.movePressId = nil
+    if id == nil then
+        return
+    end
+    if self.selectionCount > 0 and self.selection[id] then
+        self:beginDrag(id)
+        return
+    end
+    if self.moveSpanIds ~= nil and self.moveSpanIds[id] then
+        self.moveSelectMode = (self.pickKind == "run") and self.MOVE_SELECT.RUN or self.MOVE_SELECT.SPAN
+        self:beginDrag(id)
+        return
+    end
+    if self.pickFilter == "run" then
+        self.moveSelectMode = self.MOVE_SELECT.RUN
+        self.pickKind = "run"
+        self:beginDrag(id)
+        return
+    end
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+    self.moveSelectMode = self.MOVE_SELECT.POINT
+    self.pickKind = "point"
+    self:beginDrag(id)
+end
+
+--- A click (press + release without a drag) with the Move tool: the shared span-pick gesture, whose
+--- result becomes what a following drag moves.
+function ADFlyoverEditor:moveGestureClick(id)
+    if id == nil then
+        return
+    end
+    if self.pickFilter == "point" then
+        self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+        self.moveSelectMode = self.MOVE_SELECT.POINT
+        self.pickKind = "point"
+        return
+    end
+    local savedHover = self.hoverId
+    self.hoverId = id
+    self:spanPickClick({
+        getFrom = function() return self.moveSpanFromId end,
+        getTo = function() return self.moveSpanToId end,
+        setEnds = function(a, b)
+            self.moveSpanFromId, self.moveSpanToId = a, b
+            if b == nil then
+                self.moveSpanIds = nil
+            end
+        end,
+        onSpan = function(a, b, span)
+            local set = {}
+            for _, sid in ipairs(span or {}) do set[sid] = true end
+            self.moveSpanIds = set
+        end,
+    })
+    self.hoverId = savedHover
+    if self.moveSpanToId == nil then
+        self.pickKind = (self.moveSpanFromId ~= nil) and "point" or nil
+        self.moveSelectMode = self.MOVE_SELECT.POINT
+    else
+        self.moveSelectMode = (self.pickKind == "run") and self.MOVE_SELECT.RUN or self.MOVE_SELECT.SPAN
+    end
+end
+
+--- Does what the Move tool would act on have any connection to the rest of the network? Disconnect is
+--- meaningless (and greyed on the card) when it has none. The target is the selection, else the picked
+--- span/run, else the point last pointed at (its run when locked to run). nil when there is nothing to judge.
+function ADFlyoverEditor:moveTargetHasOutsideLinks()
+    local set = {}
+    if self.selectionCount > 0 then
+        for id in pairs(self.selection) do set[id] = true end
+    elseif self.moveSpanIds ~= nil then
+        for id in pairs(self.moveSpanIds) do set[id] = true end
+    elseif self.moveFocusId ~= nil then
+        if self.pickFilter == "run" then
+            local _, _, ids = self:resolveWholeRun(self.moveFocusId)
+            for _, id in ipairs(ids or { self.moveFocusId }) do set[id] = true end
+        else
+            set[self.moveFocusId] = true
+        end
+    else
+        return nil
+    end
+    local n = 0
+    for id in pairs(set) do
+        n = n + 1
+        if n > 600 then return true end   -- big set: assume connected rather than walk it every frame
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            for _, listName in ipairs({ "out", "incoming" }) do
+                for _, other in pairs(wp[listName] or {}) do
+                    if not set[other] then return true end
+                end
+            end
         end
     end
+    return false
 end
 
 function ADFlyoverEditor:onLeftRelease()
@@ -3353,34 +3469,13 @@ function ADFlyoverEditor:onLeftRelease()
     if self.tool == self.TOOL.DRAW then
         self:drawClick()
     elseif self.tool == self.TOOL.MOVE then
-        -- A click (not a drag) on a point that is already a span MEMBER should re-pick whichever
-        -- end is closer, not commit a same-place "move" - onLeftPress cannot tell in advance
-        -- whether a member click will turn into a real drag or was only ever meant to replace an
-        -- end (reported 2026-09-21: shrinking a span never worked, only extending it, because a
-        -- click landing back inside the CURRENT span always went through beginDrag with no way to
-        -- reach moveSpanClick's own "click the new one" rule). Same too-small-to-be-deliberate
-        -- distance Box/Circle/Freehand already use to tell a gesture from a stray click.
-        if self.dragId ~= nil and self.moveSelectMode == self.MOVE_SELECT.SPAN
-            and self.moveSpanIds ~= nil and self.moveSpanIds[self.dragId] and self.dragStartX ~= nil then
-            local dx, dz = self.cursorX - self.dragStartX, self.cursorZ - self.dragStartZ
-            if MathUtil.vector2Length(dx, dz) < AutoDrive.FLYOVER_BOX_MIN_SIZE then
-                -- Put everything back exactly where it started (mirrors refreshActiveDrag) before
-                -- treating this as a plain click instead of a drag.
-                for _, n in ipairs(self.dragNeighbours or {}) do
-                    self:moveTo(n.id, n.x, n.z)
-                end
-                self:moveTo(self.dragId, self.dragStartX, self.dragStartZ)
-                self.dragId, self.dragStartX, self.dragStartZ, self.dragNeighbours, self.dragFrozenCopy = nil, nil, nil, nil, false
-                self:moveSpanClick()
-                return
-            end
-        end
-
+        -- Released: a drag finishes; a press that never became a drag is a click, which picks.
         if self.dragId ~= nil then
             self:finishDrag()
-        elseif self.moveSelectMode == self.MOVE_SELECT.SPAN then
-            self:moveSpanClick()
+        elseif self.movePressId ~= nil then
+            self:moveGestureClick(self.movePressId)
         end
+        self.movePressId = nil
     elseif self.tool == self.TOOL.DELETE then
         self:deleteAtCursor()
     elseif self.tool == self.TOOL.SMOOTH then
@@ -4527,6 +4622,9 @@ end
 
 --- Is there a pick for the card's indicator to describe right now? A pending span, or (Ground) a selection.
 function ADFlyoverEditor:pickIsActive()
+    if self.tool == self.TOOL.MOVE then
+        return self.moveSpanFromId ~= nil or self.dragId ~= nil
+    end
     return self:toolHasPendingStart() or (self.tool == self.TOOL.GROUND and self.groundUsesSelection == true)
 end
 
