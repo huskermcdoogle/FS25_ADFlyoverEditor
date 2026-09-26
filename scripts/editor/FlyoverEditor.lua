@@ -10696,12 +10696,21 @@ function ADFlyoverEditor:convertAtCursor()
                     end
                 elseif op == self.CONVERT_OP.REVERSE then
                     if forward ~= backward then
-                        if forward then
-                            removeLink(a, b)
-                            addLink(b, a)
+                        local fromId, toId = a, b
+                        if not forward then
+                            fromId, toId = b, a
+                        end
+                        -- A reverse-way link (in the start's out, NOT the end's incoming) stays a reverse-way
+                        -- link, just the other way round; an ordinary one-way stays ordinary.
+                        local tw = ADGraphManager:getWayPointById(toId)
+                        local wasReverse = tw ~= nil and not table.contains(tw.incoming or {}, fromId)
+                        removeLink(fromId, toId)
+                        if wasReverse then
+                            if not table.contains(tw.out, fromId) then
+                                table.insert(tw.out, fromId)
+                            end
                         else
-                            removeLink(b, a)
-                            addLink(a, b)
+                            addLink(toId, fromId)
                         end
                         changed = changed + 1
                     end
