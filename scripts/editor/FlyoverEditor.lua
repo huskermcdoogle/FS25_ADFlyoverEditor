@@ -3695,6 +3695,9 @@ function ADFlyoverEditor:stopCurrentAction()
             return true
         end
     elseif tool == self.TOOL.MERGE then
+        if self:mergeWithOnlyCandidate() then
+            return true
+        end
         if self.mergeFromId ~= nil or self.mergeToId ~= nil then
             ADFlyoverSettings.debugLog("[FlyoverEditor]: cancelled the pending merge.")
             self.mergeFromId, self.mergeToId = nil, nil
@@ -4669,6 +4672,7 @@ function ADFlyoverEditor:pickedSpanEnds()
     elseif t == T.GROUND then return self.groundFromId, self.groundToId
     elseif t == T.STRAIGHTEN then return self.straightenFromId, self.straightenToId
     elseif t == T.PARALLEL then return self.offsetFromId, self.offsetToId
+    elseif t == T.MERGE then return self.mergeFromId, self.mergeToId
     end
     return nil, nil
 end
@@ -4683,6 +4687,7 @@ end
 
 function ADFlyoverEditor:toolUsesSpanPick()
     return self.tool == self.TOOL.SMOOTH
+        or self.tool == self.TOOL.MERGE
         or self.tool == self.TOOL.PARALLEL
         or self.tool == self.TOOL.DIVIDE
         or self.tool == self.TOOL.STRAIGHTEN
@@ -7020,12 +7025,12 @@ function ADFlyoverEditor:getNextStepLines()
             self.convertScope == self.DELETE_SCOPE.RUN and L("whole run") or L("this waypoint"))
     elseif self.tool == t.MERGE then
         if self.mergeToId ~= nil then
-            return L("Green marks what would be absorbed. Click a point on the OTHER track.")
+            return L("Green marks what would be absorbed. Click the OTHER track to merge (right-click if it is the only one).")
         end
         if self.mergeFromId ~= nil then
             return L("Click the far end of the span, on the SAME track.")
         end
-        return L("Click one end of the span to merge.")
+        return L("Click one end of the span to merge, or double-click for the whole run.")
     elseif self.tool == t.JUNCTION then
         local jp = self.junctionPreview
         local placeable = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) or 0
@@ -10879,9 +10884,10 @@ function ADFlyoverEditor:updateMergePreview()
     end
     self.mergePreviewQueryId = queryId
 
-    local span = self:runPathBetween(self.mergeFromId, endId)
+    local span = self:spanBetween(self.mergeFromId, endId)
     self.mergePreviewSpan = span
     self.mergePreviewOther = nil
+    self.mergeNear = nil
     if span == nil then
         return
     end
@@ -10901,8 +10907,12 @@ function ADFlyoverEditor:updateMergePreview()
         end
     end
 
+    if self.mergeToId ~= nil then
+        self.mergeNear = nearSpan
+    end
+
     -- Once the span is locked, narrow the preview to the track under the cursor, which is what the
-    -- third click will actually pick.
+    -- confirming click will actually pick.
     if self.mergeToId ~= nil and self.hoverId ~= nil and nearSpan[self.hoverId] then
         self.mergePreviewOther = self:connectedWithin(self.hoverId, nearSpan)
     else
@@ -10915,33 +10925,52 @@ function ADFlyoverEditor:mergeClick()
         return
     end
 
-    -- Three clicks: two on the same track marking the length to merge, then one on the other
-    -- track. The span is what stops a merge running away down the whole length of both runs.
-    if self.mergeFromId == nil then
-        self.mergeFromId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: merge span starts at id=%s; click the other end of the span on the SAME track.",
-            tostring(self.mergeFromId))
+    -- Span picked and the click lands on a track running alongside it: that is the confirm - merge now.
+    if self.mergeToId ~= nil and self.mergeNear ~= nil and self.mergeNear[self.hoverId] then
+        local fromId, toId = self.mergeFromId, self.mergeToId
+        self.mergeFromId, self.mergeToId = nil, nil
+        self:mergeTracks(fromId, toId, self.hoverId)
+        self.spanIds, self.mergeNear, self.mergePreviewQueryId = nil, nil, nil
         return
     end
 
-    if self.mergeToId == nil then
-        if self.hoverId == self.mergeFromId then
-            return
-        end
-        local span = self:runPathBetween(self.mergeFromId, self.hoverId)
-        if span == nil then
-            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so those are not two ends of one span. The first two clicks both go on the SAME track.",
-                tostring(self.hoverId), tostring(self.mergeFromId))
-            return
-        end
-        self.mergeToId = self.hoverId
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: merge span is %d waypoint(s); now click a point on the OTHER track.", #span)
-        return
-    end
+    -- Otherwise it is the shared span pick: click / second click = span, double-click = whole run,
+    -- another click replaces the nearer end.
+    self:spanPickClick({
+        getFrom = function() return self.mergeFromId end,
+        getTo = function() return self.mergeToId end,
+        setEnds = function(a, b)
+            self.mergeFromId, self.mergeToId = a, b
+            self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+        end,
+    })
+end
 
+--- Right-click with a span picked and exactly ONE track running alongside it: merge with that, no
+--- third click needed. Returns true when it merged.
+function ADFlyoverEditor:mergeWithOnlyCandidate()
+    if self.mergeFromId == nil or self.mergeToId == nil or self.mergeNear == nil then
+        return false
+    end
+    local seed = nil
+    for id in pairs(self.mergeNear) do
+        seed = id
+        break
+    end
+    if seed == nil then
+        return false
+    end
+    local group = self:connectedWithin(seed, self.mergeNear)
+    for id in pairs(self.mergeNear) do
+        if not group[id] then
+            return false   -- more than one candidate track: the player has to click the one they mean
+        end
+    end
     local fromId, toId = self.mergeFromId, self.mergeToId
     self.mergeFromId, self.mergeToId = nil, nil
-    self:mergeTracks(fromId, toId, self.hoverId)
+    self:mergeTracks(fromId, toId, seed)
+    self.spanIds, self.mergeNear, self.mergePreviewQueryId = nil, nil, nil
+    return true
 end
 
 --- Merge a span of one track with the stretch of another track running alongside it.
@@ -10960,7 +10989,7 @@ end
 --- not from waypoint to waypoint. Two separately recorded tracks do not have their points aligned,
 --- so a nearest-waypoint measure reads several metres where the lanes are less than one apart.
 function ADFlyoverEditor:mergeTracks(spanStartId, spanEndId, seedB)
-    local span = self:runPathBetween(spanStartId, spanEndId)
+    local span = self:spanBetween(spanStartId, spanEndId)
     if span == nil then
         Logging.warning("[FlyoverEditor]: lost the span between id=%s and id=%s.",
             tostring(spanStartId), tostring(spanEndId))

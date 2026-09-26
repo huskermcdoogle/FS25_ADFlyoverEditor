@@ -157,6 +157,8 @@ L.STRINGS = {
         ["offset needs a run or span pick"] = "Versatz braucht eine Route oder einen Abschnitt",
         ["other way flips a one-way; reverse-way = vehicles back along it"] = "andersherum dreht eine Einbahn; Rückwärtsweg = Fahrzeuge fahren rückwärts",
         ["OPTIONS"] = "OPTIONEN",
+        ["Green marks what would be absorbed. Click the OTHER track to merge (right-click if it is the only one)."] = "Grün markiert, was übernommen wird. Die ANDERE Spur anklicken, um zusammenzuführen (Rechtsklick, wenn es nur eine gibt).",
+        ["Click one end of the span to merge, or double-click for the whole run."] = "Ein Ende des Abschnitts zum Zusammenführen anklicken, oder doppelklicken für die ganze Route.",
         ["click = point, 2nd click = span, double-click = run"] = "Klick = Punkt, 2. Klick = Abschnitt, Doppelklick = Route",
         ["offset needs a picked run or span"] = "Versatz braucht eine gewählte Route oder einen Abschnitt",
         ["a selection moves rigidly - no falloff"] = "eine Auswahl bewegt sich starr - kein Abfall",
