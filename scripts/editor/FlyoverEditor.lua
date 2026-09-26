@@ -3664,8 +3664,14 @@ function ADFlyoverEditor:beginDrag(id)
 
     local mode = (self.selectionCount > 0 and self.selection[id]) and "selection"
         or self.MOVE_SELECT_NAMES[self.moveSelectMode]
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: grabbed waypoint id=%s (%s, %d waypoint(s) following).",
-        tostring(id), mode, #self.dragNeighbours)
+    if self.moveOffsetChainIds ~= nil then
+        -- An offset carries its chain separately from dragNeighbours; report that, not "0 following".
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: grabbed waypoint id=%s to OFFSET a chain of %d waypoint(s) (copy %s, disconnect %s).",
+            tostring(id), #self.moveOffsetChainIds, self.moveCopyOn and "on" or "off", self.moveBreakOn and "on" or "off")
+    else
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: grabbed waypoint id=%s (%s, %d waypoint(s) following).",
+            tostring(id), mode, #self.dragNeighbours)
+    end
 end
 
 --- Work out which waypoints follow the grab, and how strongly.
@@ -3962,7 +3968,36 @@ function ADFlyoverEditor:commitMoveOffset()
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: offset %.1fm applied to %d waypoint(s).",
         self.moveOffsetDistance, moved)
+
+    -- Copy and disconnect apply to an offset exactly as to a plain move. This used to stop here, so an
+    -- offset with copy on just slid the original and never left a copy behind. Same record shape as
+    -- finishDrag: each moved point with where it started.
+    local members = {}
+    for i, id in ipairs(self.moveOffsetChainIds or {}) do
+        local base = self.moveOffsetBase ~= nil and self.moveOffsetBase[i] or nil
+        if base ~= nil and (self.moveOffsetMovable == nil or self.moveOffsetMovable[id]) then
+            members[#members + 1] = { id = id, originalX = base.x, originalZ = base.z }
+        end
+    end
     self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetMovable, self.moveOffsetDistance = nil, nil, nil, 0
+
+    if #members > 0 then
+        if self.moveCopyOn then
+            self:applyMoveAsCopy({ members = members })
+            self.moveCopyOn = false
+            self.moveBreakOn = false
+            self.lastMoveRecord = nil
+        else
+            self.lastMoveRecord = { members = members }
+            if self.moveBreakOn then
+                local movedSet = {}
+                for _, m in ipairs(members) do movedSet[m.id] = true end
+                disconnectExternal(movedSet)
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: disconnected the %d offset waypoint(s) from their outside connections.",
+                    #members)
+            end
+        end
+    end
     ADGraphManager:markChanges()
 end
 
