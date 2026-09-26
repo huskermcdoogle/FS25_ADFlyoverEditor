@@ -602,7 +602,9 @@ function ADFlyoverHud:buildRows(editor)
             tgl("falloff", editor.moveFalloffOn, nil, true)
         else
             -- A selection moves rigidly (no falloff); falloff and disconnect exclude each other.
-            local hasSelection = editor.selectionCount > 0
+            -- A selection that is one connected run counts as a span (falloff tapers to its ends); only a
+            -- scattered selection is forced rigid.
+            local hasSelection = editor.selectionCount > 0 and editor:selectionChain() == nil
             tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end,
                 hasSelection or editor.moveBreakOn)
             tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
@@ -610,7 +612,9 @@ function ADFlyoverHud:buildRows(editor)
             tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end,
                 (editor.moveFalloffOn and not hasSelection) or editor:moveTargetHasOutsideLinks() == false)
             if hasSelection then
-                add("hint", "a selection moves rigidly - no falloff")
+                add("hint", "a scattered selection moves rigidly - no falloff")
+            elseif editor.selectionCount > 0 then
+                add("hint", "selection is one run - falloff tapers to its ends")
             end
         end
         if offsetting then

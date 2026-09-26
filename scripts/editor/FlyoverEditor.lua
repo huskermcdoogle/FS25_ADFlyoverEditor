@@ -2239,6 +2239,22 @@ function ADFlyoverEditor:orderedChain(set)
     return order
 end
 
+--- The selection ordered end to end when it is one connected run (orderedChain), else nil. Cached until
+--- the selection changes, since the Move card asks every frame.
+function ADFlyoverEditor:selectionChain()
+    if self.selectionCount == 0 then
+        return nil
+    end
+    local sum = 0
+    for id in pairs(self.selection) do sum = sum + id end
+    local key = self.selectionCount .. ":" .. sum
+    if self.selectionChainKey ~= key then
+        self.selectionChainKey = key
+        self.selectionChainCache = self:orderedChain(self.selection) or false
+    end
+    return self.selectionChainCache or nil
+end
+
 --- Hand a chain (ordered ids) to the active chain tool as its span, exactly as a picked span would be.
 function ADFlyoverEditor:setToolSpanFromChain(order)
     local ordered = self:trafficOrder(order)
@@ -4020,6 +4036,15 @@ function ADFlyoverEditor:gatherDragNeighbours()
     end
 
     if self.selectionCount > 0 and self.selection[self.dragId] then
+        -- A selection that happens to be one connected run IS a span: with falloff on, it tapers to its own
+        -- two ends exactly like a picked span, instead of always moving rigidly.
+        local chain = self:selectionChain()
+        if chain ~= nil and #chain >= 3 and self.moveFalloffOn then
+            local set = {}
+            for _, id in ipairs(chain) do set[id] = true end
+            self:gatherChainFollowers(chain[1], chain[#chain], set, false)
+            return
+        end
         for id in pairs(self.selection) do
             if id ~= self.dragId then
                 local wp = ADGraphManager:getWayPointById(id)
@@ -5353,7 +5378,8 @@ end
 function ADFlyoverEditor:toggleMoveFalloff()
     -- Guards (the card greys these): a tapered drag stays joined to the track it came from, so it cannot
     -- also be disconnected; and a selection always moves rigidly, so falloff means nothing with one.
-    if not self.moveFalloffOn and (self.moveBreakOn or self.selectionCount > 0) then
+    if not self.moveFalloffOn and (self.moveBreakOn
+        or (self.selectionCount > 0 and self:selectionChain() == nil)) then
         return
     end
     self.moveFalloffOn = not self.moveFalloffOn
@@ -5928,7 +5954,8 @@ function ADFlyoverEditor:getEditableNumbers()
 
         -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
         -- no radius for it to set - so the field would just be a dead number sitting on the panel.
-        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn then
+        -- Not with a selection: a run-shaped one tapers to its own ends, a scattered one is rigid - no radius either way.
+        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn and self.selectionCount == 0 then
             table.insert(fields, {
                 label = "falloff along track",
                 unit = "m",
