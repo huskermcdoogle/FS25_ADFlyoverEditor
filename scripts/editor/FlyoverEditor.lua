@@ -1816,6 +1816,9 @@ function ADFlyoverEditor:menuArmMoveSpan()
     local set = {}
     for _, id in ipairs(ids) do set[id] = true end
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = from, to, set
+    -- Picked from the popup: the span / run moves as a whole, tapering to its own ends (no reach value).
+    -- Move's own gesture picks use the falloff value as a reach instead - see moveReach.
+    self.movePickFromMenu = true
     self.pickKind = isRun and "run" or "span"
     self.moveSelectMode = isRun and self.MOVE_SELECT.RUN or self.MOVE_SELECT.SPAN
     ADFlyoverSettings.debugLog("[FlyoverEditor]: move armed on a %d-point %s; drag any of its points.", #ids, self.pickKind)
@@ -2179,6 +2182,7 @@ function ADFlyoverEditor:setTool(tool)
     end
     self.tool = tool
     self.lastMovedIds = nil
+    self.movePickFromMenu = false
     self.pickFilter, self.pickKind, self.lastPickId = nil, nil, nil
     -- Any half-finished interaction belongs to the tool being left, not the one being entered.
     if self.editing ~= nil then
@@ -3575,6 +3579,15 @@ end
 --- Pixels (normalised screen units) the mouse must travel while held before a press becomes a drag.
 ADFlyoverEditor.MOVE_DRAG_THRESHOLD = 0.006
 
+--- The falloff reach for a span / run drag: the falloff value for Move's own picks, nil (taper to the
+--- span's own ends) for a span or run handed over by a popup's "move".
+function ADFlyoverEditor:moveReach()
+    if self.movePickFromMenu then
+        return nil
+    end
+    return self.falloffRadius
+end
+
 --- A held press has moved far enough: start dragging, and decide WHAT moves from the current pick.
 ---   the point is in the selection      -> the selection (rigid)
 ---   the point is in the picked span/run -> that span / run
@@ -3601,6 +3614,7 @@ function ADFlyoverEditor:startMoveDrag(id)
         return
     end
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
+    self.movePickFromMenu = false
     self.moveSelectMode = self.MOVE_SELECT.POINT
     self.pickKind = "point"
     self:beginDrag(id)
@@ -3612,6 +3626,7 @@ function ADFlyoverEditor:moveGestureClick(id)
     if id == nil then
         return
     end
+    self.movePickFromMenu = false
     if self.pickFilter == "point" then
         self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
         self.moveSelectMode = self.MOVE_SELECT.POINT
@@ -4157,7 +4172,7 @@ function ADFlyoverEditor:gatherDragNeighbours()
             self:gatherOffsetChain(fromId, toId, run, true)
             return
         end
-        self:gatherChainFollowers(fromId, toId, run, true, self.falloffRadius)
+        self:gatherChainFollowers(fromId, toId, run, true, self:moveReach())
         return
     end
 
@@ -4171,7 +4186,7 @@ function ADFlyoverEditor:gatherDragNeighbours()
             self:gatherOffsetChain(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false)
             return
         end
-        self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false, self.falloffRadius)
+        self:gatherChainFollowers(self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds, false, self:moveReach())
         return
     end
 
@@ -6036,7 +6051,7 @@ function ADFlyoverEditor:getEditableNumbers()
         -- Not with a selection: a run-shaped one tapers to its own ends, a scattered one is rigid - no radius either way.
         -- One falloff value for every shape: a single point's reach, or - for a picked span / run or a
         -- run-shaped selection - the reach along it from the grabbed point (0 = taper to its own ends).
-        if self.moveFalloffOn and self.moveOffsetChainIds == nil
+        if self.moveFalloffOn and self.moveOffsetChainIds == nil and not self.movePickFromMenu
             and (self.selectionCount == 0 or self:selectionChain() ~= nil) then
             table.insert(fields, {
                 label = "falloff along track",
