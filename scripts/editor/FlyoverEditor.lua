@@ -1308,6 +1308,17 @@ end
 --- exits). Each press is one level, innermost first:
 ---   typed number -> dialog / manual -> open menu -> help -> pending action -> selection -> tool.
 --- Esc only ever cancels; it never applies a preview.
+--- The picker a menu-armed tool should step back to, or nil when there is nothing sensible to go back to:
+--- a selection popup whose selection is gone (cleared by an earlier Esc, or by an undo) would reopen empty
+--- and keep Esc going round in circles.
+function ADFlyoverEditor:menuToReturnTo()
+    local back = self.menuBackTo
+    if back ~= nil and back.kind == "set" and self.selectionCount == 0 then
+        return nil
+    end
+    return back
+end
+
 function ADFlyoverEditor:escapeStep()
     if self.editing ~= nil then
         self:cancelEditNumber()
@@ -1320,7 +1331,7 @@ function ADFlyoverEditor:escapeStep()
     if self.ctxMenu ~= nil then
         if self.ctxMenu.kind == "armed" then
             -- Back to the picker the tool was chosen from (same selection, same spot), not to Select.
-            local back = self.menuBackTo
+            local back = self:menuToReturnTo()
             self:menuCancelArmed()
             if back ~= nil then self.ctxMenu = back end
         else
@@ -1340,7 +1351,7 @@ function ADFlyoverEditor:escapeStep()
         return true
     end
     if self.tool ~= self.TOOL.NONE then
-        local back = self.menuBackTo
+        local back = self:menuToReturnTo()
         self:setTool(self.TOOL.NONE)
         if back ~= nil then self.ctxMenu = back end
         return true
@@ -2665,6 +2676,8 @@ end
 --- to be dropped after a destructive edit rather than silently pointing at a different waypoint.
 function ADFlyoverEditor:invalidateIdReferences()
     ADFlyoverEditor.dropReverseInCache()
+    -- Menus and the menu to step back to hold waypoint ids, which an undo or a delete can renumber.
+    self.ctxMenu, self.menuBackTo = nil, nil
     self:clearSelection()
     self.hoverId = nil
     self.smoothFromId, self.smoothToId = nil, nil
