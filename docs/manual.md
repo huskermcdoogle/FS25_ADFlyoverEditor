@@ -136,7 +136,7 @@ Field loop builds a complete two-way route that runs just outside a field's boun
 **Controls**
 
 - **margin** — how far outside the boundary the loop runs.
-- **tree clearance** — how far the loop keeps from trees before detouring.
+- **obstacle clearance** — how far the loop keeps from trees, poles, fences and buildings before detouring.
 - **turning radius** — the tightest turn the loop is allowed to make. Never used below 5m even if set lower - a sharper corner than that reads as an awkward kink rather than a smooth turn.
 - **vehicle height** — how tall a machine the tree check clears for.
 - **detect custom field** — on by default; also finds ground plowed to connect two separate map fields into one, not just a field shipped with the map. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.

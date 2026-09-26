@@ -717,7 +717,7 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
         detouredXZ, treeStats = detourAroundTrees(nearTreeRing, fieldCentroid, treeClearance, turningRadius)
 
         if #detouredXZ < 3 then
-            return nil, nil, nil, "Too many points along this loop could not clear trees - fewer than 3 points remained. Try a larger tree clearance or a different margin."
+            return nil, nil, nil, "Too many points along this loop could not clear obstacles - fewer than 3 points remained. Try a different obstacle clearance or a different margin."
         end
 
         -- The raised-cosine detour is already within turningRadius by construction, so this is a
