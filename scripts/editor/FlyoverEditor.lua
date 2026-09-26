@@ -5083,6 +5083,9 @@ end
 --- shows its row under Move (see move-tool-copy-and-break-spec in project memory for the older,
 --- copy-gated history of this toggle).
 function ADFlyoverEditor:toggleMoveBreak()
+    if not self.moveBreakOn and self.moveOffsetOn and self.moveOffsetFalloffOn then
+        return   -- not allowed with offset falloff (the card shows it greyed)
+    end
     self.moveBreakOn = not self.moveBreakOn
     ADFlyoverSettings.debugLog("[FlyoverEditor]: move disconnect %s.", self.moveBreakOn and "on" or "off")
 end
@@ -5268,6 +5271,10 @@ end
 --- when you would want to see the effect.
 function ADFlyoverEditor:toggleMoveOffsetFalloff()
     self.moveOffsetFalloffOn = not self.moveOffsetFalloffOn
+    -- An offset that tapers into the track it came from cannot also be cut loose from it.
+    if self.moveOffsetFalloffOn then
+        self.moveBreakOn = false
+    end
     if self.moveOffsetChainIds ~= nil then
         self:applyMoveOffset()
     end
@@ -6561,7 +6568,7 @@ end
 -- ---------------------------------------------------------------------------------------------
 
 ADFlyoverEditor.CONNECTION = { ONEWAY = 1, TWOWAY = 2, REVERSE = 3 }
-ADFlyoverEditor.CONNECTION_NAMES = { "one-way", "two-way", "reverse" }
+ADFlyoverEditor.CONNECTION_NAMES = { "one-way", "two-way", "reverse-way" }
 
 function ADFlyoverEditor:cycleConnectionMode()
     self.connectionMode = (self.connectionMode % #self.CONNECTION_NAMES) + 1
@@ -10245,7 +10252,7 @@ end
 -- REVERSE flips which way a one-way runs ("other way"); REVERSEROAD makes AutoDrive's reverse road - a
 -- link vehicles drive in reverse gear (listed in the start's out, not the end's incoming).
 ADFlyoverEditor.CONVERT_OP = { SECONDARY = 1, PRIMARY = 2, TWOWAY = 3, ONEWAY = 4, REVERSE = 5, REVERSEROAD = 6 }
-ADFlyoverEditor.CONVERT_OP_NAMES = { "secondary", "primary", "two-way", "one-way", "other way", "reverse road" }
+ADFlyoverEditor.CONVERT_OP_NAMES = { "secondary", "primary", "two-way", "one-way", "other way", "reverse-way" }
 
 function ADFlyoverEditor:cycleConvertOp()
     self.convertOp = (self.convertOp % #self.CONVERT_OP_NAMES) + 1

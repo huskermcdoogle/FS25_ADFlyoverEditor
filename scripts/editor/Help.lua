@@ -116,9 +116,9 @@ T["spline"] = {
     "end / start tangent: flip the direction the",
     "  curve leaves each end.",
     "traffic / priority: as for Draw - one-way,",
-    "  two-way or reverse (AutoDrive's reverse road,",
-    "  which vehicles drive in reverse gear) and",
-    "  primary/secondary.",
+    "  two-way or reverse-way (AutoDrive's reverse",
+    "  road, which vehicles drive in reverse gear)",
+    "  and primary/secondary.",
   },
 }
 

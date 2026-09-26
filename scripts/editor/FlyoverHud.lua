@@ -265,8 +265,9 @@ function ADFlyoverHud:buildRows(editor)
     --   seg  - segmented selector (a named choice: options side by side, one active)
     --   btn  - action button
     --   number - typed / steppable number field (see numberRow below)
-    local function tgl(text, on, action)
-        rows[#rows + 1] = { kind = "tgl", text = TR(text), active = on and true or false, action = action }
+    local function tgl(text, on, action, disabled)
+        rows[#rows + 1] = { kind = "tgl", text = TR(text), active = (on and not disabled) and true or false,
+            action = (not disabled) and action or nil, disabled = disabled }
     end
     local function btn(text, action, isDanger)
         rows[#rows + 1] = { kind = "btn", text = TR(text), action = action, danger = isDanger }
@@ -492,7 +493,7 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:cycleConnectionMode() end)
         -- "reverse" is AutoDrive's reverse road: a one-way link vehicles drive in reverse gear (backing up
         -- to a shed or an unloader). It is NOT a way to flip a one-way's direction.
-        add("hint", "reverse = a road vehicles back along")
+        add("hint", "reverse-way = a road vehicles back along")
         segFlip("priority", "primary", "secondary", editor.subPrio, function() editor:togglePriority() end)
     end
 
@@ -562,23 +563,44 @@ function ADFlyoverHud:buildRows(editor)
         segCycle("picks", editor.MOVE_SELECT_NAMES, nil, editor.moveSelectMode,
             function() editor:cycleMoveSelectMode() end)
 
+        -- What a drag does: MOVE the pick, or OFFSET it sideways (a run or span only). A mode, not an option,
+        -- because it changes what the other options mean.
+        local chainPick = editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN
+        local offsetting = chainPick and (editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil)
+        seg("action", {
+            { label = "move", active = not offsetting,
+                action = function() if editor.moveOffsetOn then editor:toggleMoveOffset() end end },
+            { label = "offset", active = offsetting, dull = not chainPick,
+                action = function() if chainPick and not editor.moveOffsetOn then editor:toggleMoveOffset() end end },
+        })
+        if not chainPick then
+            add("hint", "offset needs a run or span pick")
+        end
+
         add("gap")
         add("section", "OPTIONS")
-        tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end)
-        tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
-        tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
-        tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end)
-        if editor.moveSelectMode == editor.MOVE_SELECT.RUN or editor.moveSelectMode == editor.MOVE_SELECT.SPAN then
-            tgl("offset", editor.moveOffsetOn, function() editor:toggleMoveOffset() end)
-            if editor.moveOffsetOn or editor.moveOffsetChainIds ~= nil then
-                tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end)
-            end
+        -- Greyed where a combination does not apply: offset replaces the along-track follow (so falloff
+        -- and auto-hookup do nothing there), and a tapered offset stays joined to its track, so it cannot
+        -- also be disconnected.
+        if offsetting then
+            tgl("offset falloff", editor.moveOffsetFalloffOn, function() editor:toggleMoveOffsetFalloff() end)
+            tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
+            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end, editor.moveOffsetFalloffOn)
+            tgl("falloff", editor.moveFalloffOn, nil, true)
+        else
+            tgl("falloff", editor.moveFalloffOn, function() editor:toggleMoveFalloff() end)
+            tgl("auto-hookup", editor.moveAutoHookupOn, function() editor:toggleMoveAutoHookup() end)
+            tgl("copy (b)", editor.moveCopyOn, function() editor:toggleMoveCopy() end)
+            tgl("disconnect", editor.moveBreakOn, function() editor:toggleMoveBreak() end)
         end
-        numberAfter("falloff along track")
-        numberAfter("sideways offset")
-        numberAfter("offset falloff")
-        numberAfter("hookup distance")
-        numberAfter("hookup divergence")
+        if offsetting then
+            numberAfter("sideways offset")
+            numberAfter("offset falloff")
+        else
+            numberAfter("falloff along track")
+            numberAfter("hookup distance")
+            numberAfter("hookup divergence")
+        end
 
         add("gap")
         segFlip("rotate pivot", "click point", "centroid", editor.moveRotatePivotMode ~= "click",
@@ -658,8 +680,8 @@ function ADFlyoverHud:buildRows(editor)
                 action = function() editor.convertPriority = op end }
         end
         seg("direction", { dirOption("two-way", OP.TWOWAY), dirOption("one-way", OP.ONEWAY),
-            dirOption("other way", OP.REVERSE), dirOption("reverse road", OP.REVERSEROAD) })
-        add("hint", "other way flips a one-way; reverse road = vehicles back along it")
+            dirOption("other way", OP.REVERSE), dirOption("reverse-way", OP.REVERSEROAD) })
+        add("hint", "other way flips a one-way; reverse-way = vehicles back along it")
         seg("priority", { prioOption("primary", OP.PRIMARY), prioOption("secondary", OP.SECONDARY) })
         segCycle("applies to", editor.DELETE_SCOPE_NAMES, nil, editor.convertScope,
             function() editor:cycleConvertScope() end)
@@ -1127,7 +1149,10 @@ function ADFlyoverHud:draw(editor)
             local hovered = mx ~= nil and mx >= x and mx <= x + width and my >= y and my <= y + h
             local be = 0.0016
             local fillR, borderR, textR
-            if row.danger then
+            if row.disabled then
+                hovered = false
+                fillR, borderR, textR = "toolBg", "toolBorder", "mutedText"
+            elseif row.danger then
                 fillR, borderR, textR = (hovered and "danger" or "toolBg"), "danger", "danger"
             elseif row.active then
                 fillR, borderR, textR = "accent", "accentBorder", "accentText"

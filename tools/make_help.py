@@ -77,7 +77,7 @@ TOOLS = [
             ("spline direction", "as clicked builds the curve from the first point; reversed builds it from "
                                  "the far end. That reshapes the curve and, on a one-way, sets which way it runs."),
             ("end / start tangent", "flip the direction the curve leaves each end."),
-            ("traffic / priority", "as for Draw - one-way, two-way or reverse (AutoDrive's reverse road, which "
+            ("traffic / priority", "as for Draw - one-way, two-way or reverse-way (AutoDrive's reverse road, which "
                                    "vehicles drive in reverse gear) and primary/secondary."),
         ],
     },
