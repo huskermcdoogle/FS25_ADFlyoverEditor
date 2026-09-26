@@ -3698,7 +3698,17 @@ function ADFlyoverEditor:onLeftRelease()
             -- In Select mode the selection popup takes over from whatever menu was open (a point menu from
             -- the first plain click), and follows the count; it closes when the last point is deselected.
             if self.tool == self.TOOL.NONE then
-                if self.selectionCount > 0 then self:openSetMenu() else self:closeMenu() end
+                if self.selectionCount >= 2 then
+                    self:openSetMenu()
+                elseif self.selectionCount == 1 then
+                    -- One point left is a point pick, not a selection: show its point menu (a following
+                    -- Ctrl-click picks it back up into a selection - see above).
+                    local only = next(self.selection)
+                    self:clearSelection()
+                    self:openPointMenu(only, g_lastMousePosX or 0.5, g_lastMousePosY or 0.5)
+                else
+                    self:closeMenu()
+                end
             end
             ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
                 self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
