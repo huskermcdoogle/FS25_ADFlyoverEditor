@@ -279,6 +279,16 @@ function P:draw()
     -- now UNDER the tool panel, floating card and help card, so it no longer poked through them where
     -- they overlap the minimap. Guarded: a marker is a nicety, and a fault in it must never take the
     -- editor's own drawing down.
+    -- The editor hides the whole game HUD (gsHudVisibility) to get the vehicle panels out of the way, and
+    -- that takes the minimap with it. Draw the minimap ourselves while the HUD is switched off - first,
+    -- so the airplane and the editor's panels land on top of it.
+    if editorLoaded() and ADFlyoverEditor.active and ADFlyoverEditor.hudToggledOff then
+        local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+        local map = hud ~= nil and hud.ingameMap or nil
+        if map ~= nil and type(map.draw) == "function" then
+            pcall(map.draw, map)
+        end
+    end
     if ADFlyoverMapMarker ~= nil then
         pcall(ADFlyoverMapMarker.draw)
     end
