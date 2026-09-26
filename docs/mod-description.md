@@ -28,12 +28,12 @@ Tools are grouped by job on the panel. **Select** is the default mode — no too
 - **Draw** — Place waypoints one click at a time, joining each to the last so a route grows as you go. Click empty ground to drop a point; click an existing waypoint to draw *from* it and wire straight into the network; right-click ends the run. Options: one-way / two-way, primary / secondary (give-way), and whether new points snap to the terrain or any surface.
 - **Spline** — Connect two waypoints with a smooth curve instead of a straight segment, for sweeping bends a vehicle can take at speed. A live preview shows the curve before you commit; the wheel tightens or loosens the curvature, and endpoint/tangent controls flip which way the curve arrives.
 - **Field loop** — Generate a complete, drivable two-way loop just outside a field's boundary, smoothed to a turning radius and nudged around any obstacles in the way (trees, poles, fences, buildings). It's a standalone loop — no map markers, not wired to the rest of the network — so you connect it in afterwards. Controls: margin, turning radius, obstacle clearance and vehicle height.
-- **Parallel** — Offset an existing span or run sideways by a set distance to create a second track alongside it — a passing lane or a return leg. Choose the distance, the side, and whether it follows the picked span or the whole run.
+- **Parallel** — Copy an existing span or run sideways by a set distance as a second track alongside it — a passing lane or a return leg. Pick the span or run, set the distance and side, and choose whether a track beside a one-way road runs the same way or opposite as a return lane.
 - **Siding** — Drop a short parallel stretch beside a run and curve it back in at both ends — a pull-off or passing siding — in a single action. Set the offset and length (the wheel drives the length) and the side.
 
 ### Shape
 
-- **Move** — Drag a waypoint to a new spot and re-seat it on the real ground there. A falloff can spread the move to neighbouring points *along the track*, so a whole stretch shifts smoothly instead of one point jumping. The tool card auto-hides while you drag so it's never in the way.
+- **Move** — Drag a point, a span, a run or a whole selection to a new spot and re-seat it on the real ground. Click to pick, drag to move; falloff tapers the move along the track so a stretch bends smoothly instead of one point jumping. Copy drags out a new piece and leaves the original, disconnect cuts it loose, offset slides a run sideways in place, R+wheel rotates while you drag, and auto-hookup reconnects loose ends where you drop them.
 - **Smooth** — Ease the small kinks out of a stretch so a driven path stops feeling jumpy. Two modes: one nudges the existing points into line (keeping junctions and markers), the other rebuilds the stretch at an even spacing.
 - **Straighten** — Remove wandering detail from a stretch while keeping genuine corners, by dropping only the points that sit within a tolerance of the straight line. Raise the tolerance to flatten a real bend too; junctions in the middle are preserved.
 - **Divide** — Insert a chosen number of new, evenly-spaced waypoints along a span or run, giving you handles to work with where the track was too coarse.
@@ -41,21 +41,21 @@ Tools are grouped by job on the panel. **Select** is the default mode — no too
 
 ### Connect
 
-- **Convert** — Rewrite the direction and priority of connections that already exist: make a stretch two-way, one-way, or flip it to a give-way (secondary) road — for a single point, a span, or a whole run.
-- **Merge** — Fold two separately-recorded parallel lanes into one shared track — the two directions of a road, or a lane you recorded twice. A clear three-click workflow: mark the length on one track, click the far end on the same track, then point at the other track running alongside; the part that will be absorbed turns green before it happens. Merge distance and divergence keep it honest.
+- **Convert** — Rewrite existing connections: set the direction (two-way, one-way, other way, or AutoDrive's reverse-way) and the priority (primary or give-way secondary) and one click applies both — to a single point or a whole run.
+- **Merge** — Fold two separately-recorded parallel lanes into one shared track — the two directions of a road, or a lane you recorded twice. Pick the stretch on one track, then click the other track (or right-click when it's the only one); the part that will be absorbed turns green first. Merge distance and divergence keep it honest.
 
 ### Utility
 
 - **Name** — Attach a label to a waypoint so it becomes a named destination/marker on the map, exactly the way AutoDrive targets are named.
-- **Delete** — Remove a single point, a picked span, or a whole run between junctions, depending on the scope — and it's undoable.
+- **Delete** — Remove a single point, a whole run between junctions, or everything you've selected — and it's undoable.
 
 ## Select mode & context menus
 
-Select mode is where you inspect and act on what's already there. Click the network and a context menu opens for whatever you clicked — and the same click can escalate from a single **point** to a **span** to a whole **run** between junctions, so you rarely have to switch tools to make an edit. Menus offer name, move, connect/spline from here, one/two-way, primary/secondary, straighten, smooth, divide, ground, parallel, flip direction and delete — arming the right tool on your selection so you dial its setting and right-click to apply.
+Select mode is where you act on what's already there. Click a point for its popup, click a second point for the **span** between them, or double-click for the whole **run** between junctions — or box, circle, freehand or Ctrl-click a **selection** and get a popup for the whole set. Popups open clear of what they act on and can be dragged aside; picking a tool from one opens that tool's card right there, and every stretch tool picks the same way (click, second click, double-click).
 
 ## Working with it
 
-- **Floating tool card.** A tool's controls appear on a small card near the cursor instead of a far corner. Numeric settings can be **typed, scrolled, or nudged with − / + steppers**, and the wheel adjusts whichever field you're hovering.
+- **Tool cards.** Each tool's options on one card: toggles, side-by-side choices, and numbers you can **type, scroll, or nudge with − / + steppers**. Anything that can't apply right now is greyed out. The card stays where you put it (or pin it), steps aside when it would cover your work, and **Esc** backs out one step at a time.
 - **Everywhere-undo.** Q / E, plus a live count on the panel.
 - **Field readout.** The panel tells you which field/farmland the cursor is over — handy in flyover mode where there's no vehicle to tell you.
 

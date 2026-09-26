@@ -8,7 +8,7 @@
 		<en>
 <![CDATA[A top-down flyover editor for AutoDrive route networks - build and repair routes from above, on foot or in a vehicle, without driving every metre of them.
 
-Tools: draw, move, delete, name, spline, divide, smooth, convert, straighten, field loop, merge, parallel, siding and ground. Span tools work on a picked span or a whole run between junctions. Everything is undoable.
+Tools: draw, move, delete, name, spline, divide, smooth, convert, straighten, field loop, merge, parallel, siding and ground. Click a point, a second point for the span between, or double-click for the whole run - in every tool - and a popup or the tool card offers what you can do with it. Everything is undoable.
 
 Open it with Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD. Esc to leave.
 
@@ -18,7 +18,7 @@ Single player only.
 ]]>
 		</en>
 	</description>
-	<version>1.0.1.1</version>
+	<version>1.0.2.0</version>
 	<multiplayer supported="false" />
 	<iconFilename>modIcon.dds</iconFilename>
 	<actions>
