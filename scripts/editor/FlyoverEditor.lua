@@ -5036,6 +5036,15 @@ function ADFlyoverEditor:spanPickClick(cfg)
         end
     end
 
+    -- A plain click after a Ctrl-built chain drops the chain and starts a fresh pick, rather than
+    -- stretching the chain's span to the clicked point.
+    if self.selectionCount > 0 and self:toolNeedsChainSelection() then
+        self:clearSelection()
+        self.spanIds = nil
+        cfg.setEnds(nil, nil, nil)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: plain click - dropped the Ctrl chain, starting a new pick.")
+    end
+
     local from, to = cfg.getFrom(), cfg.getTo()
 
     if from == nil then
