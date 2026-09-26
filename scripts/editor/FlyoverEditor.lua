@@ -4109,7 +4109,8 @@ function ADFlyoverEditor:gatherDragNeighbours()
         if chain ~= nil and #chain >= 3 and self.moveFalloffOn then
             local set = {}
             for _, id in ipairs(chain) do set[id] = true end
-            self:gatherChainFollowers(chain[1], chain[#chain], set, false)
+            -- The falloff value is the reach along the selection from the grabbed point (0 = taper to its ends).
+            self:gatherChainFollowers(chain[1], chain[#chain], set, false, self.falloffRadius)
             return
         end
         for id in pairs(self.selection) do
@@ -4467,7 +4468,7 @@ end
 -- sits beyond them - see isJunction), false from Span (its ends are exactly what the user clicked,
 -- explicit either way). dist[fromId]/dist[toId] stay valid taper REFERENCE points either way -
 -- only membership in the moved set is filtered, not the distance math a taper measures against.
-function ADFlyoverEditor:gatherChainFollowers(fromId, toId, run, excludeJunctionEnds)
+function ADFlyoverEditor:gatherChainFollowers(fromId, toId, run, excludeJunctionEnds, maxReach)
     if not self.moveFalloffOn then
         for id in pairs(run) do
             if id ~= self.dragId and not (excludeJunctionEnds and isJunction(id)) then
@@ -4494,6 +4495,10 @@ function ADFlyoverEditor:gatherChainFollowers(fromId, toId, run, excludeJunction
             if wp ~= nil and d ~= nil then
                 local side = d - grabDist
                 local reach = side >= 0 and (total - grabDist) or grabDist
+                -- A set reach (the falloff value, for a run-shaped selection) tapers sooner than the ends.
+                if maxReach ~= nil and maxReach > 0 then
+                    reach = math.min(reach, maxReach)
+                end
                 local weight = 1
                 if reach > 1e-6 then
                     local t = math.min(math.abs(side) / reach, 1)
@@ -6022,7 +6027,8 @@ function ADFlyoverEditor:getEditableNumbers()
         -- Only Point has a settable reach. Run tapers to its own two ends automatically - there is
         -- no radius for it to set - so the field would just be a dead number sitting on the panel.
         -- Not with a selection: a run-shaped one tapers to its own ends, a scattered one is rigid - no radius either way.
-        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn and self.selectionCount == 0 then
+        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn
+            and (self.selectionCount == 0 or self:selectionChain() ~= nil) then
             table.insert(fields, {
                 label = "falloff along track",
                 unit = "m",
