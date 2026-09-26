@@ -1063,6 +1063,10 @@ function ADFlyoverEditor:enable()
     -- meaningless now. A stale escHandledAt from the last session made every Esc look like a repeat
     -- (a negative difference is "< 400") until the new clock caught up - Esc did nothing after re-opening.
     self.escHandledAt = nil
+    -- Same for the double-click memories: an old timestamp against the new clock reads as "just now",
+    -- so a single click on the same point could count as a double-click.
+    self.lastSelectId, self.lastSelectAt = nil, nil
+    self.lastPickId, self.lastPickAt = nil, nil
     self.lastRightPressAt = nil
     self.boxActive = false
     self.boxStartX, self.boxStartZ = nil, nil
