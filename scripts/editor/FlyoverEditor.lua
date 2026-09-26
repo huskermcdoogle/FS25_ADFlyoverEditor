@@ -1979,9 +1979,21 @@ end
 function ADFlyoverEditor:menuConvertSpan(op)
     local m = self.ctxMenu
     if m == nil or m.ids == nil or #m.ids < 2 then return end
-    ADEditorHistory:snapshot("convert span direction")
     local ordered = m.ids
     local changed = 0
+    if op == self.CONVERT_OP.PRIMARY or op == self.CONVERT_OP.SECONDARY then
+        ADEditorHistory:snapshot("convert span priority")
+        local flags = (op == self.CONVERT_OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        for _, id in ipairs(ordered) do
+            ADGraphManager:setWayPointFlags(id, flags, false)
+            changed = changed + 1
+        end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: span priority -> %s, %d point(s).",
+            self.CONVERT_OP_NAMES[op] or "?", changed)
+        ADGraphManager:markChanges()
+        return
+    end
+    ADEditorHistory:snapshot("convert span direction")
     for i = 1, #ordered - 1 do
         local a, b = ordered[i], ordered[i + 1]
         local aw = ADGraphManager:getWayPointById(a)
@@ -2014,6 +2026,40 @@ function ADFlyoverEditor:menuConvertSpan(op)
         self.CONVERT_OP_NAMES[op] or "?", changed)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
+end
+
+--- What a popup's targets are now, so its buttons can offer the opposite: `twoWay` when every link
+--- among them runs both ways (for a lone point: every link at it), `sub` when every one is secondary.
+--- `ids` is a list or a set; nil answers mean there is nothing to judge.
+function ADFlyoverEditor:menuConvertState(ids)
+    local set = {}
+    for k, v in pairs(ids or {}) do
+        if v == true then set[k] = true else set[v] = true end
+    end
+    local lone = next(set) ~= nil and next(set, next(set)) == nil
+    local twoWay, sub, anyLink, anyPoint = true, true, false, false
+    for a in pairs(set) do
+        local aw = ADGraphManager:getWayPointById(a)
+        if aw ~= nil then
+            anyPoint = true
+            local flags = aw.flags or 0
+            if math.floor(flags / AutoDrive.FLAG_SUBPRIO) % 2 ~= 1 then sub = false end
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, b in pairs(linkList(aw, listName) or {}) do
+                    if b ~= a and (lone or set[b]) then
+                        local bw = ADGraphManager:getWayPointById(b)
+                        anyLink = true
+                        if not (table.contains(aw.out, b) and bw ~= nil and table.contains(bw.out, a)) then
+                            twoWay = false
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if not anyLink then twoWay = nil end
+    if not anyPoint then sub = nil end
+    return twoWay, sub
 end
 
 --- Run direction, via the run-scoped convert; kept open so directions can be tried in a row.

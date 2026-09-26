@@ -1710,6 +1710,16 @@ function ADFlyoverHud:drawContextMenu(editor)
     end
     local function gap() items[#items + 1] = { kind = "mgap" } end
     local function head(text) items[#items + 1] = { kind = "mhead", text = text } end
+    -- Direction and priority each get one button naming the opposite of what is there now, so a
+    -- click flips the label; a mix (or nothing to judge) offers both ways.
+    local function convertButtons(ids, apply, flipLabel)
+        local twoWay, sub = editor:menuConvertState(ids)
+        if twoWay ~= false then btn("make one-way", function() apply(OP.ONEWAY) end) end
+        if twoWay ~= true then btn("make two-way", function() apply(OP.TWOWAY) end) end
+        if flipLabel ~= nil then btn(flipLabel, function() apply(OP.REVERSE) end) end
+        if sub ~= true then btn("make secondary", function() apply(OP.SECONDARY) end) end
+        if sub ~= false then btn("make primary", function() apply(OP.PRIMARY) end) end
+    end
     if m.kind == "point" then
         head(string.format(TR("point %d"), m.id))
         btn("name...", function() editor:menuName() end, 12)
@@ -1717,10 +1727,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         btn("connect", function() editor:menuArmDraw() end, 1)
         btn("spline", function() editor:menuArmSpline() end, 2)
         gap()
-        btn("make two-way", function() editor:menuConvert(OP.TWOWAY) end)
-        btn("make one-way", function() editor:menuConvert(OP.ONEWAY) end)
-        btn("primary", function() editor:menuConvert(OP.PRIMARY) end)
-        btn("secondary", function() editor:menuConvert(OP.SECONDARY) end)
+        convertButtons({ m.id }, function(op) editor:menuConvert(op) end, nil)
         gap()
         danger("delete point", function() editor:menuDelete() end)
     elseif m.kind == "span" then
@@ -1731,9 +1738,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         btn("divide", function() editor:menuArmDivide() end, 9)
         btn("ground", function() editor:menuArmGround() end, 14)
         gap()
-        btn("make two-way", function() editor:menuConvertSpan(OP.TWOWAY) end)
-        btn("make one-way", function() editor:menuConvertSpan(OP.ONEWAY) end)
-        btn("flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
+        convertButtons(m.ids, function(op) editor:menuConvertSpan(op) end, "flip direction")
         gap()
         danger("delete span", function() editor:menuDeleteSpan() end)
     elseif m.kind == "set" then
@@ -1741,11 +1746,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         btn("move", function() editor:menuArmMoveSelection() end, 6)
         btn("clear", function() editor:menuClearSelection() end)
         gap()
-        btn("make two-way", function() editor:menuConvertSelection(OP.TWOWAY) end)
-        btn("make one-way", function() editor:menuConvertSelection(OP.ONEWAY) end)
-        btn("other way", function() editor:menuConvertSelection(OP.REVERSE) end)
-        btn("primary", function() editor:menuConvertSelection(OP.PRIMARY) end)
-        btn("secondary", function() editor:menuConvertSelection(OP.SECONDARY) end)
+        convertButtons(editor.selection, function(op) editor:menuConvertSelection(op) end, "flip direction")
         gap()
         danger("delete selection", function() editor:menuDeleteSelection() end)
     elseif m.kind == "run" then
@@ -1757,9 +1758,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         btn("parallel", function() editor:menuArmParallel() end, 4)
         btn("ground", function() editor:menuArmGround() end, 14)
         gap()
-        btn("make two-way", function() editor:menuConvertRun(OP.TWOWAY) end)
-        btn("make one-way", function() editor:menuConvertRun(OP.ONEWAY) end)
-        btn("flip direction", function() editor:menuConvertRun(OP.REVERSE) end)
+        convertButtons(m.ids or m.runSet, function(op) editor:menuConvertRun(op) end, "flip direction")
         gap()
         danger("delete run", function() editor:menuDeleteRun() end)
     end
