@@ -1768,6 +1768,32 @@ function ADFlyoverEditor:openSpanMenu(fromId, toId, sx, sy)
         tostring(fromId), tostring(toId), #ids)
 end
 
+--- The selection popup: after a box / circle / freehand / rotated-box / Ctrl selection in Select mode,
+--- the same kind of picker the point, span and run menus are, acting on the whole selection.
+function ADFlyoverEditor:openSetMenu()
+    if self.tool ~= self.TOOL.NONE or self.selectionCount == 0 then
+        return
+    end
+    local sx, sy = g_lastMousePosX or 0.5, g_lastMousePosY or 0.5
+    self.ctxMenu = { kind = "set", count = self.selectionCount, sx = sx, sy = sy }
+end
+
+function ADFlyoverEditor:menuArmMoveSelection()
+    -- Move keeps the selection: dragging any selected point moves the whole set.
+    self:setTool(self.TOOL.MOVE)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move armed on the %d selected waypoint(s); drag any of them.", self.selectionCount)
+end
+
+function ADFlyoverEditor:menuDeleteSelection()
+    self:deleteSelection()
+    self:closeMenu()
+end
+
+function ADFlyoverEditor:menuClearSelection()
+    self:clearSelection()
+    self:closeMenu()
+end
+
 function ADFlyoverEditor:openRunMenu(seedId, sx, sy)
     local run, count = self:collectRunBetweenJunctions(seedId)
     -- fromId/toId/ids are the run's two ends and the ordered route between them, for the span-shaped
@@ -2346,6 +2372,7 @@ function ADFlyoverEditor:finishBoxSelect()
     if math.abs(x1 - x0) < AutoDrive.FLYOVER_BOX_MIN_SIZE and math.abs(z1 - z0) < AutoDrive.FLYOVER_BOX_MIN_SIZE then
         if self.hoverId ~= nil then
             self:toggleSelected(self.hoverId)
+            if self.selectionCount > 0 then self:openSetMenu() else self:closeMenu() end
             ADFlyoverSettings.debugLog("[FlyoverEditor]: %s waypoint id=%s (%d selected).",
                 self.selection[self.hoverId] and "selected" or "deselected", tostring(self.hoverId), self.selectionCount)
         end
@@ -3592,6 +3619,7 @@ function ADFlyoverEditor:onLeftRelease()
 
     if self.rotBoxActive then
         self:finishRotBoxSelect(self.cursorX, self.cursorZ)
+        self:openSetMenu()
         return
     end
 
@@ -3613,16 +3641,19 @@ function ADFlyoverEditor:onLeftRelease()
 
     if self.boxActive then
         self:finishBoxSelect()
+        self:openSetMenu()
         return
     end
 
     if self.circleActive then
         self:finishCircleSelect()
+        self:openSetMenu()
         return
     end
 
     if self.freehandActive then
         self:finishFreehandSelect()
+        self:openSetMenu()
         return
     end
 
@@ -10669,6 +10700,56 @@ local function removeLink(fromId, toId)
     end
     table.removeValue(from.out, toId)
     table.removeValue(to.incoming, fromId)
+end
+
+--- The selection popup's conversions: change only the connections BETWEEN selected points (a link to a
+--- point outside the selection is not part of it), or - for priority - the selected points themselves.
+function ADFlyoverEditor:menuConvertSelection(op)
+    if self.selectionCount == 0 then
+        return
+    end
+    ADEditorHistory:snapshot("convert selection " .. self.CONVERT_OP_NAMES[op])
+    local OP, changed = self.CONVERT_OP, 0
+    if op == OP.PRIMARY or op == OP.SECONDARY then
+        local flags = (op == OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        for id in pairs(self.selection) do
+            ADGraphManager:setWayPointFlags(id, flags, false)
+            changed = changed + 1
+        end
+    else
+        local done = {}
+        for a in pairs(self.selection) do
+            local aw = ADGraphManager:getWayPointById(a)
+            local near = {}
+            if aw ~= nil then
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, b in pairs(linkList(aw, listName) or {}) do
+                        if self.selection[b] and b ~= a then near[b] = true end
+                    end
+                end
+            end
+            for b in pairs(near) do
+                local key = math.min(a, b) .. ":" .. math.max(a, b)
+                if not done[key] then
+                    done[key] = true
+                    local bw = ADGraphManager:getWayPointById(b)
+                    local forward = table.contains(aw.out, b)
+                    local backward = bw ~= nil and table.contains(bw.out, a)
+                    if op == OP.TWOWAY and not (forward and backward) then
+                        addLink(a, b); addLink(b, a); changed = changed + 1
+                    elseif op == OP.ONEWAY and forward and backward then
+                        removeLink(b, a); changed = changed + 1
+                    elseif op == OP.REVERSE and forward ~= backward then
+                        if forward then removeLink(a, b); addLink(b, a) else removeLink(b, a); addLink(a, b) end
+                        changed = changed + 1
+                    end
+                end
+            end
+        end
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: converted the selection to %s (%d change(s)).", self.CONVERT_OP_NAMES[op], changed)
+    ADGraphManager:markChanges()
+    self:closeMenu()
 end
 
 --- The Convert tool's click: set BOTH the direction and the priority the card is configured for, as one

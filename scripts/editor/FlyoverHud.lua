@@ -1349,6 +1349,11 @@ local function menuSelectionBox(m)
         ids = m.ids
     elseif m.kind == "run" and m.runSet ~= nil then
         for id in pairs(m.runSet) do ids[#ids + 1] = id end
+    elseif m.kind == "set" and ADFlyoverEditor ~= nil and ADFlyoverEditor.selection ~= nil then
+        for id in pairs(ADFlyoverEditor.selection) do
+            ids[#ids + 1] = id
+            if #ids >= 400 then break end
+        end
     end
     local x0, y0, x1, y1
     local pts, screenOf, inSet = {}, {}, {}
@@ -1726,6 +1731,18 @@ function ADFlyoverHud:drawContextMenu(editor)
         btn("flip direction", function() editor:menuConvertSpan(OP.REVERSE) end)
         gap()
         danger("delete span", function() editor:menuDeleteSpan() end)
+    elseif m.kind == "set" then
+        head(string.format(TR("selection  %d pts"), editor.selectionCount))
+        btn("move", function() editor:menuArmMoveSelection() end, 6)
+        btn("clear", function() editor:menuClearSelection() end)
+        gap()
+        btn("make two-way", function() editor:menuConvertSelection(OP.TWOWAY) end)
+        btn("make one-way", function() editor:menuConvertSelection(OP.ONEWAY) end)
+        btn("other way", function() editor:menuConvertSelection(OP.REVERSE) end)
+        btn("primary", function() editor:menuConvertSelection(OP.PRIMARY) end)
+        btn("secondary", function() editor:menuConvertSelection(OP.SECONDARY) end)
+        gap()
+        danger("delete selection", function() editor:menuDeleteSelection() end)
     elseif m.kind == "run" then
         head(string.format(TR("run  %s pts"), tostring(m.count or "?")))
         btn("straighten", function() editor:menuArmStraighten() end, 8)
