@@ -1059,6 +1059,10 @@ function ADFlyoverEditor:enable()
     self.helpScroll = 0
     self.editing = nil
     self.elapsedMs = 0
+    -- The editor clock restarts at 0 on every open, so any timestamp taken against the old clock is
+    -- meaningless now. A stale escHandledAt from the last session made every Esc look like a repeat
+    -- (a negative difference is "< 400") until the new clock caught up - Esc did nothing after re-opening.
+    self.escHandledAt = nil
     self.lastRightPressAt = nil
     self.boxActive = false
     self.boxStartX, self.boxStartZ = nil, nil
@@ -1266,7 +1270,11 @@ function ADFlyoverEditor:markEscHandled()
 end
 
 function ADFlyoverEditor:escRecentlyHandled()
-    return self.escHandledAt ~= nil and (self:nowMs() - self.escHandledAt) < 400
+    if self.escHandledAt == nil then
+        return false
+    end
+    local since = self:nowMs() - self.escHandledAt
+    return since >= 0 and since < 400
 end
 
 --- Throw away whatever the active tool has half-done, WITHOUT applying it (right-click is the one that
