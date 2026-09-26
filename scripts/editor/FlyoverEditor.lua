@@ -1997,6 +1997,33 @@ local function removeLink(fromId, toId)
     table.removeValue(to.incoming, fromId)
 end
 
+--- Which way traffic runs past `cur`, seen walking away from `prev`: follow the road (through points
+--- with exactly one onward link) until a one-way link answers. "out" = it runs away from `prev`, "in" =
+--- toward it; nil when the road stays two-way or forks first.
+function ADFlyoverEditor:roadFlowBeyond(prev, cur)
+    for _ = 1, 50 do
+        local cw = ADGraphManager:getWayPointById(cur)
+        if cw == nil then return nil end
+        local nextId, count = nil, 0
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, x in pairs(linkList(cw, listName) or {}) do
+                if x ~= prev and x ~= cur and x ~= nextId then
+                    nextId = x
+                    count = count + 1
+                end
+            end
+        end
+        if count ~= 1 then return nil end
+        local xw = ADGraphManager:getWayPointById(nextId)
+        local away = table.contains(cw.out, nextId)
+        local toward = xw ~= nil and table.contains(xw.out, cur)
+        if away and not toward then return "out" end
+        if toward and not away then return "in" end
+        prev, cur = cur, nextId
+    end
+    return nil
+end
+
 --- Span direction: apply two-way / one-way / flip along the span's own ordered pairs. convertAtCursor
 --- only offers point and whole-run scope, so the span case is done here, mirroring its link logic.
 --- Kept open so directions can be tried in a row.
@@ -2018,6 +2045,32 @@ function ADFlyoverEditor:menuConvertSpan(op)
         return
     end
     ADEditorHistory:snapshot("convert span direction")
+    -- One-way runs the way the road does beyond the span's ends; failing that, the way most of the
+    -- span's own one-way links already run; failing that, the order it was picked in.
+    if op == self.CONVERT_OP.ONEWAY then
+        local n = #ordered
+        local vote = 0
+        local after = self:roadFlowBeyond(ordered[n - 1], ordered[n])
+        local before = self:roadFlowBeyond(ordered[2], ordered[1])
+        if after == "out" then vote = vote + 1 elseif after == "in" then vote = vote - 1 end
+        if before == "in" then vote = vote + 1 elseif before == "out" then vote = vote - 1 end
+        if vote == 0 then
+            for i = 1, n - 1 do
+                local aw = ADGraphManager:getWayPointById(ordered[i])
+                local bw = ADGraphManager:getWayPointById(ordered[i + 1])
+                if aw ~= nil and bw ~= nil then
+                    local f = table.contains(aw.out, ordered[i + 1])
+                    local b = table.contains(bw.out, ordered[i])
+                    if f and not b then vote = vote + 1 elseif b and not f then vote = vote - 1 end
+                end
+            end
+        end
+        if vote < 0 then
+            local rev = {}
+            for i = n, 1, -1 do rev[#rev + 1] = ordered[i] end
+            ordered = rev
+        end
+    end
     for i = 1, #ordered - 1 do
         local a, b = ordered[i], ordered[i + 1]
         local aw = ADGraphManager:getWayPointById(a)
@@ -11088,40 +11141,13 @@ function ADFlyoverEditor:convertAtCursor()
                 end
             end
             table.sort(near)
-            -- A two-way link at the point says nothing about which way the road runs, so walk out
-            -- along that side until a one-way link does: running away from the point means traffic
-            -- leaves this way ("out"), running toward it means it arrives ("in"); nil if none found.
-            local function flowOnSide(first)
-                local prev, cur = self.hoverId, first
-                for _ = 1, 50 do
-                    local cw = ADGraphManager:getWayPointById(cur)
-                    if cw == nil then return nil end
-                    local nextId, count = nil, 0
-                    for _, listName in ipairs(LINK_LISTS) do
-                        for _, x in pairs(linkList(cw, listName) or {}) do
-                            if x ~= prev and x ~= cur and x ~= nextId then
-                                nextId = x
-                                count = count + 1
-                            end
-                        end
-                    end
-                    if count ~= 1 then return nil end
-                    local xw = ADGraphManager:getWayPointById(nextId)
-                    local away = table.contains(cw.out, nextId)
-                    local toward = xw ~= nil and table.contains(xw.out, cur)
-                    if away and not toward then return "out" end
-                    if toward and not away then return "in" end
-                    prev, cur = cur, nextId
-                end
-                return nil
-            end
             local pairsList, leaving = {}, false
             for _, other in ipairs(near) do
                 local ow = ADGraphManager:getWayPointById(other)
                 local fwd = table.contains(wp.out, other)
                 local back = ow ~= nil and table.contains(ow.out, self.hoverId)
                 if fwd and back then
-                    local side = flowOnSide(other)
+                    local side = self:roadFlowBeyond(self.hoverId, other)
                     if side == "in" then fwd = false elseif side == "out" then back = false end
                 end
                 if back and not fwd then
