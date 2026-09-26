@@ -614,7 +614,7 @@ function ADFlyoverHud:buildRows(editor)
             if hasSelection then
                 add("hint", "a scattered selection moves rigidly - no falloff")
             elseif editor.selectionCount > 0 then
-                add("hint", "selection is one run - falloff reaches along it")
+                add("hint", "selection is one run - falloff tapers to its ends")
             end
         end
         if offsetting then

@@ -168,7 +168,7 @@ L.STRINGS = {
         ["click = point, 2nd click = span, double-click = run"] = "Klick = Punkt, 2. Klick = Abschnitt, Doppelklick = Route",
         ["offset needs a picked run or span"] = "Versatz braucht eine gewählte Route oder einen Abschnitt",
         ["a scattered selection moves rigidly - no falloff"] = "eine verstreute Auswahl bewegt sich starr - kein Abfall",
-        ["selection is one run - falloff reaches along it"] = "Auswahl ist eine Route - Abfall reicht entlang der Route",
+        ["selection is one run - falloff tapers to its ends"] = "Auswahl ist eine Route - Abfall läuft zu ihren Enden aus",
         ["No clear run through here - it is a junction, or a loop that leaves and returns to one junction. Click the two ends of the part you want instead."] = "Hier gibt es keine eindeutige Route - es ist eine Kreuzung oder eine Schleife, die zur selben Kreuzung zurückführt. Stattdessen die beiden Enden des gewünschten Teils anklicken.",
         ["Those two points are not connected, so they are not two ends of one span."] = "Diese beiden Punkte sind nicht verbunden und daher keine zwei Enden eines Abschnitts.",
         ["That point is not connected to the other end, so the span was not changed."] = "Dieser Punkt ist nicht mit dem anderen Ende verbunden, der Abschnitt wurde nicht geändert.",

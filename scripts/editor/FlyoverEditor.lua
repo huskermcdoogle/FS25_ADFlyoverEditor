@@ -2920,8 +2920,8 @@ function ADFlyoverEditor:drawNetwork()
             -- With a selection the preview must show what a grab would ACTUALLY do: only the selection's
             -- own points, and only when the pointer is on it and it is one run (a scattered one is rigid).
             local selOnly = self.selectionCount > 0
-            if selOnly and (not self.selection[centreId] or self:selectionChain() == nil) then
-                radius = 0
+            if selOnly or self.moveSpanIds ~= nil then
+                radius = 0   -- the reach preview is a single point's; picks and selections have none
             end
             if radius > 0 then
                 local c = ADGraphManager:getWayPointById(centreId)
@@ -3582,10 +3582,9 @@ ADFlyoverEditor.MOVE_DRAG_THRESHOLD = 0.006
 --- The falloff reach for a span / run drag: the falloff value for Move's own picks, nil (taper to the
 --- span's own ends) for a span or run handed over by a popup's "move".
 function ADFlyoverEditor:moveReach()
-    if self.movePickFromMenu then
-        return nil
-    end
-    return self.falloffRadius
+    -- Settled 2026-09-26: a span, run or run-shaped selection always tapers to its own two ends. The
+    -- adjustable reach is what a POINT pick with falloff is for (it walks along the run).
+    return nil
 end
 
 --- A held press has moved far enough: start dragging, and decide WHAT moves from the current pick.
@@ -4132,7 +4131,7 @@ function ADFlyoverEditor:gatherDragNeighbours()
             local set = {}
             for _, id in ipairs(chain) do set[id] = true end
             -- The falloff value is the reach along the selection from the grabbed point (0 = taper to its ends).
-            self:gatherChainFollowers(chain[1], chain[#chain], set, false, self.falloffRadius)
+            self:gatherChainFollowers(chain[1], chain[#chain], set, false, nil)
             return
         end
         for id in pairs(self.selection) do
@@ -6051,8 +6050,9 @@ function ADFlyoverEditor:getEditableNumbers()
         -- Not with a selection: a run-shaped one tapers to its own ends, a scattered one is rigid - no radius either way.
         -- One falloff value for every shape: a single point's reach, or - for a picked span / run or a
         -- run-shaped selection - the reach along it from the grabbed point (0 = taper to its own ends).
-        if self.moveFalloffOn and self.moveOffsetChainIds == nil and not self.movePickFromMenu
-            and (self.selectionCount == 0 or self:selectionChain() ~= nil) then
+        -- Only a single point has a reach to set; spans, runs and selections taper to their own ends.
+        if self.moveSelectMode == self.MOVE_SELECT.POINT and self.moveFalloffOn and self.moveOffsetChainIds == nil
+            and self.selectionCount == 0 and self.moveSpanIds == nil then
             table.insert(fields, {
                 label = "falloff along track",
                 unit = "m",
@@ -10462,8 +10462,8 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         -- A scattered selection moves rigidly: there is no reach to set, so the wheel must not quietly change
         -- a hidden value (it did, and the yellow preview changed shape for no reason). Leave the wheel to
         -- the camera instead.
-        if self.selectionCount > 0 and self:selectionChain() == nil then
-            return false
+        if self.selectionCount > 0 or self.moveSpanIds ~= nil then
+            return false   -- no reach to set: the wheel goes to the camera
         end
         self:setFalloffRadius(self.falloffRadius + step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
         return true
