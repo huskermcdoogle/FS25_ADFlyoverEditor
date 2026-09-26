@@ -657,7 +657,9 @@ function ADFlyoverHud:buildRows(editor)
             return { label = label, active = editor.convertPriority == op,
                 action = function() editor.convertPriority = op end }
         end
-        seg("direction", { dirOption("two-way", OP.TWOWAY), dirOption("one-way", OP.ONEWAY), dirOption("reversed", OP.REVERSE) })
+        seg("direction", { dirOption("two-way", OP.TWOWAY), dirOption("one-way", OP.ONEWAY),
+            dirOption("other way", OP.REVERSE), dirOption("reverse road", OP.REVERSEROAD) })
+        add("hint", "other way flips a one-way; reverse road = vehicles back along it")
         seg("priority", { prioOption("primary", OP.PRIMARY), prioOption("secondary", OP.SECONDARY) })
         segCycle("applies to", editor.DELETE_SCOPE_NAMES, nil, editor.convertScope,
             function() editor:cycleConvertScope() end)

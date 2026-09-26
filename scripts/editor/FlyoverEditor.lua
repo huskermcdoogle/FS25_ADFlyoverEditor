@@ -9846,7 +9846,8 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         -- and handleWheel also claims the wheel for it everywhere, not just over the card (see the
         -- MOVE branch of the pending-action list below), so this has to agree with that.
         if self.moveOffsetChainIds ~= nil then
-            self:setMoveOffsetDistance(self.moveOffsetDistance - step * AutoDrive.FLYOVER_OFFSET_STEP)
+            -- Same direction as every other number (no per-field exception; see handleWheel).
+            self:setMoveOffsetDistance(self.moveOffsetDistance + step * AutoDrive.FLYOVER_OFFSET_STEP)
             return true
         end
         -- Falloff is a spatial reach, not a tolerance/count - wheel-up should WIDEN it, the
@@ -9854,7 +9855,7 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         -- negates it back to the raw scroll direction. This is the one negation Move's wheel
         -- actually needs; an earlier attempt removed it entirely instead of scoping it to just
         -- this field, which is what made the wheel read backwards again.
-        self:setFalloffRadius(self.falloffRadius - step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
+        self:setFalloffRadius(self.falloffRadius + step * AutoDrive.FLYOVER_FALLOFF_WHEEL_STEP)
         return true
     elseif t == self.TOOL.SMOOTH then
         -- Each mode gets the number it actually uses; rebuild ignores strength.
@@ -9931,7 +9932,9 @@ function ADFlyoverEditor:handleWheel(offset)
         if field ~= nil and field.stepAction ~= nil then
             -- wheelReach fields (Move's falloff) want the raw, unreversed sign - see the field's
             -- own definition in getEditableNumbers for why.
-            field.stepAction(field.wheelReach and -step or step)
+            -- One rule for every number field: the wheel steps it the same way. Move's falloff and offset
+            -- used to be exempt (wheelReach), which made them run backwards next to everything else.
+            field.stepAction(step)
             return true
         end
     end
@@ -10239,8 +10242,10 @@ end
 -- an individual point.
 -- ---------------------------------------------------------------------------------------------
 
-ADFlyoverEditor.CONVERT_OP = { SECONDARY = 1, PRIMARY = 2, TWOWAY = 3, ONEWAY = 4, REVERSE = 5 }
-ADFlyoverEditor.CONVERT_OP_NAMES = { "secondary", "primary", "two-way", "one-way", "reversed" }
+-- REVERSE flips which way a one-way runs ("other way"); REVERSEROAD makes AutoDrive's reverse road - a
+-- link vehicles drive in reverse gear (listed in the start's out, not the end's incoming).
+ADFlyoverEditor.CONVERT_OP = { SECONDARY = 1, PRIMARY = 2, TWOWAY = 3, ONEWAY = 4, REVERSE = 5, REVERSEROAD = 6 }
+ADFlyoverEditor.CONVERT_OP_NAMES = { "secondary", "primary", "two-way", "one-way", "other way", "reverse road" }
 
 function ADFlyoverEditor:cycleConvertOp()
     self.convertOp = (self.convertOp % #self.CONVERT_OP_NAMES) + 1
@@ -10404,6 +10409,24 @@ function ADFlyoverEditor:convertAtCursor()
                         changed = changed + 1
                     elseif not forward and not backward then
                         addLink(a, b)
+                        changed = changed + 1
+                    end
+                elseif op == self.CONVERT_OP.REVERSEROAD then
+                    -- Keep the way it runs (a two-way or unlinked pair takes the walk direction), then make
+                    -- the link a reverse road: in the start's out, NOT in the end's incoming.
+                    local fromId, toId = a, b
+                    if backward and not forward then
+                        fromId, toId = b, a
+                    end
+                    local fw, tw = ADGraphManager:getWayPointById(fromId), ADGraphManager:getWayPointById(toId)
+                    local already = table.contains(fw.out, toId) and not table.contains(tw.incoming, fromId)
+                        and not table.contains(tw.out, fromId)
+                    if not already then
+                        removeLink(toId, fromId)
+                        if not table.contains(fw.out, toId) then
+                            table.insert(fw.out, toId)
+                        end
+                        table.removeValue(tw.incoming, fromId)
                         changed = changed + 1
                     end
                 elseif op == self.CONVERT_OP.REVERSE then
