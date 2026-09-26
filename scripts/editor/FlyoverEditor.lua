@@ -11028,6 +11028,8 @@ function ADFlyoverEditor:convertAtCursor()
     -- Points whose FLAGS may change. The boundary junctions are deliberately not in here: their
     -- priority belongs to the routes that meet at them, not to this leg.
     local flagIds = nil
+    -- A lone point's connections, as {from, to} pairs; otherwise the consecutive pairs of `ordered`.
+    local pointPairs = nil
     if self.convertScope == self.DELETE_SCOPE.RUN then
         local run, count, _, junctions = self:collectRunBetweenJunctions(self.hoverId)
         if count >= AutoDrive.FLYOVER_DELETE_RUN_MAX then
@@ -11070,15 +11072,40 @@ function ADFlyoverEditor:convertAtCursor()
             end
         end
     else
-        -- A single waypoint on its own has no direction, so the pair either side of it is the
-        -- smallest thing the direction operations can act on.
+        -- A single waypoint on its own has no direction, so every connection at it is what the
+        -- direction operations act on (the popup judges the same set). Each pair is ordered the way
+        -- traffic flows through the point: a link that only arrives stays arriving; of the rest, the
+        -- first leaves and any further two-way ones arrive, so a mid-road point keeps a through flow.
         ordered = { self.hoverId }
         local wp = ADGraphManager:getWayPointById(self.hoverId)
         if wp ~= nil and self.convertOp ~= self.CONVERT_OP.SECONDARY and self.convertOp ~= self.CONVERT_OP.PRIMARY then
-            for _, other in pairs(wp.out or {}) do
-                table.insert(ordered, other)
-                break
+            local near = {}
+            for _, listName in ipairs(LINK_LISTS) do
+                for _, other in pairs(linkList(wp, listName) or {}) do
+                    if other ~= self.hoverId and not table.contains(near, other) then
+                        near[#near + 1] = other
+                    end
+                end
             end
+            table.sort(near)
+            local pairsList, leaving = {}, false
+            for _, other in ipairs(near) do
+                local ow = ADGraphManager:getWayPointById(other)
+                local fwd = table.contains(wp.out, other)
+                local back = ow ~= nil and table.contains(ow.out, self.hoverId)
+                if back and not fwd then
+                    pairsList[#pairsList + 1] = { other, self.hoverId }
+                elseif fwd and not back then
+                    pairsList[#pairsList + 1] = { self.hoverId, other }
+                    leaving = true
+                elseif not leaving then
+                    pairsList[#pairsList + 1] = { self.hoverId, other }
+                    leaving = true
+                else
+                    pairsList[#pairsList + 1] = { other, self.hoverId }
+                end
+            end
+            pointPairs = pairsList
         end
     end
 
@@ -11100,8 +11127,14 @@ function ADFlyoverEditor:convertAtCursor()
             changed = changed + 1
         end
     else
-        for i = 1, #ordered - 1 do
-            local a, b = ordered[i], ordered[i + 1]
+        if pointPairs == nil then
+            pointPairs = {}
+            for i = 1, #ordered - 1 do
+                pointPairs[#pointPairs + 1] = { ordered[i], ordered[i + 1] }
+            end
+        end
+        for _, pair in ipairs(pointPairs) do
+            local a, b = pair[1], pair[2]
             local aw = ADGraphManager:getWayPointById(a)
             local bw = ADGraphManager:getWayPointById(b)
             if aw ~= nil and bw ~= nil then
@@ -11175,8 +11208,8 @@ function ADFlyoverEditor:convertAtCursor()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: converted %s to %s (%d change(s)).",
         (op == self.CONVERT_OP.SECONDARY or op == self.CONVERT_OP.PRIMARY)
             and string.format("%d waypoint(s)", #(flagIds or ordered))
-            or string.format("%d connection(s) across %d waypoint(s), junctions at the ends included",
-                #ordered - 1, #ordered),
+            or string.format("%d connection(s)%s", #(pointPairs or {}),
+                self.convertScope == self.DELETE_SCOPE.RUN and ", junctions at the ends included" or " at the point"),
         self.CONVERT_OP_NAMES[op], changed)
     if changed == 0 then
         ADFlyoverSettings.debugLog("[AD]   nothing to do - it was already %s.", self.CONVERT_OP_NAMES[op])
