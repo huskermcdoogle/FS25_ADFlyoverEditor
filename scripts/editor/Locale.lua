@@ -461,7 +461,7 @@ L.HELP = {
                 "Punkt-Popup: benennen, verschieben, verbinden, Spline, einseitig oder beidseitig machen, primär oder sekundär machen, Punkt löschen.",
                 "Abschnitt-/Routen-Popup: verschieben, begradigen, glätten, unterteilen, aufsetzen (+ Parallele bei einer Route), einseitig oder beidseitig machen, Richtung umkehren, primär oder sekundär machen, löschen.",
                 "Auswahl-Popup: verschieben, aufheben, einseitig oder beidseitig machen, Richtung umkehren, primär oder sekundär machen, Auswahl löschen. Umwandlungen betreffen nur Verbindungen ZWISCHEN ausgewählten Punkten.",
-                "Umwandlungs-Knöpfe: jeder bietet das Gegenteil des jetzigen Zustands und wechselt nach dem Klick; bei gemischtem Zustand beide. Richtung umkehren fehlt, solange alles beidseitig ist. Einseitig folgt der Straße hinter den Enden.",
+                "Umwandlungs-Knöpfe: jeder bietet das Gegenteil des jetzigen Zustands und wechselt nach dem Klick; bei gemischtem Zustand beide. Ohne Verbindungen untereinander gibt es keine Richtungs-Knöpfe. Bei Punkt oder Abschnitt folgt einseitig der Straße hinter den Enden.",
             },
         },
         ["draw"] = {

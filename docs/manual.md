@@ -80,7 +80,7 @@ Select mode is where you act on what is already there. Clicking the network open
 - **Point popup** — name, move, connect, spline, make one-way or two-way, make primary or secondary, delete point.
 - **Span / run popup** — move, straighten, smooth, divide, ground (+ parallel on a run), make one-way or two-way, flip direction, make primary or secondary, delete.
 - **Selection popup** — move, clear, make one-way or two-way, flip direction, make primary or secondary, delete selection. Conversions only touch links BETWEEN selected points.
-- **Convert buttons** — each offers the opposite of what is there now and swaps after a click; a mix offers both. Flip direction hides while everything is two-way. One-way follows the road beyond the ends.
+- **Convert buttons** — each offers the opposite of what is there now and swaps after a click; a mix offers both; with no connections among them there are no direction buttons. On a point or span, one-way follows the road beyond the ends.
 
 <a id="draw"></a>
 ## Draw

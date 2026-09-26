@@ -56,9 +56,10 @@ T["select"] = {
     "  touch links BETWEEN selected points.",
     "Convert buttons: each offers the opposite of",
     "  what is there now and swaps after a click; a",
-    "  mix offers both. Flip direction hides while",
-    "  everything is two-way. One-way follows the",
-    "  road beyond the ends.",
+    "  mix offers both; with no connections among",
+    "  them there are no direction buttons. On a",
+    "  point or span, one-way follows the road beyond",
+    "  the ends.",
   },
 }
 

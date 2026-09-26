@@ -31,7 +31,7 @@ whole editor works one way. Nothing was taken away - a few things now live in a 
   clear of what they act on, draggable by the header. A box / circle / freehand / Ctrl selection in
   Select mode opens a **selection popup** (move, clear, one-way or two-way, flip direction, primary or
   secondary, delete). Direction and priority buttons offer the opposite of what is there and swap
-  after a click; one-way follows the road beyond the ends. Span and run popups gained **move**.
+  after a click; on a point or span, one-way follows the road beyond the ends. Span and run popups gained **move**.
 - **The tool card is the one place a tool's options live.** Toggles light when on, choices sit side by
   side, numbers can be typed, stepped or scrolled - the same controls on every card. The old
   right-click "armed" popup is gone: a tool picked from a popup opens its card where the popup was.
