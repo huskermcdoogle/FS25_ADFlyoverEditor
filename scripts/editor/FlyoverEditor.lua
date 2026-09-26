@@ -1319,16 +1319,23 @@ function ADFlyoverEditor:menuToReturnTo()
     return back
 end
 
+function ADFlyoverEditor:logEsc(what)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: Esc: %s.", what)
+end
+
 function ADFlyoverEditor:escapeStep()
     if self.editing ~= nil then
         self:cancelEditNumber()
+        self:logEsc("typed number cancelled")
         return true
     end
     if self:isModalOpen() then
         if self.manualOpen then self:closeManual() else self:closeSettingsDialog() end
+        self:logEsc("dialog closed")
         return true
     end
     if self.ctxMenu ~= nil then
+        self:logEsc("menu '" .. tostring(self.ctxMenu.kind) .. "' closed")
         if self.ctxMenu.kind == "armed" then
             -- Back to the picker the tool was chosen from (same selection, same spot), not to Select.
             local back = self:menuToReturnTo()
@@ -1341,21 +1348,26 @@ function ADFlyoverEditor:escapeStep()
     end
     if self.helpOpen then
         self:toggleHelp()
+        self:logEsc("help closed")
         return true
     end
     if self:cancelPendingAction() then
+        self:logEsc("pending action cancelled")
         return true
     end
     if self.selectionCount > 0 then
         self:clearSelection()
+        self:logEsc("selection cleared")
         return true
     end
     if self.tool ~= self.TOOL.NONE then
         local back = self:menuToReturnTo()
         self:setTool(self.TOOL.NONE)
         if back ~= nil then self.ctxMenu = back end
+        self:logEsc(back ~= nil and "tool put away, back to its menu" or "tool put away")
         return true
     end
+    self:logEsc("nothing left - leaving the editor")
     return false
 end
 
@@ -1364,6 +1376,7 @@ function ADFlyoverEditor:onCancelAction(actionName)
         return
     end
     if self:escRecentlyHandled() then
+        self:logEsc("repeat of the same press, ignored (" .. tostring(actionName) .. ")")
         return
     end
     if self:escapeStep() then
