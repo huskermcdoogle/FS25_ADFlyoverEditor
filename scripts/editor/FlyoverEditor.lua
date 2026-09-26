@@ -2274,7 +2274,12 @@ function ADFlyoverEditor:chainToggleSelected(id)
     local trial = {}
     for sid in pairs(self.selection) do trial[sid] = true end
     if trial[id] then trial[id] = nil else trial[id] = true end
-    local order = next(trial) ~= nil and self:orderedChain(trial) or {}
+    -- Not `next(trial) ~= nil and self:orderedChain(trial) or {}`: a nil from orderedChain ("not one
+    -- run") turned into {} there, so every click was accepted and disconnected points got through.
+    local order = {}
+    if next(trial) ~= nil then
+        order = self:orderedChain(trial)
+    end
     if order == nil then
         self:warnPlayer("That would break the selection in two - for this tool a Ctrl selection has to be one connected run.")
         return true
