@@ -2293,7 +2293,11 @@ function ADFlyoverEditor:chainToggleSelected(id)
         elseif t == T.MERGE then self.mergeFromId, self.mergeToId = nil, nil
         end
     end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: chain selection now %d waypoint(s).", self.selectionCount)
+    local listed = {}
+    for i, cid in ipairs(order) do listed[i] = tostring(cid) end
+    local fromId, toId = self:pickedSpanEnds()
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: chain selection now %d waypoint(s): clicked id=%s, chain %s, span id=%s to id=%s.",
+        self.selectionCount, tostring(id), table.concat(listed, " -> "), tostring(fromId), tostring(toId))
     return true
 end
 
