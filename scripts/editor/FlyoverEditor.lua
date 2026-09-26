@@ -3687,6 +3687,13 @@ function ADFlyoverEditor:onLeftRelease()
             return
         end
         if self.hoverId ~= nil then
+            -- A point clicked plainly first (its point menu is open) is the start of the selection: Ctrl-adding
+            -- the next point keeps it, instead of silently dropping it.
+            local m = self.ctxMenu
+            if self.tool == self.TOOL.NONE and m ~= nil and m.kind == "point" and m.id ~= nil
+                and m.id ~= self.hoverId and not self.selection[m.id] then
+                self:toggleSelected(m.id)
+            end
             self:toggleSelected(self.hoverId)
             -- In Select mode the selection popup takes over from whatever menu was open (a point menu from
             -- the first plain click), and follows the count; it closes when the last point is deselected.
