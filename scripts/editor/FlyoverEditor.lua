@@ -2998,6 +2998,23 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    -- Frozen offset (copy on): the original chain stays put, so draw where the copy will go - its points
+    -- and the line through them - in the same green as the frozen-copy drag preview above.
+    if self.tool == self.TOOL.MOVE and self.moveOffsetFrozen and self.moveOffsetTargets ~= nil then
+        local prev = nil
+        for i = 1, #(self.moveOffsetChainIds or {}) do
+            local t = self.moveOffsetTargets[i]
+            if t ~= nil then
+                local ty = AutoDrive:getTerrainHeightAtWorldPos(t.x, t.z) + 0.7
+                ADDrawingManager:addSphereTask(t.x, ty, t.z, 3.5, 0.2, 1, 0.3, 0.15)
+                if prev ~= nil then
+                    ADDrawingManager:addLineTask(prev.x, prev.y, prev.z, t.x, ty, t.z, lw, 0.2, 1, 0.3)
+                end
+                prev = { x = t.x, y = ty, z = t.z }
+            end
+        end
+    end
+
     -- Falloff ring, so the reach of a proportional move is visible before committing to it
     -- rather than being discovered from the result. Point only - Run's taper has no radius, it
     -- follows the run's own ends, so a ring here would just be wrong.
@@ -3648,6 +3665,9 @@ function ADFlyoverEditor:beginDrag(id)
     -- frame, not moving the real thing and having it snap back later. Same freeze
     -- toggleMoveCopy uses when copy comes on mid-drag instead - see updateDrag/finishDrag.
     self.dragFrozenCopy = self.moveCopyOn
+    if self.moveOffsetChainIds ~= nil then
+        self.moveOffsetFrozen = self.moveCopyOn and true or false
+    end
 
     -- Rotate pivot, fixed for the whole drag (see the state table comment for why it has to be
     -- the START position, not tracked live).
@@ -3925,18 +3945,46 @@ function ADFlyoverEditor:applyMoveOffset()
         end
     end
 
+    -- Where each point of the chain goes. With copy on, the ORIGINAL chain stays put (frozen, the same
+    -- rule as a plain move: copy on from the start = you slide a new copy out of it; copy turned on part
+    -- way = the original drops straight back into place) and these positions are only drawn as a preview,
+    -- then become the copy on commit.
+    local targets = {}
     for i, id in ipairs(self.moveOffsetChainIds) do
         local p = track[i]
         if p ~= nil and (self.moveOffsetMovable == nil or self.moveOffsetMovable[id]) then
+            local tx, tz = p.x, p.z
             if weights ~= nil then
                 local base = self.moveOffsetBase[i]
                 local w = weights[i]
-                self:moveTo(id, base.x + (p.x - base.x) * w, base.z + (p.z - base.z) * w)
-            else
-                self:moveTo(id, p.x, p.z)
+                tx, tz = base.x + (p.x - base.x) * w, base.z + (p.z - base.z) * w
+            end
+            targets[i] = { x = tx, z = tz }
+            if not self.moveOffsetFrozen then
+                self:moveTo(id, tx, tz)
             end
         end
     end
+    self.moveOffsetTargets = targets
+end
+
+--- Copy turned on or off while an offset is live (during the drag or while it waits for its right-click):
+--- on puts the original chain straight back where it started and leaves only the preview moving; off
+--- lets the original follow the offset again.
+function ADFlyoverEditor:setMoveOffsetFrozen(frozen)
+    if self.moveOffsetChainIds == nil then
+        return
+    end
+    self.moveOffsetFrozen = frozen and true or false
+    if self.moveOffsetFrozen then
+        for i, id in ipairs(self.moveOffsetChainIds) do
+            local base = self.moveOffsetBase ~= nil and self.moveOffsetBase[i] or nil
+            if base ~= nil and (self.moveOffsetMovable == nil or self.moveOffsetMovable[id]) then
+                self:moveTo(id, base.x, base.z)
+            end
+        end
+    end
+    self:applyMoveOffset()
 end
 
 --- Set the offset distance directly - the wheel/typed-entry path, usable both mid-drag (where it
@@ -3973,13 +4021,21 @@ function ADFlyoverEditor:commitMoveOffset()
     -- offset with copy on just slid the original and never left a copy behind. Same record shape as
     -- finishDrag: each moved point with where it started.
     local members = {}
+    local frozen = self.moveOffsetFrozen
     for i, id in ipairs(self.moveOffsetChainIds or {}) do
         local base = self.moveOffsetBase ~= nil and self.moveOffsetBase[i] or nil
         if base ~= nil and (self.moveOffsetMovable == nil or self.moveOffsetMovable[id]) then
-            members[#members + 1] = { id = id, originalX = base.x, originalZ = base.z }
+            local m = { id = id, originalX = base.x, originalZ = base.z }
+            -- Frozen: the original never moved, so where the copy goes comes from the preview.
+            local t = frozen and self.moveOffsetTargets ~= nil and self.moveOffsetTargets[i] or nil
+            if t ~= nil then
+                m.finalX, m.finalZ = t.x, t.z
+            end
+            members[#members + 1] = m
         end
     end
     self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetMovable, self.moveOffsetDistance = nil, nil, nil, 0
+    self.moveOffsetFrozen, self.moveOffsetTargets = false, nil
 
     if #members > 0 then
         if self.moveCopyOn then
@@ -4008,6 +4064,7 @@ end
 --- just stops treating the chain as still adjustable.
 function ADFlyoverEditor:cancelMoveOffset()
     self.moveOffsetChainIds, self.moveOffsetBase, self.moveOffsetMovable, self.moveOffsetDistance = nil, nil, nil, 0
+    self.moveOffsetFrozen, self.moveOffsetTargets = false, nil
 end
 
 -- excludeJunctionEnds: true from Run (its ends are incidentally extended onto whatever junction
@@ -5079,6 +5136,14 @@ end
 --- time later cloning when a plain move was intended.
 function ADFlyoverEditor:toggleMoveCopy()
     self.moveCopyOn = not self.moveCopyOn
+
+    -- An offset is live (dragging, or waiting for its right-click): copy freezes / unfreezes the original.
+    if self.moveOffsetChainIds ~= nil then
+        self:setMoveOffsetFrozen(self.moveCopyOn)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: move copy %s (offset: original %s).", self.moveCopyOn and "on" or "off",
+            self.moveCopyOn and "back in place, sliding a copy" or "follows the offset again")
+        return
+    end
 
     if self.moveCopyOn and self.dragId == nil and self.lastMoveRecord ~= nil then
         self:applyMoveAsCopy(self.lastMoveRecord)
