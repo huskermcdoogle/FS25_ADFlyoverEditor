@@ -1806,6 +1806,21 @@ function ADFlyoverEditor:openSetMenu()
     self.ctxMenu = { kind = "set", count = self.selectionCount, sx = sx, sy = sy }
 end
 
+--- "move" on a span or run menu: switch to Move with that span / run already picked, so the next drag on
+--- any of its points moves the lot (falloff tapering to its ends when on).
+function ADFlyoverEditor:menuArmMoveSpan()
+    local m = self.ctxMenu
+    if m == nil or m.fromId == nil or m.toId == nil or m.ids == nil then return end
+    local from, to, ids, isRun = m.fromId, m.toId, m.ids, (m.kind == "run")
+    self:setTool(self.TOOL.MOVE)
+    local set = {}
+    for _, id in ipairs(ids) do set[id] = true end
+    self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = from, to, set
+    self.pickKind = isRun and "run" or "span"
+    self.moveSelectMode = isRun and self.MOVE_SELECT.RUN or self.MOVE_SELECT.SPAN
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: move armed on a %d-point %s; drag any of its points.", #ids, self.pickKind)
+end
+
 function ADFlyoverEditor:menuArmMoveSelection()
     -- Move keeps the selection: dragging any selected point moves the whole set.
     self:setTool(self.TOOL.MOVE)
