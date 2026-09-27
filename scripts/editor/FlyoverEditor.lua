@@ -11597,7 +11597,7 @@ function ADFlyoverEditor:updateJunctionPreview()
                     return run
                 end
 
-                local ISLAND_POINTS, ISLAND_SPAN = 10, 60
+                local ISLAND_POINTS, ISLAND_SPAN = 200, 20
                 local shadowed, runs = {}, {}
                 local ACROSS, RATIO = 5.0, 3.0
                 local minArm = AutoDrive.FLYOVER_JUNCTION_MIN_ARM or 15
@@ -11637,7 +11637,11 @@ function ADFlyoverEditor:updateJunctionPreview()
                         -- belongs to? A through road whose lanes an earlier clear cut loose at the
                         -- box edge is an island too - 17 to 20 points over 120-220 m on the test
                         -- map, and exactly what this tool is for connecting. Skipping those turned
-                        -- two plain crossroads into T's. Real debris was 9 points over 10-50 m.
+                        -- two plain crossroads into T's. Nor is short enough: the lane between two
+                        -- close junctions, both cleared, is an island of 5-9 points over 32-59 m.
+                        -- Across 35 captured clears the only true leftovers were 13-14 m long (3 and
+                        -- 6 points, after one junction was cleared twice), so LENGTH decides: under
+                        -- ISLAND_SPAN end to end is debris. ISLAND_POINTS only bounds the walk.
                         local pts, x0, x1, z0, z1 = 1, ap.wp.x, ap.wp.x, ap.wp.z, ap.wp.z
                         local got, st = { [ap.wp] = true }, { ap.wp }
                         while #st > 0 and pts < ISLAND_POINTS do
@@ -11656,7 +11660,7 @@ function ADFlyoverEditor:updateJunctionPreview()
                             end
                         end
                         local span = math.sqrt((x1 - x0) ^ 2 + (z1 - z0) ^ 2)
-                        if pts < ISLAND_POINTS and span < ISLAND_SPAN then
+                        if span < ISLAND_SPAN then
                             ap._debris = true
                             Logging.info("[FlyoverEditor]: junction - the road on bearing %.0f is a loose piece of %d point(s) over %.0f m, wired to nothing. Not counted as a side road.",
                                 math.deg(ap.bearing or 0) % 360, pts, span)

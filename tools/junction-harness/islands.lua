@@ -8,7 +8,7 @@ for _, w in pairs(ADGraphManager:getWayPoints()) do
         local st, n, near = { w }, 1, math.huge
         local x0, x1, z0, z1 = w.x, w.x, w.z, w.z
         done[w] = true
-        while #st > 0 and n < 5000 do
+        while #st > 0 do
             local a = table.remove(st)
             near = math.min(near, math.sqrt((a.x - CX) ^ 2 + (a.z - CZ) ^ 2))
             for _, lst in ipairs({ a.out or {}, a.incoming or {} }) do
@@ -25,6 +25,6 @@ for _, w in pairs(ADGraphManager:getWayPoints()) do
             end
         end
         print(string.format("piece from id %d: %s points, span %.0f m, nearest %.1f m from the site",
-            w.id, n >= 5000 and "5000+" or tostring(n), math.sqrt((x1 - x0) ^ 2 + (z1 - z0) ^ 2), near))
+            w.id, tostring(n), math.sqrt((x1 - x0) ^ 2 + (z1 - z0) ^ 2), near))
     end
 end
