@@ -3,8 +3,8 @@
 local H = dofile("harness.lua")
 local CX, CZ, OUT, R = tonumber(arg[1]), tonumber(arg[2]), arg[3], tonumber(arg[4]) or 75
 local jp = H.lock(CX, CZ, { mode = "clear", radius = 12, leaveThrough = false })
-local c = jp._boxCentre or jp.boxCentre or jp.tracksCentre
-local kind = ADFlyoverEditor.junctionClassify(ADFlyoverEditor, jp)
+local c = (jp and (jp._boxCentre or jp.boxCentre or jp.tracksCentre)) or { x = CX, z = CZ }
+local kind = jp and ADFlyoverEditor.junctionClassify(ADFlyoverEditor, jp) or "no reading - the tool found no junction here"
 local S, PAD = 900, 20
 local function px(x) return PAD + (x - (c.x - R)) / (2 * R) * S end
 local function py(z) return PAD + (z - (c.z - R)) / (2 * R) * S end   -- FS25 z grows south: north up
@@ -17,10 +17,31 @@ for g = -R, R, 10 do
     add(string.format('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="#eee"/>', px(c.x + g), PAD, px(c.x + g), PAD + S))
     add(string.format('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="#eee"/>', PAD, py(c.z + g), PAD + S, py(c.z + g)))
 end
+-- The map's own roads (FlyoverRoadSplines), drawn first so everything else sits on top: wide
+-- pale orange bands, one per traffic spline. SPLINES=<path to ADFlyoverEditor_roadSplines.xml>.
+local nSpl = 0
+if os.getenv("SPLINES") then
+    local f = io.open(os.getenv("SPLINES"), "r")
+    if f then
+        local txt = f:read("*a")
+        f:close()
+        for pts in txt:gmatch('points="([^"]*)"') do
+            local seg, near = {}, false
+            for x, z in pts:gmatch("(%-?[%d.]+),(%-?[%d.]+)") do
+                x, z = tonumber(x), tonumber(z)
+                seg[#seg + 1] = string.format("%.1f,%.1f", px(x), py(z))
+                if math.abs(x - c.x) < R * 1.4 and math.abs(z - c.z) < R * 1.4 then near = true end
+            end
+            if near then
+                nSpl = nSpl + 1
+                add(string.format('<polyline points="%s" fill="none" stroke="#f6b26b" stroke-width="9" stroke-opacity="0.45" stroke-linecap="round" stroke-linejoin="round"/>', table.concat(seg, " ")))
+            end
+        end
+    end
+end
 -- Network: main network grey, loose pieces dashed blue.
 local main, done = {}, {}
 do
-    local seed = jp.tracksCentre and nil
     local best, bn = nil, -1
     for _, w in pairs(ADGraphManager:getWayPoints()) do
         if not done[w] and (w.x - c.x) ^ 2 + (w.z - c.z) ^ 2 <= (R * 1.4) ^ 2 then
@@ -66,7 +87,7 @@ local function route(nodes, col, label, w)
     lx = math.max(PAD + 30, math.min(PAD + S - 30, lx)); ly = math.max(PAD + 18, math.min(PAD + S - 8, ly))
     add(string.format('<text x="%.1f" y="%.1f" font-weight="700" fill="%s" stroke="#fff" stroke-width="4" paint-order="stroke" text-anchor="middle">%s</text>', lx, ly, col, label))
 end
-local r = jp.pathRoutes or {}
+local r = (jp and jp.pathRoutes) or {}
 local SIDECOL = { "#e8710a", "#9334e6", "#188038", "#c5221f" }
 for i, t in ipairs(r.through or {}) do route(t, "#202124", "T" .. i, 7) end
 for i, sl in ipairs(r.side or {}) do route(sl.nodes, SIDECOL[(i - 1) % #SIDECOL + 1], "S" .. i, 5) end
@@ -78,6 +99,7 @@ local lines = {
     string.format("Junction at %.0f, %.0f - read as: %s", c.x, c.z, tostring(kind)),
     "Black = through route (T). Coloured = side routes (S). Grey = main network. Dashed blue = loose pieces wired to nothing.",
     string.format("%d through, %d side route(s); grid 10 m; north up.", #(r.through or {}), #(r.side or {})),
+    nSpl > 0 and string.format("Wide pale orange = the map's own roads (%d traffic spline(s) nearby).", nSpl) or "(no map road lines loaded)",
 }
 for i, s in ipairs(lines) do
     add(string.format('<text x="%d" y="%d"%s>%s</text>', PAD, y + (i - 1) * 24, i == 1 and ' font-weight="700" font-size="16"' or "", s))

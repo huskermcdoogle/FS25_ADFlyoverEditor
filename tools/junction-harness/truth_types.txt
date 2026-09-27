@@ -1,0 +1,20 @@
+# The user's own reading of each junction, by registry number (savegame6, 2026-09-27).
+# Kind: T square, T skew, Y merge, Y, 4W square/skew/very skew, 4W offset. "?" = user unsure.
+# Only junctions the user has looked at are listed; the rest are unlabelled, not agreed.
+2   T square
+14  T square
+20  T square
+22  T square
+23  T square
+36  Y merge
+39  4W offset ?     # "offset 4W skew?"
+1   T square
+26  4W offset ?     # "offset 4W, or a T square and a T skew" - two T's close together
+29  T skew
+33  T square
+34  T square        # the road curves into a square T
+35  Y
+62  T skew
+63  T square
+65  T square
+66  T skew
