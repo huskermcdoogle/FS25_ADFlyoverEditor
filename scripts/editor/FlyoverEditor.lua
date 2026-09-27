@@ -12268,33 +12268,43 @@ function ADFlyoverEditor:updateJunctionPreview()
             -- between them - the walks that pair an entry with an exit without ever turning away -
             -- and the more of them, and in both directions, the surer. Straightness only settles a
             -- tie.
-            -- A TIE IS SETTLED BY THE SHARPEST TURN NEAR THE MIDDLE, not by how straight the arms look
-            -- 60 m out. A real road bends gradually; a turn has a kink. On 50's S-bend (by the
+            -- A TIE IS SETTLED BY THE TURN AT THE JUNCTION, not by how straight the arms look 60 m
+            -- out. A real road passes through; a turn has a kink there. On 50's S-bend (by the
             -- registry) both ends of the main road head the same way 60 m out, so the main road looked
-            -- like a U-turn and lost to the side road; its sharpest turn is 23-25 degrees per 10 m
-            -- against the side road's 56-71. Straightness far out is only the last resort now.
+            -- like a U-turn and lost to the side road. Straightness far out is only the last resort.
             local function sharpest(rt)
+                -- The turn AT the junction: heading over the ~8 m before the point nearest the centre
+                -- against the ~8 m after it. A road's own bend further out is not a turn - at 22 (by
+                -- the registry) a hairpin 15 m from the centre made the real road look like the sharp
+                -- one when this looked anywhere within 30 m.
                 local pts = {}
                 for _, id in ipairs(rt.path or {}) do
                     local w = ADGraphManager:getWayPointById(id)
                     if w ~= nil then pts[#pts + 1] = w end
                 end
-                local worst = 0
-                for i = 2, #pts do
-                    if (pts[i].x - cx) ^ 2 + (pts[i].z - cz) ^ 2 < 30 * 30 then
-                        local j, run = i, 0
-                        while j < #pts and run < 10 do
-                            run = run + math.sqrt((pts[j + 1].x - pts[j].x) ^ 2 + (pts[j + 1].z - pts[j].z) ^ 2)
-                            j = j + 1
-                        end
-                        if j < #pts then
-                            local h1 = math.atan2(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
-                            local h2 = math.atan2(pts[j + 1].x - pts[j].x, pts[j + 1].z - pts[j].z)
-                            worst = math.max(worst, junctionAngDiff(h1, h2))
-                        end
-                    end
+                if #pts < 3 then return 0 end
+                local k, kd = 1, math.huge
+                for i, w in ipairs(pts) do
+                    local d = (w.x - cx) ^ 2 + (w.z - cz) ^ 2
+                    if d < kd then kd, k = d, i end
                 end
-                return worst
+                local function reach(step)
+                    local i, run = k, 0
+                    while i + step >= 1 and i + step <= #pts and run < 8 do
+                        run = run + math.sqrt((pts[i + step].x - pts[i].x) ^ 2 + (pts[i + step].z - pts[i].z) ^ 2)
+                        i = i + step
+                    end
+                    return pts[i]
+                end
+                local a, b = reach(-1), reach(1)
+                local m = pts[k]
+                if a == m or b == m then
+                    a, b = pts[1], pts[#pts]
+                end
+                local h1 = math.atan2(m.x - a.x, m.z - a.z)
+                local h2 = math.atan2(b.x - m.x, b.z - m.z)
+                if a == m or b == m then return 0 end
+                return junctionAngDiff(h1, h2)
             end
             local cand = {}
             for i = 1, #arms do
@@ -12334,6 +12344,31 @@ function ADFlyoverEditor:updateJunctionPreview()
             for _, rt in ipairs(routes) do
                 local ae, ax = armOf[rt.e], armOf[rt.x]
                 if ae ~= nil and ax ~= nil and ae ~= ax and ae.partner == ax then kept[#kept + 1] = rt end
+            end
+            -- A MAIN-ROAD LANE LEFT WITHOUT A ROUTE GETS ONE. A lane's own walk can take the wrong way
+            -- at a shallow fork: at 35 (by the registry) the south-east-bound lane followed the branch
+            -- instead of the straight road, that pairing was dropped once the straight road was chosen
+            -- as the main road, and the lane was left with no through route - trimmed like a side
+            -- road. Once the arms are partnered, an entry with nothing kept is paired with a free exit
+            -- on its partner arm, if the two are joined inside the junction.
+            local usedE, usedX = {}, {}
+            for _, rt in ipairs(kept) do usedE[rt.e], usedX[rt.x] = true, true end
+            for _, e in ipairs(approaches) do
+                local pa = armOf[e] and armOf[e].partner
+                if e.dir == "in" and not usedE[e] and pa ~= nil then
+                    for _, x in ipairs(approaches) do
+                        if x.dir == "out" and not usedX[x] and armOf[x] == pa and x.wp.id ~= e.wp.id then
+                            local connected, path = connectedInside(e.wp.id, x.wp.id)
+                            if connected and path ~= nil then
+                                kept[#kept + 1] = { e = e, x = x, path = path, ang = junctionAngDiff(e.bearing, x.bearing) }
+                                usedE[e], usedX[x] = true, true
+                                ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - lane id=%d had no through route after the arms were paired; joined to exit id=%d on the main road's far arm.",
+                                    e.wp.id, x.wp.id)
+                                break
+                            end
+                        end
+                    end
+                end
             end
             routes = kept
         end
@@ -17806,10 +17841,28 @@ function ADFlyoverEditor:junctionClassify(jp)
 
     local routes = jp.pathRoutes or {}
     local tB, sB, sPt = {}, {}, {}
+    -- EACH END OF THE MAIN ROAD IS READ BY THE WAY IT LEAVES, 12 m out, not where the route ends
+    -- 60 m out. A road that bends soon after the junction put its two lanes' far ends on very
+    -- different bearings - at 22 (by the registry) the inside and outside of a hairpin read as two
+    -- separate arms, and a T was called a Y.
+    local function leaving(t, step)
+        local k, kd = 1, math.huge
+        for i, w in ipairs(t) do
+            local d = (w.x - c.x) ^ 2 + (w.z - c.z) ^ 2
+            if d < kd then kd, k = d, i end
+        end
+        local i = k
+        while i + step >= 1 and i + step <= #t do
+            i = i + step
+            if (t[i].x - c.x) ^ 2 + (t[i].z - c.z) ^ 2 >= 12 * 12 then break end
+        end
+        return t[i]
+    end
     for _, t in ipairs(routes.through or {}) do
         if #t >= 2 then
-            tB[#tB + 1] = bearing(t[1].x, t[1].z)
-            tB[#tB + 1] = bearing(t[#t].x, t[#t].z)
+            local a, b = leaving(t, -1), leaving(t, 1)
+            tB[#tB + 1] = bearing(a.x, a.z)
+            tB[#tB + 1] = bearing(b.x, b.z)
         end
     end
     for _, sl in ipairs(routes.side or {}) do
@@ -17849,9 +17902,24 @@ function ADFlyoverEditor:junctionClassify(jp)
                 end
                 return best <= BESIDE * BESIDE or atEnd
             end
+            -- A STRETCH THAT COMES BACK TO THE MAIN ROAD IS NOT A ROAD LEAVING IT. Only an off-road
+            -- stretch that runs to an end of the route counts; one with the main road on both sides
+            -- is a loop-back or a lay-by. At 65 (by the registry) the turnaround loop at the end of
+            -- the main road bulged 15 m off it and was read as a fourth arm.
+            local on = {}
+            for i, w in ipairs(n) do on[i] = besideThrough(w) end
+            local counts = {}
+            for i = 1, #n do
+                if on[i] then break end
+                counts[i] = true
+            end
+            for i = #n, 1, -1 do
+                if on[i] then break end
+                counts[i] = true
+            end
             local far, fd, nearW, nd = nil, -1, nil, math.huge
-            for _, w in ipairs(n) do
-                if not besideThrough(w) then
+            for i, w in ipairs(n) do
+                if counts[i] then
                     local d = (w.x - c.x) ^ 2 + (w.z - c.z) ^ 2
                     if d > fd then fd, far = d, w end
                     if d < nd then nd, nearW = d, w end
@@ -17864,7 +17932,9 @@ function ADFlyoverEditor:junctionClassify(jp)
         end
     end
 
-    local T, S = arms(tB, 30), arms(sB, 30)
+    -- The main road's own ends group more loosely (45): its two lanes are 4 m apart, and read close
+    -- to the middle on a bend - 22's hairpin - they can sit 43 degrees apart and still be one arm.
+    local T, S = arms(tB, 45), arms(sB, 30)
     local nT, nS = #T, #S
 
     local function cross(a)

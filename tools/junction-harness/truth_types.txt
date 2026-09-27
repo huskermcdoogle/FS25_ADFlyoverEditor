@@ -6,7 +6,7 @@
 2   T square
 14  T square
 20  T square
-22  T square
+22  T square  main=W-SE   # main road: S via the hairpin <-> SE; it leaves the centre heading W. NE joins
 23  T square
 36  Y merge
 39  4W offset ?     # "offset 4W skew?"
