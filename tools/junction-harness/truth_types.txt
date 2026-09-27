@@ -1,6 +1,8 @@
 # The user's own reading of each junction, by registry number (savegame6, 2026-09-27).
 # Kind: T square, T skew, Y merge, Y, 4W square/skew/very skew, 4W offset. "?" = user unsure.
 # Only junctions the user has looked at are listed; the rest are unlabelled, not agreed.
+# "main=NE-S" names the main road's two ends (compass, north up) where the user gave them;
+# score.py then also checks the tool's main-road pick.
 2   T square
 14  T square
 20  T square
@@ -16,6 +18,6 @@
 35  Y
 62  T skew
 63  T square
-65  T square
+65  T square  main=NW-SE   # SE is a loop-back road; SW joins
 66  T skew
-50  T skew          # main road runs NE <-> S (the S-bend); W joins. Tool paired W <-> NE as through - wrong road.
+50  T skew  main=NE-S   # the S-bend is the main road; W joins
