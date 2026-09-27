@@ -371,6 +371,16 @@ function P:consoleSelfLinks(arg)
     return string.format("%d point(s) are wired to themselves. Positions are in the log. Nothing changed - run 'FlyoverSelfLinks apply' to unwire them.", found)
 end
 
+function P:consoleRoadSplines()
+    if ADFlyoverEditor == nil or ADFlyoverEditor.dumpRoadSplines == nil then
+        return "the flyover editor is not loaded"
+    end
+    local ok, n, where = pcall(function() return ADFlyoverEditor:dumpRoadSplines(2) end)
+    if not ok then return "failed: " .. tostring(n) end
+    if n == nil then return "not saved: " .. tostring(where) end
+    return string.format("saved %d road spline(s) to %s", n, tostring(where))
+end
+
 function P:consoleGeomTest()
     if ADPolygonUtils == nil then
         return "ADPolygonUtils is nil - PolygonUtils.lua did not publish where this file can see it."
@@ -637,6 +647,7 @@ addConsoleCommand("FlyoverSweptLoad", "Swept path: load a saved run <name> as th
 addConsoleCommand("FlyoverSweptShow", "Swept path: toggle the world overlay", "consoleSweptShow", P)
 addConsoleCommand("FlyoverSweptClear", "Swept path: discard the current run", "consoleSweptClear", P)
 
+addConsoleCommand("FlyoverRoadSplines", "Save the map's traffic splines (its own road centre-lines) to the savegame folder for the junction harness", "consoleRoadSplines", P)
 addConsoleCommand("FlyoverSelfLinks", "Report points wired to themselves; pass apply to unwire them", "consoleSelfLinks", P)
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)

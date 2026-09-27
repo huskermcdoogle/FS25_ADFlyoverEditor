@@ -824,7 +824,7 @@ function AutoDrive:createFieldLoopGraph(ring, flags, direction)
         if i > 1 then
             previousId = baseCount + i - 1
         end
-        ADGraphManager:recordWayPoint(p.x, p.y, p.z, i > 1, dual, false, previousId, flags, false)
+        ADFlyoverRecordWayPoint(p.x, p.y, p.z, i > 1, dual, false, previousId, flags, false)
     end
 
     local firstRingId = baseCount + 1

@@ -280,6 +280,18 @@ ADFlyoverEditor.KEY_SLOTS = {
 }
 
 --- The keycap ("1".."9", "0", or "" for none) for a tool, from its slot in KEY_SLOTS.
+--- EVERY POINT THIS EDITOR MAKES IS OURS. AutoDrive marks the points it builds from the map's
+--- traffic splines with FLAG_TRAFFIC_SYSTEM (and _CONNECTION), and new points used to copy their
+--- flags from a neighbour - so by 2026 about 5,300 points laid later carried the map's mark and the
+--- flag could no longer tell a map road from ours. New points keep every other flag (a low-priority
+--- lane stays low-priority) and drop only those two. Global, so FieldLoopGenerator can use it too.
+function ADFlyoverRecordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, flags, sendEvent)
+    local f = flags or 0
+    if math.floor(f / 2) % 2 == 1 then f = f - 2 end   -- AutoDrive.FLAG_TRAFFIC_SYSTEM
+    if math.floor(f / 4) % 2 == 1 then f = f - 4 end   -- AutoDrive.FLAG_TRAFFIC_SYSTEM_CONNECTION
+    return ADGraphManager:recordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, f, sendEvent)
+end
+
 function ADFlyoverEditor:toolKeyLabel(tool)
     for slot, t in ipairs(self.KEY_SLOTS) do
         if t == tool then
@@ -5892,7 +5904,7 @@ function ADFlyoverEditor:applyMoveAsCopy(record)
                 self:moveTo(m.id, m.originalX, m.originalZ)
             end
 
-            local newWp = ADGraphManager:recordWayPoint(fx, fy, fz, false, false, false, nil, flags, false)
+            local newWp = ADFlyoverRecordWayPoint(fx, fy, fz, false, false, false, nil, flags, false)
             if newWp ~= nil then
                 newIds[m.id] = newWp.id
             end
@@ -6875,7 +6887,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
     ADEditorHistory:snapshot("place waypoint")
 
     local connectPrevious = self.lastWaypointId ~= nil
-    local wp = ADGraphManager:recordWayPoint(
+    local wp = ADFlyoverRecordWayPoint(
         x, y, z,
         connectPrevious,
         dualConnection,
@@ -7542,7 +7554,7 @@ function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
     for i = 2, #newPoints - 1 do
         local p = newPoints[i]
         local y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z)
-        local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, true, dual, false, previousId, flags, false)
+        local wp = ADFlyoverRecordWayPoint(p.x, y, p.z, true, dual, false, previousId, flags, false)
         -- New waypoints are appended, so their ids sit above everything already there and nothing
         -- shifts underneath us for the rest of this loop.
         previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
@@ -8407,7 +8419,7 @@ function ADFlyoverEditor:insertOnSegment(aId, bId, position, dual, flags)
         return nil
     end
     local y = self:resolveHeightAt(position.x, position.z, position.y)
-    local wp = ADGraphManager:recordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false)
+    local wp = ADFlyoverRecordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false)
     local newId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
     local newNode = ADGraphManager:getWayPointById(newId)
     local bNode = ADGraphManager:getWayPointById(bId)
@@ -8873,7 +8885,7 @@ function ADFlyoverEditor:createRunFrom(points, dual, flags)
         local y = self:groundTargetAt(p.x, sourceY, p.z, sourceY, true)
             or self:resolveHeightAt(p.x, p.z, p.y)
         local segmentDual = perSegment and dual(index) or dual
-        local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, previousId ~= nil, segmentDual, false,
+        local wp = ADFlyoverRecordWayPoint(p.x, y, p.z, previousId ~= nil, segmentDual, false,
             previousId or 0, flags, false)
         previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
         firstId = firstId or previousId
@@ -10100,7 +10112,7 @@ end
 local function junctionLayChain(NA, points, NB, dual, flags)
     local prev = NA
     for _, p in ipairs(points) do
-        local wp = ADGraphManager:recordWayPoint(p.x, p.y, p.z, false, false, false, 0,
+        local wp = ADFlyoverRecordWayPoint(p.x, p.y, p.z, false, false, false, 0,
             flags or AutoDrive.FLAG_NONE, false)
         if wp == nil then return false end
         junctionConnect(prev, wp, dual)
@@ -10675,6 +10687,42 @@ local function jxDebugWriteGraph(path)
         delete(xml)
     end)
     return ok == true
+end
+
+--- THE MAP'S OWN ROADS, SAVED FOR THE HARNESS. The traffic splines are the lines the game's AI
+--- traffic drives, and what AutoDrive builds a map's network from when it scans it. They are the
+--- map maker's roads, independent of any flag on a waypoint, so they say which lanes lie on a real
+--- road. Written to <savegame>/ADFlyoverEditor_roadSplines.xml, one entry per spline: its length and
+--- its centre-line sampled every `step` metres as "x,z;x,z;...". Returns the count and the path.
+function ADFlyoverEditor:dumpRoadSplines(step)
+    step = step or 2
+    local ai = g_currentMission ~= nil and g_currentMission.aiSystem or nil
+    local splines = ai ~= nil and ai.roadSplines or nil
+    if splines == nil then return nil, "this map has no traffic splines the game has loaded" end
+    local root = junctionRegistryFolder()
+    if root == nil then return nil, "no savegame folder yet - save the game once first" end
+    local path = root .. "ADFlyoverEditor_roadSplines.xml"
+    local xml = createXMLFile("flyoverRoadSplines", path, "roadSplines")
+    if xml == nil or xml == -1 then return nil, "could not create " .. path end
+    local n = 0
+    for _, spline in pairs(splines) do
+        local len = getSplineLength(spline) or 0
+        if len > 0 then
+            local pts, k = {}, math.max(1, math.floor(len / step))
+            for i = 0, k do
+                local x, _, z = getSplinePosition(spline, i / k)
+                if x ~= nil then pts[#pts + 1] = string.format("%.2f,%.2f", x, z) end
+            end
+            local key = string.format("roadSplines.spline(%d)", n)
+            setXMLString(xml, key .. "#name", tostring(getName(spline) or ""))
+            setXMLFloat(xml, key .. "#length", len)
+            setXMLString(xml, key .. "#points", table.concat(pts, ";"))
+            n = n + 1
+        end
+    end
+    saveXMLFile(xml)
+    delete(xml)
+    return n, path
 end
 
 --- Start and stop collecting, for the toggle. Methods, because the toggle sits well above these
@@ -14392,7 +14440,7 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
     end
 
     local ny = (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac
-    local N = ADGraphManager:recordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false)
+    local N = ADFlyoverRecordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false)
     if N == nil then return ap.wp, trackFlags, {}, segDual end
 
     if ap.dir == "in" then
@@ -15736,7 +15784,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                                         end
                                         local made
                                         if not tryCall("junction tidy extend", function()
-                                            made = ADGraphManager:recordWayPoint(pt.x, pt.y or last.y or 0,
+                                            made = ADFlyoverRecordWayPoint(pt.x, pt.y or last.y or 0,
                                                 pt.z, false, false, false, 0,
                                                 last.flags or AutoDrive.FLAG_NONE, false)
                                         end) or made == nil then break end
@@ -15887,7 +15935,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                         local pt = atArc(path, cum, cum[#seq] + (travel / n) * i)
                         local made
                         if not tryCall("junction tidy extend", function()
-                            made = ADGraphManager:recordWayPoint(pt.x, pt.y or 0, pt.z, false, false,
+                            made = ADFlyoverRecordWayPoint(pt.x, pt.y or 0, pt.z, false, false,
                                 false, 0, last.flags or AutoDrive.FLAG_NONE, false)
                         end) or made == nil then break end
                         if useOut then junctionConnect(seq[#seq], made, segDual)
@@ -16284,7 +16332,7 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
             local prev = last
             for j = keepN + 1, want do
                 local t = targets[j]
-                local made = ADGraphManager:recordWayPoint(t.x, t.y, t.z, false, false, false, 0, flags, false)
+                local made = ADFlyoverRecordWayPoint(t.x, t.y, t.z, false, false, false, 0, flags, false)
                 if made == nil then break end
                 link(prev, made)
                 prev = made
@@ -16504,7 +16552,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     local function splitAt(a, b, x, z, fwdAB)
         local dual = dualOf(a, b)
         local y = (a.y or 0) + ((b.y or 0) - (a.y or 0)) * 0.5
-        local n = ADGraphManager:recordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false)
+        local n = ADFlyoverRecordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false)
         if n == nil then return nil end
         junctionDisconnect(a, b)
         if fwdAB then junctionConnect(a, n, dual) junctionConnect(n, b, dual)
@@ -17187,7 +17235,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     local prev = tip
                     for k = 1, n do
                         local q = arc[math.min(#arc, math.floor((hit * k / n) / 0.25 + 0.5) + 1)]
-                        local made1 = ADGraphManager:recordWayPoint(q.x, tip.y or 0, q.z,
+                        local made1 = ADFlyoverRecordWayPoint(q.x, tip.y or 0, q.z,
                             false, false, false, 0, tip.flags or AutoDrive.FLAG_NONE, false)
                         if made1 == nil then break end
                         if sl.useOut then junctionConnect(prev, made1, dual) else junctionConnect(made1, prev, dual) end
