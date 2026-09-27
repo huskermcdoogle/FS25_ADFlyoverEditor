@@ -1,0 +1,7 @@
+# Your own network and results - regenerated, and not something to publish.
+graph_data.lua
+graph_*.lua
+reg*_*.txt
+captest/
+captures*/
+*.zip
