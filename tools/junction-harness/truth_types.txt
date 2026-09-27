@@ -15,7 +15,7 @@
 29  T skew
 33  T square
 34  T square        # the road curves into a square T
-35  Y
+35  T skew  main=NW-SE   # straight road, S branches off (first called a Y)
 62  T skew
 63  T square
 65  T square  main=NW-SE   # SE is a loop-back road; SW joins
