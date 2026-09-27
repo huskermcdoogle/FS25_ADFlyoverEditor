@@ -16,7 +16,7 @@ CAP, CX, CZ, RAD, OUT = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), flo
 SIDE,PAD,TOP=520,18,52
 W=2*(SIDE+PAD)+PAD; H=TOP+SIDE+34
 def sx(x,p): return PAD+p*(SIDE+PAD)+(x-(CX-RAD))/(2*RAD)*SIDE
-def sy(z):   return TOP+((CZ+RAD)-z)/(2*RAD)*SIDE
+def sy(z):   return TOP+(z-(CZ-RAD))/(2*RAD)*SIDE   # north up: FS25 z grows southward
 o=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
    '<style>text{font-family:ui-sans-serif,system-ui,sans-serif}.t{font-size:14px;font-weight:600;fill:#111}'
    '.s{font-size:11px;fill:#555}</style>','<rect width="100%" height="100%" fill="#fbfbfa"/>',

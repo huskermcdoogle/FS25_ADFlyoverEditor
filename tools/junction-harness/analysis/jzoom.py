@@ -1,6 +1,9 @@
 import re, math, sys
 import os
-FS25 = os.environ.get("FS25_PROFILE") or os.path.join(os.path.expanduser("~"), "Documents", "My Games", "FarmingSimulator2025")
+FS25 = os.environ.get("FS25_PROFILE") or next(
+    (p for p in (os.path.expanduser("~/OneDrive/Documents/My Games/FarmingSimulator2025"),
+                 os.path.expanduser("~/Documents/My Games/FarmingSimulator2025")) if os.path.isdir(p)),
+    os.path.expanduser("~/Documents/My Games/FarmingSimulator2025"))
 SAVE = os.environ.get("FS25_SAVEGAME", "savegame6")
 CX, CZ, RAD, OUT = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
 FOCUS = int(sys.argv[5])
@@ -19,7 +22,7 @@ for m in re.finditer(r"\{id=(\d+),x=(-?[\d.]+),y=(-?[\d.]+),z=(-?[\d.]+),flags=\
 W = 980; PAD = 30
 sc = (W - 2*PAD) / (2*RAD)
 def sx(x): return PAD + (x - (CX-RAD)) * sc
-def sy(z): return PAD + ((CZ+RAD) - z) * sc      # north up
+def sy(z): return PAD + (z - (CZ-RAD)) * sc      # north up: FS25 z grows southward
 o = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{W}" viewBox="0 0 {W} {W}">',
      '<style>text{font-family:ui-sans-serif,system-ui,sans-serif}.n{font-size:14px;font-weight:700}</style>',
      '<rect width="100%" height="100%" fill="#fbfbfa"/>']

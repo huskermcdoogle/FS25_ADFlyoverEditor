@@ -1,6 +1,9 @@
 import re, math, os, glob
 import os
-FS25 = os.environ.get("FS25_PROFILE") or os.path.join(os.path.expanduser("~"), "Documents", "My Games", "FarmingSimulator2025")
+FS25 = os.environ.get("FS25_PROFILE") or next(
+    (p for p in (os.path.expanduser("~/OneDrive/Documents/My Games/FarmingSimulator2025"),
+                 os.path.expanduser("~/Documents/My Games/FarmingSimulator2025")) if os.path.isdir(p)),
+    os.path.expanduser("~/Documents/My Games/FarmingSimulator2025"))
 SAVE = os.environ.get("FS25_SAVEGAME", "savegame6")
 D = os.environ.get("CAPTURE_DIR") or os.path.join(FS25, SAVE, "flyoverDebug")
 def load(p):

@@ -55,13 +55,16 @@ near the box; `dbgcapture.lua` exercises the debug drop against stubbed engine c
 ## analysis/
 
 Python, reading drops and saved AutoDrive route files directly. Paths default to
-`~/Documents/My Games/FarmingSimulator2025`; override with `FS25_PROFILE`,
-`FS25_SAVEGAME`, `CAPTURE_DIR`.
+`~/OneDrive/Documents/My Games/FarmingSimulator2025`, else `~/Documents/...`; override
+with `FS25_PROFILE`, `FS25_SAVEGAME`, `CAPTURE_DIR`. Every map is north up - FS25's z grows
+SOUTHWARD, so small z is drawn at the top.
 
 - `sweepcaps.py` - merges and short links before/after, for every drop in a folder
 - `rowfile.py`, `rowtrue.py` - AutoDrive's right-of-way-centre rule on a saved network
 - `asym.py` - links present in one direction only, and points wired to themselves
 - `plotcap.py` - before/after SVG of a drop; `jmap.py` / `jzoom.py` - numbered map
+- `jmap_live.py` - the whole network from the savegame itself, registry numbers, loose
+  pieces in blue: `python analysis/jmap_live.py out.svg [numbers to highlight]`
 - `deploy.ps1` - deploy a built zip, waiting for FS25 to exit, then relaunch and
   confirm the build from the log. Never copy the zip while the game is running.
 
@@ -70,3 +73,11 @@ Python, reading drops and saved AutoDrive route files directly. Paths default to
 Merge counts and short-link counts both called one junction perfect while one lane of
 a road had been trimmed 13 m further back than its twin. Read the drop's `tool.log` in
 full, and check a fix by whether it moves the thing it was aimed at.
+
+## Site plots
+
+- `dump_site.lua CX CZ R on|off out.txt [span]` - a site before and after a clear
+- `plot.py out.txt out.png` - renders that dump as a before|after PNG (pure stdlib)
+- `islands.lua CX CZ [R]` - every separate piece of network near a site, with its size
+- `flood.lua SEED ID...` - which points a seed reaches, at several flood limits
+- `dbgisland.lua CX CZ` - shrinks nearby loose pieces to fake debris, then clears

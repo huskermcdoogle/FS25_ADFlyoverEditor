@@ -16,7 +16,7 @@ PAD, W = 40, 1500
 sc = (W - 2*PAD) / max(maxx-minx, maxz-minz)
 H = int((maxz-minz)*sc) + 2*PAD
 def sx(x): return PAD + (x-minx)*sc
-def sy(z): return PAD + ((maxz-z))*sc          # north up: z increases southward
+def sy(z): return PAD + (z-minz)*sc             # north up: FS25 z grows southward, so small z on top
 o = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">']
 o.append('<style>text{font-family:ui-sans-serif,system-ui,sans-serif}'
          '.n{font-size:13px;font-weight:700;fill:#111}'
