@@ -11597,6 +11597,7 @@ function ADFlyoverEditor:updateJunctionPreview()
                     return run
                 end
 
+                local ISLAND_POINTS, ISLAND_SPAN = 10, 60
                 local shadowed, runs = {}, {}
                 local ACROSS, RATIO = 5.0, 3.0
                 local minArm = AutoDrive.FLYOVER_JUNCTION_MIN_ARM or 15
@@ -11632,8 +11633,37 @@ function ADFlyoverEditor:updateJunctionPreview()
                     elseif ap.wp == nil or seen[ap.wp] then
                         kept[#kept + 1] = ap
                     else
-                        Logging.info("[FlyoverEditor]: junction - the road on bearing %.0f is not wired to this junction. Noted, not acted on.",
-                            math.deg(ap.bearing or 0) % 360)
+                        -- UNWIRED IS NOT DEBRIS; SMALL IS. How big is the piece of network this road
+                        -- belongs to? A through road whose lanes an earlier clear cut loose at the
+                        -- box edge is an island too - 17 to 20 points over 120-220 m on the test
+                        -- map, and exactly what this tool is for connecting. Skipping those turned
+                        -- two plain crossroads into T's. Real debris was 9 points over 10-50 m.
+                        local pts, x0, x1, z0, z1 = 1, ap.wp.x, ap.wp.x, ap.wp.z, ap.wp.z
+                        local got, st = { [ap.wp] = true }, { ap.wp }
+                        while #st > 0 and pts < ISLAND_POINTS do
+                            local w = table.remove(st)
+                            for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                                for _, id in pairs(lst) do
+                                    local t = ADGraphManager:getWayPointById(id)
+                                    if t ~= nil and not got[t] then
+                                        got[t] = true
+                                        pts = pts + 1
+                                        st[#st + 1] = t
+                                        x0, x1 = math.min(x0, t.x), math.max(x1, t.x)
+                                        z0, z1 = math.min(z0, t.z), math.max(z1, t.z)
+                                    end
+                                end
+                            end
+                        end
+                        local span = math.sqrt((x1 - x0) ^ 2 + (z1 - z0) ^ 2)
+                        if pts < ISLAND_POINTS and span < ISLAND_SPAN then
+                            ap._debris = true
+                            Logging.info("[FlyoverEditor]: junction - the road on bearing %.0f is a loose piece of %d point(s) over %.0f m, wired to nothing. Not counted as a side road.",
+                                math.deg(ap.bearing or 0) % 360, pts, span)
+                        else
+                            Logging.info("[FlyoverEditor]: junction - the road on bearing %.0f is not wired to this junction, but it is a road (%s point(s) over %.0f m). Counted.",
+                                math.deg(ap.bearing or 0) % 360, (pts >= ISLAND_POINTS) and (ISLAND_POINTS .. "+") or tostring(pts), span)
+                        end
                     end
                 end
                 -- WHAT IS ACTED ON, AND WHERE. Dropping approaches outright makes the clear worse
@@ -11643,10 +11673,8 @@ function ADFlyoverEditor:updateJunctionPreview()
                 -- road, and a T read as a staggered 4-way. The same-lane stub is therefore kept out
                 -- of the side roads only (ap._debris), and nothing else.
                 --
-                -- "Not wired" stays a note. Unwired is not the same as debris: a two-lane road
-                -- crossing the junction that nothing connects to yet is exactly what the tool is
-                -- for, and skipping it turned two plain crossroads into T's. Debris has to be told
-                -- apart by SIZE (a few stray points, not a 20-point road) - still to do.
+                -- An unwired road is kept out only when its whole piece of network is small (see
+                -- ISLAND_POINTS / ISLAND_SPAN above): a loose fragment, not a road awaiting wiring.
                 local _ = kept
             end
         end
