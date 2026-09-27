@@ -17786,8 +17786,18 @@ function ADFlyoverEditor:junctionClassify(jp)
                 if d > fd then fd, far = d, w end
                 if d < nd then nd, nearW = d, w end
             end
-            sB[#sB + 1] = bearing(far.x, far.z)
-            sPt[#sPt + 1] = nearW
+            -- A SIDE ROUTE HEADING OFF DOWN THE THROUGH ROAD IS PART OF THAT ROAD. Turn lanes that join
+            -- the main road, and a lane the through routes missed, end up out along one of its own
+            -- arms; counted as side roads they made T's read as crossroads (22, 23, 65, 66 by the
+            -- registry). A real side road leaves the through road at an angle.
+            local fb, alongRoad = bearing(far.x, far.z), false
+            for _, t in ipairs(tB) do
+                if sep(fb, t) <= 20 then alongRoad = true break end
+            end
+            if not alongRoad then
+                sB[#sB + 1] = fb
+                sPt[#sPt + 1] = nearW
+            end
         end
     end
 
