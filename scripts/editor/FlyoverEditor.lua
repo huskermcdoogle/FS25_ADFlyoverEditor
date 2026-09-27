@@ -517,6 +517,22 @@ end
 --- only flip it if the hud says it is currently visible, remember that we did, and flip it back on
 --- exit - never leave the player's HUD hidden. The state fields are logged so a wrong guess about
 --- their names shows up in the log instead of silently doing nothing.
+---
+--- WHEN it runs matters. A tester lost the in-vehicle wheel zoom after an exit, and every such exit
+--- showed the vehicle context gaining ~53 action events across the cycle - the HUD toggle appears to
+--- make the vehicle re-register its bindings. The hide used to run with OUR context current and the
+--- restore with VEHICLE current, so the two halves re-registered into different contexts.
+--- "symmetric" (default) hides before the context push, so both halves run with the gameplay
+--- context current; "legacy" is the 1.0.2.0 order, kept for an A/B test (FlyoverHudOrder).
+ADFlyoverEditor.hudToggleOrder = "symmetric"
+
+--- One line per toggle: which context was current, and which action events it added or removed.
+function ADFlyoverEditor:logHudToggle(label, stateBefore, countsBefore)
+    Logging.info("[FlyoverEditor]: whole-hud %s (order=%s) | before: %s | after: %s | events changed: %s",
+        label, tostring(self.hudToggleOrder), stateBefore, self:describeInputState(),
+        self:diffActionCounts(countsBefore, self:inputActionCounts()))
+end
+
 function ADFlyoverEditor:suspendWholeHud()
     self.hudToggledOff = false
     local hud = g_currentMission ~= nil and g_currentMission.hud or nil
@@ -529,10 +545,12 @@ function ADFlyoverEditor:suspendWholeHud()
         Logging.info("[FlyoverEditor]: whole-hud hide: hud already hidden (isVisible=false), leaving it alone.")
         return
     end
+    local stateBefore, countsBefore = self:describeInputState(), self:inputActionCounts()
     local ok, err = pcall(hud.consoleCommandToggleVisibility, hud)
     local after = hud.isVisible
     Logging.info("[FlyoverEditor]: whole-hud hide: called consoleCommandToggleVisibility ok=%s err=%s isVisible %s -> %s",
         tostring(ok), tostring(err), tostring(before), tostring(after))
+    self:logHudToggle("hide", stateBefore, countsBefore)
     -- Trust it flipped only if the field agrees, or the field is not exposed at all (nil both ways).
     self.hudToggledOff = ok and (after == false or (before == nil and after == nil))
 end
@@ -548,8 +566,10 @@ function ADFlyoverEditor:restoreWholeHud()
     end
     -- Only flip back if it is still hidden; if the player already toggled it themselves, leave it.
     if hud.isVisible == false or hud.isVisible == nil then
+        local stateBefore, countsBefore = self:describeInputState(), self:inputActionCounts()
         local ok, err = pcall(hud.consoleCommandToggleVisibility, hud)
         Logging.info("[FlyoverEditor]: whole-hud restore: ok=%s err=%s isVisible=%s", tostring(ok), tostring(err), tostring(hud.isVisible))
+        self:logHudToggle("restore", stateBefore, countsBefore)
     end
 end
 
@@ -831,6 +851,49 @@ function ADFlyoverEditor:describeInputState()
     return table.concat(parts, " ")
 end
 
+--- Action events per action name, for the current context. The summary above only counts them,
+--- and a count that goes UP says nothing about which bindings changed - the in-vehicle wheel zoom
+--- died after an exit whose count rose by 53. Diffing by name shows whether the camera zoom
+--- actions were among them. Nil if this build does not expose the events table.
+function ADFlyoverEditor:inputActionCounts()
+    local ok, counts = pcall(function()
+        local result = {}
+        for _, event in pairs(g_inputBinding.events or {}) do
+            local name
+            if type(event) == "table" then
+                name = event.actionName
+                if name == nil and type(event.action) == "table" then
+                    name = event.action.name
+                end
+            end
+            name = tostring(name or "?")
+            result[name] = (result[name] or 0) + 1
+        end
+        return result
+    end)
+    return ok and counts or nil
+end
+
+--- "+CAMERA_ZOOM_IN x1, -AXIS_MOVE_SIDE_VEHICLE x2" style, sorted; "no change" when equal.
+function ADFlyoverEditor:diffActionCounts(before, after)
+    if before == nil or after == nil then
+        return "not readable"
+    end
+    local names, seen = {}, {}
+    for name in pairs(before) do seen[name] = true end
+    for name in pairs(after) do seen[name] = true end
+    for name in pairs(seen) do names[#names + 1] = name end
+    table.sort(names)
+    local parts = {}
+    for _, name in ipairs(names) do
+        local d = (after[name] or 0) - (before[name] or 0)
+        if d ~= 0 then
+            parts[#parts + 1] = string.format("%s%s x%d", d > 0 and "+" or "-", name, math.abs(d))
+        end
+    end
+    return #parts == 0 and "no change" or table.concat(parts, ", ")
+end
+
 --- Last-resort recovery for a stranded input context, from the console.
 ---
 --- Reverting more than once is normally wrong, which is why this is a deliberate command and not
@@ -933,6 +996,7 @@ function ADFlyoverEditor:enable()
     -- after the push, as the first version did, made a clean cycle indistinguishable from a lossy
     -- one.
     self.inputStateOnEnter = self:describeInputState()
+    self.inputActionsOnEnter = self:inputActionCounts()
 
     local okCam, camera = tryCall("GuiTopDownCamera.new", function() return GuiTopDownCamera.new() end)
     local okCur, cursor = tryCall("GuiTopDownCursor.new", function() return GuiTopDownCursor.new() end)
@@ -975,6 +1039,12 @@ function ADFlyoverEditor:enable()
     -- left the event count at 221 and a second took it to 210, destroying eleven of the player's
     -- own bindings, movement among them. That is why a short session was fine and repeated use was
     -- not - it needed a second activation, not a long one.
+    -- The whole-hud hide goes here, while the gameplay context is still current, so it mirrors the
+    -- restore in disable() - which runs after revertContext, with that same context current again.
+    if self.hudToggleOrder ~= "legacy" then
+        self:suspendWholeHud()
+    end
+
     local createContext = not self.contextCreated
     local pushed = self.contextPushed or tryCall("g_inputBinding:setContext", function()
         g_inputBinding:setContext(self.INPUT_CONTEXT, createContext, false)
@@ -1036,7 +1106,9 @@ function ADFlyoverEditor:enable()
     tryCall("g_inputBinding:setShowMouseCursor(true)", function() g_inputBinding:setShowMouseCursor(true) end)
 
     self:hideInputHelp()
-    self:suspendWholeHud()
+    if self.hudToggleOrder == "legacy" then
+        self:suspendWholeHud()
+    end
 
     self.active = true
     self.lastWaypointId = nil
@@ -1246,6 +1318,15 @@ function ADFlyoverEditor:disable()
                 .. "expected. before: %s | after: %s", tostring(self.inputStateOnEnter), after)
         end
     end
+    -- Which bindings the whole cycle changed, by name - the counts alone could not say whether the
+    -- wheel-zoom actions were among the ones re-registered.
+    Logging.info("[FlyoverEditor]: action events changed across the cycle (hud order=%s): %s",
+        tostring(self.hudToggleOrder), self:diffActionCounts(self.inputActionsOnEnter, self:inputActionCounts()))
+    self.inputActionsOnEnter = nil
+    -- Report the next few in-vehicle wheel events (Wrappers.lua, wrapper 4). No lines at all after
+    -- scrolling means the zoom action never fired - an input-binding problem; lines saying
+    -- "swallowed" mean AutoDrive's own flags are holding the wheel.
+    self.wheelProbeRemaining = 6
 end
 
 function ADFlyoverEditor:toggle()
