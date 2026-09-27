@@ -59,7 +59,7 @@ P.MOD_DIRECTORY = g_currentModDirectory
 --- Reporting both makes the difference visible instead of misleading: if they disagree, the Lua is
 --- new and the modDesc is stale, which is harmless but tells you a full restart is needed before
 --- anything that depends on modDesc itself (a new sourceFile entry, say) will take effect.
-P.BUILD = "1.0.1.0+177.2b0392b"
+P.BUILD = "1.0.2.0+279.af34556"
 P.MODDESC_VERSION = "unknown"
 do
     local ok, mod = pcall(function() return g_modManager:getModByName(g_currentModName) end)
@@ -291,6 +291,16 @@ function P:draw()
     -- now UNDER the tool panel, floating card and help card, so it no longer poked through them where
     -- they overlap the minimap. Guarded: a marker is a nicety, and a fault in it must never take the
     -- editor's own drawing down.
+    -- The editor hides the whole game HUD (gsHudVisibility) to get the vehicle panels out of the way, and
+    -- that takes the minimap with it. Draw the minimap ourselves while the HUD is switched off - first,
+    -- so the airplane and the editor's panels land on top of it.
+    if editorLoaded() and ADFlyoverEditor.active and ADFlyoverEditor.hudToggledOff then
+        local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+        local map = hud ~= nil and hud.ingameMap or nil
+        if map ~= nil and type(map.draw) == "function" then
+            pcall(map.draw, map)
+        end
+    end
     if ADFlyoverMapMarker ~= nil then
         pcall(ADFlyoverMapMarker.draw)
     end
@@ -537,6 +547,51 @@ function P:consoleProbeMap()
     return "Probe written to the log - look for [FlyoverMapProbe]."
 end
 
+--- A/B switch for when the editor hides the whole HUD: "symmetric" (before the input context push,
+--- mirroring the restore) or "legacy" (1.0.2.0: after it). No argument reports the current order.
+function P:consoleHudOrder(order)
+    if ADFlyoverEditor == nil then
+        return "Editor not loaded."
+    end
+    if order == "symmetric" or order == "legacy" then
+        if ADFlyoverEditor.active then
+            return "Close the editor first - the order only matters on the way in."
+        end
+        ADFlyoverEditor.hudToggleOrder = order
+        log("hud toggle order set to %s", order)
+    elseif order ~= nil then
+        return "Usage: FlyoverHudOrder [symmetric|legacy]"
+    end
+    return "Whole-hud hide order: " .. tostring(ADFlyoverEditor.hudToggleOrder)
+end
+
+--- The base game's HUD toggle on its own, twice, with no editor involved: logs the action events each
+--- flip added or removed. If the wheel stops zooming after this, the toggle is the cause by itself.
+function P:consoleHudToggleTest()
+    if ADFlyoverEditor == nil then
+        return "Editor not loaded."
+    end
+    if ADFlyoverEditor.active then
+        return "Close the editor first - this tests the toggle without it."
+    end
+    local hud = g_currentMission ~= nil and g_currentMission.hud or nil
+    if hud == nil or type(hud.consoleCommandToggleVisibility) ~= "function" then
+        return "No hud:consoleCommandToggleVisibility on this build."
+    end
+    local results = {}
+    for i = 1, 2 do
+        local state, counts = ADFlyoverEditor:describeInputState(), ADFlyoverEditor:inputActionCounts()
+        local ok, err = pcall(hud.consoleCommandToggleVisibility, hud)
+        local changed = ADFlyoverEditor:diffActionCounts(counts, ADFlyoverEditor:inputActionCounts())
+        log("hud toggle test flip %d: ok=%s err=%s isVisible=%s | before: %s | after: %s | events changed: %s",
+            i, tostring(ok), tostring(err), tostring(hud.isVisible), state,
+            ADFlyoverEditor:describeInputState(), changed)
+        results[#results + 1] = string.format("flip %d: %s", i, changed)
+    end
+    ADFlyoverEditor.wheelProbeRemaining = 6
+    return table.concat(results, " | ") .. " -- now scroll the wheel; the next 6 wheel events are logged."
+end
+
 function P:consoleResetInput()
     if ADFlyoverEditor == nil then
         return "Editor not loaded."
@@ -585,6 +640,8 @@ addConsoleCommand("FlyoverSweptClear", "Swept path: discard the current run", "c
 addConsoleCommand("FlyoverSelfLinks", "Report points wired to themselves; pass apply to unwire them", "consoleSelfLinks", P)
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
+addConsoleCommand("FlyoverHudOrder", "Whole-hud hide order: symmetric (default) or legacy (1.0.2.0)", "consoleHudOrder", P)
+addConsoleCommand("FlyoverHudToggleTest", "Flip the base-game HUD off and on with no editor, logging action events", "consoleHudToggleTest", P)
 addConsoleCommand("FlyoverResetTheme", "Reset the editor's colours and scale to default", "consoleResetTheme", P)
 addConsoleCommand("FlyoverProbeMap", "Report the HUD map and hotspot classes (run with the map small, then large)", "consoleProbeMap", P)
 addConsoleCommand("FlyoverProbeMapFns", "List the map's and camera's functions, untruncated (editor open)", "consoleProbeMapFns", P)

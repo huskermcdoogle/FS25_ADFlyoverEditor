@@ -281,6 +281,13 @@ function T:setLineWeight(v)
     return self.lineWeight
 end
 
+--- Remember where the floating tool card was left, so it comes back there next time.
+function T:setCardPos(x, y)
+    if x == nil or y == nil then return end
+    self.cardX, self.cardY = x, y
+    self:save()
+end
+
 function T:setOverride(role, r, g, b)
     self.overrides[role] = { r, g, b }
     self:dirty()
@@ -336,6 +343,10 @@ function T.save()
         setXMLString(xml, "flyoverTheme#accent", T.accent)
         setXMLFloat(xml, "flyoverTheme#scale", T.scale)
         setXMLFloat(xml, "flyoverTheme#lineWeight", T.lineWeight)
+        if T.cardX ~= nil and T.cardY ~= nil then
+            setXMLFloat(xml, "flyoverTheme#cardX", T.cardX)
+            setXMLFloat(xml, "flyoverTheme#cardY", T.cardY)
+        end
         local i = 0
         for role, rgb in pairs(T.overrides) do
             setXMLString(xml, string.format("flyoverTheme.override(%d)#role", i), role)
@@ -360,6 +371,11 @@ function T.load()
 
         local preset = getXMLString(xml, "flyoverTheme#preset")
         if preset ~= nil and T.presets[preset] ~= nil then T.preset = preset end
+
+        -- Where the player last left the floating tool card. Absent in older files: stays nil, and
+        -- the card then sits beside the panel by default.
+        local cx, cy = getXMLFloat(xml, "flyoverTheme#cardX"), getXMLFloat(xml, "flyoverTheme#cardY")
+        if cx ~= nil and cy ~= nil then T.cardX, T.cardY = cx, cy end
 
         local accent = getXMLString(xml, "flyoverTheme#accent")
         if accent ~= nil and hexToRgb(accent) ~= nil then T.accent = accent end
