@@ -165,6 +165,18 @@ function W.install(AD)
             -- spline-curvature path inside the original still gets its turn.
             AD.mouseWheelActive = false
         end
+        -- Debug probe, armed for a few wheel events after each editor exit: says whether the
+        -- vehicle camera's zoom reached AutoDrive's hook and whether AutoDrive swallowed it.
+        if not editorActive() and ADFlyoverEditor ~= nil and (ADFlyoverEditor.wheelProbeRemaining or 0) > 0 then
+            ADFlyoverEditor.wheelProbeRemaining = ADFlyoverEditor.wheelProbeRemaining - 1
+            local swallowed = originalHandleSplineCurvature(selfArg, offset, ...)
+            local spline = AD.splineInterpolation
+            log("wheel after exit: offset=%s swallowed=%s (mouseWheelActive=%s splineValid=%s pullDownExpanded=%s context=%s)",
+                tostring(offset), tostring(swallowed), tostring(AD.mouseWheelActive),
+                tostring(spline ~= nil and spline.valid), tostring(AD.pullDownListExpanded),
+                tostring(g_inputBinding ~= nil and g_inputBinding.currentContextName))
+            return swallowed
+        end
         return originalHandleSplineCurvature(selfArg, offset, ...)
     end
 
