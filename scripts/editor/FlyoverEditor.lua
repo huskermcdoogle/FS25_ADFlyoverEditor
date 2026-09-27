@@ -17780,22 +17780,45 @@ function ADFlyoverEditor:junctionClassify(jp)
             -- mostly noise. WHERE it joins is read off the end NEAREST in - taking that from the far
             -- end too had a side road that runs 95 m away reported as a 95 m stagger, which is how a
             -- plain crossroads gets filed as a staggered one.
-            local far, fd, nearW, nd = n[1], -1, n[1], math.huge
+            -- ONLY THE PART THAT LEAVES THE THROUGH ROAD SAYS WHERE A SIDE ROAD GOES. A side route can
+            -- run along the main road before it turns off (at 50 by the registry both side routes ran
+            -- 60 m up the main road, then swung south), and a lane the through routes missed runs
+            -- beside the main road the whole way (66's). So every node is tested against the through
+            -- routes: within BESIDE metres of one, it is on the main road. A route with nothing off
+            -- the main road is part of it and is not a side road at all; for the rest, the arm is
+            -- read from the part that is off it. (A 20-degree test on the far end did this first,
+            -- and threw away 50's real side road because its far end lay up the main road.)
+            -- ...AND PAST THE END OF THE THROUGH ROUTE IS STILL THE MAIN ROAD. The through routes stop
+            -- about 60 m out; a turn lane that joined the main road carries on beyond that, and its
+            -- tail - nearest to where a through route ENDS - read as a phantom arm (22, 23, 36, 65).
+            local BESIDE = 6
+            local function besideThrough(w)
+                local best, atEnd = math.huge, false
+                for _, t in ipairs(routes.through or {}) do
+                    for i = 2, #t do
+                        local ax, az, bx, bz = t[i - 1].x, t[i - 1].z, t[i].x, t[i].z
+                        local vx, vz = bx - ax, bz - az
+                        local L2 = vx * vx + vz * vz
+                        local u = (L2 > 0) and ((w.x - ax) * vx + (w.z - az) * vz) / L2 or 0
+                        local end_ = (i == 2 and u < 0) or (i == #t and u > 1)
+                        u = math.max(0, math.min(1, u))
+                        local px, pz = ax + u * vx - w.x, az + u * vz - w.z
+                        local d2 = px * px + pz * pz
+                        if d2 < best then best, atEnd = d2, end_ end
+                    end
+                end
+                return best <= BESIDE * BESIDE or atEnd
+            end
+            local far, fd, nearW, nd = nil, -1, nil, math.huge
             for _, w in ipairs(n) do
-                local d = (w.x - c.x) ^ 2 + (w.z - c.z) ^ 2
-                if d > fd then fd, far = d, w end
-                if d < nd then nd, nearW = d, w end
+                if not besideThrough(w) then
+                    local d = (w.x - c.x) ^ 2 + (w.z - c.z) ^ 2
+                    if d > fd then fd, far = d, w end
+                    if d < nd then nd, nearW = d, w end
+                end
             end
-            -- A SIDE ROUTE HEADING OFF DOWN THE THROUGH ROAD IS PART OF THAT ROAD. Turn lanes that join
-            -- the main road, and a lane the through routes missed, end up out along one of its own
-            -- arms; counted as side roads they made T's read as crossroads (22, 23, 65, 66 by the
-            -- registry). A real side road leaves the through road at an angle.
-            local fb, alongRoad = bearing(far.x, far.z), false
-            for _, t in ipairs(tB) do
-                if sep(fb, t) <= 20 then alongRoad = true break end
-            end
-            if not alongRoad then
-                sB[#sB + 1] = fb
+            if far ~= nil then
+                sB[#sB + 1] = bearing(far.x, far.z)
                 sPt[#sPt + 1] = nearW
             end
         end
@@ -17834,6 +17857,10 @@ function ADFlyoverEditor:junctionClassify(jp)
         end
         local branch = math.min(sep(S[1], T[1]), sep(S[1], T[2]))
         return cross(branch)
+    elseif nT == 2 and nS == 0 then
+        -- Nothing left off the through road. This used to fall through as "T square", which looked
+        -- like an answer and was not one.
+        return "no side road found"
     elseif nT == 2 then
         local branch = 90
         if nS == 1 then branch = math.min(sep(S[1], T[1]), sep(S[1], T[2])) end

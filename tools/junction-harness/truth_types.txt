@@ -18,3 +18,4 @@
 63  T square
 65  T square
 66  T skew
+50  T skew          # main road runs NE <-> S (the S-bend); W joins. Tool paired W <-> NE as through - wrong road.
