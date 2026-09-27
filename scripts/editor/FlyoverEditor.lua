@@ -11360,6 +11360,36 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- Group the raw approaches: same direction, similar bearing, and close together fold into ONE. This
     -- collapses the near-coincident, stacked one-way nodes the survey found (arms 0.4-0.9 m apart) so a
     -- crossing reads as a handful of approaches instead of a web. First step of "approach grouping".
+    --
+    -- WHICH LANE END SPEAKS FOR THE GROUP is not whichever the loop met first. A loose copy of a road
+    -- lying on top of the real one puts its lane ends a metre from the real ones, same way, same
+    -- bearing: at one T the real southbound exit folded into the copy's, the southbound lane had no
+    -- exit left to pair with, and the road was read as one through lane plus two "side roads" - a
+    -- staggered 4-way. So a lane end on a LOOSE PIECE (a few hundred points at most, joined to
+    -- nothing else) gives way to one on the network. Only that: preferring whichever end is more
+    -- wired INSIDE the circle instead swapped a Y's plain lane for its own turn wiring and lost a
+    -- through route.
+    local LOOSE = 200
+    local looseCache = {}
+    local function onLoosePiece(wp)
+        if looseCache[wp] ~= nil then return looseCache[wp] end
+        local seen, stack, n = { [wp.id] = true }, { wp }, 0
+        while #stack > 0 and n < LOOSE do
+            local w = table.remove(stack)
+            n = n + 1
+            for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                for _, id in pairs(lst) do
+                    if not seen[id] then
+                        seen[id] = true
+                        local t = ADGraphManager:getWayPointById(id)
+                        if t ~= nil then stack[#stack + 1] = t end
+                    end
+                end
+            end
+        end
+        looseCache[wp] = (#stack == 0 and n < LOOSE)
+        return looseCache[wp]
+    end
     local approaches = {}
     local nIn, nOut = 0, 0
     for _, ap in ipairs(raw) do
@@ -11373,6 +11403,11 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
         if into ~= nil then
             into.count = into.count + 1
+            if onLoosePiece(into.wp) and not onLoosePiece(ap.wp) then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - lane end id=%d lies on a loose piece wired to nothing; id=%d beside it is on the network and speaks for the pair.",
+                    into.wp.id, ap.wp.id)
+                into.wp, into.bearing = ap.wp, ap.bearing
+            end
         else
             approaches[#approaches + 1] = { wp = ap.wp, dir = ap.dir, bearing = ap.bearing, count = 1 }
             if ap.dir == "in" then nIn = nIn + 1 else nOut = nOut + 1 end
