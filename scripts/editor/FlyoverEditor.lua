@@ -11615,7 +11615,7 @@ function ADFlyoverEditor:updateJunctionPreview()
                             if parallel and across <= ACROSS
                                 and runs[i] < minArm and runs[j] > runs[i] * RATIO then
                                 shadowed[i] = true
-                                Logging.info("[FlyoverEditor]: junction - the branch on bearing %.0f runs %.0f m and lies %.1f m alongside a lane that runs %.0f m - the same lane twice. Noted, not acted on.",
+                                Logging.info("[FlyoverEditor]: junction - the branch on bearing %.0f runs %.0f m and lies %.1f m alongside a lane that runs %.0f m - the same lane twice. Not counted as a side road.",
                                     math.deg(merged[i].bearing or 0) % 360, runs[i], across, runs[j])
                             end
                         end
@@ -11625,7 +11625,10 @@ function ADFlyoverEditor:updateJunctionPreview()
                 local kept = {}
                 for k, ap in ipairs(merged) do
                     if shadowed[k] then
-                        -- already said above
+                        -- A stub that duplicates a real lane is not a side road. Only the side-road
+                        -- list below skips it: the approaches themselves are kept, because other
+                        -- passes lean on them and dropping them made the clear worse.
+                        ap._debris = true
                     elseif ap.wp == nil or seen[ap.wp] then
                         kept[#kept + 1] = ap
                     else
@@ -11633,20 +11636,17 @@ function ADFlyoverEditor:updateJunctionPreview()
                             math.deg(ap.bearing or 0) % 360)
                     end
                 end
-                -- REPORTED, NOT ACTED ON - yet.
+                -- WHAT IS ACTED ON, AND WHERE. Dropping approaches outright makes the clear worse
+                -- (42 m reach instead of 36 at one T): they carry more than "these are the arms".
+                -- But the junction's TYPE reads jp.pathRoutes.side, which is built from every
+                -- approach no through route covers - so a stub duplicating a lane became a side
+                -- road, and a T read as a staggered 4-way. The same-lane stub is therefore kept out
+                -- of the side roads only (ap._debris), and nothing else.
                 --
-                -- Both tests find what they are meant to find. Dropping those approaches, though,
-                -- makes the clear worse rather than better: at the T above it reached 42 m instead
-                -- of 36, and left a lane stopping 21 m out that the game brings to 8. The approaches
-                -- carry more than "these are the arms" and other passes lean on them.
-                --
-                -- Nor would dropping them fix the reading this was chasing: the junction's TYPE is
-                -- worked out from jp.pathRoutes, which never looks at approaches at all, so no
-                -- filtering here could ever have changed it.
-                --
-                -- So it says what it sees and changes nothing. That is worth having on its own - the
-                -- debris is named, in the capture, at the moment it matters - and it marks the place
-                -- for the fix once it is known where acting is safe.
+                -- "Not wired" stays a note. Unwired is not the same as debris: a two-lane road
+                -- crossing the junction that nothing connects to yet is exactly what the tool is
+                -- for, and skipping it turned two plain crossroads into T's. Debris has to be told
+                -- apart by SIZE (a few stray points, not a 20-point road) - still to do.
                 local _ = kept
             end
         end
@@ -12985,7 +12985,7 @@ function ADFlyoverEditor:updateJunctionPreview()
             end
             local side = {}
             for _, ap in ipairs(approaches) do
-                if not has[ap] then
+                if not has[ap] and not ap._debris then
                     local ch = self:junctionChain(ap, cx, cz, R)
                     local nodes = {}
                     for _, n in ipairs(ch) do nodes[#nodes + 1] = n end
