@@ -12237,14 +12237,24 @@ function ADFlyoverEditor:updateJunctionPreview()
                 if ap.dir == "in" then b = b + math.pi end
                 return b
             end
+            -- AN ARM IS A PLACE AS WELL AS A HEADING. Lanes were grouped by which way they head at their
+            -- anchor, 60 m out - and on an S-bend both ends of the main road can be heading the same
+            -- way that far out. At 50 (by the registry) the north-east and south arms both headed east,
+            -- were taken for one arm, and the only pairing left was the WEST road with that lump: the
+            -- side road became the main road. So lanes share an arm only when they also lie the same
+            -- way from the centre.
+            local function placeOf(ap) return math.atan2(ap.wp.x - cx, ap.wp.z - cz) end
             local armOf = {}
             for _, ap in ipairs(approaches) do
                 local b, hit = outward(ap), nil
                 for _, a in ipairs(arms) do
-                    if junctionAngDiff(b, a.b) <= math.rad(35) then hit = a break end
+                    if junctionAngDiff(b, a.b) <= math.rad(35) and junctionAngDiff(placeOf(ap), a.p) <= math.rad(35) then
+                        hit = a
+                        break
+                    end
                 end
                 if hit == nil then
-                    hit = { b = b, sx = 0, sz = 0 }
+                    hit = { b = b, p = placeOf(ap), sx = 0, sz = 0 }
                     arms[#arms + 1] = hit
                 end
                 hit.sx, hit.sz = hit.sx + math.sin(b), hit.sz + math.cos(b)
@@ -12258,24 +12268,54 @@ function ADFlyoverEditor:updateJunctionPreview()
             -- between them - the walks that pair an entry with an exit without ever turning away -
             -- and the more of them, and in both directions, the surer. Straightness only settles a
             -- tie.
+            -- A TIE IS SETTLED BY THE SHARPEST TURN NEAR THE MIDDLE, not by how straight the arms look
+            -- 60 m out. A real road bends gradually; a turn has a kink. On 50's S-bend (by the
+            -- registry) both ends of the main road head the same way 60 m out, so the main road looked
+            -- like a U-turn and lost to the side road; its sharpest turn is 23-25 degrees per 10 m
+            -- against the side road's 56-71. Straightness far out is only the last resort now.
+            local function sharpest(rt)
+                local pts = {}
+                for _, id in ipairs(rt.path or {}) do
+                    local w = ADGraphManager:getWayPointById(id)
+                    if w ~= nil then pts[#pts + 1] = w end
+                end
+                local worst = 0
+                for i = 2, #pts do
+                    if (pts[i].x - cx) ^ 2 + (pts[i].z - cz) ^ 2 < 30 * 30 then
+                        local j, run = i, 0
+                        while j < #pts and run < 10 do
+                            run = run + math.sqrt((pts[j + 1].x - pts[j].x) ^ 2 + (pts[j + 1].z - pts[j].z) ^ 2)
+                            j = j + 1
+                        end
+                        if j < #pts then
+                            local h1 = math.atan2(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+                            local h2 = math.atan2(pts[j + 1].x - pts[j].x, pts[j + 1].z - pts[j].z)
+                            worst = math.max(worst, junctionAngDiff(h1, h2))
+                        end
+                    end
+                end
+                return worst
+            end
             local cand = {}
             for i = 1, #arms do
                 for j = i + 1, #arms do
-                    local walks, other = 0, 0
+                    local walks, other, sharp = 0, 0, math.huge
                     for _, rt in ipairs(routes) do
                         local ae, ax = armOf[rt.e], armOf[rt.x]
                         if (ae == arms[i] and ax == arms[j]) or (ae == arms[j] and ax == arms[i]) then
                             if (rt.ang or 0) == 0 then walks = walks + 1 else other = other + 1 end
+                            sharp = math.min(sharp, sharpest(rt))
                         end
                     end
                     if walks + other > 0 then
-                        cand[#cand + 1] = { a = arms[i], b = arms[j], score = walks * 10 + other,
+                        cand[#cand + 1] = { a = arms[i], b = arms[j], score = walks * 10 + other, sharp = sharp,
                             dev = math.abs(math.pi - junctionAngDiff(arms[i].b, arms[j].b)) }
                     end
                 end
             end
             table.sort(cand, function(p, q)
                 if p.score ~= q.score then return p.score > q.score end
+                if math.abs(p.sharp - q.sharp) > math.rad(10) then return p.sharp < q.sharp end
                 return p.dev < q.dev
             end)
             for _, c in ipairs(cand) do
