@@ -19,6 +19,13 @@ for line in open(comp, encoding="utf8"):
     if m:
         v, n, x, z, tool, mp, wide = m.groups()
         rows[int(n)] = dict(v=v, x=float(x), z=float(z), tool=tool, map=mp, wide=wide)
+# "# skip: 67 68" in truth_types.txt: junctions never to show (test leftovers on the map)
+skip = set()
+if os.path.exists("truth_types.txt"):
+    for line in open("truth_types.txt", encoding="utf8"):
+        m = re.match(r"#\s*skip:\s*(.*)", line.strip())
+        if m: skip |= {int(v) for v in m.group(1).split()}
+for n in skip: rows.pop(n, None)
 mains = {}
 for line in open(tt, encoding="utf8"):
     m = re.match(r"(\d+) .*\| main (.*)$", line.strip())

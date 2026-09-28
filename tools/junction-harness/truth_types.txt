@@ -2,6 +2,7 @@
 # Kind: T square, T skew, Y merge, Y, 4W square/skew/very skew, 4W offset. "?" = user unsure.
 # Only junctions the user has looked at are listed; the rest are unlabelled, not agreed.
 # Junctions 67 and 68 are test leftovers on the user's map: never reviewed or scored.
+# skip: 67 68
 # "main=NE-S" names the main road's two ends (compass, north up) where the user gave them;
 # score.py then also checks the tool's main-road pick.
 1   T square  main=SE-NW
@@ -27,7 +28,7 @@
 21  T square  main=NW-SE
 22  T square  main=W-SE   # main road: S via the hairpin <-> SE; it leaves the centre heading W. NE joins
 23  T square  main=NE-SW
-24  Y  main=E-N   # Single lane straight off of main road at turn
+24  T square  main=E-N   # the main road turns the corner; a single lane carries straight on (a side road)
 25  T square  main=SW-NE
 26  4W offset ?  main=SW-NE   # "offset 4W, or a T square and a T skew" - two T's close together
 27  T skew  main=E-W

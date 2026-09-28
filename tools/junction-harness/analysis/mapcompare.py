@@ -148,7 +148,7 @@ for line in lines:
 out = open(sys.argv[2], "w", encoding="utf8") if len(sys.argv) > 2 else sys.stdout
 order = {"DISAGREE": 0, "TOOL NO READ": 1, "MAP UNSURE": 2, "NO MAP ROAD": 3, "agree": 4}
 for n, x, z, ttype, k25, k40, a25, v in sorted(rows, key=lambda r: (order[r[7]], r[0])):
-    out.write("%-11s j%-3d (%7.1f, %7.1f)  tool: %-26s map: %-14s (wider circle: %s)  arms %s\n" % (
+    out.write("%-11s j%-3d (%7.1f, %7.1f)  tool: %-26s  map: %-14s (wider circle: %s)  arms %s\n" % (
         v, n, x, z, ttype, k25, k40, " ".join("%.0f" % a for a in a25)))
 counts = {}
 for r in rows: counts[r[7]] = counts.get(r[7], 0) + 1
