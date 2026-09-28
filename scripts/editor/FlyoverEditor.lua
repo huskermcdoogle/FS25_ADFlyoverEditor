@@ -16164,7 +16164,24 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                     local d = (n.x - centre.x) ^ 2 + (n.z - centre.z) ^ 2
                     if d < dC then dC, iC = d, i end
                 end
-                if iC ~= nil and iC >= 3 and dC <= 12 * 12 then
+                -- ...unless the road turns the corner here: then the bend is the road, and it is left
+                -- as it is (see junctionTidyByPaths - 24 by the registry).
+                local corner = false
+                if iC ~= nil then
+                    local function along(step)
+                        local i, run = iC, 0
+                        while i + step >= 1 and i + step <= #w.seq and run < 8 do
+                            run = run + math.sqrt((w.seq[i + step].x - w.seq[i].x) ^ 2 + (w.seq[i + step].z - w.seq[i].z) ^ 2)
+                            i = i + step
+                        end
+                        return w.seq[i]
+                    end
+                    local a, m, b = along(-1), w.seq[iC], along(1)
+                    if a ~= m and b ~= m then
+                        corner = junctionAngDiff(math.atan2(m.x - a.x, m.z - a.z), math.atan2(b.x - m.x, b.z - m.z)) > math.rad(45)
+                    end
+                end
+                if iC ~= nil and iC >= 3 and dC <= 12 * 12 and not corner then
                     local sub = {}
                     for i = 1, iC do sub[i] = w.seq[i] end
                     laneSeqs[#laneSeqs + 1] = { seq = sub, useOut = w.useOut }
@@ -16641,6 +16658,28 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         local seq = {}
         for i = lo, hi do seq[#seq + 1] = live0[i] end
         if #seq < 3 then return seq end
+        -- A MAIN ROAD THAT TURNS THE CORNER IS LEFT ALONE. Smoothing the whole path redraws the bend
+        -- out to 50 m either side, and at a corner that bend is the road itself, not old wiring - at
+        -- 24 (by the registry) the corner was respaced out to 37 m. The turn is read across the
+        -- middle, 8 m either side; beyond 45 degrees the path is returned untouched.
+        do
+            local function along(from, step)
+                local i, run = from, 0
+                while i + step >= 1 and i + step <= #live0 and run < 8 do
+                    run = run + math.sqrt((live0[i + step].x - live0[i].x) ^ 2 + (live0[i + step].z - live0[i].z) ^ 2)
+                    i = i + step
+                end
+                return live0[i]
+            end
+            local a, m, b = along(mid, -1), live0[mid], along(mid, 1)
+            if a ~= m and b ~= m then
+                local turn = junctionAngDiff(math.atan2(m.x - a.x, m.z - a.z), math.atan2(b.x - m.x, b.z - m.z))
+                if turn > math.rad(45) then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - the main road turns %.0f degrees here; its corner is left as it is.", math.deg(turn))
+                    return seq
+                end
+            end
+        end
         local old = {}
         for i, n in ipairs(seq) do old[i] = { x = n.x, z = n.z } end
         local first, last = seq[1], seq[#seq]
