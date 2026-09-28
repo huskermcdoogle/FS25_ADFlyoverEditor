@@ -17932,6 +17932,63 @@ function ADFlyoverEditor:junctionClassify(jp)
         end
     end
 
+    -- A CLEARED JUNCTION HAS NO MAIN ROAD TO READ - nothing joins its lanes - so it is read from the
+    -- lane ends themselves: group them into arms by where they sit, and the main road is the pair of
+    -- arms whose lanes line up straight across the gap (a lane arriving on one heading the way a lane
+    -- leaves on the other, and roughly in line with it). Every side route then counts as an arm by
+    -- where it sits. Without this every cleared junction read as "Y" (69-75 by the registry).
+    local cleared = false
+    if #tB == 0 and jp.approaches ~= nil and #jp.approaches >= 2 then
+        local function place(ap)
+            local w = ap.selWp or ap.wp
+            return bearing(w.x, w.z)
+        end
+        local groups = {}
+        for _, ap in ipairs(jp.approaches) do
+            if (ap.selWp or ap.wp) ~= nil then
+                local p, hit = place(ap), nil
+                for _, g in ipairs(groups) do
+                    if sep(p, g.p) <= 35 then hit = g break end
+                end
+                if hit == nil then
+                    hit = { p = p, aps = {} }
+                    groups[#groups + 1] = hit
+                end
+                hit.aps[#hit.aps + 1] = ap
+            end
+        end
+        local best, bi, bj = math.huge, nil, nil
+        for i = 1, #groups do
+            for j = 1, #groups do
+                if i ~= j then
+                    for _, e in ipairs(groups[i].aps) do
+                        for _, x in ipairs(groups[j].aps) do
+                            if e.dir == "in" and x.dir == "out" and e.bearing ~= nil and x.bearing ~= nil then
+                                local turn = math.deg(junctionAngDiff(e.bearing, x.bearing))
+                                local ew, xw = e.selWp or e.wp, x.selWp or x.wp
+                                local hx, hz = math.sin(e.bearing), math.cos(e.bearing)
+                                local off = math.abs((xw.x - ew.x) * hz - (xw.z - ew.z) * hx)
+                                local cost = turn + 3 * off
+                                if turn <= 40 and cost < best then best, bi, bj = cost, i, j end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if bi ~= nil then
+            cleared = true
+            tB[#tB + 1], tB[#tB + 2] = groups[bi].p, groups[bj].p
+            jp._clearedMain = { groups[bi].p, groups[bj].p }
+            sB, sPt = {}, {}
+            for k, g in ipairs(groups) do
+                if k ~= bi and k ~= bj then
+                    sB[#sB + 1] = g.p
+                    sPt[#sPt + 1] = g.aps[1].selWp or g.aps[1].wp
+                end
+            end
+        end
+    end
     -- The main road's own ends group more loosely (45): its two lanes are 4 m apart, and read close
     -- to the middle on a bend - 22's hairpin - they can sit 43 degrees apart and still be one arm.
     local T, S = arms(tB, 45), arms(sB, 30)
@@ -17975,7 +18032,10 @@ function ADFlyoverEditor:junctionClassify(jp)
         local branch = 90
         if nS == 1 then branch = math.min(sep(S[1], T[1]), sep(S[1], T[2])) end
         return (branch <= 38) and "Y merge" or ((branch <= 62) and "T skew" or "T square")
-    elseif nT >= 3 or nT == 0 then
+    elseif nT == 0 then
+        -- Nothing runs straight through and nothing lines up across the gap. This used to read "Y".
+        return "no main road found"
+    elseif nT >= 3 then
         -- Every arm pairs with every other, because in a Y each one really does run into each other
         -- fairly straight. Nothing here is a side road off a main road, which is why no box forms.
         return "Y"

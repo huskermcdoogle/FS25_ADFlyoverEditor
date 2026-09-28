@@ -66,7 +66,7 @@
 61  T skew  main=NW-SE
 62  T skew  main=NW-SW
 63  T square  main=N-SE
-64  T square
+64  4W square
 65  T square  main=NW-SE   # SE is a loop-back road; SW joins
 66  T skew  main=SW-NE
 67  other   # junk on map I left from testing

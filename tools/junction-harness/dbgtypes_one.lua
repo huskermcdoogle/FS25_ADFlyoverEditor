@@ -3,6 +3,12 @@
 -- 25 m from the centre (so a road that loops back is read by the way it leaves, not where it ends).
 local H = dofile("harness.lua")
 local jp = H.lock(tonumber(arg[1]), tonumber(arg[2]), { mode = "clear", radius = 12, leaveThrough = false })
+-- An already-cleared junction is refused by the clear; read it the way build sees it instead.
+local cleared = false
+if jp == nil and tostring(ADFlyoverEditor.junctionRefused):find("already clear") then
+    jp = H.lock(tonumber(arg[1]), tonumber(arg[2]), { mode = "build", radius = 15, leaveThrough = false })
+    cleared = jp ~= nil
+end
 local r = jp and jp.pathRoutes or {}
 local c = jp and (jp._boxCentre or jp.boxCentre or jp.tracksCentre)
 local function compass(w)   -- degrees clockwise from north (FS25 z grows south)
@@ -28,6 +34,11 @@ for _, t in ipairs(r.through or {}) do
     mains[#mains + 1] = a .. "/" .. b
 end
 local uniq = mains
-print(string.format("TYPE %s | %d through, %d side | main %s",
-    tostring(jp and ADFlyoverEditor.junctionClassify(ADFlyoverEditor, jp)), #(r.through or {}), #(r.side or {}),
-    #uniq > 0 and table.concat(uniq, ",") or "none"))
+local kind = tostring(jp and ADFlyoverEditor.junctionClassify(ADFlyoverEditor, jp))
+if cleared and jp._clearedMain then
+    -- the classifier's bearings are atan2(dx, dz) in degrees; compass = 180 - that
+    local a, b = (180 - jp._clearedMain[1]) % 360, (180 - jp._clearedMain[2]) % 360
+    uniq = { string.format("%d/%d", math.floor(math.min(a, b) + 0.5), math.floor(math.max(a, b) + 0.5)) }
+end
+print(string.format("TYPE %s%s | %d through, %d side | main %s", kind, cleared and " (cleared)" or "",
+    #(r.through or {}), #(r.side or {}), #uniq > 0 and table.concat(uniq, ",") or "none"))
