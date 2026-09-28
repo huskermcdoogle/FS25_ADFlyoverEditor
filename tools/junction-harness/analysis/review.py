@@ -37,6 +37,7 @@ def main_words(s):
     if not s or s == "none": return "none"
     parts = []
     for p in s.split(","):
+        if p.startswith("far"): continue   # the card names the way the road leaves
         a, b = (int(v) for v in p.split("/"))
         parts.append("%s-%s" % (compass_word(a), compass_word(b)))
     return ", ".join(dict.fromkeys(parts))

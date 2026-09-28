@@ -20,7 +20,8 @@ if len(sys.argv) > 3:
     for line in open(sys.argv[3], encoding="utf8"):
         m = re.match(r"(\d+) .*\| main (.*)$", line.strip())
         if m and m.group(2) != "none":
-            toolMain[int(m.group(1))] = [tuple(int(v) for v in p.split("/")) for p in m.group(2).split(",")]
+            # "a/b" is read 25 m out, "fara/b" where the route ends; either may match the answer
+            toolMain[int(m.group(1))] = [tuple(int(v) for v in p.replace("far", "").split("/")) for p in m.group(2).split(",")]
 def sep(a, b):
     d = abs(a - b) % 360
     return 360 - d if d > 180 else d

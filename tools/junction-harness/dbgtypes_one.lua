@@ -32,6 +32,11 @@ for _, t in ipairs(r.through or {}) do
     local a, b = compass(leaving(t, k, -1)), compass(leaving(t, k, 1))
     if a > b then a, b = b, a end
     mains[#mains + 1] = a .. "/" .. b
+    -- and where the route ends up (~60 m out): a road that bends just past 25 m (46) is named by
+    -- the way it goes, not the way it leaves
+    local fa, fb = compass(t[1]), compass(t[#t])
+    if fa > fb then fa, fb = fb, fa end
+    mains[#mains + 1] = "far" .. fa .. "/" .. fb
 end
 local uniq = mains
 local kind = tostring(jp and ADFlyoverEditor.junctionClassify(ADFlyoverEditor, jp))
