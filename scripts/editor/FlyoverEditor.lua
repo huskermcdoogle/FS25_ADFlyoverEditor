@@ -11438,13 +11438,46 @@ function ADFlyoverEditor:updateJunctionPreview()
         looseCache[wp] = (#stack == 0 and n < LOOSE)
         return looseCache[wp]
     end
+    -- TWO ROADS SPLITTING APART ARE NOT ONE LANE. The fold is for stacked duplicates - points under
+    -- a metre apart on the same line. At a tight Y the two branches' lanes cross the circle 3.5 m
+    -- apart and 18 degrees apart, folded into one, and a whole branch vanished (53 by the registry,
+    -- read as a straight road with no side road). So both are followed 5 m further out, the way
+    -- traffic goes (downstream for an exit, upstream for an entry); more than 5 m apart there, they
+    -- are two roads.
+    local function outward(wp, dir, want)
+        local prev, cur, run = nil, wp, 0
+        for _ = 1, 30 do
+            local lst = (dir == "out") and (cur.out or {}) or (cur.incoming or {})
+            local nxt, best = nil, -math.huge
+            for _, id in pairs(lst) do
+                local t = ADGraphManager:getWayPointById(id)
+                if t ~= nil and t ~= prev then
+                    local d = (t.x - cx) ^ 2 + (t.z - cz) ^ 2
+                    if d > best then best, nxt = d, t end
+                end
+            end
+            if nxt == nil then break end
+            run = run + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
+            prev, cur = cur, nxt
+            if run >= want then break end
+        end
+        return cur
+    end
+    local function sameLine(a, b, dir)
+        -- 5 m out, not further: a slip lane hugging the road lane 3.5 m apart at 5 m and curving off
+        -- to the NEXT junction later (40) is still this road's lane here; 53's branch is 6.8 m clear
+        -- by then.
+        local fa, fb = outward(a, dir, 5), outward(b, dir, 5)
+        return (fa.x - fb.x) ^ 2 + (fa.z - fb.z) ^ 2 <= 5 * 5
+    end
     local approaches = {}
     local nIn, nOut = 0, 0
     for _, ap in ipairs(raw) do
         local into = nil
         for _, g in ipairs(approaches) do
             if g.dir == ap.dir and junctionAngDiff(g.bearing, ap.bearing) < math.rad(35)
-                and (g.wp.x - ap.wp.x) ^ 2 + (g.wp.z - ap.wp.z) ^ 2 < 36 then
+                and (g.wp.x - ap.wp.x) ^ 2 + (g.wp.z - ap.wp.z) ^ 2 < 36
+                and sameLine(g.wp, ap.wp, ap.dir) then
                 into = g
                 break
             end
@@ -17992,6 +18025,13 @@ function ADFlyoverEditor:junctionClassify(jp)
                         local L2 = vx * vx + vz * vz
                         local u = (L2 > 0) and ((w.x - ax) * vx + (w.z - az) * vz) / L2 or 0
                         local end_ = (i == 2 and u < 0) or (i == #t and u > 1)
+                        if end_ and L2 > 0 then
+                            -- only IN LINE with the main road past its end: at a tight Y (53) a
+                            -- branch 25 m off to the side was nearest to the route's end, and
+                            -- counted as the main road carrying on
+                            local side = math.abs((w.x - ax) * vz - (w.z - az) * vx) / math.sqrt(L2)
+                            if side > 2 * BESIDE then end_ = false end
+                        end
                         u = math.max(0, math.min(1, u))
                         local px, pz = ax + u * vx - w.x, az + u * vz - w.z
                         local d2 = px * px + pz * pz
