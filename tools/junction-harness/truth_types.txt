@@ -66,7 +66,7 @@
 59  T square  main=S-N
 60  T square  main=W-E   # e branch ending ne
 61  T skew  main=NW-SE
-62  T skew  main=NW-SW
+62  T skew  main=NW-SE   # SE road <-> the hairpin road; the south road joins
 63  T square  main=N-SE
 64  4W square
 65  T square  main=NW-SE   # SE is a loop-back road; SW joins
