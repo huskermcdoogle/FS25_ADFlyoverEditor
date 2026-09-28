@@ -12259,6 +12259,8 @@ function ADFlyoverEditor:updateJunctionPreview()
                 end
                 hit.sx, hit.sz = hit.sx + math.sin(b), hit.sz + math.cos(b)
                 hit.b = math.atan2(hit.sx, hit.sz)
+                hit.members = hit.members or {}
+                hit.members[#hit.members + 1] = ap
                 armOf[ap] = hit
             end
             -- PAIRED ON THE LANES' OWN EVIDENCE, NOT ON HOW STRAIGHT THE ARMS LOOK. A main road can
@@ -12323,7 +12325,64 @@ function ADFlyoverEditor:updateJunctionPreview()
                     end
                 end
             end
+            -- A SINGLE-LANE ROAD IS NOT THE MAIN ROAD when two two-lane roads meet at the junction:
+            -- the main road can turn the corner while a single lane carries straight on (24 and 31
+            -- by the registry). An arm is single-lane when all its lane ends sit on one spot and none
+            -- stands for several folded lanes.
+            local function singleLane(arm)
+                local a0 = arm.members[1].selWp or arm.members[1].wp
+                for _, ap in ipairs(arm.members) do
+                    local w = ap.selWp or ap.wp
+                    if (ap.count or 1) > 1 or (w.x - a0.x) ^ 2 + (w.z - a0.z) ^ 2 > 1.5 * 1.5 then return false end
+                end
+                return true
+            end
+            local twoLane = 0
+            for _, arm in ipairs(arms) do
+                arm.single = singleLane(arm)
+                if not arm.single then twoLane = twoLane + 1 end
+            end
+            local anyFull = false
+            for _, c in ipairs(cand) do
+                c.full = not c.a.single and not c.b.single
+                if c.full then anyFull = true end
+            end
+            -- ...AND THE MAIN ROAD MAY TURN THE CORNER. Candidates above only come from lanes that run
+            -- nearly straight through, so a main road turning 90 degrees was never one (24 and 31:
+            -- the only straight candidates ran out along the single lane). With exactly two two-lane
+            -- arms and no candidate between them, they are the main road, over the lanes that join
+            -- them inside the junction.
+            if not anyFull and twoLane == 2 then
+                local A, B = nil, nil
+                for _, arm in ipairs(arms) do
+                    if not arm.single then
+                        if A == nil then A = arm else B = arm end
+                    end
+                end
+                local added = 0
+                for _, e in ipairs(approaches) do
+                    if e.dir == "in" and (armOf[e] == A or armOf[e] == B) then
+                        local other = (armOf[e] == A) and B or A
+                        for _, x in ipairs(approaches) do
+                            if x.dir == "out" and armOf[x] == other then
+                                local connected, path = connectedInside(e.wp.id, x.wp.id)
+                                if connected and path ~= nil then
+                                    routes[#routes + 1] = { e = e, x = x, path = path, ang = junctionAngDiff(e.bearing, x.bearing) }
+                                    added = added + 1
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+                if added > 0 then
+                    cand[#cand + 1] = { a = A, b = B, score = added, sharp = 0, dev = 0, full = true }
+                    anyFull = true
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - a single-lane road carries straight on; the two two-lane roads are the main road, turning the corner (%d lane(s)).", added)
+                end
+            end
             table.sort(cand, function(p, q)
+                if anyFull and twoLane >= 2 and p.full ~= q.full then return p.full end
                 if p.score ~= q.score then return p.score > q.score end
                 if math.abs(p.sharp - q.sharp) > math.rad(10) then return p.sharp < q.sharp end
                 return p.dev < q.dev
@@ -17908,15 +17967,23 @@ function ADFlyoverEditor:junctionClassify(jp)
             -- the main road bulged 15 m off it and was read as a fourth arm.
             local on = {}
             for i, w in ipairs(n) do on[i] = besideThrough(w) end
+            -- ...and a stretch that leaves the main road far out is the NEXT junction's side road:
+            -- at 31 (by the registry) a lane ran 45 m up the main road and turned off at the
+            -- neighbour. A stretch only counts if it comes within 25 m of this junction's centre.
             local counts = {}
-            for i = 1, #n do
-                if on[i] then break end
-                counts[i] = true
+            local function takeRun(from, to, step)
+                local run, near = {}, math.huge
+                for i = from, to, step do
+                    if on[i] then break end
+                    run[#run + 1] = i
+                    near = math.min(near, (n[i].x - c.x) ^ 2 + (n[i].z - c.z) ^ 2)
+                end
+                if near <= 25 * 25 then
+                    for _, i in ipairs(run) do counts[i] = true end
+                end
             end
-            for i = #n, 1, -1 do
-                if on[i] then break end
-                counts[i] = true
-            end
+            takeRun(1, #n, 1)
+            takeRun(#n, 1, -1)
             local far, fd, nearW, nd = nil, -1, nil, math.huge
             for i, w in ipairs(n) do
                 if counts[i] then
@@ -17957,25 +18024,47 @@ function ADFlyoverEditor:junctionClassify(jp)
                 hit.aps[#hit.aps + 1] = ap
             end
         end
-        local best, bi, bj = math.huge, nil, nil
-        for i = 1, #groups do
-            for j = 1, #groups do
-                if i ~= j then
-                    for _, e in ipairs(groups[i].aps) do
-                        for _, x in ipairs(groups[j].aps) do
-                            if e.dir == "in" and x.dir == "out" and e.bearing ~= nil and x.bearing ~= nil then
-                                local turn = math.deg(junctionAngDiff(e.bearing, x.bearing))
-                                local ew, xw = e.selWp or e.wp, x.selWp or x.wp
-                                local hx, hz = math.sin(e.bearing), math.cos(e.bearing)
-                                local off = math.abs((xw.x - ew.x) * hz - (xw.z - ew.z) * hx)
-                                local cost = turn + 3 * off
-                                if turn <= 40 and cost < best then best, bi, bj = cost, i, j end
+        -- A SINGLE-LANE ROAD IS NOT THE MAIN ROAD when two-lane roads meet it: its lane ends all sit
+        -- on one spot (one lane used both ways, or one way only). At 75 (by the registry) a single
+        -- lane lined up dead straight with the south road and was taken for the main road, which in
+        -- fact turns the corner east - so between two-lane arms the main road may turn (up to 100
+        -- degrees); only when no two two-lane arms exist does it have to line up straight.
+        for _, g in ipairs(groups) do
+            local a = g.aps[1].selWp or g.aps[1].wp
+            g.single = true
+            for _, ap in ipairs(g.aps) do
+                local w = ap.selWp or ap.wp
+                -- (count > 1: lanes running the same way side by side were folded into this one)
+                if (ap.count or 1) > 1 or (w.x - a.x) ^ 2 + (w.z - a.z) ^ 2 > 1.5 * 1.5 then g.single = false break end
+            end
+        end
+        local function bestPair(twoLaneOnly, maxTurn)
+            local best, bi, bj = math.huge, nil, nil
+            for i = 1, #groups do
+                for j = 1, #groups do
+                    if i ~= j and (not twoLaneOnly or (not groups[i].single and not groups[j].single)) then
+                        for _, e in ipairs(groups[i].aps) do
+                            for _, x in ipairs(groups[j].aps) do
+                                if e.dir == "in" and x.dir == "out" and e.bearing ~= nil and x.bearing ~= nil then
+                                    local turn = math.deg(junctionAngDiff(e.bearing, x.bearing))
+                                    local ew, xw = e.selWp or e.wp, x.selWp or x.wp
+                                    local hx, hz = math.sin(e.bearing), math.cos(e.bearing)
+                                    local off = math.abs((xw.x - ew.x) * hz - (xw.z - ew.z) * hx)
+                                    local cost = turn + 3 * off
+                                    if turn <= maxTurn and cost < best then best, bi, bj = cost, i, j end
+                                end
                             end
                         end
                     end
                 end
             end
+            return bi, bj
         end
+        local nSingle = 0
+        for _, g in ipairs(groups) do if g.single then nSingle = nSingle + 1 end end
+        local bi, bj = nil, nil
+        if nSingle > 0 and #groups - nSingle >= 2 then bi, bj = bestPair(true, 100) end
+        if bi == nil then bi, bj = bestPair(false, 40) end
         if bi ~= nil then
             cleared = true
             tB[#tB + 1], tB[#tB + 2] = groups[bi].p, groups[bj].p
