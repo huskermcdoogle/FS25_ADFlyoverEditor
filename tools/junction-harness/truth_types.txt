@@ -3,21 +3,78 @@
 # Only junctions the user has looked at are listed; the rest are unlabelled, not agreed.
 # "main=NE-S" names the main road's two ends (compass, north up) where the user gave them;
 # score.py then also checks the tool's main-road pick.
-2   T square
-14  T square
-20  T square
+1   T square  main=SE-NW
+2   T square  main=E-SW   # S2 is another road that T's in on the branch
+3   T skew  main=E-W
+4   T square  main=NE-SW
+5   T square  main=E-W
+6   T square  main=NE-SW
+7   T skew  main=E-W
+8   T square  main=E-W
+9   T square  main=SW-NE
+10  T square  main=NW-SE
+11  4W square
+12  T square  main=W-NE
+13  T square  main=SE-NW
+14  T square  main=SE-NW
+15  4W square
+16  4W square
+17  4W square
+18  4W square
+19  T skew  main=E-W
+20  T square  main=NW-S   # missing the pairing junction
+21  T square  main=NW-SE
 22  T square  main=W-SE   # main road: S via the hairpin <-> SE; it leaves the centre heading W. NE joins
-23  T square
-36  Y merge
-39  4W offset ?     # "offset 4W skew?"
-1   T square
-26  4W offset ?     # "offset 4W, or a T square and a T skew" - two T's close together
-29  T skew
-33  T square
-34  T square        # the road curves into a square T
+23  T square  main=NE-SW
+24  Y  main=E-N   # Single lane straight off of main road at turn
+25  T square  main=SW-NE
+26  4W offset ?  main=SW-NE   # "offset 4W, or a T square and a T skew" - two T's close together
+27  T skew  main=E-W
+28  T square  main=SW-NE   # bordering t skew
+29  T skew  main=NW-SE
+30  4W offset  main=NW-SE
+31  T square  main=NW-NE   # Single lane leaving T straight
+32  T square  main=NW-SE
+33  T square  main=SW-NE
+34  T square  main=SE-NW   # the road curves into a square T
 35  T skew  main=NW-SE   # straight road, S branches off (first called a Y)
-62  T skew
-63  T square
-65  T square  main=NW-SE   # SE is a loop-back road; SW joins
-66  T skew
+36  Y merge  main=N-S
+37  T square  main=NW-SE   # borderline t-skew
+38  4W square  main=S-N
+39  4W offset ?  main=W-NE   # "offset 4W skew?"
+40  T square  main=W-SE
+41  T skew  main=W-E
+42  T skew  main=W-E
+43  T square  main=S-N
+44  T square  main=S-N
+45  T square  main=SW-NE
+46  T square  main=W-S
+47  T square  main=SW-NE
+48  T square  main=S-N
+49  T square  main=NW-SE
 50  T skew  main=NE-S   # the S-bend is the main road; W joins
+51  T skew  main=E-W
+52  T skew  main=NW-SE
+53  Y  main=NW-SE   # thru is more southern branch
+54  T square  main=NW-E
+55  4W skew
+56  4W skew
+57  T square  main=E-W
+58  4W square  main=E-W   # N branch is not hooked up, otherwise I wouldn't say it has a primary through route
+59  T square  main=S-N
+60  T square  main=W-E   # e branch ending ne
+61  T skew  main=NW-SE
+62  T skew  main=NW-SW
+63  T square  main=N-SE
+64  T square
+65  T square  main=NW-SE   # SE is a loop-back road; SW joins
+66  T skew  main=SW-NE
+67  other   # junk on map I left from testing
+68  not a junction   # junk on map I left from testing
+69  T skew  main=N-S
+70  Y  main=W-W   # two to lanes into a single two way
+71  T square  main=W-E   # side road branch as well y from one lane
+72  Y  main=W-E   # one way leaving two way y
+73  Y merge  main=NW-SE   # single into double lane and then a tskew below, single one way leaving to se
+74  T square  main=N-S   # Single lane into main
+75  T square  main=E-S   # two into one lane with t branch
