@@ -7,7 +7,7 @@ import html, json, math, os, re, subprocess, sys, tempfile
 
 LUA = os.environ.get("LUA", r"C:\Program Files (x86)\Lua\5.1\lua.exe")
 comp, tt, out = sys.argv[1], sys.argv[2], sys.argv[3]
-KINDS = ["", "T square", "T skew", "Y merge", "Y", "4W square", "4W skew", "4W very skew", "4W offset",
+KINDS = ["", "T square", "T skew", "Y merge", "Y", "Corner T", "4W square", "4W skew", "4W very skew", "4W offset",
          "two T's close together", "not a junction", "other"]
 DIRS = ["", "N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 

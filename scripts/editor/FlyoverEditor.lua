@@ -18016,6 +18016,7 @@ function ADFlyoverEditor:junctionClassify(jp)
     -- own line: the side road beyond its turn connector, the main road across all its lanes (see
     -- mainLineAt and meetingOf below).
     local sGeo = {}
+    local sNodes = {}   -- each side route's waypoints, alongside sB (for the Corner T lane count)
     local function dirOf(a, b) return math.deg(math.atan2(b.x - a.x, b.z - a.z)) % 360 end
     local function gapOf(a, b) return math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2) end
     -- THE MAIN ROAD'S LINE AT A SPOT: every through lane passing within 20 m of it, averaged (lanes
@@ -18283,6 +18284,13 @@ function ADFlyoverEditor:junctionClassify(jp)
                 sB[#sB + 1] = bearing(far.x, far.z)
                 sPt[#sPt + 1] = nearW
                 sGeo[#sGeo + 1] = meetingOf(n, counts, far)
+                do
+                    -- only the part off the main road: the lane's connector and main-road stretch
+                    -- differ between the two directions of one two-way lane
+                    local offRoad = {}
+                    for i2, w in ipairs(n) do if counts[i2] then offRoad[#offRoad + 1] = w end end
+                    sNodes[#sNodes + 1] = offRoad
+                end
             end
         end
     end
@@ -18358,7 +18366,7 @@ function ADFlyoverEditor:junctionClassify(jp)
             cleared = true
             tB[#tB + 1], tB[#tB + 2] = groups[bi].p, groups[bj].p
             jp._clearedMain = { groups[bi].p, groups[bj].p }
-            sB, sPt, sGeo = {}, {}, {}
+            sB, sPt, sGeo, sNodes = {}, {}, {}, {}
             for k, g in ipairs(groups) do
                 if k ~= bi and k ~= bj then
                     sB[#sB + 1] = g.p
@@ -18433,6 +18441,44 @@ function ADFlyoverEditor:junctionClassify(jp)
             if cnt > 0 then
                 branch = acc / cnt
                 jp._branch = { angle = branch, meet = g0 }
+            end
+        end
+        -- A CORNER T: the main road turns the corner at the junction and a SINGLE-LANE road carries
+        -- straight on from one of its legs (24 and 31 by the registry; the user's own category, with
+        -- its own rules to come). A two-lane road in that place is an ordinary side road and the
+        -- junction stays a T (46). One lane = one side route, or routes whose off-road parts run over
+        -- the same waypoints (a single two-way lane is walked once each way: 24 and 31 share all of
+        -- them, two-lane roads none).
+        if nS == 1 then
+            local bend = 180 - sep(T[1], T[2])
+            -- the side road's direction where it leaves (sGeo), not towards its far end: 24's single
+            -- lane leaves due west, straight on from the main road's east leg, then curves away
+            local sx, sz, sd = 0, 0, S[1]
+            for i, v in ipairs(sB) do
+                local g = sGeo[i]
+                if g ~= nil and sep(v, S[1]) <= 30 then
+                    sx, sz = sx + math.sin(math.rad(g.side)), sz + math.cos(math.rad(g.side))
+                end
+            end
+            if sx ~= 0 or sz ~= 0 then sd = math.deg(math.atan2(sx, sz)) % 360 end
+            local straightOn = math.min(sep(sd, (T[1] + 180) % 360), sep(sd, (T[2] + 180) % 360))
+            if bend >= 45 and straightOn <= 30 then
+                local lanes = {}
+                for i, v in ipairs(sB) do
+                    if sNodes[i] ~= nil and sep(v, S[1]) <= 30 then lanes[#lanes + 1] = sNodes[i] end
+                end
+                local single = (#lanes <= 1)
+                if not single then
+                    local first = {}
+                    for _, w in ipairs(lanes[1]) do first[w] = true end
+                    single = true
+                    for k = 2, #lanes do
+                        local shared = 0
+                        for _, w in ipairs(lanes[k]) do if first[w] then shared = shared + 1 end end
+                        if shared < 0.5 * #lanes[k] then single = false break end
+                    end
+                end
+                if single then return "Corner T" end
             end
         end
         return (branch <= 38) and "Y merge" or ((branch <= 62) and "T skew" or "T square")

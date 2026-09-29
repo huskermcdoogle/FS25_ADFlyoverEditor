@@ -1,5 +1,6 @@
 # The user's own reading of each junction, by registry number (savegame6, 2026-09-27).
-# Kind: T square, T skew, Y merge, Y, 4W square/skew/very skew, 4W offset. "?" = user unsure.
+# Kind: T square, T skew, Y merge, Y, Corner T, 4W square/skew/very skew, 4W offset. "?" = user unsure.
+# Corner T: the main road turns the corner and a single-lane road carries straight on (24, 31).
 # Only junctions the user has looked at are listed; the rest are unlabelled, not agreed.
 # Junctions 67 and 68 are test leftovers on the user's map: never reviewed or scored.
 # skip: 67 68
@@ -28,14 +29,14 @@
 21  T square  main=NW-SE
 22  T square  main=W-SE   # main is reading off due to hairpin
 23  T square  main=NE-SW
-24  other  main=E-N   # we need a name for these as they have thier own rules
+24  Corner T  main=E-N
 25  T square  main=SW-NE
 26  4W offset ?  main=SW-NE   # angle is too acute on side road, still stands
 27  T square ?  main=E-W   # angle is reading too acute for meeting point, still stands
 28  T square  main=SW-NE
 29  T square ?  main=NW-SE
 30  4W offset  main=NW-SE
-31  other  main=NW-NE   # need name for these
+31  Corner T  main=NW-NE
 32  T square  main=NW-SE
 33  T square  main=SW-NE
 34  T square  main=SE-NW   # angle is too acute on side road, it's tangent to a connector

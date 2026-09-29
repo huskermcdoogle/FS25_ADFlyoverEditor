@@ -33,6 +33,7 @@ def mainRight(n):
 
 def kind(k):
     k = k.strip().rstrip("?").strip()
+    if k.startswith("Corner T"): return "Corner T"
     if k.startswith("T ") or k.startswith("Y merge"): return "T"
     if k == "Y": return "Y"
     if k.startswith("4W"): return "4W"
