@@ -45,5 +45,6 @@ if cleared and jp._clearedMain then
     local a, b = (180 - jp._clearedMain[1]) % 360, (180 - jp._clearedMain[2]) % 360
     uniq = { string.format("%d/%d", math.floor(math.min(a, b) + 0.5), math.floor(math.max(a, b) + 0.5)) }
 end
-print(string.format("TYPE %s%s | %d through, %d side | main %s", kind, cleared and " (cleared)" or "",
-    #(r.through or {}), #(r.side or {}), #uniq > 0 and table.concat(uniq, ",") or "none"))
+print(string.format("TYPE %s%s | %d through, %d side | branch %s | main %s", kind, cleared and " (cleared)" or "",
+    #(r.through or {}), #(r.side or {}), (jp and jp._branch) and string.format("%.0f", jp._branch.angle) or "-",
+    #uniq > 0 and table.concat(uniq, ",") or "none"))

@@ -26,8 +26,10 @@ if os.path.exists("truth_types.txt"):
         m = re.match(r"#\s*skip:\s*(.*)", line.strip())
         if m: skip |= {int(v) for v in m.group(1).split()}
 for n in skip: rows.pop(n, None)
-mains = {}
+mains, branch = {}, {}
 for line in open(tt, encoding="utf8"):
+    mb = re.match(r"(\d+) .*\| branch (\d+)", line.strip())
+    if mb: branch[int(mb.group(1))] = int(mb.group(2))
     m = re.match(r"(\d+) .*\| main (.*)$", line.strip())
     if m: mains[int(m.group(1))] = m.group(2)
 
@@ -110,7 +112,8 @@ for n, r in sorted(rows.items()):
     cards.append(f'''<figure id="j{n}" data-n="{n}" data-status="{cls}" class="{'done' if t else ''}">
 <figcaption><b>Junction {n}</b> <span class="tag {cls}">{lab}</span>{' <span class="tag you">answered</span>' if t else ''}<br>
 <span class="k">Tool:</span> {html.escape('nothing' if r['tool'] == 'nil' else r['tool'])}
-&nbsp; <span class="k">main road:</span> {html.escape(main_words(mains.get(n, '')))}<br>
+&nbsp; <span class="k">main road:</span> {html.escape(main_words(mains.get(n, '')))}
+{f'&nbsp; <span class="k">side road meets at</span> <b>{branch[n]}&deg;</b>' if n in branch else ''}<br>
 <span class="k">Map:</span> {html.escape(r['map'])} <span class="c">(wider: {html.escape(r['wide'])})</span><br>
 <span class="c">at {r['x']:.0f}, {r['z']:.0f}</span></figcaption>
 <div class="pic">{pics[n]}</div>

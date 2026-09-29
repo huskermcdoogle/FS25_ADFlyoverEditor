@@ -17932,8 +17932,10 @@ end
 --- attach later, without the order of the clear having to be taken apart a second time.
 function ADFlyoverEditor:junctionClassify(jp)
     if jp == nil then return "?" end
+    jp._branch = nil
     local c = jp._boxCentre or jp.boxCentre or jp.tracksCentre
     if c == nil then return "?" end
+    jp._branchCentre = c
 
     local function bearing(x, z)
         return math.deg(math.atan2(x - c.x, z - c.z)) % 360
@@ -18192,6 +18194,7 @@ function ADFlyoverEditor:junctionClassify(jp)
             return string.format("4W offset (%.0f m stagger)", hi - lo)
         end
         local branch = math.min(sep(S[1], T[1]), sep(S[1], T[2]))
+        jp._branch = { angle = branch, main = (sep(S[1], T[1]) <= sep(S[1], T[2])) and T[1] or T[2], side = S[1], other = T }
         return cross(branch)
     elseif nT == 2 and nS == 0 then
         -- Nothing left off the through road. This used to fall through as "T square", which looked
@@ -18199,7 +18202,12 @@ function ADFlyoverEditor:junctionClassify(jp)
         return "no side road found"
     elseif nT == 2 then
         local branch = 90
-        if nS == 1 then branch = math.min(sep(S[1], T[1]), sep(S[1], T[2])) end
+        if nS == 1 then
+            branch = math.min(sep(S[1], T[1]), sep(S[1], T[2]))
+            -- kept for the card and the harness overlay: the angle, the main-road arm it was measured
+            -- from, and the side arm (bearings as bearing() gives them)
+            jp._branch = { angle = branch, main = (sep(S[1], T[1]) <= sep(S[1], T[2])) and T[1] or T[2], side = S[1], other = T }
+        end
         return (branch <= 38) and "Y merge" or ((branch <= 62) and "T skew" or "T square")
     elseif nT == 0 then
         -- Nothing runs straight through and nothing lines up across the gap. This used to read "Y".

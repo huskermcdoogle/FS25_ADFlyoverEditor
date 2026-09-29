@@ -91,6 +91,39 @@ local r = (jp and jp.pathRoutes) or {}
 local SIDECOL = { "#e8710a", "#9334e6", "#188038", "#c5221f" }
 for i, t in ipairs(r.through or {}) do route(t, "#202124", "T" .. i, 7) end
 for i, sl in ipairs(r.side or {}) do route(sl.nodes, SIDECOL[(i - 1) % #SIDECOL + 1], "S" .. i, 5) end
+-- THE BRANCH ANGLE, drawn where the label reads it: the main-road arm it is measured from, the
+-- side road's direction, the angle between them, and guide rays at 38 and 62 degrees (the Y merge /
+-- T skew / T square lines) on the side road's side of the main arm.
+local br = jp and jp._branch
+if br ~= nil then
+    local bc = jp._branchCentre or c
+    local function ray(bdeg, len, col, width, dash, op)
+        local r = math.rad(bdeg)
+        local x2, z2 = bc.x + math.sin(r) * len, bc.z + math.cos(r) * len
+        add(string.format('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="%s" stroke-width="%s"%s stroke-opacity="%s" stroke-linecap="round"/>',
+            px(bc.x), py(bc.z), px(x2), py(z2), col, width, dash and (' stroke-dasharray="' .. dash .. '"') or "", op or 1))
+        return x2, z2
+    end
+    local d = (br.side - br.main + 540) % 360 - 180          -- signed turn from the main arm to the side arm
+    local sgn = (d >= 0) and 1 or -1
+    local L = R * 0.8
+    for _, g in ipairs({ 38, 62 }) do
+        local gx, gz = ray(br.main + sgn * g, L * 0.95, "#1a73e8", 2, "5 5", 0.8)
+        add(string.format('<text x="%.1f" y="%.1f" font-size="13" fill="#1a73e8" stroke="#fff" stroke-width="3" paint-order="stroke">%d°</text>', px(gx) + 4, py(gz) - 4, g))
+    end
+    ray(br.main, L, "#202124", 4, "10 6")
+    local sx, sz = ray(br.side, L, "#e8710a", 4, "10 6")
+    -- the arc
+    local pts, rr = {}, L * 0.35
+    for k = 0, 24 do
+        local b = math.rad(br.main + d * k / 24)
+        pts[#pts + 1] = string.format("%.1f,%.1f", px(bc.x + math.sin(b) * rr), py(bc.z + math.cos(b) * rr))
+    end
+    add(string.format('<polyline points="%s" fill="none" stroke="#d93025" stroke-width="3"/>', table.concat(pts, " ")))
+    local mb = math.rad(br.main + d / 2)
+    add(string.format('<text x="%.1f" y="%.1f" font-size="22" font-weight="700" fill="#d93025" stroke="#fff" stroke-width="4" paint-order="stroke" text-anchor="middle">%.0f°</text>',
+        px(bc.x + math.sin(mb) * rr * 1.7), py(bc.z + math.cos(mb) * rr * 1.7) + 7, br.angle))
+end
 add(string.format('<circle cx="%.1f" cy="%.1f" r="6" fill="none" stroke="#d93025" stroke-width="2.5"/>', px(c.x), py(c.z)))
 add(string.format('<text x="%.1f" y="%.1f" fill="#d93025" font-weight="700">centre</text>', px(c.x) + 9, py(c.z) - 8))
 add(string.format('<text x="%d" y="%d" font-size="22" font-weight="700" fill="#202124">N &#8593;</text>', PAD + S - 45, PAD + 26))
@@ -100,6 +133,7 @@ local lines = {
     "Black = through route (T). Coloured = side routes (S). Grey = main network. Dashed blue = loose pieces wired to nothing.",
     string.format("%d through, %d side route(s); grid 10 m; north up.", #(r.through or {}), #(r.side or {})),
     nSpl > 0 and string.format("Wide pale orange = the map's own roads (%d traffic spline(s) nearby).", nSpl) or "(no map road lines loaded)",
+    (jp and jp._branch) and string.format("Side road meets the main road at %.0f deg (red). Blue dashes: 38 and 62 deg - under 38 Y merge, 38-62 T skew, over 62 T square.", jp._branch.angle) or "",
 }
 for i, s in ipairs(lines) do
     add(string.format('<text x="%d" y="%d"%s>%s</text>', PAD, y + (i - 1) * 24, i == 1 and ' font-weight="700" font-size="16"' or "", s))
