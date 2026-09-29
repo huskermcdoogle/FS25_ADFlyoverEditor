@@ -18103,7 +18103,8 @@ function ADFlyoverEditor:junctionClassify(jp)
                 hit.aps[#hit.aps + 1] = ap
             end
         end
-        -- A SINGLE-LANE ROAD IS NOT THE MAIN ROAD when two-lane roads meet it: its lane ends all sit
+        -- A SINGLE-LANE ROAD IS NOT THE MAIN ROAD when AT LEAST TWO two-lane roads enter (with one,
+        -- a single lane can still be half of the main road): its lane ends all sit
         -- on one spot (one lane used both ways, or one way only). At 75 (by the registry) a single
         -- lane lined up dead straight with the south road and was taken for the main road, which in
         -- fact turns the corner east - so between two-lane arms the main road may turn (up to 100
