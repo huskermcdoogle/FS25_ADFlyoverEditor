@@ -97,6 +97,11 @@ for n, r in sorted(rows.items()):
                 '<text x="%.1f" y="%.1f">%d</text></a>' % (n, cx, cy, COL[r["v"]], cx, cy + 3.5, n))
 overview = ('<svg viewBox="0 0 %d %d" class="ov"><g class="net">%s</g>%s</svg>' % (W, H, "".join(net), "".join(dots)))
 
+# The browser keeps answers under a key tied to the answer key's content: once answers are folded
+# into truth_types.txt the page starts from them again, instead of reloading stale ones over them.
+import hashlib
+keyver = hashlib.sha1(open("truth_types.txt", "rb").read()).hexdigest()[:10] if os.path.exists("truth_types.txt") else "none"
+
 # ---- cards
 LAB = {"agree": ("tool and map agree", "ag"), "DISAGREE": ("tool and map disagree", "dis"),
        "MAP UNSURE": ("map reading unsure", "uns"), "TOOL NO READ": ("tool found nothing", "no"),
@@ -156,7 +161,7 @@ Your answers are kept in this browser as you go; "Copy answers" puts them on the
 <option value="ag">agree</option><option value="todo">not answered yet</option></select></label><span id="msg"></span></div>
 <div class="grid">{"".join(cards)}</div><div id="big"></div>
 <script>
-const KEY='junction-review-answers';
+const KEY='junction-review-answers-{keyver}';   // changes whenever the answer key does, so old browser answers never override it
 let saved={{}}; try{{saved=JSON.parse(localStorage.getItem(KEY)||'{{}}')}}catch(e){{}}
 const figs=[...document.querySelectorAll('figure[data-n]')];
 function read(f){{return {{kind:f.querySelector('.kind').value,unsure:f.querySelector('.unsure').checked,
