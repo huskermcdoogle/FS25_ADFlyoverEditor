@@ -807,6 +807,13 @@ function ADFlyoverHud:buildRows(editor)
                 if cjp.junctionType ~= nil then
                     add("toggle", "type", tostring(cjp.junctionType))
                 end
+                -- MAYBE MORE THAN ONE JUNCTION: the roads meet in more than one place here, or the
+                -- number is shared with another place roads meet (see junctionPartsNote). Only said,
+                -- never acted on - the user decides which sites to split. A row per line: a note row
+                -- is a single line and does not wrap.
+                for _, line in ipairs(cjp.junctionPartsNote or {}) do
+                    add("note", line)
+                end
                 if cjp.junctionSituation ~= nil then
                     add("toggle", "situation", tostring(cjp.junctionSituation))
                 end
@@ -880,6 +887,10 @@ function ADFlyoverHud:buildRows(editor)
                     jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered")
                 if jp.junctionState ~= nil then
                     add("toggle", "state", tostring(jp.junctionState))
+                end
+                -- The same suggestion the clear card makes (see junctionPartsNote).
+                for _, line in ipairs(jp.junctionPartsNote or {}) do
+                    add("note", line)
                 end
             elseif editor.junctionRefused ~= nil then
                 add("toggle", "free placement", "")
