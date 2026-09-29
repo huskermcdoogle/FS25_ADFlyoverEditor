@@ -18018,36 +18018,66 @@ function ADFlyoverEditor:junctionClassify(jp)
     local sGeo = {}
     local function dirOf(a, b) return math.deg(math.atan2(b.x - a.x, b.z - a.z)) % 360 end
     local function gapOf(a, b) return math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2) end
-    -- THE MAIN ROAD'S LINE AT A SPOT: every through lane passing within 20 m of it, read 20 m either
-    -- side of its nearest node, averaged (lanes run both ways, so each is turned to agree). One lane
-    -- over 10 m read a few degrees rotated wherever the lane kinks at the junction (22, 46, 61, 65 by
-    -- the registry: "rotated clockwise 5-10 degrees").
+    -- THE MAIN ROAD'S LINE AT A SPOT: every through lane passing within 20 m of it, averaged (lanes
+    -- run both ways, so each is turned to agree). One lane over 10 m read a few degrees rotated
+    -- wherever the lane kinks at the junction (22, 46, 61, 65 by the registry: "rotated clockwise
+    -- 5-10 degrees"), which is why every lane is averaged in.
+    -- ...BUT ONLY MAIN_HALF METRES EITHER SIDE, NOT 20. A 40 m chord is the road's line only where
+    -- the road is straight for 40 m; where it bends within 20 m of the junction the chord leans
+    -- towards the bend. 22's hairpin starts 17 m along ("main is reading off due to hairpin"), 51
+    -- dips to the south-east 13 m off ("main is rotated slightly clockwise"), 12 turns north 10 m
+    -- off ("main angle isn't reading right"), and 63 bends right where the side road joins, where
+    -- the chord took in far more of the straight north leg than of the bend ("main is rotated
+    -- clockwise"). 8 m either side is the road's own heading where the side road joins it, and
+    -- averaging the lanes still evens out one lane's kink. Checked against the map's own road lines,
+    -- the main road now reads within 2 degrees of them wherever the map's reading can be trusted,
+    -- a quarter of a degree on average (the 20 m chord was 4 degrees out at 4, 51 and 63).
+    -- ...AND FROM THE POINT ON THE LANE BESIDE THE SPOT, NOT THE LANE'S NEAREST NODE. Nodes on a
+    -- straight run sit up to 13 m apart, and a window centred on a node 6 m away is centred 6 m
+    -- away - on a road that bends, that is a different heading. The window is measured along the
+    -- lane, so a lane that curves is still read over 8 m of its own length.
+    local MAIN_HALF = 8
     local function mainLineAt(px, pz)
         local sx, sz, cnt, best, bpt = 0, 0, 0, math.huge, nil
         for _, t in ipairs(routes.through or {}) do
             if #t >= 2 then
-                local bi, bd = 1, math.huge
-                for i, w in ipairs(t) do
-                    local d = (w.x - px) ^ 2 + (w.z - pz) ^ 2
-                    if d < bd then bd, bi = d, i end
+                -- the closest point on the lane: segment bi, fraction bu along it
+                local bi, bu, bd = 1, 0, math.huge
+                for i = 1, #t - 1 do
+                    local ax, az = t[i].x, t[i].z
+                    local vx, vz = t[i + 1].x - ax, t[i + 1].z - az
+                    local L2 = vx * vx + vz * vz
+                    local u = 0
+                    if L2 > 0 then u = math.max(0, math.min(1, ((px - ax) * vx + (pz - az) * vz) / L2)) end
+                    local d = (ax + u * vx - px) ^ 2 + (az + u * vz - pz) ^ 2
+                    if d < bd then bi, bu, bd = i, u, d end
                 end
                 if bd <= 20 * 20 then
-                    local function walk(step)
-                        local i, r = bi, 0
-                        while i + step >= 1 and i + step <= #t and r < 20 do
-                            r = r + gapOf(t[i], t[i + step])
-                            i = i + step
-                        end
-                        return t[i]
+                    local cum = { 0 }
+                    for i = 2, #t do cum[i] = cum[i - 1] + gapOf(t[i - 1], t[i]) end
+                    local s0 = cum[bi] + bu * (cum[bi + 1] - cum[bi])
+                    -- the point s metres along the lane (held to its ends)
+                    local function at(s)
+                        s = math.max(0, math.min(cum[#t], s))
+                        local i = 1
+                        while i < #t - 1 and cum[i + 1] < s do i = i + 1 end
+                        local L = cum[i + 1] - cum[i]
+                        local f = 0
+                        if L > 0 then f = (s - cum[i]) / L end
+                        return t[i].x + f * (t[i + 1].x - t[i].x), t[i].z + f * (t[i + 1].z - t[i].z)
                     end
-                    local a, b = walk(-1), walk(1)
-                    if a ~= b then
-                        local dx, dz = b.x - a.x, b.z - a.z
-                        local l = math.sqrt(dx * dx + dz * dz)
+                    local ax, az = at(s0 - MAIN_HALF)
+                    local bx, bz = at(s0 + MAIN_HALF)
+                    local dx, dz = bx - ax, bz - az
+                    local l = math.sqrt(dx * dx + dz * dz)
+                    if l > 1 then
                         dx, dz = dx / l, dz / l
                         if cnt > 0 and dx * sx + dz * sz < 0 then dx, dz = -dx, -dz end
                         sx, sz, cnt = sx + dx, sz + dz, cnt + 1
-                        if bd < best then best, bpt = bd, t[bi] end
+                        if bd < best then
+                            local qx, qz = at(s0)
+                            best, bpt = bd, { x = qx, z = qz }
+                        end
                     end
                 end
             end
@@ -18057,14 +18087,15 @@ function ADFlyoverEditor:junctionClassify(jp)
         return bpt, sx / l, sz / l
     end
     -- WHERE AND HOW A SIDE ROAD MEETS THE MAIN ROAD. The side road is read from ITS OWN START: the
-    -- first fork out along it, where the turn connector from the other direction joins - over 10 m
-    -- from there (15 took in 66's side road already curving round to the south). The turn connectors between the main road and that fork leave the main road almost
-    -- tangentially, so reading the first 15 m after the lane left the main road made every angle too
-    -- acute ("reading off the connector", 1, 34, 42, 66); reading 10-35 m out instead caught side
-    -- roads that curve away afterwards (66 curves round to run alongside, 50 dips across). With no
-    -- fork within 30 m there is no connector, and the first 15 m is the side road itself. A lane that
-    -- never reaches the main road (1) is read from its end nearest to it. The meeting point is where
-    -- the two lines cross.
+    -- first fork out along it, where the turn connector from the other direction joins - over 6 m
+    -- from there (15, then 10, took in side roads already curving; see SIDE_LEN). The turn
+    -- connectors between the main road and that fork leave the main road almost tangentially, so
+    -- reading the first 15 m after the lane left the main road made every angle too acute ("reading
+    -- off the connector", 1, 34, 42, 66); reading 10-35 m out instead caught side roads that curve
+    -- away afterwards (66 curves round to run alongside, 50 dips across). With no fork within 30 m
+    -- there is no connector, and the first 6 m after the lane leaves is the side road itself. A lane
+    -- that never reaches the main road (1) is read from its end nearest to it. The meeting point is
+    -- where the two lines cross.
     local function degreeOf(w)
         local seen, d = {}, 0
         for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
@@ -18091,6 +18122,11 @@ function ADFlyoverEditor:junctionClassify(jp)
             if nearMain(n[1]) <= nearMain(n[#n]) then j, step = 1, 1 else j, step = #n, -1 end
         end
         local leave = n[j]
+        -- THE MAIN ROAD IS READ BESIDE WHERE THE SIDE LANE LEAVES IT, NOT WHERE THE TWO LINES CROSS.
+        -- On a skewed junction the crossing lies well up the main road from the leave point, and
+        -- where the main road bends that is a different heading: at 50 the main road read at the
+        -- crossing turns the angle into a Y merge (under 38 degrees), where the user has it as a
+        -- T skew. Beside the leave point it holds at about 40.
         local P, mx, mz = mainLineAt(leave.x, leave.z)
         if P == nil then return nil end
         local seq = { leave }
@@ -18106,14 +18142,31 @@ function ADFlyoverEditor:junctionClassify(jp)
             if run > 30 then break end
             if degreeOf(seq[k]) >= 3 then st = k break end
         end
-        local first, last = seq[st], nil
-        local k, r2 = st, 0
-        while k < #seq and r2 < 10 do
-            r2 = r2 + gapOf(seq[k], seq[k + 1])
-            k = k + 1
+        -- ...and SIDE_LEN metres of it, to the exact point that far along (between nodes). Taking
+        -- whole segments until 10 m was passed read 11-14 m wherever the nodes were coarse, and a
+        -- side road that bends after it leaves bends within that: 26, 27 and 34 swing round towards
+        -- the main road's direction ("angle is too acute on side road", "too acute for meeting
+        -- point", "tangent to a connector"), 66 turns south 5 m past its fork, 42 turns north-east
+        -- 7 m out ("side road is slightly too acute"). The side road's direction is the one it has
+        -- where it starts: read over the same 6 m, the map's own road lines give the same angle
+        -- within about 1 degree at 26, 27, 34 and 42 (66's map road starts too far out to check).
+        -- 10 m keeps 42 a T skew if that turns out to be the right answer there; it reads 64.7, a
+        -- T square, at 6 m, and so does the map.
+        local SIDE_LEN = 6
+        local first = seq[st]
+        local lx, lz = seq[#seq].x, seq[#seq].z
+        local r2 = 0
+        for k = st, #seq - 1 do
+            local g = gapOf(seq[k], seq[k + 1])
+            if r2 + g >= SIDE_LEN then
+                local f = (SIDE_LEN - r2) / g
+                lx, lz = seq[k].x + f * (seq[k + 1].x - seq[k].x), seq[k].z + f * (seq[k + 1].z - seq[k].z)
+                break
+            end
+            r2 = r2 + g
         end
-        last = seq[k]
-        if last == first or gapOf(first, last) < 3 then return nil end
+        local last = { x = lx, z = lz }
+        if gapOf(first, last) < 3 then return nil end
         local sx, sz = last.x - first.x, last.z - first.z
         local sl = math.sqrt(sx * sx + sz * sz)
         sx, sz = sx / sl, sz / sl
