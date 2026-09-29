@@ -118,6 +118,11 @@ if br ~= nil and br.meet ~= nil then
     end
     line(g.main, L, "#202124", 4, "10 6", 1, true)
     line(g.side, L, "#e8710a", 4, "10 6")
+    if g.fromX ~= nil then
+        -- the stretch of side road the direction was read along
+        add(string.format('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#e8710a" stroke-width="12" stroke-opacity="0.35" stroke-linecap="round"/>',
+            px(g.fromX), py(g.fromZ), px(g.toX), py(g.toZ)))
+    end
     local pts, rr = {}, L * 0.35
     for k = 0, 24 do
         local b = math.rad(legDir + d * k / 24)
@@ -166,7 +171,7 @@ local lines = {
     "Black = through route (T). Coloured = side routes (S). Grey = main network. Dashed blue = loose pieces wired to nothing.",
     string.format("%d through, %d side route(s); grid 10 m; north up.", #(r.through or {}), #(r.side or {})),
     nSpl > 0 and string.format("Wide pale orange = the map's own roads (%d traffic spline(s) nearby).", nSpl) or "(no map road lines loaded)",
-    (jp and jp._branch) and string.format("Side road meets the main road at %.0f deg (red, read %s). Blue dashes: 38 and 62 deg - under 38 Y merge, 38-62 T skew, over 62 T square.", jp._branch.angle, jp._branch.meet and "where it leaves the main road" or "from the centre") or "",
+    (jp and jp._branch) and string.format("Side road meets the main road at %.0f deg (red, read %s). Blue dashes: 38 and 62 deg - under 38 Y merge, 38-62 T skew, over 62 T square.", jp._branch.angle, jp._branch.meet and "along each road's own line; wide orange = the stretch of side road measured" or "from the centre") or "",
 }
 for i, s in ipairs(lines) do
     add(string.format('<text x="%d" y="%d"%s>%s</text>', PAD, y + (i - 1) * 24, i == 1 and ' font-weight="700" font-size="16"' or "", s))

@@ -18012,12 +18012,66 @@ function ADFlyoverEditor:junctionClassify(jp)
     -- WHERE AND HOW EACH SIDE ROAD MEETS THE MAIN ROAD, for its angle. The angle used to be read from
     -- the junction centre out to points 12-60 m away, so a centre off the main road, or a side road
     -- that bends after it leaves, skewed it - "angles shouldn't radiate from the junction centre",
-    -- "reads about half of actual" (the user, over the whole map). Now it is read where the side road
-    -- actually leaves: the side road's own direction over its first 15 m from there, against the
-    -- main road's own direction 10 m either side of that spot.
+    -- "reads about half of actual" (the user, over the whole map). Now each road is read along its
+    -- own line: the side road beyond its turn connector, the main road across all its lanes (see
+    -- mainLineAt and meetingOf below).
     local sGeo = {}
     local function dirOf(a, b) return math.deg(math.atan2(b.x - a.x, b.z - a.z)) % 360 end
     local function gapOf(a, b) return math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2) end
+    -- THE MAIN ROAD'S LINE AT A SPOT: every through lane passing within 20 m of it, read 20 m either
+    -- side of its nearest node, averaged (lanes run both ways, so each is turned to agree). One lane
+    -- over 10 m read a few degrees rotated wherever the lane kinks at the junction (22, 46, 61, 65 by
+    -- the registry: "rotated clockwise 5-10 degrees").
+    local function mainLineAt(px, pz)
+        local sx, sz, cnt, best, bpt = 0, 0, 0, math.huge, nil
+        for _, t in ipairs(routes.through or {}) do
+            if #t >= 2 then
+                local bi, bd = 1, math.huge
+                for i, w in ipairs(t) do
+                    local d = (w.x - px) ^ 2 + (w.z - pz) ^ 2
+                    if d < bd then bd, bi = d, i end
+                end
+                if bd <= 20 * 20 then
+                    local function walk(step)
+                        local i, r = bi, 0
+                        while i + step >= 1 and i + step <= #t and r < 20 do
+                            r = r + gapOf(t[i], t[i + step])
+                            i = i + step
+                        end
+                        return t[i]
+                    end
+                    local a, b = walk(-1), walk(1)
+                    if a ~= b then
+                        local dx, dz = b.x - a.x, b.z - a.z
+                        local l = math.sqrt(dx * dx + dz * dz)
+                        dx, dz = dx / l, dz / l
+                        if cnt > 0 and dx * sx + dz * sz < 0 then dx, dz = -dx, -dz end
+                        sx, sz, cnt = sx + dx, sz + dz, cnt + 1
+                        if bd < best then best, bpt = bd, t[bi] end
+                    end
+                end
+            end
+        end
+        if cnt == 0 then return nil end
+        local l = math.sqrt(sx * sx + sz * sz)
+        return bpt, sx / l, sz / l
+    end
+    -- WHERE AND HOW A SIDE ROAD MEETS THE MAIN ROAD. The side road is read from ITS OWN START: the
+    -- first fork out along it, where the turn connector from the other direction joins - over 10 m
+    -- from there (15 took in 66's side road already curving round to the south). The turn connectors between the main road and that fork leave the main road almost
+    -- tangentially, so reading the first 15 m after the lane left the main road made every angle too
+    -- acute ("reading off the connector", 1, 34, 42, 66); reading 10-35 m out instead caught side
+    -- roads that curve away afterwards (66 curves round to run alongside, 50 dips across). With no
+    -- fork within 30 m there is no connector, and the first 15 m is the side road itself. A lane that
+    -- never reaches the main road (1) is read from its end nearest to it. The meeting point is where
+    -- the two lines cross.
+    local function degreeOf(w)
+        local seen, d = {}, 0
+        for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+            for _, id in pairs(lst) do if not seen[id] then seen[id] = true d = d + 1 end end
+        end
+        return d
+    end
     local function meetingOf(n, counts, far)
         local fi = nil
         for i, w in ipairs(n) do if w == far then fi = i break end end
@@ -18028,34 +18082,50 @@ function ADFlyoverEditor:junctionClassify(jp)
         local j, step
         if s1 > 1 then j, step = s1 - 1, 1          -- leaves at n[s1-1], outward is +1
         elseif e1 < #n then j, step = e1 + 1, -1    -- leaves at n[e1+1], outward is -1
-        else return nil end
-        local meet = n[j]
-        local k, run = j, 0
-        while k + step >= 1 and k + step <= #n and run < 15 do
-            run = run + gapOf(n[k], n[k + step])
-            k = k + step
-        end
-        if k == j then return nil end
-        -- the main road at that spot: the through route passing nearest it, 10 m either side
-        local bt, bi, bd = nil, nil, math.huge
-        for _, t in ipairs(routes.through or {}) do
-            for i, w in ipairs(t) do
-                local d = (w.x - meet.x) ^ 2 + (w.z - meet.z) ^ 2
-                if d < bd then bd, bt, bi = d, t, i end
+        else
+            -- the whole lane is off the main road: start from its end nearest to it
+            local function nearMain(w)
+                local P0 = mainLineAt(w.x, w.z)
+                return P0 ~= nil and (P0.x - w.x) ^ 2 + (P0.z - w.z) ^ 2 or math.huge
             end
+            if nearMain(n[1]) <= nearMain(n[#n]) then j, step = 1, 1 else j, step = #n, -1 end
         end
-        if bt == nil or #bt < 2 then return nil end
-        local function walk(stepM)
-            local i, r = bi, 0
-            while i + stepM >= 1 and i + stepM <= #bt and r < 10 do
-                r = r + gapOf(bt[i], bt[i + stepM])
-                i = i + stepM
-            end
-            return bt[i]
+        local leave = n[j]
+        local P, mx, mz = mainLineAt(leave.x, leave.z)
+        if P == nil then return nil end
+        local seq = { leave }
+        local i = j + step
+        while i >= 1 and i <= #n and (counts[i] or i == j + step) do
+            seq[#seq + 1] = n[i]
+            i = i + step
         end
-        local ma, mb = walk(-1), walk(1)
-        if ma == mb then return nil end
-        return { x = meet.x, z = meet.z, side = dirOf(meet, n[k]), main = dirOf(ma, mb) }
+        -- the side road's own start: the first fork within 30 m of the leave point
+        local st, run = 1, 0
+        for k = 2, #seq do
+            run = run + gapOf(seq[k - 1], seq[k])
+            if run > 30 then break end
+            if degreeOf(seq[k]) >= 3 then st = k break end
+        end
+        local first, last = seq[st], nil
+        local k, r2 = st, 0
+        while k < #seq and r2 < 10 do
+            r2 = r2 + gapOf(seq[k], seq[k + 1])
+            k = k + 1
+        end
+        last = seq[k]
+        if last == first or gapOf(first, last) < 3 then return nil end
+        local sx, sz = last.x - first.x, last.z - first.z
+        local sl = math.sqrt(sx * sx + sz * sz)
+        sx, sz = sx / sl, sz / sl
+        -- where the side road's line crosses the main road's (the leave point if they barely cross)
+        local ix, iz = leave.x, leave.z
+        local den = sx * mz - sz * mx
+        if math.abs(den) > 0.05 then
+            local t = ((P.x - first.x) * mz - (P.z - first.z) * mx) / den
+            ix, iz = first.x + sx * t, first.z + sz * t
+        end
+        return { x = ix, z = iz, side = math.deg(math.atan2(sx, sz)) % 360, main = math.deg(math.atan2(mx, mz)) % 360,
+            fromX = first.x, fromZ = first.z, toX = last.x, toZ = last.z }
     end
     -- EACH END OF THE MAIN ROAD IS READ BY THE WAY IT LEAVES, 12 m out, not where the route ends
     -- 60 m out. A road that bends soon after the junction put its two lanes' far ends on very
@@ -18293,14 +18363,18 @@ function ADFlyoverEditor:junctionClassify(jp)
             jp._branch = { angle = branch, main = (sep(S[1], T[1]) <= sep(S[1], T[2])) and T[1] or T[2], side = S[1], other = T }
             -- Measured where the side road meets the main road when that is known (see sGeo): the
             -- sharper angle between the two lines, averaged over the side road's lanes.
-            local acc, cnt, g0 = 0, 0, nil
+            -- only lanes meeting the main road AT this junction (within 20 m of its centre): at 2 a
+            -- road joining the side road further up met the main road's line 31 m away, 13 degrees
+            -- to it, and was averaged in
+            local acc, cnt, g0, g0d = 0, 0, nil, math.huge
             for i, v in ipairs(sB) do
                 local g = sGeo[i]
-                if g ~= nil and sep(v, S[1]) <= 30 then
+                local gd = g and ((g.x - c.x) ^ 2 + (g.z - c.z) ^ 2) or math.huge
+                if g ~= nil and sep(v, S[1]) <= 30 and gd <= 20 * 20 then
                     local a = sep(g.side, g.main)
                     acc = acc + math.min(a, 180 - a)
                     cnt = cnt + 1
-                    g0 = g0 or g
+                    if gd < g0d then g0, g0d = g, gd end
                 end
             end
             if cnt > 0 then
