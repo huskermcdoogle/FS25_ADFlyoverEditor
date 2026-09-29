@@ -4,6 +4,11 @@ local H = dofile("harness.lua")
 local CX, CZ, OUT, R = tonumber(arg[1]), tonumber(arg[2]), arg[3], tonumber(arg[4]) or 75
 local jp = H.lock(CX, CZ, { mode = "clear", radius = 12, leaveThrough = false })
 local c = (jp and (jp._boxCentre or jp.boxCentre or jp.tracksCentre)) or { x = CX, z = CZ }
+-- VIEW="x,z": centre the picture there instead (e.g. between two halves of a compound junction)
+if os.getenv("VIEW") then
+    local vx, vz = os.getenv("VIEW"):match("(%-?[%d.]+),(%-?[%d.]+)")
+    if vx then c = { x = tonumber(vx), z = tonumber(vz) } end
+end
 local kind = jp and ADFlyoverEditor.junctionClassify(ADFlyoverEditor, jp) or "no reading - the tool found no junction here"
 local S, PAD = 900, 20
 local function px(x) return PAD + (x - (c.x - R)) / (2 * R) * S end
@@ -165,6 +170,12 @@ end
 add(string.format('<circle cx="%.1f" cy="%.1f" r="6" fill="none" stroke="#d93025" stroke-width="2.5"/>', px(c.x), py(c.z)))
 add(string.format('<text x="%.1f" y="%.1f" fill="#d93025" font-weight="700">centre</text>', px(c.x) + 9, py(c.z) - 8))
 add(string.format('<text x="%d" y="%d" font-size="22" font-weight="700" fill="#202124">N &#8593;</text>', PAD + S - 45, PAD + 26))
+-- MARKS="x,z,label;x,z,label": extra labelled points (e.g. the meeting points of a compound junction)
+for mx, mz, ml in (os.getenv("MARKS") or ""):gmatch("(%-?[%d.]+),(%-?[%d.]+),([^;]*)") do
+    mx, mz = tonumber(mx), tonumber(mz)
+    add(string.format('<circle cx="%.1f" cy="%.1f" r="16" fill="#7b1fa2" fill-opacity="0.18" stroke="#7b1fa2" stroke-width="3"/>', px(mx), py(mz)))
+    add(string.format('<text x="%.1f" y="%.1f" font-size="20" font-weight="700" fill="#7b1fa2" stroke="#fff" stroke-width="4" paint-order="stroke">%s</text>', px(mx) + 20, py(mz) - 14, ml))
+end
 local y = S + 2 * PAD + 24
 local lines = {
     string.format("Junction at %.0f, %.0f - read as: %s", c.x, c.z, tostring(kind)),
