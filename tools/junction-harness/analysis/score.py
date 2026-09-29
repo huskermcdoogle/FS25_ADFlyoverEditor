@@ -1,7 +1,8 @@
 # Score the tool's and the map's junction readings against the user's own (truth_types.txt).
 #   python analysis/score.py compare.txt [truth_types.txt] [tooltypes.txt]
 # With tooltypes.txt (from dbgtypes.lua), junctions whose answer names the main road ("main=NE-S")
-# are also checked: some through route must leave within 45 degrees of both named directions.
+# are also checked: some through route must leave within 40 degrees of both named directions
+# (45 could not tell 53's east branch, 90, from its south-east one, 135).
 # "Kind" is T / Y / crossroads; a Y merge counts as a T (a shallow one), "?" answers are shown
 # but not scored.
 import re, sys
@@ -27,7 +28,7 @@ def sep(a, b):
     return 360 - d if d > 180 else d
 def mainRight(n):
     a, b = mainOf[n]
-    return any((sep(a, x) <= 45 and sep(b, y) <= 45) or (sep(a, y) <= 45 and sep(b, x) <= 45)
+    return any((sep(a, x) <= 40 and sep(b, y) <= 40) or (sep(a, y) <= 40 and sep(b, x) <= 40)
                for x, y in toolMain.get(n, []))
 
 def kind(k):

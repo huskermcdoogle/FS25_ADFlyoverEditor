@@ -57,7 +57,7 @@
 50  T skew  main=NE-S   # the S-bend is the main road; W joins
 51  T skew  main=E-W
 52  T skew  main=NW-SE
-53  Y  main=NW-SE   # thru is more southern branch
+53  Y merge  main=NW-SE   # tight Y; the main road takes the southerly branch, the east branch merges off
 54  T square  main=NW-E
 55  4W skew
 56  4W skew

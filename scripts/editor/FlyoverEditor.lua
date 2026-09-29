@@ -12278,12 +12278,26 @@ function ADFlyoverEditor:updateJunctionPreview()
             -- way from the centre.
             local function placeOf(ap) return math.atan2(ap.wp.x - cx, ap.wp.z - cz) end
             local armOf = {}
+            -- ONE LANE EACH WAY PER ARM. Two lanes going the same way, not folded together and lying
+            -- in different directions from the centre, are two roads (see the fold above) - at 53's tight Y the east and
+            -- south-east branches lay within 35 degrees of each other 60 m out and were lumped into
+            -- one arm, so the west road could only be paired with the lump. And a lane joins the arm
+            -- it matches most closely, not the first that will take it.
             for _, ap in ipairs(approaches) do
-                local b, hit = outward(ap), nil
+                local b, hit, hd = outward(ap), nil, math.huge
                 for _, a in ipairs(arms) do
-                    if junctionAngDiff(b, a.b) <= math.rad(35) and junctionAngDiff(placeOf(ap), a.p) <= math.rad(35) then
-                        hit = a
-                        break
+                    local dp = junctionAngDiff(placeOf(ap), a.p)
+                    if junctionAngDiff(b, a.b) <= math.rad(35) and dp <= math.rad(35) and dp < hd then
+                        -- (a second lane the same way in the same PLACE is the same road's parallel
+                        -- lane, just too far apart to have been folded - 30's north-west road)
+                        local sameWay = false
+                        for _, m in ipairs(a.members or {}) do
+                            if m.dir == ap.dir and junctionAngDiff(placeOf(ap), placeOf(m)) > math.rad(10) then
+                                sameWay = true
+                                break
+                            end
+                        end
+                        if not sameWay then hit, hd = a, dp end
                     end
                 end
                 if hit == nil then
@@ -14464,6 +14478,18 @@ function ADFlyoverEditor:junctionChainWalk(ap, cx, cz, radius)
                 turnsAway = verdict
             end
         end
+        -- ...AND WITHIN THAT BAND, THE WAY THAT TURNS LESS OVER ITS LENGTH. "Lower id is the road"
+        -- was the whole tie-break, and it is only true where the tool laid wiring onto an old road.
+        -- Where the map's own junction pieces fork (53 by the registry: both ways the scan laid),
+        -- ids say nothing - there it sent the lane east, 7 degrees off and turning 11 over its
+        -- length, past the south-east way 3 degrees off and turning 5, and the side road became the
+        -- main road. A kickout still loses: it leaves tangentially but turns away along its length.
+        -- The id decides only when the two turn within 2 degrees of each other. Clear mode only.
+        local farTurn, bestNx = {}, nil
+        local function turnOf(nid, nx)
+            if farTurn[nid] == nil then farTurn[nid] = junctionBranchTurn(node, nx, useOut, wdx, wdz, 60) end
+            return farTurn[nid]
+        end
         for _, nid in pairs(list) do
             if nid ~= cameFrom and not (turnsAway ~= nil and turnsAway[nid]) then
                 local nx = ADGraphManager:getWayPointById(nid)
@@ -14483,10 +14509,19 @@ function ADFlyoverEditor:junctionChainWalk(ap, cx, cz, radius)
                         -- connector carrying STRAIGHT on where the lane itself bends a little at the
                         -- tie node still loses to the lane; narrow enough that a real fork of two
                         -- old roads, one clearly straighter, is still decided by bearing.
-                        if dot > bestDot + 0.15 or (dot > bestDot - 0.15 and nextId ~= nil and nid < nextId) then
-                            bestDot, nextId = math.max(dot, bestDot), nid
-                        elseif nextId == nil then
-                            bestDot, nextId = dot, nid
+                        local take = false
+                        if nextId == nil or dot > bestDot + 0.15 then
+                            take = true
+                        elseif dot > bestDot - 0.15 then
+                            if lookAhead and bestNx ~= nil then
+                                local a, b = turnOf(nid, nx), turnOf(nextId, bestNx)
+                                if math.abs(a - b) >= math.rad(2) then take = a < b else take = nid < nextId end
+                            else
+                                take = nid < nextId
+                            end
+                        end
+                        if take then
+                            bestDot, nextId, bestNx = (nextId == nil) and dot or math.max(dot, bestDot), nid, nx
                         end
                     end
                 end
