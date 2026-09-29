@@ -11,8 +11,8 @@
 73se T skew     -749.4  489.9
 26n  T          -933.0  481.4
 26s  T          -933.8  493.3
-14n  T square   -816.2   42.1
-14s  T square   -806.0   60.8
+14nw T square   -816.2   42.1
+14se T square   -806.0   60.8
 39   ?            6.9  -13.6   # the north road's junction, the middle of three
 39se T square    22.5    0.1
 39nw T square   -15.0  -24.5   # a one-way lane (labelled "SW" on the decision page; it sits north-west)
