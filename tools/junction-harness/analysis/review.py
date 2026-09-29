@@ -105,7 +105,7 @@ keyver = hashlib.sha1(open("truth_types.txt", "rb").read()).hexdigest()[:10] if 
 # ---- cards
 LAB = {"agree": ("tool and map agree", "ag"), "DISAGREE": ("tool and map disagree", "dis"),
        "MAP UNSURE": ("map reading unsure", "uns"), "TOOL NO READ": ("tool found nothing", "no"),
-       "NO MAP ROAD": ("no map road here", "nm")}
+       "NO MAP ROAD": ("map reader sees no junction", "nm")}
 def opts(values, sel):
     return "".join('<option%s>%s</option>' % (" selected" if v == sel else "", html.escape(v)) for v in values)
 cards = []
