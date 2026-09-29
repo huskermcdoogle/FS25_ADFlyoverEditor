@@ -19,5 +19,13 @@ for n, x, z in txt:gmatch('n="(%d+)"%s+x="(%-?[%d.]+)"%s+z="(%-?[%d.]+)"') do
         local line = out:match("TYPE ([^\n]*)") or ("ERROR " .. (out:match("[^\n]*error[^\n]*") or "no result"))
         print(string.format("%d %.1f %.1f | %s", n, tonumber(x), tonumber(z), line))
         io.stdout:flush()
+        -- MEETS=<file>: also append the measured meeting geometry ("n x z main <deg> side <deg>
+        -- angle <deg>") for comparing measuring methods
+        local meet = out:match("MEET ([^\n]*)")
+        if meet ~= nil and os.getenv("MEETS") ~= nil then
+            local mf = io.open(os.getenv("MEETS"), "a")
+            mf:write(string.format("%d %s\n", n, meet))
+            mf:close()
+        end
     end
 end

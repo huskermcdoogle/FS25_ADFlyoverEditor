@@ -5,13 +5,13 @@
 # skip: 67 68
 # "main=NE-S" names the main road's two ends (compass, north up) where the user gave them;
 # score.py then also checks the tool's main-road pick.
-1   T square  main=SE-NW   # t reading reading off of one of the connectors
+1   T square  main=SE-NW
 2   T square  main=E-SW
-3   T skew  main=E-W   # main is off
-4   T square  main=NE-SW
+3   T skew  main=E-W
+4   T square  main=NE-SW   # little skew of main
 5   T square  main=E-W
 6   T square  main=NE-SW
-7   T skew  main=E-W   # both angles aren't reading right, but this is tskew probably
+7   T skew  main=E-W
 8   T square  main=E-W
 9   T square  main=SW-NE
 10  T square  main=NW-SE
@@ -23,16 +23,16 @@
 16  4W square
 17  4W square
 18  4W square
-19  T square  main=E-W   # main angle is forcing it slightly acute
+19  T square  main=E-W
 20  T square  main=NW-S
-21  T square  main=NW-SE   # main road is acute from actual line
-22  T square  main=W-SE   # both are reading clockwise to where they should be
+21  T square  main=NW-SE
+22  T square  main=W-SE   # main is reading off due to hairpin
 23  T square  main=NE-SW
 24  other  main=E-N   # we need a name for these as they have thier own rules
 25  T square  main=SW-NE
-26  4W offset ?  main=SW-NE   # angle is too acute on side road
-27  T square ?  main=E-W   # angle is reading too acute for meeting point
-28  T square  main=SW-NE   # angle too acute mostly on side road but some on main
+26  4W offset ?  main=SW-NE   # angle is too acute on side road, still stands
+27  T square ?  main=E-W   # angle is reading too acute for meeting point, still stands
+28  T square  main=SW-NE
 29  T square ?  main=NW-SE
 30  4W offset  main=NW-SE
 31  other  main=NW-NE   # need name for these
@@ -46,31 +46,31 @@
 39  4W offset ?  main=W-NE
 40  T square  main=W-SE   # main road is reading to acute to where it should be
 41  T skew  main=W-E
-42  T skew ?  main=W-E   # side road is too acute, seems to be reading off of end of connector
+42  T skew ?  main=W-E   # side road is slightly too acute
 43  T square  main=S-N
 44  T square  main=S-N
 45  T square  main=SW-NE
-46  T square  main=W-S   # main road is rotated clockwise from where it likely should be
+46  T square  main=W-S   # main road is rotated clockwise from where it likely should be, still stands
 47  T square  main=SW-NE
 48  T square  main=S-N
 49  T square  main=NW-SE
-50  T skew  main=NE-S   # angle should be closer to 38
-51  T skew  main=E-W   # angle is too acute on the side road
+50  T skew  main=NE-S
+51  T skew  main=E-W   # main is rotated slightly clockwise
 52  T skew  main=NW-SE
 53  Y merge  main=NW-SE
 54  T square  main=NW-E
 55  4W skew
 56  4W skew
 57  T square  main=E-W
-58  4W square  main=E-W
+58  4W square  main=E-W   # main road is reading too far ccw
 59  T square  main=S-N
 60  T square  main=W-E
 61  T skew  main=NW-SE   # both angles are rotated cw by roughly 5 degrees
 62  T square  main=NW-SE
-63  T square  main=N-SE   # side road is too acute
+63  T square  main=N-SE   # main is rotated cw from where it should be
 64  4W square
 65  T square  main=NW-SE   # both angles rotated clockwise 5-10 degrees
-66  T skew  main=SW-NE   # side road is too acute, measuring off of connector
+66  T skew  main=SW-NE   # side road is too acute, still stands
 69  T skew  main=N-S
 70  Y merge ?  main=W-W
 71  T square  main=W-E

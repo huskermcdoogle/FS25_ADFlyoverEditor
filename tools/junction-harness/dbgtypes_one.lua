@@ -45,6 +45,12 @@ if cleared and jp._clearedMain then
     local a, b = (180 - jp._clearedMain[1]) % 360, (180 - jp._clearedMain[2]) % 360
     uniq = { string.format("%d/%d", math.floor(math.min(a, b) + 0.5), math.floor(math.max(a, b) + 0.5)) }
 end
+-- the measured geometry behind the branch angle: meeting point and the two directions (compass
+-- degrees, 0 = north), for comparing measuring methods
+local g = jp and jp._branch and jp._branch.meet
+if g ~= nil then
+    print(string.format("MEET %.2f %.2f main %.1f side %.1f angle %.1f", g.x, g.z, (180 - g.main) % 360, (180 - g.side) % 360, jp._branch.angle))
+end
 print(string.format("TYPE %s%s | %d through, %d side | branch %s | main %s", kind, cleared and " (cleared)" or "",
     #(r.through or {}), #(r.side or {}), (jp and jp._branch) and string.format("%.0f", jp._branch.angle) or "-",
     #uniq > 0 and table.concat(uniq, ",") or "none"))
