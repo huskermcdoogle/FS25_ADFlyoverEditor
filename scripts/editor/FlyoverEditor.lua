@@ -1135,6 +1135,8 @@ function ADFlyoverEditor:enable()
     -- meaningless now. A stale escHandledAt from the last session made every Esc look like a repeat
     -- (a negative difference is "< 400") until the new clock caught up - Esc did nothing after re-opening.
     self.escHandledAt = nil
+    -- And the warning box's expiry: a message left from last time would otherwise hang on screen.
+    self.warning = nil
     -- Same for the double-click memories: an old timestamp against the new clock reads as "just now",
     -- so a single click on the same point could count as a double-click.
     self.lastSelectId, self.lastSelectAt = nil, nil
@@ -5198,6 +5200,19 @@ function ADFlyoverEditor:warnPlayer(message)
         message = ADFlyoverLocale.t(message)
     end
     Logging.warning("[FlyoverEditor]: %s", message)
+    self:showWarning(message)
+end
+
+--- Show a message in the editor's own warning box, attached to whichever card is in front (drawn by
+--- ADFlyoverHud:drawWarning). The game's red blinking warning is small, fixed in size and sits in the
+--- middle of the screen, away from where the player is looking - it is only the fallback now, for
+--- when the editor is closed. Stays up for a reading time that grows with the message; a click on the
+--- box closes it early.
+function ADFlyoverEditor:showWarning(message)
+    if self.active then
+        self.warning = { text = message, untilMs = self:nowMs() + math.max(5000, #message * 65) }
+        return
+    end
     if g_currentMission ~= nil and g_currentMission.showBlinkingWarning ~= nil then
         pcall(g_currentMission.showBlinkingWarning, g_currentMission, message, 4000)
     end
