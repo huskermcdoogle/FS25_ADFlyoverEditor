@@ -17974,6 +17974,54 @@ function ADFlyoverEditor:junctionClassify(jp)
 
     local routes = jp.pathRoutes or {}
     local tB, sB, sPt = {}, {}, {}
+    -- WHERE AND HOW EACH SIDE ROAD MEETS THE MAIN ROAD, for its angle. The angle used to be read from
+    -- the junction centre out to points 12-60 m away, so a centre off the main road, or a side road
+    -- that bends after it leaves, skewed it - "angles shouldn't radiate from the junction centre",
+    -- "reads about half of actual" (the user, over the whole map). Now it is read where the side road
+    -- actually leaves: the side road's own direction over its first 15 m from there, against the
+    -- main road's own direction 10 m either side of that spot.
+    local sGeo = {}
+    local function dirOf(a, b) return math.deg(math.atan2(b.x - a.x, b.z - a.z)) % 360 end
+    local function gapOf(a, b) return math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2) end
+    local function meetingOf(n, counts, far)
+        local fi = nil
+        for i, w in ipairs(n) do if w == far then fi = i break end end
+        if fi == nil then return nil end
+        local s1, e1 = fi, fi
+        while s1 > 1 and counts[s1 - 1] do s1 = s1 - 1 end
+        while e1 < #n and counts[e1 + 1] do e1 = e1 + 1 end
+        local j, step
+        if s1 > 1 then j, step = s1 - 1, 1          -- leaves at n[s1-1], outward is +1
+        elseif e1 < #n then j, step = e1 + 1, -1    -- leaves at n[e1+1], outward is -1
+        else return nil end
+        local meet = n[j]
+        local k, run = j, 0
+        while k + step >= 1 and k + step <= #n and run < 15 do
+            run = run + gapOf(n[k], n[k + step])
+            k = k + step
+        end
+        if k == j then return nil end
+        -- the main road at that spot: the through route passing nearest it, 10 m either side
+        local bt, bi, bd = nil, nil, math.huge
+        for _, t in ipairs(routes.through or {}) do
+            for i, w in ipairs(t) do
+                local d = (w.x - meet.x) ^ 2 + (w.z - meet.z) ^ 2
+                if d < bd then bd, bt, bi = d, t, i end
+            end
+        end
+        if bt == nil or #bt < 2 then return nil end
+        local function walk(stepM)
+            local i, r = bi, 0
+            while i + stepM >= 1 and i + stepM <= #bt and r < 10 do
+                r = r + gapOf(bt[i], bt[i + stepM])
+                i = i + stepM
+            end
+            return bt[i]
+        end
+        local ma, mb = walk(-1), walk(1)
+        if ma == mb then return nil end
+        return { x = meet.x, z = meet.z, side = dirOf(meet, n[k]), main = dirOf(ma, mb) }
+    end
     -- EACH END OF THE MAIN ROAD IS READ BY THE WAY IT LEAVES, 12 m out, not where the route ends
     -- 60 m out. A road that bends soon after the junction put its two lanes' far ends on very
     -- different bearings - at 22 (by the registry) the inside and outside of a hairpin read as two
@@ -18076,6 +18124,7 @@ function ADFlyoverEditor:junctionClassify(jp)
             if far ~= nil then
                 sB[#sB + 1] = bearing(far.x, far.z)
                 sPt[#sPt + 1] = nearW
+                sGeo[#sGeo + 1] = meetingOf(n, counts, far)
             end
         end
     end
@@ -18151,7 +18200,7 @@ function ADFlyoverEditor:junctionClassify(jp)
             cleared = true
             tB[#tB + 1], tB[#tB + 2] = groups[bi].p, groups[bj].p
             jp._clearedMain = { groups[bi].p, groups[bj].p }
-            sB, sPt = {}, {}
+            sB, sPt, sGeo = {}, {}, {}
             for k, g in ipairs(groups) do
                 if k ~= bi and k ~= bj then
                     sB[#sB + 1] = g.p
@@ -18207,6 +18256,22 @@ function ADFlyoverEditor:junctionClassify(jp)
             -- kept for the card and the harness overlay: the angle, the main-road arm it was measured
             -- from, and the side arm (bearings as bearing() gives them)
             jp._branch = { angle = branch, main = (sep(S[1], T[1]) <= sep(S[1], T[2])) and T[1] or T[2], side = S[1], other = T }
+            -- Measured where the side road meets the main road when that is known (see sGeo): the
+            -- sharper angle between the two lines, averaged over the side road's lanes.
+            local acc, cnt, g0 = 0, 0, nil
+            for i, v in ipairs(sB) do
+                local g = sGeo[i]
+                if g ~= nil and sep(v, S[1]) <= 30 then
+                    local a = sep(g.side, g.main)
+                    acc = acc + math.min(a, 180 - a)
+                    cnt = cnt + 1
+                    g0 = g0 or g
+                end
+            end
+            if cnt > 0 then
+                branch = acc / cnt
+                jp._branch = { angle = branch, meet = g0 }
+            end
         end
         return (branch <= 38) and "Y merge" or ((branch <= 62) and "T skew" or "T square")
     elseif nT == 0 then

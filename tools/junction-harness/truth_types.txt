@@ -11,7 +11,7 @@
 4   T square  main=NE-SW
 5   T square  main=E-W
 6   T square  main=NE-SW
-7   T skew  main=E-W
+7   T skew ?  main=E-W   # likely borderline Y
 8   T square  main=E-W
 9   T square  main=SW-NE
 10  T square  main=NW-SE
@@ -31,22 +31,22 @@
 24  T square  main=E-N   # the main road turns the corner; a single lane carries straight on (a side road)
 25  T square  main=SW-NE
 26  4W offset ?  main=SW-NE   # "offset 4W, or a T square and a T skew" - two T's close together
-27  T skew  main=E-W
+27  T square ?  main=E-W
 28  T square  main=SW-NE   # bordering t skew
-29  T skew  main=NW-SE
+29  T square ?  main=NW-SE
 30  4W offset  main=NW-SE
 31  T square  main=NW-NE   # Single lane leaving T straight
 32  T square  main=NW-SE
 33  T square  main=SW-NE
 34  T square  main=SE-NW   # the road curves into a square T
-35  T skew  main=NW-SE   # straight road, S branches off (first called a Y)
-36  Y merge  main=N-S
+35  Y ?  main=NW-SE   # straight road, S branches off; maybe Y merge should run up to 40-45 deg
+36  Y merge  main=N-SE
 37  T square  main=NW-SE   # borderline t-skew
 38  4W square  main=S-N
 39  4W offset ?  main=W-NE   # "offset 4W skew?"
 40  T square  main=W-SE
 41  T skew  main=W-E
-42  T skew  main=W-E
+42  T square ?  main=W-E
 43  T square  main=S-N
 44  T square  main=S-N
 45  T square  main=SW-NE
@@ -66,7 +66,7 @@
 59  T square  main=S-N
 60  T square  main=W-E   # e branch ending ne
 61  T skew  main=NW-SE
-62  T skew  main=NW-SE   # SE road <-> the hairpin road; the south road joins
+62  T square  main=NW-SE   # SE road <-> the hairpin road; the south road joins
 63  T square  main=N-SE
 64  4W square
 65  T square  main=NW-SE   # SE is a loop-back road; SW joins
