@@ -1747,6 +1747,8 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
 end
 
 function ADFlyoverEditor:update(dt)
+    -- Before anything else, so it happens whatever the editor is doing: see junctionCheckRecordOff.
+    self:junctionCheckRecordOff()
     if not self.active or self.camera == nil or self.cursor == nil then
         return
     end
@@ -9903,6 +9905,109 @@ local jxWhy = {}   -- per reason: how many taken, and the farthest of them
 local jxWasLoose, jxCut, jxExisted = nil, nil, nil
 local jxForeignForks   -- defined below, used by jxBegin
 
+-- THE CLEAR'S OWN RECORD OF WHAT IT CHANGED, one entry per edit, in the order it made them. The
+-- check that runs after a clear compares the network before and after, and every difference has to
+-- be one of these: a change nobody recorded is a change no stage meant to make. Comparing alone
+-- could only say THAT something changed; the record says which stage did it, so a stage that
+-- reaches too far can be named. Only ever written to while a clear is running (jxJournal is nil
+-- otherwise), and only ever read by the check - nothing in the clear decides anything from it.
+-- Entries: op = "add" / "remove" / "move" / "out+" / "out-" / "in+" / "in-", a = the point, b =
+-- the other end of a link, stage = which part of the clear, x/y/z = where the point stood when the
+-- entry was made: where it was laid, where it was removed from, or - for a move - where it stands
+-- AFTER the move (the check replays the moves in order, so each one is measured from the last).
+local jxJournal, jxStage = nil, nil
+-- True while the respacing is rebuilding a run, whichever stage called it: the respacing has a reach
+-- of its own (FLYOVER_JUNCTION_RESPACE_LEN), and the tidy calls it too, to smooth a through road.
+local jxInRespace = false
+-- The stretch the respacing is rebuilding at the moment: where its points stood, and how far along
+-- its lane from the lane's end it starts. Lets the check tell a stretch running out of the junction
+-- (allowed: it ends on the first point past the edge) from one lying wholly outside it (not).
+local jxRespaceRun = nil
+
+local function jxNote(op, a, b, why)
+    if jxJournal == nil or a == nil then return end
+    jxJournal[#jxJournal + 1] = { op = op, a = a, b = b, stage = jxStage or "?", why = why,
+        respace = jxInRespace, run = jxRespaceRun, x = a.x, y = a.y, z = a.z }
+end
+
+--- A point the clear has just laid. Nil-safe, so it can follow any creation call unguarded.
+local function jxNoteAdded(w)
+    if w ~= nil then jxNote("add", w) end
+end
+
+--- A point the clear has just moved, recorded where it now stands.
+local function jxNoteMoved(w)
+    if w ~= nil then jxNote("move", w) end
+end
+
+--- A clear runs start to finish inside one call, so a record still open when the next frame starts
+--- belongs to a clear that stopped with an error before it could close it (applyJunction calls the
+--- clear unguarded). Closed from the editor's update, so the edits of whatever tool comes next are
+--- not piled into it until the next clear resets it. Memory only: nothing reads the record outside
+--- a clear's own check.
+function ADFlyoverEditor:junctionCheckRecordOff()
+    if jxJournal ~= nil then
+        jxJournal, jxStage, jxInRespace, jxRespaceRun = nil, nil, false, nil
+    end
+end
+
+--- The whole network as it stands: where every point is and what it is linked to, held by the
+--- points themselves, because every removal reissues the ids above it. The whole network and not a
+--- circle round the site, so a change made anywhere is seen. Only the check after a clear reads it.
+local function jxSnapshot()
+    local snap = {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil then
+            local out, inn = {}, {}
+            for _, id in ipairs(w.out or {}) do
+                local t = ADGraphManager:getWayPointById(id)
+                if t ~= nil then out[#out + 1] = t end
+            end
+            for _, id in ipairs(w.incoming or {}) do
+                local t = ADGraphManager:getWayPointById(id)
+                if t ~= nil then inn[#inn + 1] = t end
+            end
+            snap[w] = { x = w.x, y = w.y, z = w.z, out = out, inn = inn }
+        end
+    end
+    return snap
+end
+
+--- The through roads the clear found, as lines on the map, read before any of them is cut or
+--- respaced, with the points each one starts and ends at.
+local function jxRouteLines(jp)
+    local lines = {}
+    local through = (jp ~= nil and jp.pathRoutes ~= nil) and jp.pathRoutes.through or nil
+    for _, nodes in ipairs(through or {}) do
+        local pts = {}
+        for _, n in ipairs(nodes) do pts[#pts + 1] = { x = n.x, z = n.z } end
+        if #pts >= 2 then lines[#lines + 1] = { pts = pts, first = nodes[1], last = nodes[#nodes] } end
+    end
+    return lines
+end
+
+--- AUTODRIVE'S OWN RIGHT-OF-WAY RULE, the teal dot: a point two or more roads lead into and at least
+--- one leads out of, less three shapes that only change road type. Copied from AutoDrive 3.0.1.2
+--- (Specialization.lua, getWayPointsInRange). It found 24 links our own counts had called cleared.
+local function jxRightOfWayLists(out, inc)
+    if #out < 1 or #inc < 2 then return false end
+    local singleIn, singleOut, dual = 0, 0, 0
+    for _, i in pairs(inc) do
+        if table.contains(out, i) then dual = dual + 1 else singleIn = singleIn + 1 end
+    end
+    for _, o in pairs(out) do
+        if not table.contains(inc, o) then singleOut = singleOut + 1 end
+    end
+    if dual == 1 and singleIn == 1 and singleOut == 0 then return false end
+    if dual == 1 and singleIn == 0 and singleOut == 1 then return false end
+    if dual == 2 and singleIn == 0 and singleOut == 0 then return false end
+    return true
+end
+
+local function jxRightOfWay(w)
+    return jxRightOfWayLists(w.out or {}, w.incoming or {})
+end
+
 --- One-ended: something leads in and nothing out, or the other way about.
 local function jxLoose(w)
     local nOut, nIn = #(w.out or {}), #(w.incoming or {})
@@ -9946,8 +10051,9 @@ local function jxEnd()
     return held, took, far
 end
 
-local function jxMayDelete(x, z)
-    local site = jxBound
+--- Does (x, z) belong to `site`? The bound itself, for any site: the check after a clear asks it of
+--- the site that was cleared, after jxEnd has let go of jxBound.
+local function jxSiteHas(site, x, z)
     -- No site means this is not a bounded clear (build mode, the console, a tool that never had a
     -- site). Unbounded, exactly as before - this gate only ever tightens a clear.
     if site == nil or site.roads == nil or #site.roads == 0 then return true end
@@ -9976,6 +10082,8 @@ local function jxMayDelete(x, z)
     if best.fork then lim = math.max(0, lim - 2) else lim = lim + 4 end
     return d <= lim
 end
+
+local function jxMayDelete(x, z) return jxSiteHas(jxBound, x, z) end
 
 --- Does this point belong to the junction being worked on? The same question the deletions ask,
 --- asked by anything else that must not wander into the junction next door.
@@ -10010,6 +10118,7 @@ local function jxRemove(which, why)
     -- Whatever this point was joined to is now an end, and on purpose.
     for _, id in ipairs(w.out or {}) do jxMarkCut(ADGraphManager:getWayPointById(id)) end
     for _, id in ipairs(w.incoming or {}) do jxMarkCut(ADGraphManager:getWayPointById(id)) end
+    jxNote("remove", w, nil, why)
     return tryCall(why or "junction remove", function()
         ADGraphManager:removeWayPoint(w.id, false)
     end) == true
@@ -10096,11 +10205,11 @@ end
 local function junctionConnect(a, b, dual)
     if a ~= nil and b ~= nil and not jxMayLink(a, b) then return end
     if a == nil or b == nil or a.id == b.id then return end
-    if not table.contains(a.out, b.id) then table.insert(a.out, b.id) end
-    if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) end
+    if not table.contains(a.out, b.id) then table.insert(a.out, b.id) jxNote("out+", a, b) end
+    if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) jxNote("in+", b, a) end
     if dual then
-        if not table.contains(b.out, a.id) then table.insert(b.out, a.id) end
-        if not table.contains(a.incoming, b.id) then table.insert(a.incoming, b.id) end
+        if not table.contains(b.out, a.id) then table.insert(b.out, a.id) jxNote("out+", b, a) end
+        if not table.contains(a.incoming, b.id) then table.insert(a.incoming, b.id) jxNote("in+", a, b) end
     end
 end
 
@@ -10109,6 +10218,13 @@ local function junctionDisconnect(a, b)
     if a == nil or b == nil then return end
     jxMarkCut(a)
     jxMarkCut(b)
+    -- Recorded only where there was something to remove, so the record says what changed.
+    if jxJournal ~= nil then
+        if table.contains(a.out, b.id) then jxNote("out-", a, b) end
+        if table.contains(b.incoming, a.id) then jxNote("in-", b, a) end
+        if table.contains(b.out, a.id) then jxNote("out-", b, a) end
+        if table.contains(a.incoming, b.id) then jxNote("in-", a, b) end
+    end
     table.removeValue(a.out, b.id)
     table.removeValue(b.incoming, a.id)
     table.removeValue(b.out, a.id)
@@ -10168,6 +10284,7 @@ local function junctionLayChain(NA, points, NB, dual, flags)
     for _, p in ipairs(points) do
         local wp = ADFlyoverRecordWayPoint(p.x, p.y, p.z, false, false, false, 0,
             flags or AutoDrive.FLAG_NONE, false)
+        jxNoteAdded(wp)
         if wp == nil then return false end
         junctionConnect(prev, wp, dual)
         prev = wp
@@ -14737,6 +14854,7 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
 
     local ny = (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac
     local N = ADFlyoverRecordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false)
+    jxNoteAdded(N)
     if N == nil then return ap.wp, trackFlags, {}, segDual end
 
     if ap.dir == "in" then
@@ -16083,6 +16201,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                                             made = ADFlyoverRecordWayPoint(pt.x, pt.y or last.y or 0,
                                                 pt.z, false, false, false, 0,
                                                 last.flags or AutoDrive.FLAG_NONE, false)
+                                            jxNoteAdded(made)
                                         end) or made == nil then break end
                                         if useOut then junctionConnect(seq[#seq], made, segDual)
                                         else junctionConnect(made, seq[#seq], segDual) end
@@ -16233,6 +16352,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                         if not tryCall("junction tidy extend", function()
                             made = ADFlyoverRecordWayPoint(pt.x, pt.y or 0, pt.z, false, false,
                                 false, 0, last.flags or AutoDrive.FLAG_NONE, false)
+                            jxNoteAdded(made)
                         end) or made == nil then break end
                         if useOut then junctionConnect(seq[#seq], made, segDual)
                         else junctionConnect(made, seq[#seq], segDual) end
@@ -16626,6 +16746,7 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
         for j = 1, keepN do
             local w, t = interior[j], targets[j]
             ADGraphManager:moveWayPoint(w.id, t.x, t.y, t.z, w.flags, false)
+            jxNoteMoved(w)
             moved = moved + 1
         end
         local last = (keepN > 0) and interior[keepN] or A
@@ -16646,6 +16767,7 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
             for j = keepN + 1, want do
                 local t = targets[j]
                 local made = ADFlyoverRecordWayPoint(t.x, t.y, t.z, false, false, false, 0, flags, false)
+                jxNoteAdded(made)
                 if made == nil then break end
                 link(prev, made)
                 prev = made
@@ -16701,7 +16823,23 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
                         for i = a, b do nodes[#nodes + 1] = seq[i] end
                         local ok = true
                         for _, q in ipairs(nodes) do if not live(q) then ok = false break end end
-                        if ok then tryCall("junction respace run", respaceRun, nodes) end
+                        if ok then
+                            -- For the check after a clear, and nothing else: which stretch this
+                            -- rebuild works on and how far along the lane from its end, so the check
+                            -- can hold the respacing to its own reach. Read only by the check.
+                            if jxJournal ~= nil then
+                                local along = 0
+                                for i = a, n - 1 do along = along + gap(seq[i], seq[i + 1]) end
+                                local pts = {}
+                                for i, q in ipairs(nodes) do pts[i] = { x = q.x, z = q.z } end
+                                jxRespaceRun = { pts = pts, along = along, firstGap = gap(seq[a], seq[a + 1]),
+                                                 cap = lane.len or LEN }
+                            end
+                            jxInRespace = true
+                            tryCall("junction respace run", respaceRun, nodes)
+                            jxInRespace = false
+                            jxRespaceRun = nil
+                        end
                     end
                     a = b
                 end
@@ -16888,6 +17026,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         local dual = dualOf(a, b)
         local y = (a.y or 0) + ((b.y or 0) - (a.y or 0)) * 0.5
         local n = ADFlyoverRecordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false)
+        jxNoteAdded(n)
         if n == nil then return nil end
         junctionDisconnect(a, b)
         if fwdAB then junctionConnect(a, n, dual) junctionConnect(n, b, dual)
@@ -17227,6 +17366,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     if sh.dx ~= nil and live(near) then
                         tryCall("junction ease clean node", function()
                             ADGraphManager:moveWayPoint(near.id, near.x + sh.dx, near.y, near.z + sh.dz, near.flags, false)
+                            jxNoteMoved(near)
                         end)
                     end
                 end
@@ -17572,6 +17712,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                         local q = arc[math.min(#arc, math.floor((hit * k / n) / 0.25 + 0.5) + 1)]
                         local made1 = ADFlyoverRecordWayPoint(q.x, tip.y or 0, q.z,
                             false, false, false, 0, tip.flags or AutoDrive.FLAG_NONE, false)
+                        jxNoteAdded(made1)
                         if made1 == nil then break end
                         if sl.useOut then junctionConnect(prev, made1, dual) else junctionConnect(made1, prev, dual) end
                         prev = made1
@@ -17763,6 +17904,8 @@ local function jxUnwireSelf(w, apply)
     local selfOut = w.out ~= nil and table.contains(w.out, w.id)
     if not selfIn and not selfOut then return false, nil end
     if apply ~= false then
+        if selfIn then jxNote("in-", w, w) end
+        if selfOut then jxNote("out-", w, w) end
         table.removeValue(w.incoming, w.id)
         table.removeValue(w.out, w.id)
     end
@@ -19365,9 +19508,2535 @@ function ADFlyoverEditor:junctionPartsNote(jp, n, x, z, reg)
     return lines
 end
 
+--- THE CLEAR CHECKS ITS OWN WORK. Two checks, run on the network the clear has just left, and
+--- REPORT ONLY: nothing here undoes, refuses or changes anything. What to do when one fails is
+--- still the user's call (docs/junction-tool/04, Still open 9).
+---
+--- 1. THE MIDDLE IS EMPTY. Nothing in the middle of the cleared junction - out as far as its own
+---    forks lay before the clear, inside the bound the deletions obey - lets a lane coming in on one
+---    road drive out on another, and none of AutoDrive's merge points (teal dots) is left there.
+---    Further out, to 45 m, a teal dot the clear made is reported too (65 and 2, where a side road
+---    came out doubled), and one fed by the end of a turn the clear cut (36). Those dots found 24
+---    missed links across 14 of 60 junctions that our own counts had called clean, and only a drive
+---    through the junction, not a count, says whether two roads are still joined. Whether a join or
+---    a dot was there BEFORE the clear is asked of the network as it was, by place: the clean-up
+---    folds points within 0.3 m into one, and that both moves dots (40) and joins roads that never
+---    met (16). Cases that are not a missed connection are named apart, so none is taken for one: a
+---    crossroads cleared with through roads kept, whose two kept roads still share the point where
+---    they cross, as they did before (decided, not built yet: nothing joins them there) - or which
+---    the clear joined there; a site with no box; one lane splitting and joining itself; one road's
+---    own lanes; and, at a junction the user wants split, the other part's own wiring, which the
+---    clear leaves alone.
+--- 2. NOTHING ELSE TOUCHED. The network before against the network after, matched against the
+---    clear's own record of every edit it made (jxJournal): a difference nobody recorded is a change
+---    no stage meant. Every edit must also lie inside this junction - the respacing may run a
+---    stretch out to the first point past the edge, and no further along a lane than its own reach;
+---    a stretch it re-lays wholly outside the edge but within that reach is a note, the user's call;
+---    every road that drove through the junction must still drive end to end when through roads are
+---    kept; every lane must still run its own way - a lane that came in still comes in, one that went
+---    out still goes out; and no fork may gain a way out that leads to a dead end (58).
+---
+--- `ck` is what applyJunctionClear gathered: the site, the preview it worked from, the network
+--- before (jxSnapshot), the record, the through roads' lines, the through-roads setting, and the
+--- places the roads met before the clear. Logs a summary line and one line per problem, keeps the
+--- result in self.junctionLastCheck for the card, and returns it.
+
+local JX_WORD = { n = "north", ne = "north-east", e = "east", se = "south-east",
+                  s = "south", sw = "south-west", w = "west", nw = "north-west" }
+
+--- In a fixed order: sets keyed by points come back from pairs() in address order, which is a
+--- different order in every process. By place, then by id for two points on the same spot.
+local function jxByPos(a, b)
+    if a.x ~= b.x then return a.x < b.x end
+    if a.z ~= b.z then return a.z < b.z end
+    if (a.y or 0) ~= (b.y or 0) then return (a.y or 0) < (b.y or 0) end
+    return (a.id or 0) < (b.id or 0)
+end
+
+--- Distance from a line of points, how far along it, and which way it runs there.
+local function jxOnLine(pts, x, z)
+    local bd, bs, bdx, bdz, run = math.huge, 0, 0, 0, 0
+    for i = 2, #pts do
+        local a, b = pts[i - 1], pts[i]
+        local ex, ez = b.x - a.x, b.z - a.z
+        local l2 = ex * ex + ez * ez
+        local l = math.sqrt(l2)
+        local t = 0
+        if l2 > 1e-9 then t = math.max(0, math.min(1, ((x - a.x) * ex + (z - a.z) * ez) / l2)) end
+        local px, pz = a.x + ex * t, a.z + ez * t
+        local d = math.sqrt((x - px) ^ 2 + (z - pz) ^ 2)
+        if d < bd then
+            bd, bs = d, run + l * t
+            if l > 1e-6 then bdx, bdz = ex / l, ez / l end
+        end
+        run = run + l
+    end
+    return bd, bs, bdx, bdz
+end
+
+--- Unit heading from p to q, or nil when they stand on the same spot.
+local function jxHeading(p, q)
+    local dx, dz = q.x - p.x, q.z - p.z
+    local l = math.sqrt(dx * dx + dz * dz)
+    if l < 1e-6 then return nil end
+    return dx / l, dz / l
+end
+
+--- What the check works from: where the junction is, how far its middle reaches, and which points
+--- stand in it now. Nil when the clear left nothing to say where the junction was.
+local function jxCheckSetup(ck)
+    local site, jp = ck.site, ck.jp
+    local cx, cz
+    if site ~= nil then
+        cx, cz = site.x, site.z
+    elseif jp ~= nil then
+        local c = jp._boxCentre or jp.tracksCentre
+        if c ~= nil then cx, cz = c.x, c.z end
+    end
+    if cx == nil then return nil end
+    local C = { site = site, jp = jp, leave = ck.leave ~= false, before = ck.before,
+                journal = ck.journal or {}, lines = ck.routeLines or {}, cx = cx, cz = cz,
+                meetings = ck.meetings }
+    local CORE = AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE or 12
+    local bounded = site ~= nil and site.roads ~= nil and #site.roads > 0
+    -- The cleared area is the clear's own idea of this junction: the bound every deletion obeys.
+    function C.inArea(x, z)
+        if bounded then return jxSiteHas(site, x, z) end
+        return (x - cx) ^ 2 + (z - cz) ^ 2 <= CORE * CORE
+    end
+    function C.node(id) return ADGraphManager:getWayPointById(id) end
+    function C.dist(p) return math.sqrt((p.x - cx) ^ 2 + (p.z - cz) ^ 2) end
+    function C.at(x, z) return string.format("(%.1f, %.1f)", x, z) end
+    function C.wordAt(x, z) return JX_WORD[jxCompass(x - cx, z - cz)] or "?" end
+    -- THE MIDDLE, for check 1: as far out as the junction's own forks lay before the clear - where
+    -- its turns left and joined the lanes - and 3 m more, never under the clear's core, never over
+    -- 30 m, and never past the bound. The bound alone is no good here: it runs every arm out to the
+    -- next junction, 44 m where nothing stops it, and that far out it takes in other roads. At 1 a
+    -- road joining its two roads 40 m out read as four missed connections and four U-turns.
+    local midR = CORE
+    for _, f in ipairs(ck.forkSpots or {}) do
+        midR = math.max(midR, math.sqrt((f.x - cx) ^ 2 + (f.z - cz) ^ 2) + 3)
+    end
+    midR = math.min(midR, 30)
+    C.midR = midR
+    function C.inMiddle(x, z)
+        return (x - cx) ^ 2 + (z - cz) ^ 2 <= midR * midR and C.inArea(x, z)
+    end
+    local live = {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil then live[w] = true end
+    end
+    C.live = live
+    local inA, inMid, area = {}, {}, {}
+    for w in pairs(live) do
+        if C.inArea(w.x, w.z) then
+            inA[w] = true
+            area[#area + 1] = w
+            if C.inMiddle(w.x, w.z) then inMid[w] = true end
+        end
+    end
+    table.sort(area, jxByPos)
+    C.inA, C.inMid, C.area = inA, inMid, area
+    C.noBox = (jp ~= nil and jp._box == nil)
+    -- Out to 60 m, past the junction's edge: a teal dot or a dead-end spur the clear left there is
+    -- still the clear's doing (36's half-cut turn left a teal dot 15 m out, just past the edge; 58's
+    -- spur split off its lane 25 m out).
+    local near = {}
+    for w in pairs(live) do
+        if (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= 60 * 60 then near[#near + 1] = w end
+    end
+    table.sort(near, jxByPos)
+    C.near = near
+
+    -- WHAT STOOD HERE BEFORE, BY PLACE. The clean-up folds two points within 0.3 m into one, and
+    -- the one it keeps is not always the one a teal dot sat on: 40e's merge moved 0.5 m onto the
+    -- neighbouring point and was called new, though it had been a teal dot all along. So whether a
+    -- dot was there before is asked of the place, not of the point.
+    local before = C.before
+    local dotsBefore, goneBefore = {}, {}
+    for w, b0 in pairs(before) do
+        if (b0.x - cx) ^ 2 + (b0.z - cz) ^ 2 <= 80 * 80 then
+            if jxRightOfWayLists(b0.out, b0.inn) then dotsBefore[#dotsBefore + 1] = b0 end
+            if not live[w] then goneBefore[#goneBefore + 1] = { w = w, b = b0 } end
+        end
+    end
+    --- How far the nearest teal dot that stood within 1 m of (x, z) before the clear was, or nil.
+    function C.dotBefore(x, z)
+        local bd = nil
+        for _, b0 in ipairs(dotsBefore) do
+            local d = math.sqrt((b0.x - x) ^ 2 + (b0.z - z) ^ 2)
+            if d <= 1 and (bd == nil or d < bd) then bd = d end
+        end
+        return bd
+    end
+    --- A point folded into w: one that stood within 0.5 m of it - before the clear, or where the
+    --- clear took it out - is gone now, and brought links w did not have. Returns how far apart the
+    --- two stood, or nil. Where it was taken out counts too: at 30 the tidy moved a point of each
+    --- kept road to 0.28 m from the other's, and the final sweep folded the two into one.
+    local goneAt, respaceLinks = {}, {}
+    for _, e in ipairs(C.journal) do
+        if e.op == "remove" then goneAt[e.a] = e end
+        if e.op == "out+" and e.respace and e.b ~= nil then
+            respaceLinks[e.a] = respaceLinks[e.a] or {}
+            respaceLinks[e.a][e.b] = true
+        end
+    end
+    C.respaceLinks = respaceLinks
+    --- The points folded into w, gone now, with how far apart the two stood when folded. Not how far
+    --- apart they stood before the clear: the respacing slides a lane's points along it, and at 30 the
+    --- two folded there had stood 30 m apart. `bringing`: only those that brought links w did not have.
+    local function folds(w, bringing)
+        local b0 = before[w]
+        local list = {}
+        if b0 == nil then return list end
+        local mine = { [w] = true }
+        for _, lst in ipairs({ b0.out, b0.inn }) do
+            for _, t in ipairs(lst) do mine[t] = true end
+        end
+        for _, g in ipairs(goneBefore) do
+            local d = math.sqrt((g.b.x - b0.x) ^ 2 + (g.b.z - b0.z) ^ 2)
+            local e = goneAt[g.w]
+            if e ~= nil then d = math.min(d, math.sqrt((e.x - w.x) ^ 2 + (e.z - w.z) ^ 2)) end
+            if d <= 0.5 then
+                local brings = false
+                for _, lst in ipairs({ g.b.out, g.b.inn }) do
+                    for _, t in ipairs(lst) do
+                        if not mine[t] and t ~= g.w then brings = true end
+                    end
+                end
+                if brings or not bringing then list[#list + 1] = { w = g.w, d = d } end
+            end
+        end
+        return list
+    end
+    C.folds = folds
+    --- The points of the network before the clear that w stands for now: itself, when it was there,
+    --- and every point gone now that stood within 0.5 m of it - before the clear, or where the clear
+    --- took it out. A point the clear laid on the spot of one it took out stands for that one.
+    function C.standsFor(w)
+        local list, b0 = {}, before[w]
+        if b0 ~= nil then list[1] = w end
+        for _, g in ipairs(goneBefore) do
+            local d = math.sqrt((g.b.x - w.x) ^ 2 + (g.b.z - w.z) ^ 2)
+            if b0 ~= nil then d = math.min(d, math.sqrt((g.b.x - b0.x) ^ 2 + (g.b.z - b0.z) ^ 2)) end
+            local e = goneAt[g.w]
+            if e ~= nil then d = math.min(d, math.sqrt((e.x - w.x) ^ 2 + (e.z - w.z) ^ 2)) end
+            if d <= 0.5 then list[#list + 1] = g.w end
+        end
+        return list
+    end
+    function C.foldedInto(w)
+        local bd = nil
+        for _, f in ipairs(folds(w, true)) do
+            if bd == nil or f.d < bd then bd = f.d end
+        end
+        return bd
+    end
+    return C
+end
+
+--- THE JUNCTION'S ROADS AND LANES, AS THEY LIE NOW. Which road a drive came in on and went out on
+--- is read off the clear's own lanes (its approaches), not off bearings: a road's two lanes can
+--- leave the middle 40 degrees apart (10's west road read as two roads, and its own stub as joining
+--- it), and 40 m out a bending road lies off its own arm (62's west road read as its south one).
+--- Each lane is walked from its far end in towards the middle, the way it is driven, keeping to the
+--- straightest way on, until it has passed through the middle; every point it runs over is that
+--- lane's. EVERY approach, including those the clear set aside as a duplicate or a loose piece
+--- (ap._debris): the shadow rule also catches a short arm lined up with the opposite arm of a
+--- straight road, and at 16 that hid the whole east road - both ends of two kept through roads -
+--- so a join onto it could not be seen.
+---
+--- Each lane also belongs to one ROAD, named once. Lanes are one road when they lie side by side:
+--- read where each lane is exactly 30 m from the middle (or as far out as it goes), within 20
+--- degrees of each other seen from the middle and within 7 m across. Not by the arms the selection
+--- found: those fold roads within 30 degrees into one, which put both branches of 36's Y on one
+--- road, so a turn from one branch to the other would have read as a U-turn. And not from where a
+--- drive happened to leave a lane: named that way, 16's south-south-east road was "south" in one
+--- line and "south-east" in the next, and a U-turn on its north-west road read as a join between
+--- two roads.
+--- Known and left: a lane that goes less than 30 m out is read where it stops, and that close in
+--- two lanes 5 m apart are more than 20 degrees apart seen from the middle. Every road of 68's grid
+--- (read 7 to 8 m out) reads as two roads, so its U-turns read as joins between two, and 67's east
+--- road (read 13 and 10 m out) as "east" and "east-south-east". 67 and 68 are test leftovers
+--- (truth_types.txt skips them). The one real road still read as two is 22's west road, which loops
+--- through a hairpin: the clear followed its lane out only 27 m out, and there it lies 11 m across
+--- from where its lane in is read, 30 m out, so it is "south-west" and "south". Neither is worth a rule
+--- that every real junction would have to be checked against.
+local JX_WORD16 = { "north", "north-north-east", "north-east", "east-north-east", "east", "east-south-east",
+                    "south-east", "south-south-east", "south", "south-south-west", "south-west",
+                    "west-south-west", "west", "west-north-west", "north-west", "north-north-west" }
+local function jxCheckLanes(C)
+    local jp, cx, cz = C.jp, C.cx, C.cz
+    local approaches = (jp ~= nil and jp.approaches) or {}
+    C.approaches = approaches
+
+    -- A point two lanes run over belongs to the one whose own end it is nearest, along the lane. Each
+    -- walk carries on through the middle and out the far side, so the lane leaving 68's grid walked
+    -- back up to where the lane coming in starts, 7.5 m out, and that lane's drive was named after
+    -- the far side's road ("the lane starting on the east-south-east", for a lane in from the west).
+    -- Each walk's points are kept in order (walked), for reading where the lane lies 30 m out.
+    local inLane, outLane, inRun, outRun = {}, {}, {}, {}
+    local walked = {}
+    for idx, ap in ipairs(approaches) do
+        local A = ap.wp
+        if A ~= nil and C.live[A] then
+            local fwd = (ap.dir == "in")
+            local mark, runAt = outLane, outRun
+            if fwd then mark, runAt = inLane, inRun end
+            local hx, hz = cx - A.x, cz - A.z
+            local hl = math.sqrt(hx * hx + hz * hz)
+            if hl > 1e-6 then hx, hz = hx / hl, hz / hl end
+            local cur, seen, entered = A, { [A] = true }, C.inMid[A] == true
+            local run = 0
+            local seq = { A }
+            walked[idx] = seq
+            if runAt[A] == nil or run < runAt[A] then mark[A], runAt[A] = idx, run end
+            for _ = 1, 300 do
+                local best, bd = nil, -math.huge
+                local lst = cur.incoming or {}
+                if fwd then lst = cur.out or {} end
+                for _, id in ipairs(lst) do
+                    local t = C.node(id)
+                    if t ~= nil and t ~= cur and not seen[t] then
+                        local dx, dz = t.x - cur.x, t.z - cur.z
+                        local l = math.sqrt(dx * dx + dz * dz)
+                        if l > 1e-6 and (dx * hx + dz * hz) / l > bd then bd, best = (dx * hx + dz * hz) / l, t end
+                    end
+                end
+                if best == nil or bd < 0.3 then break end
+                hx, hz = jxHeading(cur, best)
+                run = run + math.sqrt((best.x - cur.x) ^ 2 + (best.z - cur.z) ^ 2)
+                cur = best
+                seen[cur] = true
+                seq[#seq + 1] = cur
+                if runAt[cur] == nil or run < runAt[cur] then mark[cur], runAt[cur] = idx, run end
+                if C.inMid[cur] then entered = true elseif entered then break end
+            end
+        end
+    end
+    C.inLane, C.outLane, C.inRun, C.outRun = inLane, outLane, inRun, outRun
+
+    -- Where each lane lies 30 m out: exactly 30 m, where the lane crosses that distance from the
+    -- middle - not at its first point past it, which on a road with sparse points lies 44-50 m out,
+    -- and a lane read 30 m out beside its partner read 44 m out is more than 7 m across from it.
+    -- Read on the lane as the walk found it, coming in from its far end; only a lane whose walk does
+    -- not cross 30 m is read off the clear's own run of it (ap.runPath), as far as that goes. Read
+    -- off the run alone, a long link of the old network (37 m at 30's north-east road, 28 m at 63's
+    -- south-east road) cut the corner of a bend the lane now follows. Between them, 1, 29, 30, 34,
+    -- 46 and 63 each read one road as two, so a U-turn on it would have read as a join between two.
+    local function at30(p, q)
+        -- where the line from p (inside 30 m) to q (outside) crosses 30 m from the middle
+        local dx, dz, fx, fz = q.x - p.x, q.z - p.z, p.x - cx, p.z - cz
+        local a, b, c = dx * dx + dz * dz, 2 * (fx * dx + fz * dz), fx * fx + fz * fz - 900
+        local t = 1
+        if a > 1e-9 and b * b - 4 * a * c >= 0 then
+            t = math.max(0, math.min(1, (-b + math.sqrt(b * b - 4 * a * c)) / (2 * a)))
+        end
+        return p.x + dx * t, p.z + dz * t
+    end
+    local spot = {}
+    for idx, ap in ipairs(approaches) do
+        local sx, sz = nil, nil
+        local seq = walked[idx] or {}
+        for k = 2, #seq do
+            if C.dist(seq[k]) < 30 and C.dist(seq[k - 1]) >= 30 then
+                sx, sz = at30(seq[k], seq[k - 1])
+                break
+            end
+        end
+        if sx == nil then
+            local p, q = nil, nil
+            for _, w in ipairs(ap.runPath or {}) do
+                if C.dist(w) >= 30 then
+                    q = w
+                    break
+                end
+                p = w
+            end
+            if p ~= nil and q ~= nil then
+                sx, sz = at30(p, q)
+            else
+                local w = q or p or ap.wp
+                if w ~= nil then sx, sz = w.x, w.z end
+            end
+        end
+        if sx ~= nil and (sx - cx) ^ 2 + (sz - cz) ^ 2 > 1e-6 then
+            spot[idx] = { x = sx, z = sz, b = math.atan2(sx - cx, sz - cz) }
+        end
+    end
+    C.laneSpots = spot
+    local apRoad, roads = {}, {}
+    for idx = 1, #approaches do
+        local s1 = spot[idx]
+        if s1 ~= nil then
+            for j = 1, idx - 1 do
+                local s2 = spot[j]
+                if apRoad[idx] == nil and s2 ~= nil and junctionAngDiff(s1.b, s2.b) <= math.rad(20) then
+                    local across = math.abs((s2.x - cx) * math.cos(s1.b) - (s2.z - cz) * math.sin(s1.b))
+                    if across <= 7 then apRoad[idx] = apRoad[j] end
+                end
+            end
+            if apRoad[idx] == nil then
+                roads[#roads + 1] = { sx = 0, sz = 0 }
+                apRoad[idx] = #roads
+            end
+            local r = roads[apRoad[idx]]
+            r.sx, r.sz = r.sx + math.sin(s1.b), r.sz + math.cos(s1.b)
+        end
+    end
+    -- Named by compass point; where two roads would share a name, both get the finer one.
+    local function name8(r) return JX_WORD[jxCompass(r.sx, r.sz)] or "?" end
+    local function name16(r)
+        local b = math.deg(math.atan2(r.sx, -r.sz)) % 360
+        return JX_WORD16[math.floor((b + 11.25) / 22.5) % 16 + 1]
+    end
+    local used = {}
+    for _, r in ipairs(roads) do
+        r.name = name8(r)
+        used[r.name] = (used[r.name] or 0) + 1
+    end
+    for _, r in ipairs(roads) do
+        if used[r.name] > 1 then r.name = name16(r) end
+    end
+    C.roads, C.apRoad = roads, apRoad
+    function C.roadName(idx)
+        local r = apRoad[idx]
+        if r ~= nil then return roads[r].name end
+        local ap = approaches[idx]
+        if ap ~= nil and ap.wp ~= nil then return C.wordAt(ap.wp.x, ap.wp.z) end
+        return "?"
+    end
+end
+
+--- The drive from A to B as the network stands: the shortest by length, over points within `lim` of
+--- the middle and, when a line is given, within `corridor` metres of it. Returns the points of the
+--- drive in order, or nil and every point it could reach (in the order it reached them).
+--- `old`: drive the network as it was before the clear instead (C.before), where it stood then.
+local function jxDrive(C, A, B, pts, corridor, lim, old)
+    local before = C.before
+    local function at(t)
+        if old then return before[t] end
+        return t
+    end
+    local function outs(w)
+        if old then return before[w].out end
+        local list = {}
+        for _, id in ipairs(w.out or {}) do
+            local t = C.node(id)
+            if t ~= nil then list[#list + 1] = t end
+        end
+        return list
+    end
+    local near = {}
+    local function allowed(t)
+        local p = at(t)
+        if p == nil or C.dist(p) > lim then return false end
+        if pts == nil then return true end
+        if near[t] == nil then near[t] = (jxOnLine(pts, p.x, p.z) <= corridor) end
+        return near[t]
+    end
+    local best, prev, done = { [A] = 0 }, {}, {}
+    local open, reached = { A }, { A }
+    while #open > 0 do
+        local bi = 1
+        for i = 2, #open do
+            local a, b = open[i], open[bi]
+            if best[a] < best[b] or (best[a] == best[b] and jxByPos(at(a), at(b))) then bi = i end
+        end
+        local w = table.remove(open, bi)
+        if w == B then break end
+        if not done[w] then
+            done[w] = true
+            local pw = at(w)
+            for _, t in ipairs(outs(w)) do
+                if t ~= w and not done[t] and allowed(t) then
+                    local pt = at(t)
+                    local d = best[w] + math.sqrt((pt.x - pw.x) ^ 2 + (pt.z - pw.z) ^ 2)
+                    if best[t] == nil then
+                        best[t], prev[t] = d, w
+                        open[#open + 1] = t
+                        reached[#reached + 1] = t
+                    elseif d < best[t] then
+                        best[t], prev[t] = d, w
+                    end
+                end
+            end
+        end
+    end
+    if best[B] == nil then return nil, reached end
+    local path, w = {}, B
+    while w ~= nil do
+        table.insert(path, 1, w)
+        w = prev[w]
+    end
+    return path, reached
+end
+
+--- Do the segments p1-p2 and p3-p4 cross (not merely touch)?
+local function jxSegmentsCross(p1, p2, p3, p4)
+    local function side(a, b, c) return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x) end
+    local d1, d2 = side(p3, p4, p1), side(p3, p4, p2)
+    local d3, d4 = side(p1, p2, p3), side(p1, p2, p4)
+    return ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0))
+end
+
+--- EVERY ROAD THROUGH THE JUNCTION, read off the network as it was before the clear. The clear's own
+--- list of through roads misses some: it is built from its approaches, and a lane whose end was set
+--- aside (ap._debris) or never found has no route. 65's and 39's south-east-bound main-road lanes
+--- were cut with through roads kept, and nothing said so. So every lane that comes into the
+--- junction is driven on from where it enters, straight on at every fork, until it leaves again
+--- past the middle. Each such drive is a PASSAGE, with how far it turned, whether it met a fork in
+--- the middle, and whether it crossed another of the junction's lanes without sharing a point
+--- with it - a road that runs across the junction without joining it, like the loop road over 67.
+local function jxCheckPassages(C)
+    local before, cx, cz = C.before, C.cx, C.cz
+    local entries, links = {}, {}
+    for w, b0 in pairs(before) do
+        if (b0.x - cx) ^ 2 + (b0.z - cz) ^ 2 <= 100 * 100 then
+            local inside = C.inArea(b0.x, b0.z)
+            for _, t in ipairs(b0.out) do
+                local b1 = before[t]
+                if b1 ~= nil and t ~= w and C.inArea(b1.x, b1.z) then
+                    if inside then
+                        links[#links + 1] = { a = w, b = t, pa = b0, pb = b1 }
+                    else
+                        entries[#entries + 1] = { u = w, v = t, pu = b0, pv = b1 }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(entries, function(p, q)
+        if p.pv.x ~= q.pv.x then return p.pv.x < q.pv.x end
+        if p.pv.z ~= q.pv.z then return p.pv.z < q.pv.z end
+        if p.pu.x ~= q.pu.x then return p.pu.x < q.pu.x end
+        if p.pu.z ~= q.pu.z then return p.pu.z < q.pu.z end
+        return (p.pu.y or 0) < (q.pu.y or 0)
+    end)
+    local function isFork(w)
+        local b0, seen, n = before[w], {}, 0
+        for _, lst in ipairs({ b0.out, b0.inn }) do
+            for _, t in ipairs(lst) do
+                if t ~= w and not seen[t] then seen[t] = true n = n + 1 end
+            end
+        end
+        return n >= 3
+    end
+    local passages = {}
+    for _, e in ipairs(entries) do
+        local path, P = { e.u, e.v }, { e.pu, e.pv }
+        local seen = { [e.u] = true, [e.v] = true }
+        local hx, hz = jxHeading(e.pu, e.pv)
+        local cur, mid, out = e.v, C.inMiddle(e.pv.x, e.pv.z), false
+        if hx ~= nil then
+            for _ = 1, 300 do
+                local bc = before[cur]
+                local best, bd = nil, -math.huge
+                for _, t in ipairs(bc.out) do
+                    local bt = before[t]
+                    if bt ~= nil and t ~= cur and not seen[t] then
+                        local dx, dz = bt.x - bc.x, bt.z - bc.z
+                        local l = math.sqrt(dx * dx + dz * dz)
+                        if l > 1e-6 and (dx * hx + dz * hz) / l > bd then bd, best = (dx * hx + dz * hz) / l, t end
+                    end
+                end
+                if best == nil or bd < 0.3 then break end
+                local bb = before[best]
+                hx, hz = jxHeading(bc, bb)
+                path[#path + 1], P[#P + 1] = best, bb
+                seen[best] = true
+                cur = best
+                if C.inMiddle(bb.x, bb.z) then mid = true end
+                if not C.inArea(bb.x, bb.z) then
+                    out = mid
+                    break
+                end
+            end
+        end
+        if out then
+            -- How far it turned: its heading over the first 6 m against its heading over the last 6.
+            local k, j = 2, #P - 1
+            while k < #P and (P[k].x - P[1].x) ^ 2 + (P[k].z - P[1].z) ^ 2 < 36 do k = k + 1 end
+            while j > 1 and (P[#P].x - P[j].x) ^ 2 + (P[#P].z - P[j].z) ^ 2 < 36 do j = j - 1 end
+            local ax, az = jxHeading(P[1], P[k])
+            local bx, bz = jxHeading(P[j], P[#P])
+            if ax ~= nil and bx ~= nil then
+                local turn = math.deg(math.acos(math.max(-1, math.min(1, ax * bx + az * bz))))
+                local fork, forkInArea, crosses = false, false, false
+                local onIt = {}
+                for i, w in ipairs(path) do
+                    onIt[w] = true
+                    if i > 1 and i < #path and isFork(w) then
+                        forkInArea = true
+                        if C.inMiddle(P[i].x, P[i].z) then fork = true end
+                    end
+                end
+                if not forkInArea then
+                    for i = 1, #path - 1 do
+                        for _, l in ipairs(links) do
+                            if not onIt[l.a] and not onIt[l.b] and jxSegmentsCross(P[i], P[i + 1], l.pa, l.pb) then
+                                crosses = true
+                                break
+                            end
+                        end
+                        if crosses then break end
+                    end
+                end
+                passages[#passages + 1] = { path = path, pts = P, A = e.u, B = path[#path], turn = turn,
+                                            noFork = not fork, unjoined = crosses }
+            end
+        end
+    end
+    C.passages = passages
+end
+
+--- THE ROADS THAT MUST STILL DRIVE, AND HOW THEY DRIVE NOW. With through roads kept: the clear's own
+--- through roads, every passage that turned 40 degrees or less, and every passage that met no fork
+--- in the middle. Either way: a road that crossed the junction without joining it. Each is driven
+--- again, A to B, along its own line (within 2.5 m of where it ran): the links of those drives are
+--- the KEPT links, and where two of them cross at a shared point is a crossing of kept roads. A
+--- road that no longer drives from A to B by any way at all is cut.
+local function jxCheckKept(C)
+    local kept = {}
+    if C.leave then
+        for _, L in ipairs(C.lines) do
+            kept[#kept + 1] = { pts = L.pts, A = L.first, B = L.last, kind = "own" }
+        end
+    end
+    for _, p in ipairs(C.passages or {}) do
+        local want = nil
+        if p.unjoined then
+            want = "unjoined"
+        elseif C.leave and (p.turn <= 40 or p.noFork) then
+            want = "straight"
+        end
+        -- A passage the clear's own through roads already cover, at its way in or its way out, is
+        -- left to them: they say which way that lane goes on, and at a Y the straightest way on is
+        -- not always the through road (36's north road runs straight into its side branch).
+        if want ~= nil then
+            local n = #p.pts
+            for _, L in ipairs(C.lines) do
+                local function on(q) return jxOnLine(L.pts, q.x, q.z) <= 2.5 end
+                if (on(p.pts[1]) and on(p.pts[2])) or (on(p.pts[n - 1]) and on(p.pts[n])) then want = nil break end
+            end
+        end
+        if want ~= nil then kept[#kept + 1] = { pts = p.pts, A = p.A, B = p.B, kind = want } end
+    end
+    local keptLinks, keptAt, broken = {}, {}, {}
+    C.detours = 0
+    for k, item in ipairs(kept) do
+        local A, B = item.A, item.B
+        if not C.live[A] or not C.live[B] then
+            local gw = A
+            if C.live[A] then gw = B end
+            broken[#broken + 1] = { item = item, x = gw.x, z = gw.z, lost = true }
+        else
+            local lim = math.max(C.dist(A), C.dist(B)) + 20
+            local path, along = jxDrive(C, A, B, item.pts, 2.5, lim)
+            if path ~= nil then
+                for i = 1, #path - 1 do
+                    local a, b = path[i], path[i + 1]
+                    keptLinks[a] = keptLinks[a] or {}
+                    keptLinks[a][b] = keptLinks[a][b] or {}
+                    keptLinks[a][b][k] = true
+                end
+                for i, w in ipairs(path) do
+                    local hx, hz = jxHeading(path[math.max(1, i - 1)], path[math.min(#path, i + 1)])
+                    if hx ~= nil then
+                        keptAt[w] = keptAt[w] or {}
+                        keptAt[w][#keptAt[w] + 1] = { k = k, hx = hx, hz = hz }
+                    end
+                end
+            else
+                -- Where it stops along its own line: of everything still reached, the point
+                -- furthest along it. Then whether it still gets there at all, by some other way: a
+                -- road that only gets through by leaving its own line - across a crossing, down a
+                -- turn and back - is not the road it was. Over all 68 junctions no kept road needed
+                -- that, so it is said rather than allowed.
+                local stop, far = A, -1
+                for _, p in ipairs(along) do
+                    local d, s = jxOnLine(item.pts, p.x, p.z)
+                    if d <= 4 and (s > far or (s == far and jxByPos(p, stop))) then far, stop = s, p end
+                end
+                local any = jxDrive(C, A, B, nil, nil, lim)
+                if any ~= nil then C.detours = C.detours + 1 end
+                broken[#broken + 1] = { item = item, x = stop.x, z = stop.z, detour = (any ~= nil) }
+            end
+        end
+    end
+    C.kept, C.keptLinks, C.keptAt, C.broken = kept, keptLinks, keptAt, broken
+    --- A point where two kept roads cross: it lies on both, and they head more than 30 degrees
+    --- apart there. The two lanes of one road never qualify - they run opposite ways. Returns the
+    --- two roads' entries there (which road, and its heading), or nil.
+    function C.crossPair(w)
+        local list = keptAt[w]
+        if list == nil then return nil end
+        for i = 1, #list do
+            for j = i + 1, #list do
+                if list[i].k ~= list[j].k
+                    and math.abs(list[i].hx * list[j].hx + list[i].hz * list[j].hz) < math.cos(math.rad(30)) then
+                    return list[i], list[j]
+                end
+            end
+        end
+        return nil
+    end
+    function C.crossing(w) return C.crossPair(w) ~= nil end
+    --- DID THE TWO KEPT ROADS ALREADY SHARE THIS POINT BEFORE THE CLEAR? Each must have run through
+    --- it then: a link into or out of it, lying on that road's line and heading its way. At 16 they
+    --- did not - each road had a point of its own, 0.06 to 0.22 m from the other's, and the clean-up
+    --- folded each pair into one - so "still joins where they cross" was wrong there: the clear had
+    --- joined them. At 64 and 68 the roads shared the point all along.
+    function C.sharedBefore(w)
+        local e1, e2 = C.crossPair(w)
+        local b0 = C.before[w]
+        if e1 == nil or b0 == nil then return false end
+        local sep = math.deg(math.acos(math.min(1, math.abs(e1.hx * e2.hx + e1.hz * e2.hz))))
+        local tol = math.cos(math.rad(math.min(25, sep / 2)))
+        for _, e in ipairs({ e1, e2 }) do
+            local line, found = kept[e.k].pts, false
+            for _, f in ipairs(b0.inn) do
+                local bf = C.before[f]
+                local hx, hz = nil, nil
+                if bf ~= nil then hx, hz = jxHeading(bf, b0) end
+                if hx ~= nil and hx * e.hx + hz * e.hz >= tol and jxOnLine(line, bf.x, bf.z) <= 2.5 then found = true end
+            end
+            for _, t in ipairs(b0.out) do
+                local bt = C.before[t]
+                local hx, hz = nil, nil
+                if bt ~= nil then hx, hz = jxHeading(b0, bt) end
+                if hx ~= nil and hx * e.hx + hz * e.hz >= tol and jxOnLine(line, bt.x, bt.z) <= 2.5 then found = true end
+            end
+            if not found then return false end
+        end
+        return true
+    end
+    --- HOW CLOSE THE TWO KEPT ROADS CAME, BEFORE THE CLEAR, where they now share w: the nearest two
+    --- points, one on each road's line, within 2 m of w. Nil when either road had none there. At 30
+    --- they came within 0.75 m; the clear then moved a point of each to 0.28 m and folded the two,
+    --- and "0.28 m apart" alone read as if they had stood that close all along.
+    function C.crossGapBefore(w)
+        local e1, e2 = C.crossPair(w)
+        if e1 == nil then return nil end
+        local l1, l2 = kept[e1.k].pts, kept[e2.k].pts
+        local on1, on2 = {}, {}
+        for v, b0 in pairs(C.before) do
+            if (b0.x - w.x) ^ 2 + (b0.z - w.z) ^ 2 <= 4 then
+                if jxOnLine(l1, b0.x, b0.z) <= 0.5 then on1[#on1 + 1] = v end
+                if jxOnLine(l2, b0.x, b0.z) <= 0.5 then on2[#on2 + 1] = v end
+            end
+        end
+        local bd = nil
+        for _, p in ipairs(on1) do
+            for _, q in ipairs(on2) do
+                if p ~= q then
+                    local bp, bq = C.before[p], C.before[q]
+                    local d = math.sqrt((bp.x - bq.x) ^ 2 + (bp.z - bq.z) ^ 2)
+                    if bd == nil or d < bd then bd = d end
+                end
+            end
+        end
+        return bd
+    end
+    function C.keptLink(a, b)
+        return keptLinks[a] ~= nil and keptLinks[a][b] ~= nil
+    end
+end
+
+--- ONE LANE THAT SPLITS AND JOINS ITSELF AGAIN is a merge to AutoDrive too, and is drawn teal, but
+--- no second road comes into it: two of the ways in lead back, within a few points, to the same
+--- point. At 2 a lane carried a link that skipped one of its own points, 10 m from the middle.
+--- Said as what it is, so it is not taken for a missed turn. `old`: asked of the network as it was
+--- before the clear - at 2 the self-join was what the clear left of a turn meeting the lane (its
+--- clean-up folded the turn's point into the lane's), not something that was there already.
+local function jxSelfJoin(C, w, old)
+    local before = C.before
+    local function inc(v)
+        if old then return (before[v] and before[v].inn) or {} end
+        local list = {}
+        for _, id in ipairs(v.incoming or {}) do
+            local t = C.node(id)
+            if t ~= nil then list[#list + 1] = t end
+        end
+        return list
+    end
+    local function at(v)
+        if old then return before[v] end
+        return v
+    end
+    if old and before[w] == nil then return false end
+    local back = {}
+    for _, f in ipairs(inc(w)) do
+        if f ~= w then
+            local seen, cur, run = { [f] = true }, f, 0
+            for _ = 1, 4 do
+                local list = inc(cur)
+                if #list ~= 1 then break end
+                local p = list[1]
+                if p == w or seen[p] then break end
+                local pp, pc = at(p), at(cur)
+                run = run + math.sqrt((pp.x - pc.x) ^ 2 + (pp.z - pc.z) ^ 2)
+                if run > 15 then break end
+                seen[p] = true
+                cur = p
+            end
+            back[#back + 1] = seen
+        end
+    end
+    -- The point the two ways in split from, for the log: the nearest such point to w, so the same
+    -- one is named every run (the sets are keyed by points, and pairs() runs in address order).
+    local found, fd = nil, math.huge
+    for i = 1, #back do
+        for j = i + 1, #back do
+            for p in pairs(back[i]) do
+                if back[j][p] then
+                    local pp, pw = at(p), at(w)
+                    local d = (pp.x - pw.x) ^ 2 + (pp.z - pw.z) ^ 2
+                    if found == nil or d < fd or (d == fd and jxByPos(pp, at(found))) then found, fd = p, d end
+                end
+            end
+        end
+    end
+    if found ~= nil then return true, found end
+    return false
+end
+
+--- THE END OF A TURN THE CLEAR CUT, STILL JOINED TO A LANE: a way into a teal dot that leads back,
+--- point by point and without a fork, at most 15 m, to a start nothing feeds any more - though
+--- something did before the clear, or the clear laid it - and that is none of this junction's own
+--- lanes (a lane leaving the junction starts like that on purpose). At 36 the clear took most of
+--- the side road's turn but left its last 2 points, 2.6 m, fed by nothing and still joined to the
+--- main lane 15 m out: a teal dot past the junction's edge, which the check, looking no further
+--- than the edge, passed as "middle empty". Not a longer stretch, nor one that forks: that is a
+--- lane the clear cut, not a turn's end - at 39 the main road's lane, 24 m to where it merges with
+--- the next road (already said, as a road cut), and at 20 a stub that forks into the next part's
+--- own two turns. Returns where that stretch starts, or nil.
+local function jxTail(C, w)
+    for _, id in ipairs(w.incoming or {}) do
+        local f = C.node(id)
+        if f ~= nil and f ~= w then
+            local cur, run, seen = f, math.sqrt((f.x - w.x) ^ 2 + (f.z - w.z) ^ 2), { [w] = true, [f] = true }
+            for _ = 1, 40 do
+                if run > 15 or #(cur.out or {}) ~= 1 then break end
+                local inc = cur.incoming or {}
+                if #inc == 0 then
+                    local b0 = C.before[cur]
+                    if (b0 == nil or #b0.inn > 0) and C.inLane[cur] == nil and C.outLane[cur] == nil then
+                        return cur
+                    end
+                    break
+                end
+                if #inc ~= 1 then break end
+                local p = C.node(inc[1])
+                if p == nil or seen[p] then break end
+                run = run + math.sqrt((p.x - cur.x) ^ 2 + (p.z - cur.z) ^ 2)
+                seen[p] = true
+                cur = p
+            end
+        end
+    end
+    return nil
+end
+
+--- THE DRIVE CARRIED ON TO WHAT WAS THERE BEFORE, for jxJoinWas: each end carried on the way it is
+--- driven to the first point that was there before the clear - straight on at a fork, the same
+--- point first on a tie, up to 80 m (the respacing re-lays up to 50 m of a lane). An end that
+--- reaches no old point is left as it was.
+local function jxOnToOld(C, path)
+    local before = C.before
+    local P, on = {}, {}
+    for i, p in ipairs(path) do
+        P[i] = p
+        on[p] = true
+    end
+    local function carry(fwd)
+        local added, run = {}, 0
+        for _ = 1, 200 do
+            local cur = P[1]
+            if fwd then cur = P[#P] end
+            if before[cur] ~= nil then return end
+            local prev = P[2]
+            if fwd then prev = P[#P - 1] end
+            local hx, hz = nil, nil
+            if prev ~= nil then
+                if fwd then hx, hz = jxHeading(prev, cur) else hx, hz = jxHeading(cur, prev) end
+            end
+            local lst = cur.incoming or {}
+            if fwd then lst = cur.out or {} end
+            local best, bd = nil, -math.huge
+            for _, id in ipairs(lst) do
+                local t = C.node(id)
+                if t ~= nil and t ~= cur and not on[t] then
+                    local dx, dz
+                    if fwd then dx, dz = jxHeading(cur, t) else dx, dz = jxHeading(t, cur) end
+                    if dx ~= nil then
+                        local c = 1
+                        if hx ~= nil then c = dx * hx + dz * hz end
+                        if best == nil or c > bd or (c == bd and jxByPos(t, best)) then bd, best = c, t end
+                    end
+                end
+            end
+            if best == nil or bd < 0.3 then break end
+            run = run + math.sqrt((best.x - cur.x) ^ 2 + (best.z - cur.z) ^ 2)
+            if run > 80 then break end
+            on[best] = true
+            added[#added + 1] = best
+            if fwd then P[#P + 1] = best else table.insert(P, 1, best) end
+        end
+        -- Reached no old point: put back as it was.
+        for _, w in ipairs(added) do
+            on[w] = nil
+            if fwd then table.remove(P) else table.remove(P, 1) end
+        end
+    end
+    carry(true)
+    carry(false)
+    return P
+end
+
+--- How far a drive turns at point a, coming from p and going on to b, in radians; 0 where a link has
+--- no length or there is no point on one side.
+local function jxTurnAt(p, a, b)
+    if p == nil or a == nil or b == nil then return 0 end
+    local ax, az = jxHeading(p, a)
+    local bx, bz = jxHeading(a, b)
+    if ax == nil or bx == nil then return 0 end
+    return math.acos(math.max(-1, math.min(1, ax * bx + az * bz)))
+end
+
+--- WAS THIS JOIN THERE BEFORE THE CLEAR? A join that was not is not one the clear missed: it is new,
+--- and is said so - a link put in at 8 after the clear read "still joins ... a connection the clear
+--- missed", and its teal dot "a connection the clear missed; the clear made it". Two questions:
+--- 1. Does it use a link that was not there before, between two points that were? That link is
+---    new, whatever else drove there. Not one the respacing laid, nor a kept road's: a lane's own
+---    links are re-laid by the respacing all the time, bridging over the points it takes out. And a
+---    link the clean-up only moved, by folding a point into its neighbour, counts as the old link
+---    (40e's turn). Not asked by which lane a point is on: those are read off the network as it is
+---    now, and a lane walked on over the new link at 8 took the main road's lane for its own.
+--- 1b. Does it use a link to a point the clear laid, that is neither the respacing's nor a kept
+---    road's? Asking only of links between two old points let a join made that way read "still
+---    joins ... a connection the clear missed" - and the tidy re-lays the lane ends at most
+---    junctions, so a tidy that wired one stub to another would have been named a miss. A laid
+---    point stands for any old point it was laid on (within 0.5 m of where that one stood, or of
+---    where the clear took it out); the link is old only when one of those carried it. Not "did a
+---    drive run near there": at 20, with through roads not kept, an old turn had run within 2 m of
+---    where the south road's stub was wired to the east road's (dbgcheck.lua WIRE=1), and that
+---    passed the wiring off as a missed turn. Only links between the first and last old points of
+---    the drive: before them, or after, is a lane's own end, re-laid where it starts or stops. And
+---    the drive is first carried on along its lanes, at both ends, to the first point that was there
+---    before (jxOnToOld): the respacing re-lays a lane out for up to 50 m, so at 38, 58, 63 and 65,
+---    with through roads not kept, every point after the wired link was laid, the drive's last old
+---    point was on the lane coming in, and a tidy that wired the two lanes together read "still
+---    joins ... a connection the clear missed". Carried on, the wired link lies between old points.
+---    The link named is the one the drive turns most at, at its two ends: the lanes' own re-laid
+---    ends run straight on, and the link that joins two lanes is where the drive changes road
+---    (dbgcheck.lua WIRE=1 at every junction, both ways: the wired link turned most every time).
+--- 1c. Does it change road at a point the clean-up folded another into? Each of its two links can
+---    have been there before - one into each of the two points - while no drive went from one to
+---    the other, because they were two points. At 30, with through roads kept, the lane in from the
+---    south-west ran 0.13 m past the last point of a turn onto the south-east road; the clean-up
+---    folded the two points into one, so the lane now drives on over that turn's last link and out
+---    to the south-east: "a connection the clear missed", said of a join the clear's own clean-up
+---    made.
+--- 2. Otherwise, did it drive before, along the same line (within 3 m of it), between the first and
+---    last of its points that were there then?
+--- Returns whether it was there, and when that is why not, the new link's two ends, or the point
+--- where the fold joined two ways.
+local function jxJoinWas(C, path)
+    path = jxOnToOld(C, path)
+    local before = C.before
+    local function near(p, q) return p ~= nil and q ~= nil and (p.x - q.x) ^ 2 + (p.z - q.z) ^ 2 <= 0.25 end
+    local function linkedBefore(a, b)
+        local ba, bb = before[a], before[b]
+        for _, t in ipairs(ba.out) do
+            if t == b or (not C.live[t] and (near(before[t], b) or near(before[t], bb))) then return true end
+        end
+        for _, f in ipairs(bb.inn) do
+            if f == a or (not C.live[f] and (near(before[f], a) or near(before[f], ba))) then return true end
+        end
+        return false
+    end
+    local function relaid(a, b) return C.respaceLinks[a] ~= nil and C.respaceLinks[a][b] == true end
+    for i = 1, #path - 1 do
+        local a, b = path[i], path[i + 1]
+        if before[a] ~= nil and before[b] ~= nil and not relaid(a, b) and not C.keptLink(a, b)
+            and not linkedBefore(a, b) then
+            return false, a, b
+        end
+    end
+    -- 1b: links touching a point the clear laid, between the first and last old points of the drive.
+    local firstOld, lastOld = nil, nil
+    for k = 1, #path do
+        if before[path[k]] ~= nil then
+            firstOld = firstOld or k
+            lastOld = k
+        end
+    end
+    if firstOld ~= nil then
+        local la, lb, lt = nil, nil, -1
+        for k = firstOld, lastOld - 1 do
+            local a, b = path[k], path[k + 1]
+            if (before[a] == nil or before[b] == nil) and not relaid(a, b) and not C.keptLink(a, b) then
+                local was = false
+                local sb = C.standsFor(b)
+                for _, a0 in ipairs(C.standsFor(a)) do
+                    for _, t in ipairs(before[a0].out) do
+                        for _, b0 in ipairs(sb) do
+                            if t == b0 then was = true end
+                        end
+                    end
+                end
+                -- Named by the link the drive turns most at: that is where two ways were wired
+                -- together, not where a lane's own end was re-laid straight on.
+                if not was then
+                    local turn = jxTurnAt(path[k - 1], a, b) + jxTurnAt(a, b, path[k + 2])
+                    if turn > lt then la, lb, lt = a, b, turn end
+                end
+            end
+        end
+        if la ~= nil then return false, la, lb end
+    end
+    -- 1c: where a point was folded into one the drive changes road at.
+    local function counterparts(w)
+        local s = { w }
+        for _, f in ipairs(C.folds(w, false)) do s[#s + 1] = f.w end
+        return s
+    end
+    local function linked(p0, w0)
+        for _, t in ipairs(before[p0].out) do
+            if t == w0 then return true end
+        end
+        return false
+    end
+    for k = 2, #path - 1 do
+        local p, w, n = path[k - 1], path[k], path[k + 1]
+        if before[p] ~= nil and before[w] ~= nil and before[n] ~= nil and not relaid(p, w) and not relaid(w, n)
+            and not (C.keptLink(p, w) and C.keptLink(w, n)) and #C.folds(w, true) > 0 then
+            local passed = false
+            local cp, cn = counterparts(p), counterparts(n)
+            for _, w0 in ipairs(counterparts(w)) do
+                local into, onto = false, false
+                for _, p0 in ipairs(cp) do
+                    if linked(p0, w0) then into = true end
+                end
+                for _, n0 in ipairs(cn) do
+                    if linked(w0, n0) then onto = true end
+                end
+                if into and onto then passed = true end
+            end
+            if not passed then return false, nil, nil, w end
+        end
+    end
+    local A, B = nil, nil
+    for i = 1, #path do
+        if before[path[i]] ~= nil then A = path[i] break end
+    end
+    for i = #path, 1, -1 do
+        if before[path[i]] ~= nil then B = path[i] break end
+    end
+    if A == nil or B == nil or A == B then return false end
+    local pts, lim = {}, 0
+    for _, p in ipairs(path) do
+        pts[#pts + 1] = { x = p.x, z = p.z }
+        lim = math.max(lim, C.dist(p))
+    end
+    return jxDrive(C, A, B, pts, 3, lim + 20, true) ~= nil
+end
+
+--- WHERE A DRIVE TURNS OFF ITS ROAD, and whether it only ever ran on kept roads. A drive that never
+--- leaves the kept roads changes road at a point two of them share: where they cross, the known
+--- case. Anything else turned off somewhere - where it left a kept road, or where it came onto one,
+--- or else at its first fork. Named by the drive's own links, not by any point it passes: with
+--- through roads kept every drive along a kept road passes the crossing, and a turn that left
+--- 16's kept road 7 m past it was reported AT the crossing, as the known case (16; and 30, whose
+--- lane only passes 0.07 m from a turn's point without using it).
+--- Returns the point, and "through" (one kept road all the way), "crossing", or "turn".
+local function jxTurnOf(C, path)
+    local S, allK, sw, leaveAt, joinAt, sawK = nil, true, nil, nil, nil, false
+    for i = 1, #path - 1 do
+        local a, b = path[i], path[i + 1]
+        local R = C.keptLinks[a] and C.keptLinks[a][b]
+        if R == nil then
+            allK = false
+            if sawK and leaveAt == nil then leaveAt = a end
+            S = nil
+        else
+            if not sawK and i > 1 and joinAt == nil then joinAt = a end
+            sawK = true
+            if S == nil then
+                S = R
+            else
+                local S2, any = {}, false
+                for k in pairs(S) do
+                    if R[k] then S2[k] = true any = true end
+                end
+                if any then
+                    S = S2
+                else
+                    if sw == nil then sw = a end
+                    S = R
+                end
+            end
+        end
+    end
+    if allK then
+        if sw == nil then return nil, "through" end
+        if C.crossing(sw) then return sw, "crossing" end
+        return sw, "turn"
+    end
+    if leaveAt ~= nil then return leaveAt, "turn" end
+    if joinAt ~= nil then return joinAt, "turn" end
+    for i = 2, #path - 1 do
+        local p, w, n = path[i - 1], path[i], path[i + 1]
+        if C.inA[w] then
+            for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                for _, id in ipairs(lst) do
+                    local t = C.node(id)
+                    if t ~= nil and t ~= w and t ~= n and t ~= p then return w, "turn" end
+                end
+            end
+        end
+    end
+    return nil, "turn"
+end
+
+--- The part of a split junction a place belongs to, when it is nearer another of the places the
+--- roads met (before the clear) than the one this clear worked on. Nil otherwise.
+local function jxOtherPart(C, x, z)
+    local M = C.meetings
+    if M == nil or M.here == nil then return nil end
+    local best, bd = nil, (x - M.here.x) ^ 2 + (z - M.here.z) ^ 2
+    for _, p in ipairs(M.pts) do
+        if p ~= M.here then
+            local d = (x - p.x) ^ 2 + (z - p.z) ^ 2
+            if d < bd then bd, best = d, p end
+        end
+    end
+    return best
+end
+
+--- Where the turn into a teal dot came from: the way in that arrives most turned, followed back up
+--- to the fork where it left its road. Half-way along it is where that turn belongs. At 39 a dot 10 m
+--- from the middle and 12 m from 39se's meeting point is the merge of 39se's own turn off its south
+--- road; by the dot's own place it read as this junction's missed connection.
+local function jxTurnFrom(C, w)
+    local ox, oz = 0, 0
+    for _, id in ipairs(w.out or {}) do
+        local t = C.node(id)
+        if t ~= nil and t ~= w then
+            local hx, hz = jxHeading(w, t)
+            if hx ~= nil then ox, oz = ox + hx, oz + hz end
+        end
+    end
+    local best, bd = nil, math.huge
+    for _, id in ipairs(w.incoming or {}) do
+        local f = C.node(id)
+        if f ~= nil and f ~= w then
+            local hx, hz = jxHeading(f, w)
+            if hx ~= nil and hx * ox + hz * oz < bd then bd, best = hx * ox + hz * oz, f end
+        end
+    end
+    if best == nil then return w end
+    local function forks(v)
+        local seen, n = {}, 0
+        for _, lst in ipairs({ v.out or {}, v.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                if id ~= v.id and not seen[id] then seen[id] = true n = n + 1 end
+            end
+        end
+        return n >= 3
+    end
+    local prev, cur, run = w, best, math.sqrt((best.x - w.x) ^ 2 + (best.z - w.z) ^ 2)
+    for _ = 1, 40 do
+        if run >= 40 or forks(cur) then break end
+        local nxt = nil
+        for _, id in ipairs(cur.incoming or {}) do
+            local f = C.node(id)
+            if f ~= nil and f ~= prev and f ~= cur then
+                if nxt ~= nil then nxt = nil break end
+                nxt = f
+            end
+        end
+        if nxt == nil or nxt == w then break end
+        run = run + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
+        prev, cur = cur, nxt
+    end
+    return { x = (w.x + cur.x) / 2, z = (w.z + cur.z) / 2 }
+end
+
+--- ONE ROAD'S OWN LANES: every way in and out of a teal dot leads, within 40 m, to lanes of one and
+--- the same road, or to a dead end. At 31 the two-way side road splits into a two-way stub and a
+--- one-way one; AutoDrive draws that teal, but no second road comes into it.
+local function jxOneRoad(C, w)
+    local road, any = nil, false
+    local function roadOf(v)
+        local m = C.inLane[v] or C.outLane[v]
+        if m == nil then return nil end
+        return C.apRoad[m]
+    end
+    local seen0 = {}
+    for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+        for _, id in ipairs(lst) do
+            local n = C.node(id)
+            if n ~= nil and n ~= w and not seen0[n] then
+                seen0[n] = true
+                local prev, cur, run, found, dead = w, n, 0, nil, false
+                for _ = 1, 40 do
+                    found = roadOf(cur)
+                    if found ~= nil then break end
+                    local nxt, k = nil, 0
+                    for _, l2 in ipairs({ cur.out or {}, cur.incoming or {} }) do
+                        for _, id2 in ipairs(l2) do
+                            local t = C.node(id2)
+                            if t ~= nil and t ~= prev and t ~= cur and t ~= nxt then
+                                k = k + 1
+                                nxt = t
+                            end
+                        end
+                    end
+                    if k == 0 then dead = true break end
+                    if k > 1 then break end
+                    run = run + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
+                    if run > 40 then break end
+                    prev, cur = cur, nxt
+                end
+                if found ~= nil then
+                    if road ~= nil and road ~= found then return false end
+                    road, any = found, true
+                elseif not dead then
+                    return false
+                end
+            end
+        end
+    end
+    if roadOf(w) ~= nil and road ~= nil and roadOf(w) ~= road then return false end
+    return any
+end
+
+--- PAST THE EDGE, ONTO WHICH LANE. A drive that leaves the junction where none of the lanes the
+--- check walked runs is followed on, the way it is driven, until it reaches one of the junction's
+--- lanes out: up to 40 m, and never back into the middle (a drive that comes back in is found from
+--- its own way in). Shortest first, the same point first on a tie, so every run names the same lane.
+--- Before this, such a drive was never counted: at 20, with through roads kept, the lane in from the
+--- south splits inside the middle, 8.7 m out, and its branch to the north-east - 20n's own turn -
+--- leaves the junction 12 m out on a stretch no lane walk had marked, reaching the north-east
+--- road's lane out 4 m further on; a split makes no teal dot, so nothing said it. The same lane's
+--- other branch, and 62's south-east lane looping out past the edge, reach the lane out of their
+--- own kept through road, and stay unsaid for that reason. Returns the points after `t`, and the
+--- lane reached, or no lane when it reached none.
+--- `marks`: the lanes to look for - the lanes out (C.outLane) unless given. A way in that lies on
+--- no lane the check walked is followed on the same way to the lane in it becomes (C.inLane).
+local function jxDriveOn(C, t, marks)
+    marks = marks or C.outLane
+    local best, prev, done, open = { [t] = 0 }, {}, {}, { t }
+    while #open > 0 do
+        local bi = 1
+        for i = 2, #open do
+            local a, b = open[i], open[bi]
+            if best[a] < best[b] or (best[a] == best[b] and jxByPos(a, b)) then bi = i end
+        end
+        local w = table.remove(open, bi)
+        if not done[w] then
+            done[w] = true
+            if marks[w] ~= nil then
+                local path, v = {}, w
+                while v ~= nil and v ~= t do
+                    table.insert(path, 1, v)
+                    v = prev[v]
+                end
+                return path, marks[w]
+            end
+            for _, id in ipairs(w.out or {}) do
+                local n = C.node(id)
+                if n ~= nil and n ~= w and not done[n] and not C.inMid[n] then
+                    local d = best[w] + math.sqrt((n.x - w.x) ^ 2 + (n.z - w.z) ^ 2)
+                    if d <= 40 and (best[n] == nil or d < best[n]) then
+                        if best[n] == nil then open[#open + 1] = n end
+                        best[n], prev[n] = d, w
+                    end
+                end
+            end
+        end
+    end
+    return {}, nil
+end
+
+--- THE LANE A LANE START BECOMES. From w, the way it is driven, straight on at every fork - the way
+--- the lanes themselves are walked - through the middle or not, up to 40 m, to the first point a
+--- walked lane runs over. Returns that lane, and whether it is a lane in (where a lane in and a lane
+--- out both run over the point, the one whose own end it is nearer), or nil when it reaches none.
+local function jxLaneAhead(C, w)
+    local cur, prev, run, seen = w, nil, 0, { [w] = true }
+    for _ = 1, 200 do
+        local o, i = C.outLane[cur], C.inLane[cur]
+        if o ~= nil and i ~= nil and C.inRun[cur] < C.outRun[cur] then o = nil end
+        if o ~= nil then return o, false end
+        if i ~= nil then return i, true end
+        local hx, hz = nil, nil
+        if prev ~= nil then hx, hz = jxHeading(prev, cur) end
+        local best, bd = nil, -math.huge
+        for _, id in ipairs(cur.out or {}) do
+            local t = C.node(id)
+            if t ~= nil and t ~= cur and not seen[t] then
+                local dx, dz = jxHeading(cur, t)
+                if dx ~= nil then
+                    local c = 1
+                    if hx ~= nil then c = dx * hx + dz * hz end
+                    if best == nil or c > bd or (c == bd and jxByPos(t, best)) then bd, best = c, t end
+                end
+            end
+        end
+        if best == nil or bd < 0.3 then return nil end
+        run = run + math.sqrt((best.x - cur.x) ^ 2 + (best.z - cur.z) ^ 2)
+        if run > 40 then return nil end
+        prev, cur = cur, best
+        seen[cur] = true
+    end
+    return nil
+end
+
+--- CHECK 1: THE MIDDLE IS EMPTY.
+local function jxCheckMiddle(C)
+    local inLane, outLane, inA, inMid = C.inLane, C.outLane, C.inA, C.inMid
+    local approaches, before = C.approaches, C.before
+
+    -- The lanes a through road joins, by the clear's own list: the lane it came in on and the lane
+    -- it went out on.
+    local throughPair = {}
+    for _, L in ipairs(C.lines) do
+        throughPair[L.first] = throughPair[L.first] or {}
+        throughPair[L.first][L.last] = true
+    end
+    local function isThroughPair(a, b)
+        local A, B = approaches[a], approaches[b]
+        return A ~= nil and B ~= nil and throughPair[A.wp] ~= nil and throughPair[A.wp][B.wp] == true
+    end
+
+    -- A JOIN IS A DRIVE: in on one of the junction's lanes, through the middle, and out on another
+    -- of them that is not the same road going on. The drive may use all of the junction, out to its
+    -- bound, so a turn that leaves its lane 20 m out still counts; but it has to pass through the
+    -- middle, or a road that cuts the corner 40 m out (1) would be a join of this junction. A way in
+    -- is a link from a point outside the bound to a point inside it - found from the outside points'
+    -- own links, which are what a vehicle drives - or a lane that starts inside the bound with
+    -- nothing leading into it (the stub of a lane leaving, as a clear cuts it). A way out is a link
+    -- out of the bound, or a lane out that ends inside it: 68 is a grid of short one-way lanes that
+    -- all start and end inside its bound, and its four corner links joined them unseen.
+    local cx, cz = C.cx, C.cz
+    local entries, hasIn = {}, {}
+    for u in pairs(C.live) do
+        if (u.x - cx) ^ 2 + (u.z - cz) ^ 2 <= 100 * 100 then
+            for _, id in ipairs(u.out or {}) do
+                local v = C.node(id)
+                if v ~= nil and v ~= u then
+                    hasIn[v] = true
+                    if inA[v] and not inA[u] then entries[#entries + 1] = { u = u, v = v } end
+                end
+            end
+        end
+    end
+    for _, w in ipairs(C.area) do
+        if not hasIn[w] then entries[#entries + 1] = { u = nil, v = w } end
+    end
+    table.sort(entries, function(p, q)
+        if p.v ~= q.v then return jxByPos(p.v, q.v) end
+        if p.u == nil or q.u == nil then return q.u == nil and p.u ~= nil end
+        return jxByPos(p.u, q.u)
+    end)
+    local joins, seenJoin = {}, {}
+    for _, e in ipairs(entries) do
+        -- Which lane this is: one coming in, or one that starts here and goes out. Where a lane in
+        -- and a lane out both run over the point, it is the lane whose own end it is nearer (68).
+        local laneIn, laneStart = nil, nil
+        -- Where the drive starts (ev), the point it came from (cameFrom0, never driven straight back
+        -- to), and the point the drive is said from (eu): the way in, unless that lies before its
+        -- lane (below).
+        local eu, ev, cameFrom0 = e.u, e.v, e.u
+        if e.u ~= nil then
+            laneIn = inLane[e.v] or inLane[e.u]
+            -- A way in on no lane the check walked: followed on to the lane in it becomes, and driven
+            -- from where it reaches that lane. Each lane is walked from its own far end, and where
+            -- that end lies inside the bound the way in lies before it: 40's west lane starts 20 m
+            -- out, where a side road merges into it, and 62's north-west lane 36 m out, on the far
+            -- side of a hairpin. Neither lane's drives were looked at, so a link wired from either
+            -- into another road read "middle empty". Driven from the lane's own end, not from the
+            -- way in: from the way in, 40's side road merging into the west lane read as a join of
+            -- this junction, 20 m out and past its middle - and it is a road meeting the lane before
+            -- the lane is this junction's.
+            if laneIn == nil then
+                local onto, found = jxDriveOn(C, e.v, inLane)
+                if found ~= nil then
+                    laneIn = found
+                    ev, eu = onto[#onto], nil
+                    cameFrom0 = onto[#onto - 1] or e.v
+                end
+            end
+        else
+            local o, i = outLane[e.v], inLane[e.v]
+            if o ~= nil and i ~= nil and C.inRun[e.v] < C.outRun[e.v] then o = nil end
+            if o ~= nil then laneStart = o else laneIn = i end
+            -- A lane start on no lane the check walked: the lane it runs on into (jxLaneAhead). At
+            -- 20, with through roads not kept, the tidy cut the north lane out at the box and laid
+            -- its new start 6 m from the middle; the north lane's walk, coming back in, kept to the
+            -- north-east road at 20n and missed it, so the stub's split onto 20n's turn to the
+            -- north-east went unsaid - while the same kind of split off the stub of 40's north-east
+            -- lane out, which its walk did cover, was said.
+            if o == nil and i == nil then
+                local found, isIn = jxLaneAhead(C, e.v)
+                if found ~= nil and isIn then laneIn = found elseif found ~= nil then laneStart = found end
+            end
+        end
+        if laneIn ~= nil or laneStart ~= nil then
+            -- Drive on from the way in, inside the bound, remembering whether the middle has been
+            -- passed yet - a point can be reached both ways, so each is a state of its own - and
+            -- note every way out taken after the middle.
+            local par = { [false] = {}, [true] = {} }
+            local f0 = inMid[ev] == true
+            par[f0][ev] = false
+            local q, head = { { ev, f0 } }, 1
+            local exits = {}
+            while head <= #q do
+                local w, f = q[head][1], q[head][2]
+                head = head + 1
+                -- Never straight back to the point it came from: that is a two-way lane driven
+                -- both ways, not a turn (65's two-way side road read as two U-turns).
+                local cameFrom = cameFrom0
+                if par[f][w] then cameFrom = par[f][w][1] end
+                local outs = w.out or {}
+                for _, id in ipairs(outs) do
+                    local t = C.node(id)
+                    if t ~= nil and t ~= w and t ~= cameFrom then
+                        if inA[t] then
+                            local g = f or (inMid[t] == true)
+                            if par[g][t] == nil then
+                                par[g][t] = { w, f }
+                                q[#q + 1] = { t, g }
+                            end
+                        elseif f then
+                            exits[#exits + 1] = { w = w, t = t }
+                        end
+                    end
+                end
+                if f and #outs == 0 and outLane[w] ~= nil then exits[#exits + 1] = { w = w } end
+            end
+            local inIdx = laneIn or laneStart
+            for _, x in ipairs(exits) do
+                local laneOut = outLane[x.w]
+                if laneOut == nil and x.t ~= nil then laneOut = outLane[x.t] end
+                -- Leaving where no walked lane runs: followed on to the lane it reaches (jxDriveOn).
+                -- One that reaches none is still a join - onto a road the clear found no lane of -
+                -- and is said as that, not passed as the same lane going on.
+                local onward, offLanes = nil, false
+                if laneOut == nil and x.t ~= nil then
+                    onward, laneOut = jxDriveOn(C, x.t)
+                    offLanes = (laneOut == nil)
+                end
+                local same = (laneOut == nil and not offLanes) or (laneStart ~= nil and laneOut == laneStart)
+                if not same then
+                    local path, st = {}, { x.w, true }
+                    while st do
+                        table.insert(path, 1, st[1])
+                        st = par[st[2]][st[1]]
+                    end
+                    if eu ~= nil then table.insert(path, 1, eu) end
+                    if x.t ~= nil then path[#path + 1] = x.t end
+                    for _, v in ipairs(onward or {}) do path[#path + 1] = v end
+                    local where, kind = jxTurnOf(C, path)
+                    local through = (laneIn ~= nil and isThroughPair(laneIn, laneOut)) or kind == "through"
+                    -- A kept through road running end to end is what "through roads kept" asked for.
+                    if not (through and C.leave) then
+                        if where == nil then
+                            local bd = math.huge
+                            for _, pp in ipairs(path) do
+                                if inMid[pp] then
+                                    local d = C.dist(pp)
+                                    if d < bd then bd, where = d, pp end
+                                end
+                            end
+                            where = where or path[math.floor((#path + 1) / 2)]
+                        end
+                        local key = string.format("%d>%d@%d,%d", laneIn or -(laneStart or 0), laneOut or 0,
+                            math.floor(where.x * 2 + 0.5), math.floor(where.z * 2 + 0.5))
+                        if not seenJoin[key] then
+                            seenJoin[key] = true
+                            -- Was it there before the clear? Where two kept roads cross, that is
+                            -- whether they shared the point then (16: they did not, the clean-up
+                            -- joined them); anywhere else, whether the drive drove then.
+                            local why, part, was, fold, foldWas, la, lb = "missed", nil, true, nil, nil, nil, nil
+                            local old, na, nb, fw = true, nil, nil, nil
+                            if kind ~= "crossing" then old, na, nb, fw = jxJoinWas(C, path) end
+                            if kind == "crossing" then
+                                if C.sharedBefore(where) then
+                                    why = "crossing"
+                                else
+                                    why, was, fold = "crossmade", false, C.foldedInto(where)
+                                    foldWas = C.crossGapBefore(where)
+                                end
+                            elseif not old then
+                                why, was = "made", false
+                                if na ~= nil then la, lb = { x = na.x, z = na.z }, { x = nb.x, z = nb.z } end
+                                if fw ~= nil then
+                                    fold, la = C.foldedInto(fw), { x = fw.x, z = fw.z }
+                                end
+                            elseif through then
+                                why = "through"
+                            else
+                                part = jxOtherPart(C, where.x, where.z)
+                                -- A drive followed on past the edge is also asked half-way between
+                                -- where it turns off and where it gets to, as a teal dot's turn is
+                                -- (jxTurnFrom): at 40, with through roads not kept, the west road's
+                                -- lane splits 10.5 m from 40w's middle and 11.2 m from 40e's, and its
+                                -- branch runs on to 40e's east road.
+                                if part == nil and onward ~= nil then
+                                    local far = path[#path]
+                                    part = jxOtherPart(C, (where.x + far.x) / 2, (where.z + far.z) / 2)
+                                end
+                                if part ~= nil then
+                                    why = "part"
+                                elseif C.noBox then
+                                    why = "nobox"
+                                end
+                            end
+                            local pts = {}
+                            for _, pp in ipairs(path) do pts[#pts + 1] = { x = pp.x, z = pp.z } end
+                            local rIn, rOut = C.apRoad[inIdx], nil
+                            if laneOut ~= nil then rOut = C.apRoad[laneOut] end
+                            local to
+                            if laneOut ~= nil then to = C.roadName(laneOut) else to = C.wordAt(x.t.x, x.t.z) end
+                            local startAt = nil
+                            if laneStart ~= nil then startAt = { x = ev.x, z = ev.z } end
+                            joins[#joins + 1] = { x = where.x, z = where.z, why = why, path = pts, part = part, nodes = path, at = where,
+                                starts = (laneStart ~= nil), startAt = startAt, uturn = (rIn ~= nil and rIn == rOut), was = was, fold = fold,
+                                foldWas = foldWas, foldAt = (fw ~= nil), linkFrom = la, linkTo = lb, offLanes = offLanes,
+                                from = C.roadName(inIdx), to = to }
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.sort(joins, function(p, q)
+        if p.x ~= q.x then return p.x < q.x end
+        if p.z ~= q.z then return p.z < q.z end
+        if p.from ~= q.from then return p.from < q.from end
+        if p.to ~= q.to then return p.to < q.to end
+        if p.why ~= q.why then return p.why < q.why end
+        return (p.uturn and 1 or 0) < (q.uturn and 1 or 0)
+    end)
+
+    -- THE TEAL DOTS: in the middle, all of them. Further out, to 45 m - the reach of the clear's
+    -- own clean-up, past the junction's edge - only those the clear made, and those fed by the end
+    -- of a turn it cut: a merge out there that was already one, and still is for the same reason,
+    -- is as likely the next junction's. A dot that a join drives through is said for the same reason
+    -- as the join; any other is named for what made it.
+    local function allKept(w)
+        for _, id in ipairs(w.out or {}) do
+            local t = C.node(id)
+            if t ~= nil and not C.keptLink(w, t) then return false end
+        end
+        for _, id in ipairs(w.incoming or {}) do
+            local f = C.node(id)
+            if f ~= nil and not C.keptLink(f, w) then return false end
+        end
+        return true
+    end
+    -- A join's own points are where it turns: every point on a link of the drive that is not a kept
+    -- road's, and the point it turns at. Not the whole drive - along a kept road that would hand the
+    -- join's reason to a dot it merely passes.
+    local RANK = { made = 7, crossmade = 6, missed = 5, part = 4, nobox = 3, through = 2, crossing = 1 }
+    local onJoin = {}
+    local function mark(v, j)
+        local o = onJoin[v]
+        if o == nil or (RANK[j.why] or 0) > (RANK[o.why] or 0) then onJoin[v] = j end
+    end
+    for _, j in ipairs(joins) do
+        local path = j.nodes
+        for i = 1, #path - 1 do
+            if not C.keptLink(path[i], path[i + 1]) then
+                mark(path[i], j)
+                mark(path[i + 1], j)
+            end
+        end
+        if j.at ~= nil then mark(j.at, j) end
+    end
+    local dots = {}
+    for _, w in ipairs(C.near) do
+        if C.dist(w) <= 45 and jxRightOfWay(w) then
+            local was = C.dotBefore(w.x, w.z) ~= nil
+            local tail = jxTail(C, w)
+            if inMid[w] or not was or tail ~= nil then
+                local why, part, fold, foldWas, from, viaJoin = "missed", nil, nil, nil, nil, nil
+                local joinsItself, split = jxSelfJoin(C, w)
+                if C.leave and C.crossing(w) and allKept(w) then
+                    if C.sharedBefore(w) then
+                        why = "crossing"
+                    else
+                        why, fold, foldWas = "crossmade", C.foldedInto(w), C.crossGapBefore(w)
+                    end
+                elseif joinsItself then
+                    -- Was it one lane joining itself before the clear too? At 2 it was not: the
+                    -- clean-up folded a turn's point into the lane's, and what is left of the turn
+                    -- now runs beside the lane into the same point.
+                    if jxSelfJoin(C, w, true) then
+                        why = "selfjoin"
+                    else
+                        why, from, fold = "selfmade", split, C.foldedInto(split)
+                    end
+                elseif onJoin[w] ~= nil then
+                    viaJoin = onJoin[w]
+                    why, part, fold, foldWas = viaJoin.why, viaJoin.part, viaJoin.fold, viaJoin.foldWas
+                elseif tail ~= nil then
+                    why, from = "tail", tail
+                elseif not was then
+                    why = "new"
+                elseif jxOneRoad(C, w) then
+                    why = "oneroad"
+                else
+                    local turned = jxTurnFrom(C, w)
+                    part = jxOtherPart(C, turned.x, turned.z)
+                    if part ~= nil then
+                        why = "part"
+                    elseif C.noBox then
+                        why = "nobox"
+                    end
+                end
+                local d = { x = w.x, z = w.z, why = why, was = was, part = part, fold = fold, foldWas = foldWas }
+                if from ~= nil then d.fx, d.fz = from.x, from.z end
+                if viaJoin ~= nil then d.linkFrom, d.linkTo, d.foldAt = viaJoin.linkFrom, viaJoin.linkTo, viaJoin.foldAt end
+                dots[#dots + 1] = d
+            end
+        end
+    end
+    for _, j in ipairs(joins) do j.nodes, j.at = nil, nil end
+    C.joins, C.dots = joins, dots
+end
+
+--- CHECK 2: NOTHING ELSE TOUCHED.
+local function jxCheckTouched(C)
+    local before, journal, live = C.before, C.journal, C.live
+    local at, node = C.at, C.node
+    local issues = {}
+    local function issue(kind, x, z, text, far)
+        issues[#issues + 1] = { kind = kind, x = x, z = z, text = text, far = far }
+    end
+
+    -- THE RECORD, PLAYED OVER THE NETWORK AS IT WAS: what the clear meant the network to become.
+    -- Only the points the record touches are copied; everything else is expected as it was. Each
+    -- move is measured against where the point stood before it, so a move of nothing is not
+    -- counted as an edit: the lane-end tidy records its nudge even when the nudge is zero, and at
+    -- 24 a point "moved" 0.000 m, 63 m out, was reported as the tidy reaching outside the junction.
+    local model, gone, added = {}, {}, {}
+    local function setOf(list)
+        local s = {}
+        for _, t in ipairs(list or {}) do s[t] = true end
+        return s
+    end
+    local function M(w, e)
+        local m = model[w]
+        if m == nil then
+            local b0 = before[w]
+            if b0 ~= nil then
+                m = { x = b0.x, y = b0.y, z = b0.z, out = setOf(b0.out), inn = setOf(b0.inn) }
+            elseif e ~= nil then
+                m = { x = e.x, y = e.y, z = e.z, out = {}, inn = {} }
+            else
+                m = { x = w.x, y = w.y, z = w.z, out = {}, inn = {} }
+            end
+            model[w] = m
+        end
+        return m
+    end
+    local moveBy = {}
+    for i, e in ipairs(journal) do
+        if e.op == "add" then
+            model[e.a] = { x = e.x, y = e.y, z = e.z, out = {}, inn = {} }
+            added[e.a] = e
+            gone[e.a] = nil
+        elseif e.op == "remove" then
+            local m = M(e.a, e)
+            for t in pairs(m.out) do if t ~= e.a then M(t).inn[e.a] = nil end end
+            for f in pairs(m.inn) do if f ~= e.a then M(f).out[e.a] = nil end end
+            gone[e.a] = e
+        elseif e.op == "move" then
+            local m = M(e.a, e)
+            moveBy[i] = math.sqrt((e.x - m.x) ^ 2 + ((e.y or 0) - (m.y or 0)) ^ 2 + (e.z - m.z) ^ 2)
+            m.x, m.y, m.z = e.x, e.y, e.z
+        elseif e.op == "out+" then M(e.a, e).out[e.b] = true
+        elseif e.op == "out-" then M(e.a, e).out[e.b] = nil
+        elseif e.op == "in+" then M(e.a, e).inn[e.b] = true
+        elseif e.op == "in-" then M(e.a, e).inn[e.b] = nil
+        end
+    end
+
+    -- A link that now runs the other way between two points that were both there before. Never
+    -- something a clear means to do, recorded or not: it turns a lane round.
+    local flipped = {}
+    for w, b0 in pairs(before) do
+        if live[w] then
+            for _, t in ipairs(b0.out) do
+                if live[t] and t ~= w and not table.contains(w.out or {}, t.id)
+                    and table.contains(t.out or {}, w.id) then
+                    local back = false
+                    for _, f in ipairs((before[t] and before[t].out) or {}) do
+                        if f == w then back = true break end
+                    end
+                    if not back then
+                        flipped[w] = flipped[w] or {}
+                        flipped[w][t] = true
+                        issue("flip", (w.x + t.x) / 2, (w.z + t.z) / 2,
+                            string.format("the link from %s to %s now runs the other way", at(w.x, w.z), at(t.x, t.z)))
+                    end
+                end
+            end
+        end
+    end
+    local function isFlip(a, b)
+        return (flipped[a] ~= nil and flipped[a][b]) or (flipped[b] ~= nil and flipped[b][a]) or false
+    end
+
+    local function nowSet(list)
+        local s = {}
+        for _, id in ipairs(list or {}) do
+            local t = node(id)
+            if t ~= nil then s[t] = true end
+        end
+        return s
+    end
+    -- Compare one surviving point with what the record says it should be.
+    local outDiff, inDiff = {}, {}
+    local function compare(w, m)
+        local d = math.sqrt((w.x - m.x) ^ 2 + ((w.y or 0) - (m.y or 0)) ^ 2 + (w.z - m.z) ^ 2)
+        if d > 0.01 then
+            if model[w] ~= nil and before[w] ~= nil
+                and (m.x ~= before[w].x or m.y ~= before[w].y or m.z ~= before[w].z) then
+                issue("moved", w.x, w.z, string.format("a point the clear moved to %s stands %.1f m from there", at(m.x, m.z), d))
+            else
+                issue("moved", w.x, w.z, string.format("a point moved %.1f m, and no part of the clear moved it", d))
+            end
+        end
+        -- Link differences are gathered and said once the whole network has been compared, so a
+        -- link that appeared is one line, not one for each end of it.
+        for t in pairs(nowSet(w.out)) do
+            if not m.out[t] then outDiff[#outDiff + 1] = { a = w, b = t, ex = true } end
+        end
+        for t in pairs(m.out) do
+            if live[t] and not table.contains(w.out or {}, t.id) then outDiff[#outDiff + 1] = { a = w, b = t, ex = false } end
+        end
+        for f in pairs(nowSet(w.incoming)) do
+            if not m.inn[f] then inDiff[#inDiff + 1] = { a = f, b = w, ex = true } end
+        end
+        for f in pairs(m.inn) do
+            if live[f] and not table.contains(w.incoming or {}, f.id) then inDiff[#inDiff + 1] = { a = f, b = w, ex = false } end
+        end
+    end
+    -- Untouched points are compared list against list first: the cheap way, for the thousands that
+    -- the clear never came near.
+    local function sameAsBefore(w, b0)
+        if w.x ~= b0.x or w.y ~= b0.y or w.z ~= b0.z then return false end
+        local o, i = w.out or {}, w.incoming or {}
+        if #o ~= #b0.out or #i ~= #b0.inn then return false end
+        for k = 1, #o do if node(o[k]) ~= b0.out[k] then return false end end
+        for k = 1, #i do if node(i[k]) ~= b0.inn[k] then return false end end
+        return true
+    end
+    for w, b0 in pairs(before) do
+        if not live[w] then
+            if gone[w] == nil then
+                issue("gone", b0.x, b0.z, "a point was removed, and no part of the clear removed it")
+            end
+        elseif gone[w] ~= nil then
+            issue("stayed", w.x, w.z, "the clear removed this point, but it is still there")
+        elseif model[w] ~= nil then
+            compare(w, model[w])
+        elseif not sameAsBefore(w, b0) then
+            compare(w, M(w))
+        end
+    end
+    for w in pairs(live) do
+        if before[w] == nil then
+            if added[w] == nil then
+                issue("new", w.x, w.z, "a point appeared, and no part of the clear laid it")
+            elseif gone[w] ~= nil then
+                issue("stayed", w.x, w.z, "the clear laid this point and removed it again, but it is still there")
+            else
+                compare(w, model[w])
+            end
+        end
+    end
+    for w, e in pairs(added) do
+        if not live[w] and gone[w] == nil then
+            issue("vanished", e.x, e.z, "a point the clear laid is gone, and no part of the clear removed it")
+        end
+    end
+    -- A link is the outgoing list of one point and the incoming list of the other. Where both
+    -- disagree with the record it is one link, said once; where only the incoming side does, it is
+    -- half a link - the kind of disagreement AutoDrive's own merge test reads wrongly.
+    local outSeen = {}
+    for _, d in ipairs(outDiff) do
+        outSeen[d.a] = outSeen[d.a] or {}
+        outSeen[d.a][d.b] = d.ex
+        if not isFlip(d.a, d.b) then
+            if d.ex then
+                issue("link", d.a.x, d.a.z, string.format("a link from here to %s appeared, and no part of the clear made it", at(d.b.x, d.b.z)))
+            else
+                issue("link", d.a.x, d.a.z, string.format("the link from here to %s is gone, and no part of the clear cut it", at(d.b.x, d.b.z)))
+            end
+        end
+    end
+    for _, d in ipairs(inDiff) do
+        local same = outSeen[d.a] ~= nil and outSeen[d.a][d.b] == d.ex
+        if not same and not isFlip(d.a, d.b) then
+            if d.ex then
+                issue("link", d.b.x, d.b.z, string.format("the point now lists %s as leading into it, but no link runs from there - half a link no part of the clear made", at(d.a.x, d.a.z)))
+            else
+                issue("link", d.b.x, d.b.z, string.format("the point no longer lists %s as leading into it, though the link from there still runs - half a link no part of the clear cut", at(d.a.x, d.a.z)))
+            end
+        end
+    end
+
+    -- EACH EDIT STAYS INSIDE THIS JUNCTION. Deletions are bounded at jxRemove already; this asks the
+    -- same of every edit, so a stage that wires or moves something past the junction is named. The
+    -- respacing has a reach of its own: it may not work further along a lane, from the lane's end,
+    -- than FLYOVER_JUNCTION_RESPACE_LEN (plus the one gap that takes it there), measured along the
+    -- lane as the respacing measures it - a straight line from the middle said "57 m" of a stretch
+    -- 49 m along the lane (1). Past that it is a problem. Inside that reach, a stretch lying wholly
+    -- outside the junction is only a NOTE: the design gives the respacing "up to 50 m out" and "its
+    -- own limit" (docs/junction-tool/04, check 2), while the respacing's own comment says the far
+    -- part is "simply not this junction's to touch", and a two-point stretch with both ends past the
+    -- edge gets through its rule all the same (1: a 13 m link 45-58 m out divided at 51 m). Which
+    -- of the two is right is the user's call; counted as problems, they failed 37 of 68 clears and
+    -- buried the three real road cuts among them.
+    local reach = {}
+    local VERB = { add = "laid", move = "moved", remove = "removed", ["out+"] = "made", ["out-"] = "cut" }
+    local function runInside(run)
+        if run.inside == nil then
+            run.inside = false
+            for _, p in ipairs(run.pts or {}) do
+                if C.inArea(p.x, p.z) then run.inside = true break end
+            end
+        end
+        return run.inside
+    end
+    for i, e in ipairs(journal) do
+        -- One count per edit: a link is counted from its outgoing side, its mirror is not.
+        local verb = VERB[e.op]
+        if verb == "moved" and (moveBy[i] or 0) < 0.01 then verb = nil end
+        if verb ~= nil then
+            local d = C.dist(e)
+            local outside
+            if e.b ~= nil then
+                outside = not C.inArea(e.x, e.z) and not C.inArea(e.b.x, e.b.z)
+            else
+                outside = not C.inArea(e.x, e.z)
+            end
+            if e.respace and e.run ~= nil and runInside(e.run) then outside = false end
+            local key, far = nil, false
+            if outside then
+                key = (e.respace and "1 " or "0 ") .. e.stage
+            end
+            if e.respace and e.run ~= nil and e.run.cap ~= nil
+                and (e.run.along or 0) - (e.run.firstGap or 0) > e.run.cap then
+                key, far = "2 " .. e.stage, true
+            end
+            if key ~= nil then
+                local r = reach[key]
+                if r == nil then
+                    r = { key = key, stage = e.stage, respace = e.respace, far = -1, near = math.huge, n = {}, runs = {}, nRuns = 0 }
+                    if far then r.along, r.cap = e.run.along, e.run.cap end
+                    reach[key] = r
+                end
+                r.n[verb] = (r.n[verb] or 0) + 1
+                if e.run ~= nil and not r.runs[e.run] then
+                    r.runs[e.run] = true
+                    r.nRuns = r.nRuns + 1
+                end
+                if far and e.run.along > (r.along or 0) then r.along = e.run.along end
+                if d > r.far then r.far, r.x, r.z = d, e.x, e.z end
+                if d < r.near then r.near = d end
+            end
+        end
+    end
+    local stages = {}
+    for _, r in pairs(reach) do stages[#stages + 1] = r end
+    table.sort(stages, function(p, q) return p.key < q.key end)
+    local notes = {}
+    for _, r in ipairs(stages) do
+        local who = "the respacing"
+        if r.stage ~= "respacing" then who = string.format("the respacing (while %s)", r.stage) end
+        -- "between 15 and 25 m": at 58 a lone "the farthest 25 m" was where the lane split, while
+        -- the points it laid were 15 and 20 m out.
+        local span = string.format("%.0f m from the middle", r.far)
+        if r.far - r.near >= 1 then span = string.format("between %.0f and %.0f m from the middle", r.near, r.far) end
+        if r.key:sub(1, 1) == "2" then
+            issue("reach", r.x, r.z, string.format("%s worked %.0f m along a lane from its end, past its %.0f m reach",
+                who, r.along or 0, r.cap or 0), r.far)
+        elseif r.respace then
+            -- Two distances, said as two: how far from the middle in a straight line, and how far
+            -- along the lane from where it now ends - which is how the respacing's reach is
+            -- measured. "Between 50 and 61 m from the middle. Within its own 50 m reach" (30) read
+            -- as a contradiction; "its own code says it should stop at the edge" was about the
+            -- code, not the road.
+            local what = string.format("re-laid %d stretch%s of road", r.nRuns, (r.nRuns == 1) and "" or "es")
+            if r.nRuns == 0 then what = "changed road" end
+            notes[#notes + 1] = { x = r.x, z = r.z, far = r.far, text = string.format(
+                "%s %s lying wholly outside this junction, %s in a straight line. Not counted as a problem: measured along the lane from the lane's end at the junction, it is inside the %.0f m the respacing may work over. Whether it should work past the junction's edge at all is your call",
+                who, what, span, AutoDrive.FLYOVER_JUNCTION_RESPACE_LEN or 50) }
+        else
+            local parts = {}
+            for _, v in ipairs({ "laid", "moved", "removed", "made", "cut" }) do
+                local n = r.n[v]
+                if n ~= nil then
+                    local unit = "point"
+                    if v == "made" or v == "cut" then unit = "link" end
+                    if n ~= 1 then unit = unit .. "s" end
+                    parts[#parts + 1] = string.format("%s %d %s", v, n, unit)
+                end
+            end
+            local what = parts[1] or "changed nothing"
+            if #parts > 1 then
+                what = table.concat(parts, ", ", 1, #parts - 1) .. " and " .. parts[#parts]
+            end
+            issue("reach", r.x, r.z, string.format("%s %s outside this junction, %s",
+                r.stage, what, span), r.far)
+        end
+    end
+
+    -- A LANE THAT NOW SPLITS INTO DEAD ENDS. At 58 the tidy laid a new spur beside a lane's old end:
+    -- the lane coming in from the south split 25 m out into two dead ends side by side, 3 m apart,
+    -- and the only report was "laid 2 points outside this junction". Each way out of a fork is
+    -- followed, never straight back, until it forks again, ends, or runs 30 m; a fork the clear gave
+    -- more ways out than it had, with more of its ways ending than before, is said, out to 60 m.
+    -- More ways out, not merely new ones: a road that already split into two lanes before the
+    -- junction, both now cut to stubs, is what a clear leaves on purpose - at 31 the tidy re-laid
+    -- one of the side road's two stubs, a new way out in place of an old one.
+    local function deadEnds(w, old)
+        local function outs(v, from)
+            local list = {}
+            if old then
+                for _, t in ipairs((before[v] and before[v].out) or {}) do
+                    if t ~= v and t ~= from then list[#list + 1] = t end
+                end
+            else
+                for _, id in ipairs(v.out or {}) do
+                    local t = node(id)
+                    if t ~= nil and t ~= v and t ~= from then list[#list + 1] = t end
+                end
+            end
+            return list
+        end
+        local function pos(v)
+            if old then return before[v] end
+            return v
+        end
+        local ends = {}
+        local first = outs(w, nil)
+        if #first < 2 then return ends end
+        for _, t in ipairs(first) do
+            local prev, cur = w, t
+            local run = math.sqrt((pos(t).x - pos(w).x) ^ 2 + (pos(t).z - pos(w).z) ^ 2)
+            for _ = 1, 40 do
+                local nx = outs(cur, prev)
+                if #nx == 0 then ends[#ends + 1] = cur break end
+                if #nx > 1 then break end
+                run = run + math.sqrt((pos(nx[1]).x - pos(cur).x) ^ 2 + (pos(nx[1]).z - pos(cur).z) ^ 2)
+                if run > 30 then break end
+                prev, cur = cur, nx[1]
+            end
+        end
+        return ends
+    end
+    local function newWayOut(w)
+        local now, was, seen = 0, 0, {}
+        for _, id in ipairs(w.out or {}) do
+            local t = node(id)
+            if t ~= nil and t ~= w and not seen[t] then seen[t] = true now = now + 1 end
+        end
+        seen = {}
+        for _, t in ipairs((before[w] and before[w].out) or {}) do
+            if t ~= w and not seen[t] then seen[t] = true was = was + 1 end
+        end
+        return now > was
+    end
+    local spurAt = {}
+    for _, w in ipairs(C.near) do
+        local ends = {}
+        if newWayOut(w) then ends = deadEnds(w, false) end
+        if #ends >= 2 then
+            local was = 0
+            if before[w] ~= nil then was = #deadEnds(w, true) end
+            if was < #ends then
+                spurAt[w] = true
+                table.sort(ends, jxByPos)
+                local where = {}
+                for _, t in ipairs(ends) do where[#where + 1] = at(t.x, t.z) end
+                local list = table.concat(where, " and ")
+                if #where > 2 then list = table.concat(where, ", ", 1, #where - 1) .. " and " .. where[#where] end
+                local earlier = "none of its ways ended"
+                if was == 1 then earlier = "only one of them did" elseif was > 1 then earlier = string.format("only %d did", was) end
+                issue("spur", w.x, w.z, string.format("a lane now splits here into %d dead ends, at %s; before the clear %s",
+                    #ends, list, earlier))
+            end
+        end
+    end
+
+    -- THE START OF A TURN THE CLEAR CUT, LEFT HANGING OFF A LANE: the other end of the tail
+    -- (jxTail). A way out of a fork that runs, point by point and without a fork, at most 15 m to a
+    -- dead end that was there before the clear and led on then, while another way out of the same
+    -- fork is not such a piece. At 36, with through roads kept, the clear cut the Y's branch to the
+    -- south but left its first 4 m on the north road's lane, 15 m out, just past the edge the
+    -- deletions obey: a lane splitting makes no teal dot, and with one dead end the rule above had
+    -- nothing to say, so nothing said it. Not a lane of this junction stopping on purpose: the end of
+    -- a lane coming in is on the lanes the check walked, and is left out. Nor a dead end the clear
+    -- laid: that is a lane's end the tidy re-laid (31's one-way stub, beside the side road's two-way
+    -- one), or else the rule above's.
+    local function liveOuts(v, from)
+        local list, seen = {}, {}
+        for _, id in ipairs(v.out or {}) do
+            local t = node(id)
+            if t ~= nil and t ~= v and t ~= from and not seen[t] then
+                seen[t] = true
+                list[#list + 1] = t
+            end
+        end
+        return list
+    end
+    -- A fork is a point with three or more neighbours: along a two-way road every point has two
+    -- ways out, forward and back, and taking that for a split read every point of 26's two-way side
+    -- road as a fork with a dead end hanging off it.
+    local function isFork(v)
+        local seen, k = {}, 0
+        for _, lst in ipairs({ v.out or {}, v.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                local t = node(id)
+                if t ~= nil and t ~= v and not seen[t] then
+                    seen[t] = true
+                    k = k + 1
+                end
+            end
+        end
+        return k >= 3
+    end
+    for _, w in ipairs(C.near) do
+        local first = liveOuts(w, nil)
+        if not spurAt[w] and #first >= 2 and isFork(w) then
+            local pieces = {}
+            for _, t in ipairs(first) do
+                local prev, cur = w, t
+                local run = math.sqrt((t.x - w.x) ^ 2 + (t.z - w.z) ^ 2)
+                local stop = nil
+                for _ = 1, 40 do
+                    local nx = liveOuts(cur, prev)
+                    if #nx == 0 then stop = cur break end
+                    if #nx > 1 or run > 15 then break end
+                    run = run + math.sqrt((nx[1].x - cur.x) ^ 2 + (nx[1].z - cur.z) ^ 2)
+                    prev, cur = cur, nx[1]
+                end
+                local b0 = nil
+                if stop ~= nil then b0 = before[stop] end
+                if b0 ~= nil and run <= 15 and C.inLane[stop] == nil and C.outLane[stop] == nil then
+                    local ledOn = false
+                    for _, o in ipairs(b0.out) do
+                        if o ~= stop then ledOn = true end
+                    end
+                    if ledOn then pieces[#pieces + 1] = { e = stop, run = run } end
+                end
+            end
+            if #pieces > 0 and #pieces < #first then
+                table.sort(pieces, function(p, q) return jxByPos(p.e, q.e) end)
+                for _, p in ipairs(pieces) do
+                    issue("leftover", w.x, w.z, string.format(
+                        "a lane now splits here into a dead end %.0f m long, ending at %s - the start of a turn the clear cut, left behind; before the clear that way led on",
+                        p.run, at(p.e.x, p.e.z)))
+                end
+            end
+        end
+    end
+
+    -- EVERY ROAD THAT HAS TO STILL DRIVE, STILL DRIVES (jxCheckKept found which ones, and where each
+    -- one stops).
+    for _, b in ipairs(C.broken or {}) do
+        local it = b.item
+        -- Named by the junction's own roads where the ends lie on its lanes, as the joins are.
+        local from, to = C.wordAt(it.A.x, it.A.z), C.wordAt(it.B.x, it.B.z)
+        local ia, ob = C.inLane[it.A] or C.outLane[it.A], C.outLane[it.B] or C.inLane[it.B]
+        if ia ~= nil then from = C.roadName(ia) end
+        if ob ~= nil then to = C.roadName(ob) end
+        local text
+        local stops = "no longer drives through: it stops here"
+        if b.detour then stops = "now gets through only by leaving its own line: along it, it stops here" end
+        if b.lost then
+            text = string.format("the road in from the %s, out to the %s, lost its end point", from, to)
+        elseif it.kind == "unjoined" then
+            text = string.format("the road in from the %s, out to the %s, runs across the junction without joining it, and %s", from, to, stops)
+        elseif it.kind == "own" then
+            text = string.format("the kept through road in from the %s, out to the %s, %s", from, to, stops)
+        else
+            text = string.format("the road in from the %s, out to the %s, drove straight through before the clear and %s", from, to, stops)
+        end
+        issue("through", b.x, b.z, text)
+    end
+
+    -- EVERY LANE STILL RUNS ITS OWN WAY. Walked from its far end in towards the middle, keeping to the
+    -- straightest way on, and every link it crosses must run the way the lane does. A link that ran
+    -- the wrong way before the clear as well is said, but is not this clear's doing.
+    local wrongBefore = {}
+    for idx, ap in ipairs(C.approaches) do
+        local A = ap.wp
+        if A ~= nil and live[A] then
+            local wantIn = (ap.dir == "in")
+            local name = string.format("the lane %s the %s", wantIn and "in from" or "out to", C.roadName(idx))
+            local hx, hz = C.cx - A.x, C.cz - A.z
+            local hl = math.sqrt(hx * hx + hz * hz)
+            if hl > 1e-6 then hx, hz = hx / hl, hz / hl end
+            -- THE FIRST STEP IS THE LANE'S OWN: downstream from where a lane in starts, upstream from
+            -- where a lane out ends. Straight at the middle is no good where the lane bends - at 62
+            -- the west road's lane runs north at its far end, and a first step aimed at the middle
+            -- went on down it, the way traffic leaves.
+            do
+                local first, fd = nil, -math.huge
+                local lst = A.incoming or {}
+                if wantIn then lst = A.out or {} end
+                for _, id in ipairs(lst) do
+                    local t = node(id)
+                    if t ~= nil and t ~= A then
+                        local dx, dz = t.x - A.x, t.z - A.z
+                        local l = math.sqrt(dx * dx + dz * dz)
+                        if l > 1e-6 and (dx * hx + dz * hz) / l > fd then fd, first = (dx * hx + dz * hz) / l, t end
+                    end
+                end
+                if first ~= nil then hx, hz = jxHeading(A, first) end
+            end
+            local prev, cur, seen, entered = nil, A, { [A] = true }, C.inA[A] == true
+            for _ = 1, 300 do
+                local best, bd = nil, -math.huge
+                for _, lst in ipairs({ cur.out or {}, cur.incoming or {} }) do
+                    for _, id in ipairs(lst) do
+                        local t = node(id)
+                        if t ~= nil and t ~= prev and t ~= cur and not seen[t] then
+                            local dx, dz = t.x - cur.x, t.z - cur.z
+                            local l = math.sqrt(dx * dx + dz * dz)
+                            if l > 1e-6 and (dx * hx + dz * hz) / l > bd then bd, best = (dx * hx + dz * hz) / l, t end
+                        end
+                    end
+                end
+                if best == nil or bd < 0.3 then break end
+                local fwd = table.contains(cur.out or {}, best.id)
+                local bwd = table.contains(best.out or {}, cur.id)
+                if (wantIn and not fwd) or (not wantIn and not bwd) then
+                    local mx, mz = (cur.x + best.x) / 2, (cur.z + best.z) / 2
+                    local b0, b1 = before[cur], before[best]
+                    local was = false
+                    if b0 ~= nil and b1 ~= nil then
+                        local f0, r0 = false, false
+                        for _, t in ipairs(b0.out) do if t == best then f0 = true end end
+                        for _, t in ipairs(b1.out) do if t == cur then r0 = true end end
+                        was = (f0 == fwd) and (r0 == bwd)
+                    end
+                    local text = string.format("%s no longer %s: the link here runs the wrong way", name, wantIn and "drives in" or "drives out")
+                    if was then
+                        wrongBefore[#wrongBefore + 1] = { x = mx, z = mz, text = name .. ": the link here ran the wrong way before the clear too" }
+                    else
+                        issue("stub", mx, mz, text)
+                    end
+                    break
+                end
+                hx, hz = jxHeading(cur, best)
+                prev, cur = cur, best
+                seen[cur] = true
+                if C.inA[cur] then entered = true elseif entered then break end
+            end
+        end
+    end
+    C.issues, C.wrongBefore, C.notes = issues, wrongBefore, notes
+end
+
+--- What the check found, in the log and on the card. Plain words, one name for each thing: a "teal
+--- dot" everywhere (the log once said "merge point" and the card "teal dot", for the same dot).
+---
+--- Every reason a join or teal dot can be left for, worst first. `card` is the few words the card
+--- has room for; `short` names the group in the log's summary line.
+local JX_REASONS = {
+    { key = "made", short = "made during the clear", card = "joined by the clear" },
+    { key = "crossmade", short = "where the clear joined the two kept through roads", card = "clear joined kept roads" },
+    { key = "new", short = "made by the clear", card = "made by the clear" },
+    { key = "selfmade", short = "left of two ways meeting, now one lane joining itself", card = "left of a cut turn" },
+    { key = "tail", short = "fed by the end of a turn the clear cut", card = "end of a cut turn" },
+    { key = "missed", short = "missed by the clear", card = "missed" },
+    { key = "nobox", short = "where no box could be built", card = "no box here" },
+    { key = "through", short = "a through road still running through", card = "through road runs on" },
+    { key = "part", short = "another part's own wiring", card = "next part's wiring" },
+    { key = "oneroad", short = "one road's own lanes", card = "one road's own lanes" },
+    { key = "selfjoin", short = "one lane joining itself, as before the clear", card = "lane joins itself" },
+    { key = "crossing", short = "where the kept through roads cross, as before the clear", card = "where kept roads cross" },
+}
+
+local function jxCheckReport(C)
+    local joins, dots, issues, wrongBefore, notes = C.joins, C.dots, C.issues, C.wrongBefore, C.notes or {}
+    local at = C.at
+    local KIND = { gone = 1, stayed = 2, new = 3, vanished = 4, moved = 5, link = 6, flip = 7,
+                   through = 8, stub = 9, spur = 10, leftover = 11, reach = 12 }
+    table.sort(issues, function(p, q)
+        if p.kind ~= q.kind then return (KIND[p.kind] or 99) < (KIND[q.kind] or 99) end
+        if p.x ~= q.x then return p.x < q.x end
+        if p.z ~= q.z then return p.z < q.z end
+        return p.text < q.text
+    end)
+    table.sort(dots, function(p, q)
+        if p.x ~= q.x then return p.x < q.x end
+        if p.z ~= q.z then return p.z < q.z end
+        return p.why < q.why
+    end)
+    for _, list in ipairs({ wrongBefore, notes }) do
+        table.sort(list, function(p, q)
+            if p.x ~= q.x then return p.x < q.x end
+            if p.z ~= q.z then return p.z < q.z end
+            return p.text < q.text
+        end)
+    end
+    local function partName(p)
+        if p == nil then return "the next part" end
+        if p.name ~= nil then return p.name end
+        return string.format("the part %.0f m %s", math.sqrt((p.x - C.cx) ^ 2 + (p.z - C.cz) ^ 2),
+            JX_WORD[jxCompass(p.x - C.cx, p.z - C.cz)] or "away")
+    end
+    -- Where two kept roads were joined, the clear had sometimes moved them together first: at 30 the
+    -- two roads came within 0.75 m of each other before the clear, and a point of each stood 0.28 m
+    -- apart when the two were folded. Said as both, so "0.28 m apart" is not read as how they stood.
+    local function movedFirst(it)
+        return it.fold ~= nil and it.foldWas ~= nil and it.foldWas - it.fold >= 0.05
+    end
+    local function why(it)
+        local w = it.why
+        if w == "missed" then return "a connection the clear missed" end
+        if w == "made" then
+            if it.foldAt and it.linkFrom ~= nil then
+                return string.format("the clear made this join: its clean-up folded two points, %.2f m apart, into one at %s, joining two ways that did not meet",
+                    it.fold or 0, at(it.linkFrom.x, it.linkFrom.z))
+            end
+            if it.linkFrom ~= nil then
+                return string.format("joined by a link that was not there before the clear, from %s to %s",
+                    at(it.linkFrom.x, it.linkFrom.z), at(it.linkTo.x, it.linkTo.z))
+            end
+            return "a connection that did not drive before the clear"
+        end
+        if w == "crossing" then
+            return "where the two kept through roads cross, which shared this point before the clear too (nothing keeps them apart there yet)"
+        end
+        if w == "crossmade" then
+            if movedFirst(it) then
+                return string.format("where the two kept through roads cross - the clear joined them here: before it they shared no point, the nearest two %.2f m apart; it moved a point of each together first, to %.2f m, and then folded the two into one", it.foldWas, it.fold)
+            end
+            if it.fold ~= nil then
+                return string.format("where the two kept through roads cross - the clear joined them here: they shared no point before it, and it folded a point of each, %.2f m apart, into one", it.fold)
+            end
+            return "where the two kept through roads cross - the clear joined them here: they shared no point before it"
+        end
+        if w == "nobox" then return "no box could be built here, so the clear could not cut everything in the middle" end
+        if w == "through" then return "a through road still runs through, though through roads were not kept" end
+        if w == "selfjoin" then return "one lane splitting and joining itself again, not two roads" end
+        if w == "selfmade" then
+            local s = string.format("one lane now splits at %s and joins itself again here, left so by the clear", at(it.fx or it.x, it.fz or it.z))
+            if it.fold ~= nil then
+                s = s .. string.format(": its clean-up folded two points %.2f m apart there into one", it.fold)
+            end
+            if it.was then s = s .. "; before the clear, two separate ways met here" end
+            return s
+        end
+        if w == "tail" then
+            return string.format("the end of a turn the clear cut: its last stretch, from %s, is fed by nothing now but still joins the lane here",
+                at(it.fx or it.x, it.fz or it.z))
+        end
+        if w == "new" then return "the clear made it: there was no teal dot here before" end
+        if w == "oneroad" then return "one road's own lanes splitting or ending here, not two roads joined" end
+        if w == "part" then return string.format("%s's own wiring, which this clear leaves alone", partName(it.part)) end
+        return w
+    end
+    -- Whether the dot is old is worth saying only where the reason does not say it already.
+    local SAYS_WHEN = { made = true, crossmade = true, new = true, selfmade = true, tail = true }
+    local function count(n, one, many)
+        if n == 1 then return "1 " .. one end
+        return string.format("%d %s", n, many)
+    end
+    local function both(nj, nd, sep)
+        local parts = {}
+        if nj > 0 then parts[#parts + 1] = count(nj, "join", "joins") end
+        if nd > 0 then parts[#parts + 1] = count(nd, "teal dot", "teal dots") end
+        return table.concat(parts, sep)
+    end
+    local nJoin, nDot = #joins, #dots
+    local byJ, byD = {}, {}
+    for _, j in ipairs(joins) do byJ[j.why] = (byJ[j.why] or 0) + 1 end
+    for _, d in ipairs(dots) do byD[d.why] = (byD[d.why] or 0) + 1 end
+    local groups = {}
+    for _, R in ipairs(JX_REASONS) do
+        local nj, nd = byJ[R.key] or 0, byD[R.key] or 0
+        if nj + nd > 0 then groups[#groups + 1] = { R = R, nj = nj, nd = nd } end
+    end
+    local num = nil
+    if C.jp ~= nil then num = C.jp.junctionNumber end
+    local label = ""
+    if num ~= nil then label = string.format(" (j%02d)", num) end
+    -- What was looked at is said every time, and said as a place, not a radius: "looked at 23 m out"
+    -- at 39 read as everything within 23 m, while a teal dot 20 m out past the junction's edge - the
+    -- next part's own - was rightly not mentioned.
+    local looked = string.format("looked at: the middle, up to %.0f m out inside this junction's edge, and teal dots the clear left up to 45 m out", C.midR)
+    local middle
+    if nJoin + nDot == 0 then
+        middle = string.format("middle empty (%s)", looked)
+    else
+        local named = {}
+        for _, g in ipairs(groups) do
+            named[#named + 1] = string.format("%s %s", both(g.nj, g.nd, " and "), g.R.short)
+        end
+        if #groups == 1 and nJoin + nDot > 1 then named = { "all " .. groups[1].R.short } end
+        if #groups == 1 and nJoin + nDot == 1 then named = { groups[1].R.short } end
+        middle = string.format("%s left (%s): %s", both(nJoin, nDot, " and "), looked, table.concat(named, ", "))
+    end
+    local elsewhere = "nothing else touched"
+    if #issues > 0 then elsewhere = count(#issues, "other problem found", "other problems found") end
+    if #notes > 0 then elsewhere = elsewhere .. "; " .. count(#notes, "note", "notes") end
+    Logging.info("[FlyoverEditor]: junction - check after the clear%s: %s; %s.", label, middle, elsewhere)
+    for _, j in ipairs(joins) do
+        -- A lane that starts inside the junction is named as the lane out it is, and where it starts:
+        -- "the lane starting on the north-east" at 40 named a stub 5 m south-east of the middle -
+        -- the start of the lane out to the north-east.
+        local lane = string.format("the lane in from the %s", j.from)
+        if j.starts and j.startAt ~= nil then
+            lane = string.format("the lane out to the %s, from its start at %s,", j.from, at(j.startAt.x, j.startAt.z))
+        end
+        local still = "still"
+        if not j.was then still = "now" end
+        if j.uturn then
+            Logging.info("[FlyoverEditor]: junction - check: %s %s turns back out along the same road at %s - %s.",
+                lane, still, at(j.x, j.z), why(j))
+        elseif j.offLanes then
+            -- Leaves onto a road none of this junction's lanes is on (jxDriveOn reached none). Not
+            -- "none of this junction's own": the road is only one the clear found no lane of - at 40
+            -- it is the south-east road, the junction's own main road by the user's reading, which
+            -- the clear read as running west to north-east.
+            Logging.info("[FlyoverEditor]: junction - check: %s %s joins a road the clear did not count as one of this junction's, leaving to the %s, at %s - %s.",
+                lane, still, j.to, at(j.x, j.z), why(j))
+        else
+            Logging.info("[FlyoverEditor]: junction - check: %s %s joins the lane out to the %s at %s - %s.",
+                lane, still, j.to, at(j.x, j.z), why(j))
+        end
+    end
+    for _, d in ipairs(dots) do
+        local tail = ""
+        if not SAYS_WHEN[d.why] then
+            if d.was then tail = "; it was a teal dot before the clear too" else tail = "; there was no teal dot here before the clear" end
+        end
+        Logging.info("[FlyoverEditor]: junction - check: a teal dot (AutoDrive's merge point) is left at %s - %s%s.",
+            at(d.x, d.z), why(d), tail)
+    end
+    for _, it in ipairs(issues) do
+        Logging.info("[FlyoverEditor]: junction - check: at %s, %s.", at(it.x, it.z), it.text)
+    end
+    for _, it in ipairs(notes) do
+        Logging.info("[FlyoverEditor]: junction - check (note): at %s, %s.", at(it.x, it.z), it.text)
+    end
+    for _, it in ipairs(wrongBefore) do
+        Logging.info("[FlyoverEditor]: junction - check (not this clear's doing): at %s, %s.", at(it.x, it.z), it.text)
+    end
+
+    -- THE CARD: one short line, two when both checks have something to say. A note row is a single
+    -- line, drawn as it is - it is neither wrapped nor shrunk to fit - so each says the main thing
+    -- and leaves the rest to the log. Joins and teal dots are counted apart - "(12)" at 16 added the
+    -- two together without saying so - and what is named is the worst reason found, as a reason and
+    -- with no number of its own: "3 joins, 2 teal dots left (3 clear joined kept roads)" at 30 added
+    -- two joins and a teal dot of one reason together, and read as three kept roads. The second line names
+    -- the worst kind of problem, not a bare count: "1 other change" read like damage where the only
+    -- thing found was the respacing going 1 m too far.
+    local card = {}
+    local first
+    if nJoin + nDot == 0 then
+        first = "Check: middle empty"
+    elseif #groups == 1 then
+        first = string.format("Check: %s - %s", both(nJoin, nDot, ", "), groups[1].R.card)
+    else
+        first = string.format("Check: %s - worst: %s", both(nJoin, nDot, ", "), groups[1].R.card)
+    end
+    local noted = ""
+    if #notes > 0 then noted = string.format(" (%s)", count(#notes, "note", "notes")) end
+    if #issues == 0 then
+        if nJoin + nDot == 0 then
+            card[1] = first .. ", nothing else touched" .. noted
+        else
+            card[1] = first
+            card[2] = "nothing else touched" .. noted
+        end
+    else
+        card[1] = first
+        local kinds, reachFar = {}, 0
+        local ORDER = { "through", "stub", "flip", "spur", "leftover", "change", "reach" }
+        for _, it in ipairs(issues) do
+            local k = it.kind
+            if k ~= "through" and k ~= "stub" and k ~= "flip" and k ~= "spur" and k ~= "leftover" and k ~= "reach" then
+                k = "change"
+            end
+            kinds[k] = (kinds[k] or 0) + 1
+            if k == "reach" and (it.far or 0) > reachFar then reachFar = it.far end
+        end
+        local SAY = {
+            through = { "road cut", "roads cut" },
+            stub = { "lane turned round", "lanes turned round" },
+            flip = { "link turned round", "links turned round" },
+            spur = { "lane split into dead ends", "lanes split into dead ends" },
+            leftover = { "piece of a cut turn left", "pieces of cut turns left" },
+            change = { "change no part made", "changes no part made" },
+            reach = { "edit outside the junction", "edits outside the junction" },
+        }
+        local said, more = nil, 0
+        for _, k in ipairs(ORDER) do
+            if kinds[k] ~= nil then
+                if said == nil then
+                    said = count(kinds[k], SAY[k][1], SAY[k][2])
+                    if k == "reach" then said = string.format("%s, to %.0f m", said, reachFar) end
+                else
+                    more = more + kinds[k]
+                end
+            end
+        end
+        if more > 0 then said = string.format("%s, %d more", said, more) end
+        card[2] = said .. " - see the log"
+    end
+    return { number = num, x = C.cx, z = C.cz, middleR = C.midR, leave = C.leave, joins = joins, dots = dots,
+             issues = issues, wrongBefore = wrongBefore, notes = notes, card = card,
+             middleEmpty = (nJoin + nDot == 0), untouched = (#issues == 0) }
+end
+
+--- WHAT THE NETWORK LOOKS LIKE AROUND A CLEARED JUNCTION, as one string: every point within 60 m,
+--- where it stands and where each of its links leads. Equal strings mean the clear's result still
+--- describes the network there.
+local function jxCheckSignature(cx, cz)
+    local parts = {}
+    for _, w in pairs(ADGraphManager:getWayPoints() or {}) do
+        if w ~= nil and w.id ~= nil and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= 60 * 60 then
+            local outs = {}
+            for _, id in ipairs(w.out or {}) do
+                local t = ADGraphManager:getWayPointById(id)
+                if t ~= nil then outs[#outs + 1] = string.format("%.2f,%.2f", t.x, t.z) end
+            end
+            table.sort(outs)
+            parts[#parts + 1] = string.format("%.2f,%.2f,%.2f>%s", w.x, w.y or 0, w.z, table.concat(outs, ";"))
+        end
+    end
+    table.sort(parts)
+    return table.concat(parts, "|")
+end
+
+--- Keep the result for the card, with what the network looked like when the check was made. Every
+--- field is worked out before any is set, so an error part-way leaves the result as it was rather
+--- than half marked: a result with a signature but nothing to compare it with would stop the card.
+function ADFlyoverEditor:junctionCheckKeep(res)
+    if res ~= nil and res.x ~= nil then
+        local list = ADGraphManager:getWayPoints()
+        local sig = jxCheckSignature(res.x, res.z)
+        -- Held weakly: the list a later undo throws away must not be kept alive by the card.
+        res.seen = setmetatable({ list = list }, { __mode = "v" })
+        res.seenCount, res.shown, res.askedAt = #(list or {}), true, self:nowMs()
+        res.sig = sig
+    end
+    self.junctionLastCheck = res
+end
+
+function ADFlyoverEditor:junctionClearCheck(ck)
+    local C = nil
+    if ck ~= nil and ck.before ~= nil and ck.failed == nil then C = jxCheckSetup(ck) end
+    if C == nil then
+        -- Said, and shown, rather than left to the card's last result: that described another clear.
+        local why = "nothing is left to say where the junction was"
+        if ck ~= nil and ck.failed ~= nil then why = ck.failed end
+        Logging.info("[FlyoverEditor]: junction - check after the clear could not run: %s.", why)
+        self:junctionCheckFailed(ck)
+        return nil
+    end
+    jxCheckLanes(C)
+    jxCheckPassages(C)
+    jxCheckKept(C)
+    jxCheckMiddle(C)
+    jxCheckTouched(C)
+    local res = jxCheckReport(C)
+    -- The offline harness looks at the workings through this; nothing in the game sets it.
+    if ADFlyoverEditor.junctionCheckProbe ~= nil then ADFlyoverEditor.junctionCheckProbe(C, res) end
+    self:junctionCheckKeep(res)
+    return res
+end
+
+--- The card's line when the check could not run or stopped with an error (tryCall has logged it).
+--- Called from the clear's own ending, so nothing in here may throw: an error escaping it would
+--- leave the clear's last steps undone (the debug capture still open, the tool still armed). The
+--- line is set first, plainly; keeping it the usual way - with the network's signature, so the card
+--- can drop it after a later edit - is tried after, and if that fails the line simply stays.
+function ADFlyoverEditor:junctionCheckFailed(ck)
+    local res = { card = { "Check: could not run - see the log" } }
+    self.junctionLastCheck = res
+    tryCall("junction clear check (could not run)", function()
+        if ck ~= nil and ck.jp ~= nil then res.number = ck.jp.junctionNumber end
+        if ck ~= nil and ck.site ~= nil then res.x, res.z = ck.site.x, ck.site.z end
+        self:junctionCheckKeep(res)
+    end)
+    self.junctionLastCheck = res
+end
+
+--- The last check, while it still describes the network. Asked again whenever the network is
+--- swapped whole (an undo or a redo does that) or its number of points changes, and otherwise
+--- every half second: a link made or a point moved inside the cleared junction changes neither the
+--- list nor the count, and the card went on describing a junction that was no longer there. If the
+--- 60 m round the junction is no longer what the clear left, the card stops showing it - and shows
+--- it again once it is, after an undo of a later edit, or a redo of the clear. Tied to the network
+--- itself, not to an undo step: an undo step is a new table after a redo, falls off the 25-step stack
+--- after 25 more edits, and a clear with nothing to cut takes none. The card draws this every frame,
+--- so an error comparing hides the line rather than taking the card down.
+function ADFlyoverEditor:junctionLastCheckShown()
+    local r = self.junctionLastCheck
+    if r == nil or r.sig == nil or r.seen == nil then return r end
+    local list = ADGraphManager:getWayPoints()
+    local n = #(list or {})
+    local now = self:nowMs()
+    if r.seen.list ~= list or r.seenCount ~= n or now - (r.askedAt or 0) >= 500 or now < (r.askedAt or 0) then
+        r.seen.list, r.seenCount, r.askedAt = list, n, now
+        local ok, sig = pcall(jxCheckSignature, r.x, r.z)
+        r.shown = ok and sig == r.sig
+    end
+    if r.shown then return r end
+    return nil
+end
+
+--- WHERE THE ROADS MET BEFORE THE CLEAR, when the one number stands for more than one such place - a
+--- junction the user wants split (20, 26, 39, 40). What a clear of one part leaves near another is
+--- that part's own wiring, which this clear leaves alone; read now, before anything changes, since
+--- the part being cleared stops being a meeting point once it is. `at` is where the selection locked
+--- the site, which is the meeting point this site is (the same rule as junctionPartsNote). Nil
+--- when the number stands for one place, or none.
+function ADFlyoverEditor:junctionCheckMeetings(jp, at)
+    local n = nil
+    if jp ~= nil then n = jp.junctionNumber end
+    if n == nil or at == nil then return nil end
+    local mine = self:junctionMeetingPointsOf(n)
+    if #mine < 2 then return nil end
+    local pts = {}
+    for _, m in ipairs(mine) do pts[#pts + 1] = { x = m.x, z = m.z } end
+    jxPartLetters(pts)
+    local here, hd = nil, 10 * 10
+    for _, p in ipairs(pts) do
+        if p.letter ~= nil then p.name = string.format("j%02d%s", n, p.letter) end
+        local d = (p.x - at.x) ^ 2 + (p.z - at.z) ^ 2
+        if d < hd then hd, here = d, p end
+    end
+    if here == nil then return nil end
+    return { pts = pts, here = here }
+end
+
 function ADFlyoverEditor:applyJunctionClear()
     local jp = self.junctionPreview
     if jp == nil then return end
+    -- The card's line on the last clear goes now: whatever this clear's check says or fails to say,
+    -- the last one described another clear.
+    self.junctionLastCheck = nil
+    -- Where the selection locked the site, for the check at the end only (which of a split
+    -- junction's parts this is); the line below moves the site onto the crossing.
+    local lockedAt = nil
+    if self.junctionSite ~= nil then lockedAt = { x = self.junctionSite.x, z = self.junctionSite.z } end
     -- The bounds are measured from the crossing too, where there is one, so that "this junction"
     -- means the same place to the deletions as it does on screen.
     if self.junctionSite ~= nil and jp.boxCentre ~= nil then
@@ -19375,6 +22044,22 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     -- From here until jxEnd, nothing is deleted outside the junction that was selected. See jxRemove.
     jxBegin(self.junctionSite)
+    -- THE NETWORK BEFORE, AND THE RECORD OF WHAT THIS CLEAR DOES TO IT, for the check at the end.
+    -- Taken here, before the cleaning, because the cleaning changes the network too. Reading only:
+    -- nothing below decides anything from either. Read under tryCall, like every other step of the
+    -- check: the check only reports, so an error in it must never stop the clear. If the network
+    -- cannot be read, the clear carries on and the check says it could not run.
+    local chk = { site = self.junctionSite, leave = (self.junctionLeaveThrough ~= false), forkSpots = {} }
+    if not tryCall("junction clear check (the network before)", function()
+        chk.before = jxSnapshot()
+        for _, f in ipairs((self.junctionSite ~= nil and self.junctionSite.forks) or {}) do
+            chk.forkSpots[#chk.forkSpots + 1] = { x = f.x, z = f.z }
+        end
+    end) then
+        chk.before, chk.failed = nil, "the network before the clear could not be read"
+    end
+    tryCall("junction check parts", function() chk.meetings = self:junctionCheckMeetings(jp, lockedAt) end)
+    jxJournal, jxStage = {}, "cleaning the site"
 
     -- The network as it stands, before a single point moves, when capture is on. Nil otherwise, and
     -- every debugCapture call below is a no-op on nil.
@@ -19402,6 +22087,7 @@ function ADFlyoverEditor:applyJunctionClear()
             -- with nothing leading into it, so one pass is never enough. Three is, and anything that
             -- will not settle by then is left alone rather than chased.
             for _ = 1, 3 do
+                jxStage = "cleaning the site"
                 local ok, r = pcall(function()
                     return self:networkIntegritySweep(c0.x, c0.z, 45, false)
                 end)
@@ -19436,6 +22122,7 @@ function ADFlyoverEditor:applyJunctionClear()
             -- spec put the box first and the smoothing after; measuring unsmoothed lanes is exactly
             -- what has been moving the box, so it is done the other way round.
             local rsM, rsR, rsC = 0, 0, 0
+            jxStage = "smoothing the lanes first"
             tryCall("junction smooth parent lanes", function()
                 rsM, rsR, rsC = self:junctionRespaceApproaches(jp)
             end)
@@ -19456,6 +22143,7 @@ function ADFlyoverEditor:applyJunctionClear()
                 -- to reconsider whether to work on it, so a refusal here keeps what we already had.
                 local keep = jp
                 self.junctionPreviewKey = nil
+                jxStage = "reading the site again"
                 tryCall("junction preview after cleaning", function() self:updateJunctionPreview() end)
                 jp = self.junctionPreview
                 if jp == nil then
@@ -19481,6 +22169,14 @@ function ADFlyoverEditor:applyJunctionClear()
             Logging.info("[FlyoverEditor]: junction - this is a %s, %s. Nothing branches on that yet; it is recorded so rules for each kind have somewhere to attach.",
                 kind, tostring(jp.junctionSituation or "situation unknown"))
         end
+    end
+    -- The preview the rest of the clear works from, and its through roads as they lie now, before
+    -- any of them is cut, smoothed or respaced - what the check holds the kept roads up against.
+    -- Under tryCall for the same reason as the network before: without these lines the check would
+    -- take every kept road for a join, so it says it could not run instead, and the clear goes on.
+    chk.jp = jp
+    if not tryCall("junction clear check (the through roads)", function() chk.routeLines = jxRouteLines(jp) end) then
+        chk.routeLines, chk.failed = nil, chk.failed or "the through roads could not be read"
     end
     local leave = self.junctionLeaveThrough ~= false
     -- Through paths KEPT: only the turn wiring goes. Through paths CLEARED: the through route's
@@ -19525,10 +22221,17 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     if nodeCount == 0 and #linksToSever == 0 then
         Logging.info("[FlyoverEditor]: junction - nothing here for this site to clear.")
+        -- The cleaning above may still have changed the site, so its work is checked all the same.
+        chk.journal = jxJournal
+        jxJournal, jxStage = nil, nil
+        if not tryCall("junction clear check", function() self:junctionClearCheck(chk) end) then
+            self:junctionCheckFailed(chk)
+        end
         return
     end
 
     ADEditorHistory:snapshot("clear junction")
+    jxStage = "cutting old links"
     local staleCut = 0
     for _, pair in ipairs(linksToSever) do
         local a, b = pair[1], pair[2]
@@ -19568,6 +22271,7 @@ function ADFlyoverEditor:applyJunctionClear()
 
     -- Highest id first: removeWayPoint renumbers everything above the id it removes, so a pending
     -- lower id is still valid when its turn comes; a pending higher id would not be.
+    jxStage = "removing turn wiring"
     local ids = {}
     for _, w in ipairs(doomed) do ids[#ids + 1] = w.id end
     table.sort(ids, function(a, b) return a > b end)
@@ -19583,6 +22287,7 @@ function ADFlyoverEditor:applyJunctionClear()
     -- measuring. The cost of the move is that the tidy's own lane walks are not available yet, so
     -- the stub sweep falls back to its cruder walk - which is why this was the other way round.
     local stubs = 0
+    jxStage = "removing connector stubs"
     tryCall("junction clear stubs", function() stubs = self:junctionClearStubs(jp) end)
     if stubs > 0 then
         Logging.info("[FlyoverEditor]: junction - removed %d point(s) of connector left hanging off the lanes.",
@@ -19591,6 +22296,7 @@ function ADFlyoverEditor:applyJunctionClear()
 
     -- Tidy AFTER the removals: the ends being measured are the ones the clear just created.
     local tidyTrim, tidyAdd, tidyLanes, boxSwept, boxSevered = 0, 0, 0, 0, 0
+    jxStage = "tidying lane ends"
     tryCall("junction tidy lane ends", function()
         local nEnds, nMade, nRemoved, nCut = self:junctionTidyByPaths(jp)
         if nEnds ~= nil then
@@ -19670,6 +22376,7 @@ function ADFlyoverEditor:applyJunctionClear()
 
     -- Respace LAST: the ends are where they belong and the stubs are gone, so what is left is lane.
     local rsMoved, rsRemoved, rsCreated = 0, 0, 0
+    jxStage = "respacing"
     tryCall("junction respace approaches", function()
         rsMoved, rsRemoved, rsCreated = self:junctionRespaceApproaches(jp)
     end)
@@ -19697,6 +22404,7 @@ function ADFlyoverEditor:applyJunctionClear()
             -- kinds of loose end can be told apart: what was already loose when the clear began, what
             -- the clear cut on purpose, and what one of its own passes broke by accident. Only the
             -- last is put back.
+            jxStage = "final sweep"
             local ok, r = pcall(function()
                 return self:networkIntegritySweep(c0.x, c0.z, 45, false)
             end)
@@ -19731,6 +22439,7 @@ function ADFlyoverEditor:applyJunctionClear()
             end
         end
         table.sort(stranded, function(a, b) return a > b end)
+        jxStage = "removing stranded points"
         for _, id in ipairs(stranded) do
             jxRemove(id, "junction stranded point")
         end
@@ -19774,10 +22483,18 @@ function ADFlyoverEditor:applyJunctionClear()
         end
     end
     local held, took, farOut = jxEnd()
+    chk.journal = jxJournal
+    jxJournal, jxStage = nil, nil
     Logging.info("[FlyoverEditor]: junction - took %d point(s) in all, the farthest %.0f m out; %d left alone as belonging to a neighbouring junction rather than this one.",
         took, farOut, held)
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
+    -- THE CLEAR CHECKS ITS OWN WORK. Report only: it undoes nothing and refuses nothing, and a
+    -- failure inside it cannot stop the clear, which is already done. Before the capture closes, so
+    -- a capture's tool.log carries the check too.
+    if not tryCall("junction clear check", function() self:junctionClearCheck(chk) end) then
+        self:junctionCheckFailed(chk)
+    end
     -- After markChanges, so what is written is the network as the game now holds it.
     self:debugCaptureEnd(cap)
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil

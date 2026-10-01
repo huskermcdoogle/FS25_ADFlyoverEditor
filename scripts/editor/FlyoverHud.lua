@@ -778,6 +778,23 @@ function ADFlyoverHud:buildRows(editor)
                     add("note", "nowhere to write yet - save the game once")
                 end
             end
+            -- WHAT THE CHECK SAID ABOUT THE LAST CLEAR. Display only: the check undoes and refuses
+            -- nothing, and the log has a line for every problem it found. Named by number, because
+            -- once the clear is done the cursor is usually on the next junction already. Hidden
+            -- while the network round that junction is not what the clear left - after an undo of
+            -- the clear, say - since it would be describing a network that is no longer there; back
+            -- again after a redo.
+            local lastCheck = editor:junctionLastCheckShown()
+            if lastCheck ~= nil and lastCheck.card ~= nil then
+                if lastCheck.number ~= nil then
+                    add("toggle", "last clear", string.format("j%02d", lastCheck.number))
+                else
+                    add("toggle", "last clear", string.format("%.0f, %.0f", lastCheck.x or 0, lastCheck.z or 0))
+                end
+                for _, line in ipairs(lastCheck.card) do
+                    add("note", line)
+                end
+            end
             local cjp = editor.junctionPreview
             -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card,
             -- which reads exactly like the tool having stopped working - and "that is not a

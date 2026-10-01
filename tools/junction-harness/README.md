@@ -32,6 +32,65 @@ measurement is noise, not signal.
 
     LEAVE=1 lua dbgstages.lua X Z          # the stage-by-stage account of one clear
 
+## The check after a clear
+
+Every clear checks its own work and only reports: it never undoes or refuses anything.
+Check 1, "middle empty": no lane coming in on one road can drive out on another through
+the middle, and no teal dot (AutoDrive's merge point) is left there. Check 2, "nothing
+else touched": every change matches the clear's own record of its edits, stays inside
+the junction, and no road that drove through has been cut.
+
+    LEAVE=1 lua dbgcheck.lua X Z           # one junction: the check's log lines and card
+    bash reg75check.sh TAG                 # every registry junction, both through modes
+
+`reg75check.sh` writes `reg75checkTAG_1.txt` / `_0.txt`: one line per junction, then that
+junction's problem lines, then the totals. Run it twice and diff, as with `reg75.sh` -
+both runs must be byte-identical. The line reads:
+
+    jN | joins N reason:n | dots N reason:n | other N kind:n | wrongBefore N | notes N | err=N
+
+- joins and dots are split by the reason each was left for, worst first: `made` (the
+  clear made it - a new link, or two points folded into one), `crossmade` (it joined the
+  two kept through roads), `new` (a teal dot that was not there), `selfmade`, `tail` (the
+  end of a turn it cut), `missed`, `nobox`, `through`, `part` (the other part of a split
+  junction - its own wiring, left alone on purpose), `oneroad`, `selfjoin`, `crossing`.
+- other problems by kind: `through` (a road cut), `stub`, `flip`, `spur` (a lane split into
+  dead ends), `leftover` (the start of a turn it cut, left hanging off a lane), `reach`
+  (an edit outside the junction), and `link`, `moved`, `gone`, `new`, `vanished`,
+  `stayed` for changes no part of the clear recorded.
+- notes are not problems: the respacing re-laid road wholly outside the junction but
+  within its own reach, which is measured along the lane from the lane's end. Whether it
+  should do that is the user's call, so it is said and not counted.
+- `err` counts Lua errors, including a step of the check that failed; such a junction
+  shows `NO CHECK` and the card says the check could not run.
+
+Two switches on `dbgcheck.lua` test the check itself:
+
+- `THROW=snapshot|routes|keep|check` makes one step of the check throw. With it (or with
+  `NET=1`) it prints the clear's total (`TOOK`), a checksum of the whole network (`NET`)
+  and whether the clear's last steps ran (`ENDED`). Compare with a run without THROW: the
+  clear must be identical, and the card must read "could not run".
+- `WIRE=1` wires a lane end the clear laid to the nearest lane start it laid, recorded as
+  the tidy's own edit, and prints `WIRED (a) to (b)`. The check must name it as a new join
+  ("now joins ... joined by a link that was not there before the clear, from (a) to (b)"),
+  with that same link, never as one the clear missed. Run it over every junction in both
+  modes when the join rules change: at 38, 58, 63 and 65 the lane out was re-laid for
+  50 m past the wired link, and only this showed the link being missed.
+
+Reading a join line:
+
+- "the lane in from the west" is a lane coming in; "the lane out to the north, from its
+  start at (x, z)," is a lane that now starts inside the junction (the clear cut it there).
+- Roads are named from where each lane lies exactly 30 m from the middle. Two lanes there
+  within 7 m of each other are one road, so a drive back out along it is "turns back out
+  along the same road". Known exceptions: 67 and 68 (test leftovers, lanes under 30 m)
+  and 22's west road, which loops through a hairpin.
+- "joins a road the clear did not count as one of this junction's" means the drive left
+  on a road none of the clear's own lanes is on - not that the road belongs to another
+  junction. At 40 it is the south-east road - the main road, by the user's reading - which
+  the clear found no lane of, because it reads the main road as running west to north-east.
+- `still` means the join drove before the clear too; `now` means it did not.
+
 ## Replaying a debug drop
 
 A drop from `savegame6/flyoverDebug/NNNN_clear_.../` carries the network before and
