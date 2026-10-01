@@ -9169,6 +9169,44 @@ local function roadRayCallback(_, hitObjectId, x, y, z, distance)
 end
 local RoadRay = { callback = roadRayCallback }
 local ROAD_MATERIALS = { [1] = true, [6] = true, [7] = true }         -- dirt track, gravel, asphalt
+
+-- ROCK AND FIELDS ARE NOT ROAD. Road meshes on Riverbend are decoration with no collision, so nearly
+-- every probe falls through to the paint below - and the paint's material is a tyre-SOUND class, not a
+-- surface class. Material 7 (the asphalt sound) covers asphalt, concrete AND every rock paint; material
+-- 1 (dirt) is also the dark mud painted under every field. So a turn across a rock face or a field
+-- passed as road. The game's own AI drive-cost map tells them apart: it is built from each paint's
+-- drive cost (asphalt and concrete 4, rock 12). Measured over the whole of Riverbend, 96% of asphalt and
+-- concrete cells read under 150 (most 51; the rest are blocked by something standing there) and not one
+-- rock cell does. The map exists on the server only, which is where edits run; without it, material 7
+-- stays road as before. Fields come from the field layer, read the way the game's steering assist reads
+-- it (AIAutomaticSteering.lua). See docs/junction-tool/03-data-sources.md.
+local ROAD_DRIVE_COST_MAX = 150                                        -- on the map file's 0-255 scale
+
+local function navigationCostAt(x, y, z)
+    local ai = g_currentMission ~= nil and g_currentMission.aiSystem or nil
+    if type(ai) ~= "table" or getVehicleNavigationMapCostAtWorldPos == nil then return nil end
+    local navMap = ai.navigationMap
+    if navMap == nil or navMap == 0 then return nil end
+    local ok, cost, blocked = pcall(getVehicleNavigationMapCostAtWorldPos, navMap, x, y, z)
+    if not ok or type(cost) ~= "number" then return nil end
+    return cost, blocked == true
+end
+
+local function roadDriveCostMax()
+    -- the engine's own scale, in case it is not the 0-255 the map file stores
+    local scale = AISystem ~= nil and AISystem.COSTMAP_MAX_VALUE or nil
+    if type(scale) == "number" and scale > 0 then
+        return ROAD_DRIVE_COST_MAX * scale / 255
+    end
+    return ROAD_DRIVE_COST_MAX
+end
+
+local function isFieldAt(x, z)
+    local detail = g_currentMission ~= nil and g_currentMission.terrainDetailId or nil
+    if detail == nil or getDensityAtWorldPos == nil then return false end
+    local ok, density = pcall(getDensityAtWorldPos, detail, x, 0, z)
+    return ok and type(density) == "number" and density ~= 0
+end
 local BASE_MATERIAL_NAMES = { [0] = "field", [1] = "dirt", [2] = "grass", [3] = "sand", [4] = "sound",
     [5] = "leaves", [6] = "gravel", [7] = "asphalt", [97] = "railroad", [98] = "mediumWater", [99] = "shallowWater" }
 local roadProbeNoted = {}
@@ -9221,6 +9259,22 @@ local function isRoadAt(x, z)
         local id = math.floor(mat + 0.5)
         local road = ROAD_MATERIALS[id] == true
         roadNote("mat:" .. id, "terrain material %d ('%s') classed as %s", id, materialName(id), road and "ROAD" or "not road")
+        if road and isFieldAt(x, z) then
+            roadNote("field", "field ground under a probed spot; classed as not road")
+            return false
+        end
+        if road and id == 7 then
+            local cost, blocked = navigationCostAt(x, ty, z)
+            if cost == nil then
+                roadNote("nonav", "no drive-cost map (not the server?); asphalt-sound paint counts as road, rock included")
+            elseif blocked then
+                roadNote("blocked", "asphalt-sound paint marked blocked in the game's drive-cost map; classed as not road")
+                return false
+            elseif cost >= roadDriveCostMax() then
+                roadNote("rock", "asphalt-sound paint with drive cost %d: rock, classed as not road", cost)
+                return false
+            end
+        end
         return road
     end
     roadNote("nomat", "terrain material lookup unavailable; terrain is treated as road")
