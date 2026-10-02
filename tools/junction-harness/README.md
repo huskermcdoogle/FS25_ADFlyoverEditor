@@ -171,6 +171,22 @@ the undo, as `FE_SRC` does for the editor.
 stops (`stopped=yes`). No registry junction does that on its own; it is the one way a clear
 changes the network without clearing anything, and that change needs its undo step too.
 
+## The swept-path prediction (SweptSim)
+
+`reg75.sh` never drives the design rig: it tests the clear, and the harness loads no SweptSim.
+A change to `scripts/editor/SweptSim.lua` is measured with these instead. Build mode, rebuild
+on, so each junction's turns are re-solved and the preset rig (`SweptSim.EXAMPLE_RIG`) is
+driven through every one. With `TERRAIN=1` the road check is live, so the swept gate (trailer
+off the road) and the sweep-wide reshape run too.
+
+    TERRAIN=1 lua dbgswept.lua X Z         # one junction: each turn's cut-in, then a summary
+    TERRAIN=1 bash sweptreg.sh TAG         # every registry junction -> sweptregTAG.txt
+
+A turn refused with no curve at all (its last radius laid nothing) is listed as `no connector`.
+`SWEPT_SRC=<file>` loads another SweptSim (an old copy from git, to compare). The summary
+counts the twin's runs that hit their time limit (`out of time`) - a slower driver needs
+longer to cover the same route.
+
 ## Real ground (TERRAIN=1)
 
 By default the harness sees road everywhere, flat ground at height 0, no fields and no

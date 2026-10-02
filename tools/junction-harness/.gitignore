@@ -2,6 +2,7 @@
 graph_data.lua
 graph_*.lua
 reg*_*.txt
+sweptreg*.txt
 seq*_*.txt
 seq*/
 click*/
