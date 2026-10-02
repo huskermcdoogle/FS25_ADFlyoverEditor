@@ -65,14 +65,23 @@ Baseline, today's builder on this branch (2026-10-02), identical on two runs, wi
     67 built, 8 refused, 0 Lua errors | 283 turns laid, 17 refused
     rules: new two-way links 4 at 4 junctions | crossings without a shared point 282 at 61 | U-turn routes 7 at 7
 
-A junction the clear calls "already clear" is built as it stands. The 8 still refused are all refused
-by the clear's picker, never by the build. `bash whyrefused.sh TAG` gives each one's reason:
+A junction the clear calls "already clear" is built as it stands. `bash whyrefused.sh TAG` gives the
+reason for each refusal.
 
-- **j67, j68:** the placeable T and X from FS25_AutoDrive_XT_Intersection. That export has no points
-  there (it predates them), so this is a map mismatch, not the picker.
-- **j4, j24, j25, j31, j65, j66:** the export has forks 10-28 m away, but the picker does not take them
-  for a junction ("no junction near", or "the nearest junction is 35-62 m away"). The registry is an
-  hour newer than the export, so these may also differ on the newer network. Not looked into yet.
+**Use the same network the registry was made from.** All 8 refusals above are a map mismatch, not the
+picker:
+
+- That export (12,524 points) is an older network than savegame6's `AutoDrive_config.xml` (12,873
+  points, 2026-09-27 12:46), which the registry numbers.
+- On the older export, the 6 sites j4, j24, j25, j31, j65 and j66 are plain road, with no fork within
+  30 m. The placeable T and X (j67, j68) are not there at all.
+- Exported fresh from the save, the picker finds all 8 within 2.4 m of their registry positions.
+
+Baseline on the save's own network (export it with `export_graph.py` and point `GRAPH=` at it),
+identical on two runs:
+
+    75 built, 0 refused, 0 Lua errors | 310 turns laid, 17 refused
+    rules: new two-way links 7 at 6 junctions | crossings without a shared point 293 at 66 | U-turn routes 11 at 8
 
 The crossings and U-turns are expected: today's builder ties each turn in on its own and adds no shared
 points. They are what the new builder must bring to 0.
