@@ -79,6 +79,16 @@ end
 local s1 = snap()
 for k in pairs(LOG) do LOG[k] = nil end
 local jp = H.lock(bx, bz, { mode = "clear", radius = 12, leaveThrough = lv })
+-- SITE=1 (reg75click.sh): where the selection put the site, and the crossing the clear works on
+-- ("clearing the one at"), to 0.1 m - two clicks inside one junction must land on the same ones.
+if os.getenv("SITE") == "1" then
+    local s = ADFlyoverEditor.junctionSite
+    print(s and string.format("SITE %.1f %.1f", s.x, s.z) or "SITE none")
+    for _, line in ipairs(LOG) do
+        local x, z = line:match("clearing the one at (%-?[%d%.]+), (%-?[%d%.]+)")
+        if x ~= nil then print("CROSSING " .. x .. " " .. z) break end
+    end
+end
 if jp == nil then
     print("REFUSED " .. tostring(ADFlyoverEditor.junctionRefused))
     return

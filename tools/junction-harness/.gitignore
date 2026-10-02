@@ -4,6 +4,7 @@ graph_*.lua
 reg*_*.txt
 seq*_*.txt
 seq*/
+click*/
 captest/
 captures*/
 *.zip

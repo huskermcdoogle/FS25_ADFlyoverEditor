@@ -115,6 +115,44 @@ such sets by place (`jxByPlace` in FlyoverEditor.lua). Two tests keep it that wa
   difference there is not a fault in itself. Where A's edits stay clear of B, B must
   match. Run it again with `SHUFFLE=7`: every file must be identical.
 
+## Click points: reg75click.sh
+
+A clear of one junction must come out the same from any click inside it. The click is used once,
+to pick the junction (`junctionSelect`); from there everything is measured from the junction's own
+middle, so two clicks that pick the same site give the same clear. What can still differ is which
+site a click picks: a few metres off the registry point can land on a neighbour, or on another
+part of a split junction.
+
+    bash reg75click.sh TAG                 # every registry junction, both modes, six clicks each
+
+The six clicks: the registry point, 4 m east, west, south and north of it (`OFF=` sets the 4), and
+the crossing the registry click's clear works on ("clearing the one at" in the log). Each run is
+`dbgseq.lua` with `SITE=1`, which adds the site the selection locked and the crossing it cleared
+(`SITE`, `CROSSING`) to its usual print-out (`TOOK`, `ROUTE`, `COUNTS`, every `EDIT` by place).
+`reg75clickTAG_1.txt` / `_0.txt` give one line per junction: `same`, or `DIFFERS at` the clicks
+whose output is not the registry click's, with each one's site (`same`, or where it moved to),
+points taken and check counts. A difference with the same site would be the clear depending on the
+click; with a moved site it is the selection picking another junction. `refused` means every
+click was refused (already clear, say): nothing was compared, so it is not counted as `same`.
+Skips 67 and 68 (`SKIP=`). Run it twice: identical.
+
+What it can and cannot see: the click only picks the site, and the clear then works from the
+site's middle, so on a given network two clicks that pick the same site give the same clear by
+construction. A `same` line therefore says the selection is steady, not that the clear is right.
+A fault that comes from the network itself - as j39's did, below - shows the same from every
+click, and only on that network: run it with the drop's network as `GRAPH=`.
+
+To run it on a network from a debug drop (the game's own, which can differ from the export: see
+the j39 note below), export it with `export_route.py` and pass it as `GRAPH=`; a `REG=` file with
+just the junctions wanted (lines of `n="39" x="6.9" z="-13.6"`) keeps it short.
+
+j39, 2026-10: the in-game clear cut the main road and the harness's did not, from any click. The
+click was not the cause: the game's network had two turns that cross inside 39 folded into one
+point, 0.23 m apart, by an earlier clean-up. That point read as a fork and moved 39's middle 3.4 m.
+Now a point where two lanes cross straight through is walked through, not read as a fork
+(`jxCrossingPairs`, in `junctionCentres`), and the clean-up no longer folds two lanes that cross
+(`jxLanesCross`, in `networkIntegritySweep`).
+
 ## Undo after a clear
 
 `dbgundo.lua` loads the real undo (`scripts/editor/EditorHistory.lua`) over the harness's

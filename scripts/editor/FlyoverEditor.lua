@@ -9873,6 +9873,70 @@ local function jxByPlace(t)
     end
 end
 
+--- TWO LANES CROSSING, AT ONE POINT OR AT TWO. Where two lanes cross, a point of each can lie a few
+--- cm from the other's, and folding such a pair (networkIntegritySweep's doubles) makes one point that
+--- both lanes run through: two ways in, two ways out. Read as a fork, that point cut a turn in half
+--- and moved 39's middle 3.4 m (the game's network had one, 0.23 m apart, folded before the session).
+---
+--- jxCrossingPairs(w): for a point with exactly two ways in and two ways out (none of them both), where
+--- each way in carries straight on (30 degrees or less) to its own way out and the swapped pairing
+--- would turn hard (45 or more), the way out for each way in, keyed by point. Otherwise nil: a real
+--- fork, or a point too bent to say.
+local function jxStraightTurn(a, w, b)
+    local d = math.atan2(b.x - w.x, b.z - w.z) - math.atan2(w.x - a.x, w.z - a.z)
+    while d > math.pi do d = d - 2 * math.pi end
+    while d < -math.pi do d = d + 2 * math.pi end
+    return math.abs(d)
+end
+local function jxCrossingPairs(w)
+    if w == nil then return nil end
+    local ins, outs, isIn = {}, {}, {}
+    for _, id in ipairs(w.incoming or {}) do
+        local v = ADGraphManager:getWayPointById(id)
+        if v ~= nil and v ~= w and not isIn[v] then isIn[v] = true ins[#ins + 1] = v end
+    end
+    for _, id in ipairs(w.out or {}) do
+        local v = ADGraphManager:getWayPointById(id)
+        if v ~= nil and v ~= w then
+            if isIn[v] then return nil end
+            if outs[1] ~= v and outs[2] ~= v then outs[#outs + 1] = v end
+        end
+    end
+    if #ins ~= 2 or #outs ~= 2 then return nil end
+    local s11, s22 = jxStraightTurn(ins[1], w, outs[1]), jxStraightTurn(ins[2], w, outs[2])
+    local s12, s21 = jxStraightTurn(ins[1], w, outs[2]), jxStraightTurn(ins[2], w, outs[1])
+    local STRAIGHT, HARD = math.rad(30), math.rad(45)
+    if math.max(s11, s22) <= STRAIGHT and math.min(s12, s21) >= HARD then
+        return { [ins[1]] = outs[1], [ins[2]] = outs[2] }
+    elseif math.max(s12, s21) <= STRAIGHT and math.min(s11, s22) >= HARD then
+        return { [ins[1]] = outs[2], [ins[2]] = outs[1] }
+    end
+    return nil
+end
+--- jxLanesCross(a, b): a and b each carry one lane straight through (one way in, one way out, 30
+--- degrees or less), are not wired to each other or to a shared neighbour, and their lanes lie on
+--- lines 30 degrees or more apart - two lanes crossing, not one point laid twice. A lane end lying on a
+--- lane, or a lane laid twice along itself, is not this, and still folds.
+local function jxLanesCross(a, b)
+    local function pass(w)
+        local i, o = w.incoming or {}, w.out or {}
+        if #i ~= 1 or #o ~= 1 or i[1] == o[1] then return nil end
+        local p, q = ADGraphManager:getWayPointById(i[1]), ADGraphManager:getWayPointById(o[1])
+        if p == nil or q == nil or jxStraightTurn(p, w, q) > math.rad(30) then return nil end
+        return p, q
+    end
+    local pa, qa = pass(a)
+    local pb, qb = pass(b)
+    if pa == nil or pb == nil then return false end
+    if pa == b or qa == b or pb == a or qb == a or pa == pb or qa == qb or pa == qb or qa == pb then
+        return false
+    end
+    local d = math.atan2(qa.x - pa.x, qa.z - pa.z) - math.atan2(qb.x - pb.x, qb.z - pb.z)
+    d = math.abs(d) % math.pi
+    if d > math.pi / 2 then d = math.pi - d end
+    return d >= math.rad(30)
+end
+
 --- How far a way on from a fork has TURNED by the time it next meets something, in radians.
 ---
 --- The branch is followed from `first`, straightest way on at each node, until it reaches the next
@@ -10534,6 +10598,17 @@ function ADFlyoverEditor:junctionCentres()
         while d < -math.pi do d = d + 2 * math.pi end
         return d
     end
+    -- TWO LANES CROSSING ARE NOT A FORK (39, in the game). Two turns crossing inside 39 had a point
+    -- each 0.23 m apart, folded into one before the session (jxCrossingPairs). That point has two ways
+    -- in and two ways out and read as a fork: it cut a 22 m turn in half, the half-turn's corner
+    -- started 39's group early and let a stray corner in, and 39's middle moved 3.4 m. Its circle then
+    -- cut the roads inside their bends, and the main road was no longer read as running through - cut
+    -- at (0.9, -13.6). Each lane is walked straight through such a point, and it starts no chain.
+    local passOn = {}
+    for _, w in pairs(wps) do
+        if w ~= nil and deg[w] == 4 then passOn[w] = jxCrossingPairs(w) end
+    end
+    for w in pairs(passOn) do deg[w] = 2 end
     local corners = {}
     for _, f in pairs(wps) do
         if f ~= nil and (deg[f] or 0) >= 3 then
@@ -10542,10 +10617,12 @@ function ADFlyoverEditor:junctionCentres()
                 if o ~= nil then
                     local chain, prev, cur, len = { f, o }, f, o, math.sqrt((o.x - f.x) ^ 2 + (o.z - f.z) ^ 2)
                     while (deg[cur] or 0) == 2 and #chain < 200 and len <= 60 do
-                        local nxt = nil
-                        for _, nid in ipairs(cur.out or {}) do
-                            local w = ADGraphManager:getWayPointById(nid)
-                            if w ~= nil and w ~= prev then nxt = w break end
+                        local nxt = passOn[cur] and passOn[cur][prev] or nil
+                        if passOn[cur] == nil then
+                            for _, nid in ipairs(cur.out or {}) do
+                                local w = ADGraphManager:getWayPointById(nid)
+                                if w ~= nil and w ~= prev then nxt = w break end
+                            end
                         end
                         if nxt == nil then break end
                         len = len + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
@@ -16749,6 +16826,16 @@ function ADFlyoverEditor:junctionClearStubs(jp)
                                     + (chain[k].z - chain[k - 1].z) ^ 2)
                             end
                             laid = (span / #chain) <= 3.0
+                            -- ...UNLESS THIS CLEAR CUT ITS FAR END. Then it is not a spur that was
+                            -- driven but the first point of a turn whose rest the clear has just
+                            -- taken: at 36, read as two roads that never cross (no box), a turn laid
+                            -- at 3-4 m lost all but its first point, and that point was left as a
+                            -- 4 m dead end off its lane. Before, the clean-up had folded two lanes
+                            -- crossing in 36's middle into one point, and that "fork" gave 36 a box.
+                            -- Only a remnant: a point or three and at most 10 m, not a driven spur up
+                            -- to MAX_LEN long that happens to end where this clear cut. 36's was one
+                            -- point, 4 m; 53's two, 8-9 m (its turn's start, left with a teal dot).
+                            if not laid and #chain <= 3 and span <= 10 and jxWasCutByUs(chain[#chain]) then laid = true end
                         end
                         if dead and laid then
                             for _, c in ipairs(chain) do doomed[#doomed + 1] = c end
@@ -17224,6 +17311,15 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
         if L < 1 then return nil end
         return (#list - 1) / L
     end
+    -- The longest gap between two points of a run of positions: the sparsest the road ever was.
+    local function longest(list)
+        local m = nil
+        for i = 2, #list do
+            local g = math.sqrt((list[i].x - list[i - 1].x) ^ 2 + (list[i].z - list[i - 1].z) ^ 2)
+            if m == nil or g > m then m = g end
+        end
+        return m
+    end
     local function segCrosses(a, b)
         local vx, vz = b.x - a.x, b.z - a.z
         local len = math.sqrt(vx * vx + vz * vz)
@@ -17250,6 +17346,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
             end
         end
         local densIn, densOut = density(before), density(after)
+        local gapIn, gapOut = longest(before), longest(after)
         local lane = smoothLane(nodes, true)
         for _, n in ipairs(lane) do keep[n] = true end
         if not leave and #lane >= 2 then
@@ -17335,7 +17432,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     half[#half + 1] = n
                 elseif #half > 0 then
                     -- the entry side: runs outer end -> box, the way the lane is travelled
-                    afterCut[#afterCut + 1] = { seq = half, useOut = true, step = lastStep, len = 1e9, dens = densIn }
+                    afterCut[#afterCut + 1] = { seq = half, useOut = true, step = lastStep, len = 1e9, dens = densIn, maxGap = gapIn }
                     nHalves = nHalves + 1
                     half = {}
                 end
@@ -17344,7 +17441,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 -- the exit side: box -> outer end as travelled, so reversed to end on the box too
                 local rev = {}
                 for k = #half, 1, -1 do rev[#rev + 1] = half[k] end
-                afterCut[#afterCut + 1] = { seq = rev, useOut = false, step = lastStep, len = 1e9, dens = densOut }
+                afterCut[#afterCut + 1] = { seq = rev, useOut = false, step = lastStep, len = 1e9, dens = densOut, maxGap = gapOut }
             end
         end
     end
@@ -18064,7 +18161,20 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 if h.dens == nil or dNow == nil then break end
                 local ratio = dNow / h.dens
                 if math.abs(ratio - 1) <= 0.10 then break end
-                h.step = math.max(3, math.min(25, (h.step or STEP) * ratio ^ 1.4))
+                -- NEVER SPARSER THAN THE ROAD EVER WAS. The density is the leg's points per metre,
+                -- and part of a leg cannot be rebuilt (its far end, a fork, a point past this
+                -- junction's reach), so on a short leg the count barely answers the spacing and the
+                -- spacing kept being scaled up. At 39 with through roads off, the north-west road's
+                -- leg out towards 39se, spaced 4-7 m before, went to 5, 7.3, 8.5, 10 and 11.6 m and came
+                -- back with 8 and 11 m gaps through 39se's middle. Capped at the leg's own longest
+                -- gap before the clear; once there, rebuilding again changes nothing, so it stops.
+                local stepWas = h.step or STEP
+                local stepNew = math.max(3, math.min(25, stepWas * ratio ^ 1.4))
+                if h.maxGap ~= nil and stepNew > stepWas then
+                    stepNew = math.min(stepNew, math.max(stepWas, h.maxGap))
+                end
+                if stepNew == stepWas then break end
+                h.step = stepNew
             end
         end
     end
@@ -18272,6 +18382,18 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
                     twoRoads = not nbA[b.id]
                     for _, id in ipairs(b.out or {}) do if nbA[id] or id == a.id then twoRoads = false end end
                     for _, id in ipairs(b.incoming or {}) do if nbA[id] or id == a.id then twoRoads = false end end
+                end
+                -- TWO LANES CROSSING ARE NOT A DOUBLE, kept road or not. Where two lanes cross, a point
+                -- of each can lie a few cm apart: at 39 two turns crossed 0.23 m apart, and the
+                -- respacing slid a lane's point to 0.16 m from a point of 39se's turn. Folded, they make
+                -- one point that both lanes run through - two movements that were never there (a
+                -- lane into the other road), and a point that reads as a fork and moved 39's middle
+                -- 3.4 m. A true double runs the same way as its twin, or is a lane end lying on a
+                -- lane, or is wired to it or to a neighbour of it; two points that each carry a lane
+                -- straight through, unrelated, on lines 30 degrees or more apart, are a crossing.
+                if not twoRoads and not doomedSet[b] and (a.x - b.x) ^ 2 + (a.z - b.z) ^ 2 <= SAME * SAME
+                    and jxLanesCross(a, b) then
+                    twoRoads = true
                 end
                 if not doomedSet[b] and not twoRoads and (a.x - b.x) ^ 2 + (a.z - b.z) ^ 2 <= SAME * SAME then
                     rep.doubles = rep.doubles + 1
@@ -20581,17 +20703,39 @@ end
 --- lane the clear cut, not a turn's end - at 39 the main road's lane, 24 m to where it merges with
 --- the next road (already said, as a road cut), and at 20 a stub that forks into the next part's
 --- own two turns. Returns where that stretch starts, or nil.
+---
+--- NOR ONE OF THIS CLEAR'S OWN THROUGH ROADS, CUT AT THE BOX. With through roads off every through
+--- road is cut where it meets the box and its leg out is left starting loose, on purpose - that is
+--- what "off" asks for. At 39 the south-to-north road leaves the box and, 10 m on, merges into
+--- 39se's lane: its leg is fed by nothing now and still joins that lane, which read exactly like a
+--- turn's end. The lane walk that marks the lanes out (C.outLane) cannot tell, because at the merge
+--- it follows 39se's lane, the straighter way back. The through roads as they lay before the clear
+--- (C.lines) can: a stretch lying along one of them, all of it within 2.5 m, is that road's leg.
+--- Then the second value is where the leg starts, so the dot can be said for what it is.
 local function jxTail(C, w)
+    local function alongThrough(stretch)
+        if C.leave then return false end
+        for _, L in ipairs(C.lines or {}) do
+            local all = true
+            for _, q in ipairs(stretch) do
+                if jxOnLine(L.pts, q.x, q.z) > 2.5 then all = false break end
+            end
+            if all then return true end
+        end
+        return false
+    end
     for _, id in ipairs(w.incoming or {}) do
         local f = C.node(id)
         if f ~= nil and f ~= w then
             local cur, run, seen = f, math.sqrt((f.x - w.x) ^ 2 + (f.z - w.z) ^ 2), { [w] = true, [f] = true }
+            local stretch = { w, f }
             for _ = 1, 40 do
                 if run > 15 or #(cur.out or {}) ~= 1 then break end
                 local inc = cur.incoming or {}
                 if #inc == 0 then
                     local b0 = C.before[cur]
                     if (b0 == nil or #b0.inn > 0) and C.inLane[cur] == nil and C.outLane[cur] == nil then
+                        if alongThrough(stretch) then return nil, cur end
                         return cur
                     end
                     break
@@ -20601,6 +20745,7 @@ local function jxTail(C, w)
                 if p == nil or seen[p] then break end
                 run = run + math.sqrt((p.x - cur.x) ^ 2 + (p.z - cur.z) ^ 2)
                 seen[p] = true
+                stretch[#stretch + 1] = p
                 cur = p
             end
         end
@@ -20907,6 +21052,10 @@ local function jxTurnFrom(C, w)
         end
     end
     if best == nil then return w end
+    -- A FORK AS IT WAS BEFORE THE CLEAR as well as now. The clear takes the other connectors off the
+    -- point a turn leaves its road at, and then nothing stops the walk there: at 39 (the game's own
+    -- network, through roads kept) 39se's turn was followed on back down 39's south lane into 39's
+    -- middle, and its dot was called a connection 39's clear missed.
     local function forks(v)
         local seen, n = {}, 0
         for _, lst in ipairs({ v.out or {}, v.incoming or {} }) do
@@ -20914,9 +21063,19 @@ local function jxTurnFrom(C, w)
                 if id ~= v.id and not seen[id] then seen[id] = true n = n + 1 end
             end
         end
-        return n >= 3
+        if n >= 3 then return true end
+        local b0 = C.before ~= nil and C.before[v] or nil
+        if b0 == nil then return false end
+        local seenB, nb = {}, 0
+        for _, lst in ipairs({ b0.out or {}, b0.inn or {} }) do
+            for _, t in ipairs(lst) do
+                if t ~= v and not seenB[t] then seenB[t] = true nb = nb + 1 end
+            end
+        end
+        return nb >= 3
     end
     local prev, cur, run = w, best, math.sqrt((best.x - w.x) ^ 2 + (best.z - w.z) ^ 2)
+    local walked = { w, best }
     for _ = 1, 40 do
         if run >= 40 or forks(cur) then break end
         local nxt = nil
@@ -20928,8 +21087,29 @@ local function jxTurnFrom(C, w)
             end
         end
         if nxt == nil or nxt == w then break end
+        -- ...and where it comes off a kept through road: that is its road. With through roads kept
+        -- the clear gives the kept road its own copy of a fork it shares with a turn, so neither
+        -- copy is a fork afterwards, nor (being new) one before - and 39se's turn was walked back
+        -- 40 m down 39's south road.
+        if C.keptLink ~= nil and C.keptLink(nxt, cur) then break end
         run = run + math.sqrt((nxt.x - cur.x) ^ 2 + (nxt.z - cur.z) ^ 2)
         prev, cur = cur, nxt
+        walked[#walked + 1] = cur
+    end
+    -- HALF-WAY ALONG THE TURN, not half-way across from the dot to its fork. A turn bows out, and
+    -- the straight line between its ends cuts the corner back towards where it left its road: at 39
+    -- (the game's own network) 39se's turn into the dot at (12.1, 6.3) came out 13.7 m from 39's
+    -- middle and 13.8 m from 39se's by its ends, and was called a connection 39's clear missed;
+    -- along the turn its middle is 11.5 m from 39se's and 14.4 m from 39's.
+    local half, acc = run / 2, 0
+    for i = 2, #walked do
+        local a, b = walked[i - 1], walked[i]
+        local l = math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+        if acc + l >= half and l > 0 then
+            local t = (half - acc) / l
+            return { x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t }
+        end
+        acc = acc + l
     end
     return { x = (w.x + cur.x) / 2, z = (w.z + cur.z) / 2 }
 end
@@ -21332,7 +21512,7 @@ local function jxCheckMiddle(C)
     for _, w in ipairs(C.near) do
         if C.dist(w) <= 45 and jxRightOfWay(w) then
             local was = C.dotBefore(w.x, w.z) ~= nil
-            local tail = jxTail(C, w)
+            local tail, leg = jxTail(C, w)
             if inMid[w] or not was or tail ~= nil then
                 local why, part, fold, foldWas, from, viaJoin = "missed", nil, nil, nil, nil, nil
                 local joinsItself, split = jxSelfJoin(C, w)
@@ -21351,13 +21531,26 @@ local function jxCheckMiddle(C)
                     else
                         why, from, fold = "selfmade", split, C.foldedInto(split)
                     end
-                elseif onJoin[w] ~= nil then
+                -- A TAIL IS SAID AS A TAIL even where another part's own drive passes the dot too. At
+                -- 39 with through roads off, 39se's turn lost the fork it left 39's south road at and
+                -- is fed by nothing, but 39se's south-east to south drive runs through its merge, so
+                -- the dot was passed as "39se's own wiring". A join's reason still wins where it is
+                -- this clear's doing or a miss (made, crossmade, missed): those are worse.
+                elseif onJoin[w] ~= nil and not (tail ~= nil and (RANK[onJoin[w].why] or 0) < RANK.missed) then
                     viaJoin = onJoin[w]
                     why, part, fold, foldWas = viaJoin.why, viaJoin.part, viaJoin.fold, viaJoin.foldWas
                 elseif tail ~= nil then
                     why, from = "tail", tail
                 elseif not was then
                     why = "new"
+                -- WHERE A THROUGH ROAD THIS CLEAR CUT AT THE BOX MERGES INTO ANOTHER PART'S LANE. At 39
+                -- with through roads off, the south-to-north road's leg out, cut loose on purpose,
+                -- still merges into 39se's lane at the dot. The lanes out are walked the straighter
+                -- way back at that merge, along 39se's lane, so on the game's network the dot read as
+                -- "one road's own lanes" (both ways in looked like the north road). It is the merge
+                -- of two roads, and it lies in the other part: that part's wiring.
+                elseif leg ~= nil and jxOtherPart(C, w.x, w.z) ~= nil then
+                    why, part = "part", jxOtherPart(C, w.x, w.z)
                 elseif jxOneRoad(C, w) then
                     why = "oneroad"
                 else
