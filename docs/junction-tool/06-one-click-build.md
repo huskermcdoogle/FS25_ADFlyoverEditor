@@ -114,8 +114,8 @@ The junction itself is then built like any one-way junction.
 - **Trucks coming in** move onto their own one-way lane at the split, and check normally from there.
 - **Trucks going out** still get AutoDrive's own check of the whole two-way road ahead, at the split.
   If someone is coming, they wait on their lane, clear of the junction.
-- **The split sits about 20 m before the junction** (to measure), so a truck has room to stop between
-  the split and the mouth.
+- **The split sits 20 m before the mouth, with points every 4-5 m on the short lanes** (measured, see
+  "How far back the split goes").
 
 Two versions, picked by the paved width at the mouth (the same paving reading that sizes the curves):
 
@@ -134,6 +134,95 @@ other way round.
 - The guard point opens no new routes. Lane in to lane out is a 180° bend, and so is turn to turn, so
   AutoDrive refuses both. The route check confirms it on every build.
 - The cost is one truck in the mouth at a time, which is how a one-truck-wide track works anyway.
+
+### How far back the split goes
+
+Measured 2026-10-02 in the truck twin. The truck drives in along the two-way road, through the split
+and towards its turn, while another truck holds the junction. AutoDrive's own "who waits" check is
+replayed on the twin's track.
+
+**The split distance only matters up to about 20 m.** A truck only starts checking once it is past the
+split, and then it looks **5 points ahead**, not a distance. So where it stops depends on how far apart
+the points are between it and the first shared point.
+
+Where the truck's front stops, for a right turn aimed at 20 km/h, with medium brakes (3 m/s²):
+
+| Points on the short lane | Split 10 m | Split 15 m | Split 20 m | Split 30 m |
+|---|---|---|---|---|
+| every 2 m | 3.9 m short of the mouth | 2.1 m short | 3.9 m short | 3.9 m short |
+| every 3 m | 3.9 m short | 7.6 m short | 7.6 m short | 7.6 m short |
+| every 4 m | 3.9 m short | 7.6 m short | **10.6 m short** | 10.2 m short |
+| every 5 m | 3.9 m short | 7.6 m short | **10.6 m short** | 11.5 m short |
+
+Rules from it:
+
+1. **Split 20 m before the mouth, points every 4-5 m on the short lanes.** Medium brakes stop the front
+   about 10 m short of the mouth. With weak brakes (2 m/s²), it still stops 3.5-6.5 m short (left
+   and right turns). The same holds if it runs the 6 km/h over its cap that AutoDrive allows before
+   braking hard. Both at once was not tested.
+2. **At least two points between the split and the first shared point.** With only one, AutoDrive
+   never sees the shared point, because the check is off on the two-way link before it. The twin
+   confirms it: a 5 m split with 4-5 m spacing never stops.
+3. **No extra points between the mouth and the first shared point.** In the wide version the first
+   shared point sits a few metres into the turn. With the turn's usual 2 m points in front of it and a
+   20 m split, the truck stops anywhere from 1.6 m past the mouth to 3.9 m short, depending on the lane's
+   spacing. With no points in front of it, it stops 9.5-10.6 m short.
+4. **Left turns** (aimed at 23 km/h) stop 2-3 m closer to the mouth than right turns, for the same
+   layout. A 20 m split with 4-5 m spacing still leaves 8 m.
+
+Not modelled: how hard AutoDrive's 60% brake really stops a given truck (2-4 m/s² bracketed). Check in
+game. Script: `tools/xt-study/splitdist.lua`.
+
+## Stopping in time (every approach)
+
+Measured 2026-10-02 in the truck twin on one-way lanes (`tools/xt-study/throughdist.lua`). Another
+truck holds a shared point; where does ours stop?
+
+**AutoDrive only sees a shared point once it is among the truck's next 5 points.** So how far ahead it
+sees is set by the **last four gaps between points** before that shared point, not by any distance
+setting. Its own steering point adds about 6 m on top.
+
+**Through trucks are the problem.** They do not slow for the junction. Where the front stops (medium
+brakes, 3 m/s²; minus is short of the shared point):
+
+| Points every | 20 km/h | 30 km/h | 40 km/h | 50 km/h |
+|---|---|---|---|---|
+| 3 m | 8 m short | at it | 9 m past | 18 m past |
+| 5 m | 18 m short | 12 m short | at it | 11 m past |
+| 8 m | 33 m short | 26 m short | 18 m short | 4 m short |
+| 5 m, with 4 junction points in the last 15 m | 3 m short | 5 m past | 15 m past | 25 m past |
+
+The last row is the normal case. Turn starts and other shared points sit close together near every
+junction, and they shrink what the truck can see to about 15 m. At that point, anything over about
+20 km/h cannot stop in time.
+
+**What the four gaps before each shared point must add up to**, for the truck to stop with its front
+3 m short:
+
+| Truck speed | 20 km/h | 25 km/h | 30 km/h | 40 km/h | 50 km/h |
+|---|---|---|---|---|---|
+| Last 4 gaps add up to at least | 11 m | 14 m | 18 m | 28 m | 40 m |
+
+This applies to **every** shared point on a lane, not just the first. A truck that has to wait for the
+far side of the box only sees that point once it is 5 points away, which may already be inside the box.
+
+**Who waits:** when two trucks see each other in the same instant, the one the game updates first
+waits. That is vehicle order, not road. So a fast through truck will sometimes be the one asked to wait,
+and it overruns.
+
+**Turning trucks are fine** at their 20-25 km/h, with points 4-5 m apart and no crowding (same as the
+split results).
+
+What this means for the builder:
+
+1. **Turning lanes must pass the gap check.** For every shared point on a turning truck's route, the
+   four gaps before it must add up to enough for the turn's target speed (the table above). If they do
+   not, the build fails its checks.
+2. **Through lanes stay at road speed** (decided 2026-10-02). They are not slowed for the junction, and
+   the builder does not try to make them stop in time. It still spaces their points out as far as it
+   can, so they get the best reach the layout allows.
+3. **Space points out where it can:** approaches at 8-10 m on the straight. Add only the points the
+   junction needs, and place them evenly rather than in clumps.
 
 ## When it stops and asks
 
@@ -154,6 +243,8 @@ other way round.
 5. **The truck twin drives every turn:** wheels on the paving with the spare room, speed in its band.
 6. **Nothing outside the junction changed.**
 7. **The teal dots** AutoDrive would draw match the merges and crossings we meant.
+8. **The gap check** on every turning route: the four gaps before each shared point add up to enough
+   for the turn's speed (see "Stopping in time").
 
 ## Settings
 
@@ -235,11 +326,16 @@ branch.
   replaced two other options:
   - one two-way turn (today's): trucks off the two-way road never check at the junction;
   - two one-way turns on the same line: those trucks only start checking about 6 m before the turn.
+- 2026-10-02:
+  - The two-way split sits 20 m before the mouth, with points every 4-5 m (measured).
+  - Through traffic stays at road speed. Only slow turning trucks are counted on to wait in time. That
+    is how the mod's pieces and most junctions work today. Rejected: slowing every through lane with a
+    deliberate bend, and a per-junction setting. Turning lanes must pass the gap check.
 
 ## Still open
 
-1. **How far before the junction the split sits.** About 20 m proposed: room to stop between the split
-   and the mouth. To measure with the truck twin.
-2. **The width that counts as "room for two trucks"** at the mouth. Two of the captured truck side by side
+1. **The width that counts as "room for two trucks"** at the mouth. Two of the captured truck side by side
    is about 5.4 m plus clearance, so about 6.5 m of paving is proposed. To check.
-3. **Two junctions close together on one two-way road,** where their splits would overlap.
+2. **Two junctions close together on one two-way road,** where their splits would overlap.
+3. ~~The 5-point reach on one-way approaches.~~ Measured 2026-10-02: see "Stopping in time".
+4. ~~Through traffic speed at junctions.~~ Decided 2026-10-02: road speed (see Decided).
