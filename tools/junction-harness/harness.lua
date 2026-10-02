@@ -195,6 +195,18 @@ function M.apply()
     return LOG
 end
 
+--- Run the real applyJunction (the BUILD: lay the preview's new turns) against the loaded graph. Lock
+--- the site with mode = "build" first; a clear-mode preview is refused here rather than silently
+--- cleared, since applyJunction hands those to the clear. Destructive like M.apply.
+function M.build()
+    LOG = {}
+    local jp = E.junctionPreview
+    if jp == nil then error("M.build: no preview - lock the site with mode = \"build\" first") end
+    if jp.clearMode then error("M.build: the preview is a clear - lock with mode = \"build\"") end
+    E:applyJunction()
+    return LOG
+end
+
 --- Walk a lane in from its outer anchor and report the surviving end plus the last few spacings -
 --- how a tidied stub is actually inspected.
 function M.laneEnd(ap)

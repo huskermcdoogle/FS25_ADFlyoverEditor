@@ -32,6 +32,17 @@ measurement is noise, not signal.
 
     LEAVE=1 lua dbgstages.lua X Z          # the stage-by-stage account of one clear
 
+## One build
+
+    lua dbgbuild.lua X Z [turnRadius]            # today's builder, on the junction as it stands
+    CLEARFIRST=1 lua dbgbuild.lua X Z            # clear it first (through roads kept), then build
+
+Runs the real `applyJunction` through `harness.lua`'s `M.build()` (lock with `mode = "build"`
+first). It reports points, links, two-way links and teal dots within 40 m before and after, plus the
+turns laid and refused, and ends with a `COUNTS` line for a regression to collect. On a wired
+junction today's builder usually has nothing new to lay, so `CLEARFIRST=1` is the useful case. There
+is no build regression yet.
+
 ## The check after a clear
 
 Every clear checks its own work and only reports: it never undoes or refuses anything.
