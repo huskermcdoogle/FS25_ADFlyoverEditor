@@ -91,6 +91,24 @@ Reading a join line:
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
 
+## Undo after a clear
+
+`dbgundo.lua` loads the real undo (`scripts/editor/EditorHistory.lua`) over the harness's
+stub, clears a junction, then undoes and redoes it, comparing every field of every point.
+
+    LEAVE=1 lua dbgundo.lua X Z            # one junction: UNDO ok|FAIL pushed= changed= undo= redo=
+    bash reg75undo.sh TAG                  # every registry junction, both through modes
+
+A clear must leave exactly one undo step if it changed anything and none if it did not, and
+undo must give back the network exactly as it was before the clear - cleaning included. Each
+line ends with `after=`, a checksum of the network after the clear: the same junction run on
+two builds with the same checksum was cleared identically. `EH_SRC=...` runs another copy of
+the undo, as `FE_SRC` does for the editor.
+
+`NOTHING_LEFT=1` makes the site read as having nothing to clear, so the clear cleans it and
+stops (`stopped=yes`). No registry junction does that on its own; it is the one way a clear
+changes the network without clearing anything, and that change needs its undo step too.
+
 ## Real ground (TERRAIN=1)
 
 By default the harness sees road everywhere, flat ground at height 0, no fields and no

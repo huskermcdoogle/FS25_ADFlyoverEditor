@@ -132,14 +132,30 @@ end
 --- Capture the current graph before an edit. Call this BEFORE mutating, once per user-visible
 --- action - not once per waypoint inside a loop, or undo becomes single-step-at-a-time.
 function ADEditorHistory:snapshot(label)
-    local ok, err = pcall(function()
-        table.insert(self.stack, captureState(label))
-        self.redoStack = {}
-    end)
+    return self:commit(self:capture(label))
+end
+
+--- Capture the graph now WITHOUT putting it on the stack: half of snapshot(), for an action that
+--- cannot tell before it starts whether it will change anything. The junction clear cleans its site
+--- first and only then knows whether there is anything to clear. Capture before the first edit, then
+--- commit() once something has changed, or drop the capture if nothing did. Snapshotting and popping
+--- it again would not do: a snapshot empties the redo stack, so an action that changed nothing would
+--- still throw the redo away. Returns nil if the graph could not be copied.
+function ADEditorHistory:capture(label)
+    local ok, entry = pcall(captureState, label)
     if not ok then
-        Logging.error("[FlyoverEditor] ADEditorHistory: failed to snapshot before '%s': %s", tostring(label), tostring(err))
-        return false
+        Logging.error("[FlyoverEditor] ADEditorHistory: failed to snapshot before '%s': %s", tostring(label), tostring(entry))
+        return nil
     end
+    return entry
+end
+
+--- Put a capture() on the stack, once the action it was taken for has changed something. False for a
+--- capture that failed, as snapshot() returns.
+function ADEditorHistory:commit(entry)
+    if entry == nil then return false end
+    table.insert(self.stack, entry)
+    self.redoStack = {}
 
     -- Drop the oldest once past the cap. table.remove from the front is O(n) on the stack depth
     -- (25), not on the graph size, so this is cheap regardless of network size.

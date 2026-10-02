@@ -22068,6 +22068,19 @@ function ADFlyoverEditor:applyJunctionClear()
         string.format("turn radius          %s m", tostring(self.junctionTurnRadius or 12)),
     })
 
+    -- UNDO GOES BACK TO HERE, before the cleaning: the cleaning changes the network as surely as the
+    -- clear does, and undo used to bring back the cleaned site rather than the one the user had. Not
+    -- put on the undo stack until something has actually changed, because the cleaning may find
+    -- nothing to do and the site then nothing to clear - and a clear that changed nothing must leave
+    -- no undo step behind. One step per clear, whichever change comes first.
+    local undo = ADEditorHistory:capture("clear junction")
+    local function keepUndo()
+        if undo ~= nil then
+            ADEditorHistory:commit(undo)
+            undo = nil
+        end
+    end
+
     -- STEP 2: CLEAN THE SITE BEFORE ANYTHING MEASURES IT. This used to run last of all, which meant
     -- the box, the road widths and the answer to which lanes are parent road were all worked out on
     -- a site that still had points sitting on top of each other and chains leading nowhere in it -
@@ -22170,6 +22183,9 @@ function ADFlyoverEditor:applyJunctionClear()
                 kind, tostring(jp.junctionSituation or "situation unknown"))
         end
     end
+    -- The cleaning changed the site: that is a step to undo already, even if nothing is left to clear.
+    -- Read off the clear's own record of its edits, which every change the cleaning makes goes into.
+    if jxJournal ~= nil and #jxJournal > 0 then keepUndo() end
     -- The preview the rest of the clear works from, and its through roads as they lie now, before
     -- any of them is cut, smoothed or respaced - what the check holds the kept roads up against.
     -- Under tryCall for the same reason as the network before: without these lines the check would
@@ -22230,7 +22246,7 @@ function ADFlyoverEditor:applyJunctionClear()
         return
     end
 
-    ADEditorHistory:snapshot("clear junction")
+    keepUndo()
     jxStage = "cutting old links"
     local staleCut = 0
     for _, pair in ipairs(linksToSever) do
