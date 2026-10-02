@@ -56,6 +56,97 @@ local function survey()
     return s
 end
 
+-- Every link with both ends within R, keyed "from>to".
+local function linkSet()
+    local s = {}
+    for _, p in pairs(ADGraphManager:getWayPoints()) do
+        if p ~= nil and p.id ~= nil and (p.x - CX) ^ 2 + (p.z - CZ) ^ 2 <= R * R then
+            for _, o in ipairs(p.out or {}) do
+                local q = ADGraphManager:getWayPointById(o)
+                if q ~= nil and (q.x - CX) ^ 2 + (q.z - CZ) ^ 2 <= R * R then s[p.id .. ">" .. q.id] = { p, q } end
+            end
+        end
+    end
+    return s
+end
+
+-- RULE: every crossing of two paths is a shared point. Counts pairs of links that cross away from
+-- their ends, where at least one of the two is new. A two-way link is counted once.
+local function crossingsWithoutPoint(links, newKeys)
+    local list = {}
+    for k, l in pairs(links) do
+        local a, b = l[1], l[2]
+        if not links[b.id .. ">" .. a.id] or a.id < b.id then list[#list + 1] = { k = k, a = a, b = b } end
+    end
+    local n = 0
+    for i = 1, #list do
+        for j = i + 1, #list do
+            local L1, L2 = list[i], list[j]
+            if (newKeys[L1.k] or newKeys[L2.k]) and L1.a ~= L2.a and L1.a ~= L2.b and L1.b ~= L2.a and L1.b ~= L2.b then
+                local ax, az, bx, bz = L1.a.x, L1.a.z, L1.b.x, L1.b.z
+                local cx, cz, dx, dz = L2.a.x, L2.a.z, L2.b.x, L2.b.z
+                local den = (bx - ax) * (dz - cz) - (bz - az) * (dx - cx)
+                if math.abs(den) > 1e-9 then
+                    local t = ((cx - ax) * (dz - cz) - (cz - az) * (dx - cx)) / den
+                    local u = ((cx - ax) * (bz - az) - (cz - az) * (bx - ax)) / den
+                    if t > 0.02 and t < 0.98 and u > 0.02 and u < 0.98 then n = n + 1 end
+                end
+            end
+        end
+    end
+    return n
+end
+
+-- RULE: no U-turns. Follows every route AutoDrive could take into the 30 m circle and out again,
+-- under its 80-degree rule (GraphManager.prepareWayPoints), and counts those that use a new link and
+-- leave heading back the way they came (more than 150 degrees off the way in).
+local function uTurnRoutes(newKeys)
+    local IN, OUT = 30, 36
+    local function d(p) return math.sqrt((p.x - CX) ^ 2 + (p.z - CZ) ^ 2) end
+    local function bend(a, b, c)
+        local ux, uz, vx, vz = b.x - a.x, b.z - a.z, c.x - b.x, c.z - b.z
+        local nu, nv = math.sqrt(ux * ux + uz * uz), math.sqrt(vx * vx + vz * vz)
+        if nu < 1e-6 or nv < 1e-6 then return 0 end
+        return math.deg(math.acos(math.max(-1, math.min(1, (ux * vx + uz * vz) / (nu * nv)))))
+    end
+    local count = 0
+    for _, a in pairs(ADGraphManager:getWayPoints()) do
+        if a ~= nil and a.id ~= nil and d(a) > IN and d(a) < OUT then
+            for _, bid in ipairs(a.out or {}) do
+                local b = ADGraphManager:getWayPointById(bid)
+                if b ~= nil and d(b) <= IN then
+                    local seen, stack = {}, { { a, b, false } }
+                    while #stack > 0 do
+                        local top = table.remove(stack)
+                        local prev, cur, usedNew = top[1], top[2], top[3]
+                        local key = prev.id .. ">" .. cur.id
+                        if not seen[key] then
+                            seen[key] = true
+                            for _, nid in ipairs(cur.out or {}) do
+                                local nx = ADGraphManager:getWayPointById(nid)
+                                if nx ~= nil and nx ~= prev and bend(prev, cur, nx) <= 80 then
+                                    local un = usedNew or newKeys[cur.id .. ">" .. nx.id] ~= nil
+                                    if d(nx) > IN then
+                                        if un and bend(a, b, nx) >= 0 then
+                                            local ex, ez = nx.x - cur.x, nx.z - cur.z
+                                            local ix, iz = b.x - a.x, b.z - a.z
+                                            local c = (ex * ix + ez * iz) / math.max(1e-9, math.sqrt((ex * ex + ez * ez) * (ix * ix + iz * iz)))
+                                            if c < math.cos(math.rad(150)) then count = count + 1 end
+                                        end
+                                    elseif d(nx) < OUT then
+                                        stack[#stack + 1] = { cur, nx, un }
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return count
+end
+
 if os.getenv("CLEARFIRST") == "1" then
     local cjp = H.lock(CX, CZ, { mode = "clear", radius = 12, leaveThrough = true })
     if cjp == nil then
@@ -67,6 +158,7 @@ if os.getenv("CLEARFIRST") == "1" then
 end
 
 local before = survey()
+local linksBefore = linkSet()
 local jp, lockLog = H.lock(CX, CZ, { mode = "build", radius = 15, turnRadius = TURN })
 if jp == nil then
     print("REFUSED: " .. tostring(ADFlyoverEditor.junctionRefused))
@@ -88,8 +180,15 @@ if os.getenv("ALL") == "1" then for _, l in ipairs(log) do print("  " .. l) end 
 for _, l in ipairs(log) do
     if l:find("refused") or l:find("nothing new") or l:find("INVARIANT") then print("  " .. l) end
 end
+local linksAfter = linkSet()
+local newKeys = {}
+for k in pairs(linksAfter) do if linksBefore[k] == nil then newKeys[k] = true end end
+local crossNo = crossingsWithoutPoint(linksAfter, newKeys)
+local uturns = uTurnRoutes(newKeys)
 print(string.format("points %d -> %d | links %d -> %d | two-way links %d -> %d | teal dots %d -> %d",
     before.points, after.points, before.links, after.links, before.dual, after.dual, before.teal, after.teal))
-print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d",
+print(string.format("rules: %d new two-way link(s) | %d crossing(s) without a shared point | %d U-turn route(s) through new links",
+    after.dual - before.dual, crossNo, uturns))
+print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d uturn=%d",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    after.dual - before.dual, after.teal - before.teal))
+    after.dual - before.dual, after.teal - before.teal, crossNo, uturns))

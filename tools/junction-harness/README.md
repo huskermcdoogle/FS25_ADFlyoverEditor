@@ -40,8 +40,32 @@ measurement is noise, not signal.
 Runs the real `applyJunction` through `harness.lua`'s `M.build()` (lock with `mode = "build"`
 first). It reports points, links, two-way links and teal dots within 40 m before and after, plus the
 turns laid and refused, and ends with a `COUNTS` line for a regression to collect. On a wired
-junction today's builder usually has nothing new to lay, so `CLEARFIRST=1` is the useful case. There
-is no build regression yet.
+junction today's builder usually has nothing new to lay, so `CLEARFIRST=1` is the useful case.
+
+It also checks the build against doc 06's rules, counting only what the build added:
+
+- **new two-way links;**
+- **crossings without a shared point:** two links crossing away from their ends;
+- **U-turn routes:** a route AutoDrive could take into the junction and out the way it came, under its
+  80-degree rule.
+
+A build that follows doc 06 scores 0 on all three.
+
+## The build regression - run it TWICE
+
+    bash regbuild.sh TAG
+
+Clears and then builds every registry junction (the same list as reg75.sh), and writes one line per
+junction to `regbuildTAG.txt` plus a summary: built, refused, Lua errors, turns laid and refused, and
+the three rule counts. Run it twice and diff, as for the clear.
+
+First baseline, today's builder on this branch (2026-10-02), identical on two runs:
+
+    60 built, 15 refused, 0 Lua errors | 248 turns laid, 14 refused
+    rules: new two-way links 1 at 1 junctions | crossings without a shared point 241 at 55 | U-turn routes 3 at 3
+
+The crossings and U-turns are expected: today's builder ties each turn in on its own and adds no shared
+points. They are what the new builder must bring to 0.
 
 ## The check after a clear
 
