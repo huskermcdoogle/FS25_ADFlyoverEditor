@@ -306,8 +306,11 @@ Each is one choice. We'll ask them one at a time.
    **Update 2026-10-01 (your note):** most centres look good. A T skew needs a different rule from a
    T square: slide the centre along the main road toward the WIDE-angle side, by an amount that grows
    as the angle gets sharper. That leaves room for the trailer on the sharp turn into the acute
-   corner. Candidate: half the main road's width x cot(angle), 0 at 90°, about 3.5 m at 45° on a 7 m
-   road; Y merges need a cap or their own rule.
+   corner. Correction: today's centre (where the side road's middle line crosses the main road's)
+   already sits about half the main road's width x cot(angle) toward the wide side of the mouth's
+   middle, so the slide is extra, measured from today's centre: k x half-width x cot(angle), with k
+   being tested offline (0, 0.5, 1, 1.5). The side road re-aims to the slid centre (your choice). Y
+   merges need a cap or their own rule.
 2. ~~Which fit first for a curving side road?~~ **Pick by cause**, as in "Picking by situation".
 3. ~~Your time.~~ **Flag-only review first, a click page only if needed, no test drives** (see "Pass mark
    and asking you").
@@ -336,6 +339,17 @@ Each is one choice. We'll ask them one at a time.
     groups back; c) today's fit, unless another is clearly better.
 13. **What the card shows on a pass:** a) "Fit: good" and a Why? button; b) that, plus one line such as
     "Centre on the paving's middle; all 6 stubs reach the edge"; c) nothing until you ask.
+
+## Open items from testing
+
+- **Cleared sites: the kind depends on lane order** (from the numbering fix, 30e2857). Cleared 74 now
+  reads T skew; your label is T square. The reader groups a cleared site's lanes first come, first
+  served, so the order alone can change the label; the numbering fix changed that order and flipped
+  74. 71 is wrong before and after (4W square, now 4W offset; you: T square). Fix idea: make the
+  grouping not depend on order, rather than tuning the order.
+- **In-game check still to do for the numbering fix** (tested offline only): clear 30, then 39, with
+  through roads kept. 39 should keep its road from the south: all three through roads, as on a
+  fresh 39.
 
 ## Sources
 

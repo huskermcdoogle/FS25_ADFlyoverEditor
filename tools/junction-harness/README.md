@@ -91,6 +91,48 @@ Reading a join line:
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
 
+## Loop order: SHUFFLE and one junction after another
+
+A clear renumbers the points above every one it removes, and a set keyed by point ids (or
+by the points themselves) comes back from `pairs()` in an order set by those numbers (or by
+memory). Wherever that order reached a choice, clearing one junction changed the clear of
+its neighbour: clearing 30 and then 39 cut 39's road from the south. The editor now walks
+such sets by place (`jxByPlace` in FlyoverEditor.lua). Two tests keep it that way:
+
+    SHUFFLE=7 bash reg75.sh TAG            # any script: pairs() in a random order, fixed by the seed
+    bash seqreg.sh TAG                     # clear A, then B, for every pair within 90 m
+
+- `SHUFFLE=<seed>` (harness.lua loads `shuffle.lua`) walks every `pairs()` in a random
+  order. Results must be byte-identical to a run without it, for any seed. A difference
+  is a choice that depends on loop order.
+- `seqreg.sh` clears junction A, then B, and compares B's result with B cleared on the
+  fresh network, both through modes. It skips 67 and 68 (test junk) and the already
+  cleared 69-75 (`SKIP=`); `NEAR=` sets the 90 m. `dbgseq.lua` prints each run by place,
+  not by point number (`TOOK`, kept `ROUTE`s, the check's `COUNTS`, every `EDIT`), so two
+  runs diff line for line. `seq<TAG>_1.txt` / `_0.txt` give one line per pair, `same` or
+  `DIFFERS`, with how close A's own edits came to B's centre. Where A's edits reach B's
+  roads, B cannot come out as on a fresh network (A shortened a road B keeps, say), so a
+  difference there is not a fault in itself. Where A's edits stay clear of B, B must
+  match. Run it again with `SHUFFLE=7`: every file must be identical.
+
+## Undo after a clear
+
+`dbgundo.lua` loads the real undo (`scripts/editor/EditorHistory.lua`) over the harness's
+stub, clears a junction, then undoes and redoes it, comparing every field of every point.
+
+    LEAVE=1 lua dbgundo.lua X Z            # one junction: UNDO ok|FAIL pushed= changed= undo= redo=
+    bash reg75undo.sh TAG                  # every registry junction, both through modes
+
+A clear must leave exactly one undo step if it changed anything and none if it did not, and
+undo must give back the network exactly as it was before the clear - cleaning included. Each
+line ends with `after=`, a checksum of the network after the clear: the same junction run on
+two builds with the same checksum was cleared identically. `EH_SRC=...` runs another copy of
+the undo, as `FE_SRC` does for the editor.
+
+`NOTHING_LEFT=1` makes the site read as having nothing to clear, so the clear cleans it and
+stops (`stopped=yes`). No registry junction does that on its own; it is the one way a clear
+changes the network without clearing anything, and that change needs its undo step too.
+
 ## The swept-path prediction (SweptSim)
 
 `reg75.sh` never drives the design rig: it tests the clear, and the harness loads no SweptSim.

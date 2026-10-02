@@ -5,6 +5,11 @@
 -- the game engine is stubbed below; anything it touches that ISN'T stubbed will error loudly rather
 -- than silently behaving differently from the game.
 
+-- SHUFFLE=<seed> walks every pairs() in a random order fixed by the seed (shuffle.lua) - as the
+-- game can once a clear has renumbered points. A result that changes with the seed depends on
+-- loop order. Unset (or 0), nothing changes.
+if (tonumber(os.getenv("SHUFFLE") or "") or 0) ~= 0 then dofile("shuffle.lua") end
+
 -- ---------------------------------------------------------------------------- FS Lua extensions
 function table.contains(t, v)
     for _, x in pairs(t or {}) do if x == v then return true end end
@@ -72,6 +77,20 @@ function ADGraphManager:getWayPoints() return ordered end
 function ADGraphManager:getWayPointsCount() return #ordered end
 function ADGraphManager:markChanges() end
 
+--- What the real undo calls to swap a whole saved graph back in. Never reached through the stub
+--- undo below; dbgundo.lua loads the real one. Looked up by position, as the game does.
+function ADGraphManager:setWayPoints(wps)
+    ordered = wps
+    byId = {}
+    for i, w in ipairs(ordered) do byId[i] = w end
+end
+local mapMarkers, groups = {}, {}
+function ADGraphManager:getMapMarkers() return mapMarkers end
+function ADGraphManager:setMapMarkers(m) mapMarkers = m end
+function ADGraphManager:getGroups() return groups end
+function ADGraphManager:setGroups(g) groups = g end
+function AutoDrive.getAllVehicles() return {} end
+
 --- Mutating ops, so apply-time code (clearing, trimming, extending lane ends) can be exercised
 --- offline. Ids are renumbered on removal exactly as AutoDrive does it, because code that holds ids
 --- across a removal is a real bug class here.
@@ -127,7 +146,8 @@ function ADGraphManager:moveWayPoint(id, x, y, z, flags)
 end
 
 ADDrawingManager = { addLineTask = function() end, addSphereTask = function() end }
-ADEditorHistory = { snapshot = function() end }
+-- Undo does nothing here; dbgundo.lua loads the real one (scripts/editor/EditorHistory.lua) over it.
+ADEditorHistory = { snapshot = function() end, capture = function() end, commit = function() end }
 ADFlyoverSettings = {
     -- main routes its verbose lines through debugLog; offline we always want them
     debugLog = function(fmt, ...) Logging.info(fmt, ...) end, settings = {}, get = function() return 1 end }
