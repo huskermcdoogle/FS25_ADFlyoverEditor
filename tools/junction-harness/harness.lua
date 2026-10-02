@@ -36,6 +36,10 @@ function getTerrainHeightAtWorldPos() error("engine call reached: getTerrainHeig
 overlapBox = nil       -- junctionObstacleHitsAlong returns 0 when this is nil
 raycastClosest = nil
 CollisionFlag = { STATIC_OBJECT = 1, TREE = 2, BUILDING = 4, DEFAULT = 8, DYNAMIC_OBJECT = 16 }
+-- Real ground, opt-in: TERRAIN=1 replaces the flat, all-road stand-ins above with the map's paint,
+-- drive cost, heights and fields (terrain.lua; data from make_terrain.py). Off by default so every
+-- existing run and its saved results stay exactly as they were.
+if os.getenv("TERRAIN") == "1" then dofile("terrain.lua") end
 
 -- ------------------------------------------------------------------------------- the graph itself
 local raw = dofile(os.getenv("GRAPH") or "graph_data.lua")

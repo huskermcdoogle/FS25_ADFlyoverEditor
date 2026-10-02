@@ -91,6 +91,38 @@ Reading a join line:
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
 
+## Real ground (TERRAIN=1)
+
+By default the harness sees road everywhere, flat ground at height 0, no fields and no
+physics. `TERRAIN=1` swaps those for the real map, so the editor's own in-game reads
+answer offline with the values the game would give:
+
+- `getTerrainAttributesAtWorldPos` - colour, softness, materialId of the main paint per
+  1 m cell (the savegame's `terrain.lod.type.cache`, layer attributes from `mapUS.i3d`)
+- `getVehicleNavigationMapCostAtWorldPos` via `g_currentMission.aiSystem.navigationMap` -
+  the AI drive-cost byte and blocked (255), from `vehicleNavigationCostmap.dat`
+- `getTerrainHeightAtWorldPos` (bilinear), `getTerrainNormalAtWorldPos`, and
+  `AutoDrive:getTerrainHeightAtWorldPos` - from `terrain.heightmap.png`
+- `getDensityAtWorldPos` on `g_currentMission.terrainDetailId` - non-zero inside the map's
+  field outlines (a stand-in for the field layer)
+- `raycastClosest` - hits the terrain only (no road meshes, bridges, signs or trees offline).
+  It is what lets the road check get past its "no physics, call it road" guard to the
+  paint. `TERRAIN_RAY=0` keeps it nil.
+
+Make the data once per map/save (pure Python, a couple of seconds, ~17 MB into the
+git-ignored `terrain_data/`; `TERRAIN_DIR=...` points elsewhere):
+
+    python make_terrain.py ["<FS25 profile>/savegame6"] [out folder]
+
+Then any script takes it, e.g. `TERRAIN=1 bash reg75.sh TAG`. Loading adds about 0.12 s
+and 15 MB per process. Look at the ground round a point, or test the road check:
+
+    lua dbgterrain.lua X Z [R] [STEP]   # paint / cost / height / field / road grids
+    lua dbgterrain.lua check            # isRoadAt at known spots: asphalt, verge, rock, field, gravel
+
+Not offline: anything standing on the ground, and paint the player changed after the save
+(the type cache is what the save wrote).
+
 ## Replaying a debug drop
 
 A drop from `savegame6/flyoverDebug/NNNN_clear_.../` carries the network before and

@@ -5,3 +5,4 @@ reg*_*.txt
 captest/
 captures*/
 *.zip
+terrain_data/
