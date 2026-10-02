@@ -119,7 +119,8 @@ The junction itself is then built like any one-way junction.
 
 Two versions, picked by the paved width at the mouth (the same paving reading that sizes the curves):
 
-**Room for two trucks side by side:** two separate short lanes, a normal lane width apart. Trucks pass
+**Room for two trucks side by side** (about 9.5 m of paving, measured below): two separate short lanes,
+at least 6.5 m apart. Trucks pass
 each other on the short stretch like on any two-lane road.
 
 ![Two-way road split, room for two trucks](06-img/two-way-split-wide.svg)
@@ -172,6 +173,27 @@ Rules from it:
 
 Not modelled: how hard AutoDrive's 60% brake really stops a given truck (2-4 m/s² bracketed). Check in
 game. Script: `tools/xt-study/splitdist.lua`.
+
+### How wide is room for two trucks
+
+Measured 2026-10-02 in the truck twin (`tools/xt-study/twowidth.lua`). A truck turns into the side
+road while another waits on the lane coming out, 3-8 m short of the mouth. How close do they get?
+
+- **Left turns into the side road clear the waiting truck at any lane gap from 3 m.** The closest they
+  get is 0.5-1 m. The one exception: a 15 m curve passes within 0.2 m, or touches at a 3 m gap, when the
+  waiting truck is only 3 m short.
+- **Right turns are the problem.** After the turn the truck swings about 2 m wide, onto the other lane,
+  10-25 m past the mouth, right where the waiting truck stands. It hits the waiting truck until the
+  lanes are 6.5 m apart:
+
+  | Lane gap | 4 m | 5 m | 6 m | 6.5 m | 7 m |
+  |---|---|---|---|---|---|
+  | Closest (10 m curve) | hits | hits | 0.0 m | 0.5 m | 1.0 m |
+
+- **So "room for two trucks" means lanes at least 6.5 m apart:** about **9.5 m of paving** at the mouth
+  (two truck widths, plus that gap, plus a little margin). Anything narrower gets the narrow version,
+  one truck at a time. That will be most farm tracks.
+- The 2 m swing is how AutoDrive steers (doc 05). It is the twin's figure, still to see in game.
 
 ## Stopping in time (every approach)
 
@@ -334,8 +356,8 @@ branch.
 
 ## Still open
 
-1. **The width that counts as "room for two trucks"** at the mouth. Two of the captured truck side by side
-   is about 5.4 m plus clearance, so about 6.5 m of paving is proposed. To check.
+1. ~~The width that counts as "room for two trucks".~~ Measured 2026-10-02: about 9.5 m of paving at
+   the mouth. See "How wide is room for two trucks".
 2. **Two junctions close together on one two-way road,** where their splits would overlap.
 3. ~~The 5-point reach on one-way approaches.~~ Measured 2026-10-02: see "Stopping in time".
 4. ~~Through traffic speed at junctions.~~ Decided 2026-10-02: road speed (see Decided).

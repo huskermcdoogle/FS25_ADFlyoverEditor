@@ -19,6 +19,8 @@ AutoDrive 3.0.0.8. 3.0.1.2 scans further, so use the 50/100 m rows for speed.
 
     lua throughdist.lua ../../scripts/editor                # one-way lanes: stopping vs speed and spacing
 
+    lua twowidth.lua ../../scripts/editor                   # side-road width for two trucks at the mouth
+
 `splitdist.lua` replays AutoDrive's "who waits" check on the twin's track and prints where the truck's
 front stops, for each split distance, point spacing and braking strength.
 `drive.lua` writes `drive_results.txt`, `drive.html` (every panel) and one `panel_*.svg` per move.
