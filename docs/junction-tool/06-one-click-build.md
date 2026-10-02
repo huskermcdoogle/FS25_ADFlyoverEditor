@@ -105,95 +105,38 @@ So two turns that cross at a shallow angle create a new route nobody laid.
 
 AutoDrive treats a two-way stretch like a one-lane road. Before entering it, a truck checks the whole
 stretch ahead for anyone coming the other way. Once on it, the truck keeps right of way and stops
-checking (doc 05). So a two-way road that runs straight into a junction brings in trucks that never
-check there.
+checking (doc 05). That rule is built for one-truck-wide tracks, so the builder works with it.
 
-**The fix: split every two-way arm into two one-way lanes for its last stretch before the junction.**
-The junction itself is then built like any one-way junction.
+**A two-way road stays two-way right up to the mouth** (decided 2026-10-02):
 
-- **Trucks coming in** move onto their own one-way lane at the split, and check normally from there.
-- **Trucks going out** still get AutoDrive's own check of the whole two-way road ahead, at the split.
-  If someone is coming, they wait on their lane, clear of the junction.
-- **The split sits 20 m before the mouth, with points every 4-5 m on the short lanes** (measured, see
-  "How far back the split goes").
+- **Its two-way line ends at one point at the mouth.** Every turn into or out of the road starts or ends
+  at that point, and the turns themselves are one-way.
+- **A truck leaving the junction** checks the whole track ahead at the mouth, while it is still in the
+  junction. If someone is coming, it waits there, off the track.
+- **A truck arriving along the track** keeps right of way into the junction. Trucks on the junction's
+  one-way lanes give way to it, because they share points with its turn.
+- **Two junctions close together on one two-way road:** the road between them stays two-way too. The
+  same rule covers it.
 
-Two versions, picked by the paved width at the mouth (the same paving reading that sizes the curves):
+**Why not split the road into two one-way lanes before the junction?** We planned to, and the truck
+twin showed it fails (`tools/xt-study/splitpair.lua`, `overlap.lua`):
 
-**Room for two trucks side by side** (about 9.5 m of paving, measured below): two separate short lanes,
-at least 6.5 m apart. Trucks pass
-each other on the short stretch like on any two-lane road.
+- **On a narrow track, one truck arriving and one leaving:** with a split, they met head-on in 32-41 of
+  41 start timings, at every split length from 10 to 30 m. Two-way to the mouth: no meetings.
+- **Why:** the leaving truck only checks the track once the split is among its next 5 points. By then
+  it is on the narrow stretch, so it waits there, in the way. The arriving truck is on a two-way link,
+  never checks, and drives in.
+- **Between two close junctions:** a guarded one-way stretch met head-on in most runs beyond 10 m.
+  Left two-way: no meetings at 10-40 m.
+- **A wide split** (two lanes at least 6.5 m apart, about 9.5 m of paving) would avoid the narrow
+  stretch. Two-way roads that wide are rare, so it is not built (`tools/xt-study/twowidth.lua`).
 
-![Two-way road split, room for two trucks](06-img/two-way-split-wide.svg)
+Two AutoDrive behaviours found on the way, which matter anywhere:
 
-**Room for one truck:** the two short lanes join again at one **guard point** at the mouth, where all
-the turns start or end. The guard at the mouth and the split guard the short stretch from both ends,
-so only one truck is ever on it. A truck turning in waits at the mouth while one is coming out, and the
-other way round.
-
-![Two-way road split, room for one truck](06-img/two-way-split-narrow.svg)
-
-- The guard point opens no new routes. Lane in to lane out is a 180° bend, and so is turn to turn, so
-  AutoDrive refuses both. The route check confirms it on every build.
-- The cost is one truck in the mouth at a time, which is how a one-truck-wide track works anyway.
-
-### How far back the split goes
-
-Measured 2026-10-02 in the truck twin. The truck drives in along the two-way road, through the split
-and towards its turn, while another truck holds the junction. AutoDrive's own "who waits" check is
-replayed on the twin's track.
-
-**The split distance only matters up to about 20 m.** A truck only starts checking once it is past the
-split, and then it looks **5 points ahead**, not a distance. So where it stops depends on how far apart
-the points are between it and the first shared point.
-
-Where the truck's front stops, for a right turn aimed at 20 km/h, with medium brakes (3 m/s²):
-
-| Points on the short lane | Split 10 m | Split 15 m | Split 20 m | Split 30 m |
-|---|---|---|---|---|
-| every 2 m | 3.9 m short of the mouth | 2.1 m short | 3.9 m short | 3.9 m short |
-| every 3 m | 3.9 m short | 7.6 m short | 7.6 m short | 7.6 m short |
-| every 4 m | 3.9 m short | 7.6 m short | **10.6 m short** | 10.2 m short |
-| every 5 m | 3.9 m short | 7.6 m short | **10.6 m short** | 11.5 m short |
-
-Rules from it:
-
-1. **Split 20 m before the mouth, points every 4-5 m on the short lanes.** Medium brakes stop the front
-   about 10 m short of the mouth. With weak brakes (2 m/s²), it still stops 3.5-6.5 m short (left
-   and right turns). The same holds if it runs the 6 km/h over its cap that AutoDrive allows before
-   braking hard. Both at once was not tested.
-2. **At least two points between the split and the first shared point.** With only one, AutoDrive
-   never sees the shared point, because the check is off on the two-way link before it. The twin
-   confirms it: a 5 m split with 4-5 m spacing never stops.
-3. **No extra points between the mouth and the first shared point.** In the wide version the first
-   shared point sits a few metres into the turn. With the turn's usual 2 m points in front of it and a
-   20 m split, the truck stops anywhere from 1.6 m past the mouth to 3.9 m short, depending on the lane's
-   spacing. With no points in front of it, it stops 9.5-10.6 m short.
-4. **Left turns** (aimed at 23 km/h) stop 2-3 m closer to the mouth than right turns, for the same
-   layout. A 20 m split with 4-5 m spacing still leaves 8 m.
-
-Not modelled: how hard AutoDrive's 60% brake really stops a given truck (2-4 m/s² bracketed). Check in
-game. Script: `tools/xt-study/splitdist.lua`.
-
-### How wide is room for two trucks
-
-Measured 2026-10-02 in the truck twin (`tools/xt-study/twowidth.lua`). A truck turns into the side
-road while another waits on the lane coming out, 3-8 m short of the mouth. How close do they get?
-
-- **Left turns into the side road clear the waiting truck at any lane gap from 3 m.** The closest they
-  get is 0.5-1 m. The one exception: a 15 m curve passes within 0.2 m, or touches at a 3 m gap, when the
-  waiting truck is only 3 m short.
-- **Right turns are the problem.** After the turn the truck swings about 2 m wide, onto the other lane,
-  10-25 m past the mouth, right where the waiting truck stands. It hits the waiting truck until the
-  lanes are 6.5 m apart:
-
-  | Lane gap | 4 m | 5 m | 6 m | 6.5 m | 7 m |
-  |---|---|---|---|---|---|
-  | Closest (10 m curve) | hits | hits | 0.0 m | 0.5 m | 1.0 m |
-
-- **So "room for two trucks" means lanes at least 6.5 m apart:** about **9.5 m of paving** at the mouth
-  (two truck widths, plus that gap, plus a little margin). Anything narrower gets the narrow version,
-  one truck at a time. That will be most farm tracks.
-- The 2 m swing is how AutoDrive steers (doc 05). It is the twin's figure, still to see in game.
+- **A truck that stops within about 6 m of a shared point stops seeing it,** because that point has
+  become the one it is heading for, and the check only looks beyond that one.
+- **A waiting truck is released once the other truck's cab is 4 points past,** while its trailer can
+  still be in the way.
 
 ## Stopping in time (every approach)
 
@@ -232,8 +175,9 @@ far side of the box only sees that point once it is 5 points away, which may alr
 waits. That is vehicle order, not road. So a fast through truck will sometimes be the one asked to wait,
 and it overruns.
 
-**Turning trucks are fine** at their 20-25 km/h, with points 4-5 m apart and no crowding (same as the
-split results).
+**Turning trucks are fine** at their 20-25 km/h, with points 4-5 m apart and no crowding. Measured the
+same way on a truck coming in from a side lane (`tools/xt-study/splitdist.lua`): a 20 m one-way lane
+with points every 4-5 m stops its front about 10 m short of the mouth.
 
 What this means for the builder:
 
@@ -260,7 +204,7 @@ What this means for the builder:
 
 1. **The route check** (above).
 2. **No two paths cross without a shared point.**
-3. **No two-way link** inside the box or between the split and the box.
+3. **No two-way link** inside the box. A two-way road's line ends at its point at the mouth.
 4. **No destination** inside the box.
 5. **The truck twin drives every turn:** wheels on the paving with the spare room, speed in its band.
 6. **Nothing outside the junction changed.**
@@ -300,7 +244,7 @@ branch.
 - **Point spacing after the solve:** the solver spaces points by smoothness (about 1.5 m). The
   builder then sets the deliberate speed bend and widens the spacing inside the box.
 - **Two-way turns:** today the builder lays a two-way turn where a two-way road comes in (22602). That
-  goes. Two-way arms are split before the junction instead (see "Two-way roads").
+  goes. The road's two-way line ends at the mouth and its turns are one-way (see "Two-way roads").
 - **The saved description:** today the registry keeps only the number and position (11063). Doc 02 decided
   the clear saves its description; that is still to build.
 - **One undo for everything.** Today the clear cleans and smooths the site before it takes its undo
@@ -314,7 +258,6 @@ branch.
 - **Opposite left turns through one point** when they would not cross.
 - **The route check.**
 - **The speed bend.**
-- **The two-way split,** in both versions.
 - **A build entry in the offline harness, and a build regression.** Today the harness can only run the
   clear (`harness.lua` `M.apply`), so building has no offline test at all.
 
@@ -343,21 +286,19 @@ branch.
   - Version 1 is square X and T only.
   - Kept through roads at an X share a point where they cross.
   - Two clicks: the first locks the site and shows the plan, the second builds.
-- 2026-10-02: two-way arms are split into two one-way lanes before the junction. Room for two trucks
-  gives two separate lanes; room for one gives two lanes joined at a guard point at the mouth. This
-  replaced two other options:
-  - one two-way turn (today's): trucks off the two-way road never check at the junction;
-  - two one-way turns on the same line: those trucks only start checking about 6 m before the turn.
 - 2026-10-02:
-  - The two-way split sits 20 m before the mouth, with points every 4-5 m (measured).
+  - Two-way roads stay two-way right up to the mouth. Their line ends at one point there, and every
+    turn into or out of them is one-way from that point. The split into two one-way lanes, decided
+    earlier the same day, was dropped after the two-truck replays (see "Two-way roads").
   - Through traffic stays at road speed. Only slow turning trucks are counted on to wait in time. That
     is how the mod's pieces and most junctions work today. Rejected: slowing every through lane with a
     deliberate bend, and a per-junction setting. Turning lanes must pass the gap check.
 
 ## Still open
 
-1. ~~The width that counts as "room for two trucks".~~ Measured 2026-10-02: about 9.5 m of paving at
-   the mouth. See "How wide is room for two trucks".
-2. **Two junctions close together on one two-way road,** where their splits would overlap.
+1. ~~Two-way roads: split or not, how far back, how wide.~~ Settled 2026-10-02: no split (see "Two-way
+   roads").
+2. ~~Two junctions close together on one two-way road.~~ Settled 2026-10-02: the road between them stays
+   two-way.
 3. ~~The 5-point reach on one-way approaches.~~ Measured 2026-10-02: see "Stopping in time".
 4. ~~Through traffic speed at junctions.~~ Decided 2026-10-02: road speed (see Decided).

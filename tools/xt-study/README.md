@@ -21,6 +21,11 @@ AutoDrive 3.0.0.8. 3.0.1.2 scans further, so use the 50/100 m rows for speed.
 
     lua twowidth.lua ../../scripts/editor                   # side-road width for two trucks at the mouth
 
+    lua overlap.lua ../../scripts/editor                    # two close junctions: guarded lanes vs two-way
+    lua splitpair.lua ../../scripts/editor                  # one junction: narrow split vs two-way to the mouth
+
+`overlap.lua` and `splitpair.lua` replay the check for TWO trucks at once (straight-line motion with the
+twin's truck numbers). `ONE="D s mid delay" lua overlap.lua ...` traces a single run.
 `splitdist.lua` replays AutoDrive's "who waits" check on the twin's track and prints where the truck's
 front stops, for each split distance, point spacing and braking strength.
 `drive.lua` writes `drive_results.txt`, `drive.html` (every panel) and one `panel_*.svg` per move.
