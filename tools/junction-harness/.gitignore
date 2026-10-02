@@ -3,6 +3,11 @@ graph_data.lua
 graph_*.lua
 reg*_*.txt
 regbuild*.txt
+sweptreg*.txt
+seq*_*.txt
+seq*/
+click*/
 captest/
 captures*/
 *.zip
+terrain_data/

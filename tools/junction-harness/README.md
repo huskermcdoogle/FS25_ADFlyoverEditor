@@ -168,6 +168,134 @@ Reading a join line:
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
 
+## Loop order: SHUFFLE and one junction after another
+
+A clear renumbers the points above every one it removes, and a set keyed by point ids (or
+by the points themselves) comes back from `pairs()` in an order set by those numbers (or by
+memory). Wherever that order reached a choice, clearing one junction changed the clear of
+its neighbour: clearing 30 and then 39 cut 39's road from the south. The editor now walks
+such sets by place (`jxByPlace` in FlyoverEditor.lua). Two tests keep it that way:
+
+    SHUFFLE=7 bash reg75.sh TAG            # any script: pairs() in a random order, fixed by the seed
+    bash seqreg.sh TAG                     # clear A, then B, for every pair within 90 m
+
+- `SHUFFLE=<seed>` (harness.lua loads `shuffle.lua`) walks every `pairs()` in a random
+  order. Results must be byte-identical to a run without it, for any seed. A difference
+  is a choice that depends on loop order.
+- `seqreg.sh` clears junction A, then B, and compares B's result with B cleared on the
+  fresh network, both through modes. It skips 67 and 68 (test junk) and the already
+  cleared 69-75 (`SKIP=`); `NEAR=` sets the 90 m. `dbgseq.lua` prints each run by place,
+  not by point number (`TOOK`, kept `ROUTE`s, the check's `COUNTS`, every `EDIT`), so two
+  runs diff line for line. `seq<TAG>_1.txt` / `_0.txt` give one line per pair, `same` or
+  `DIFFERS`, with how close A's own edits came to B's centre. Where A's edits reach B's
+  roads, B cannot come out as on a fresh network (A shortened a road B keeps, say), so a
+  difference there is not a fault in itself. Where A's edits stay clear of B, B must
+  match. Run it again with `SHUFFLE=7`: every file must be identical.
+
+## Click points: reg75click.sh
+
+A clear of one junction must come out the same from any click inside it. The click is used once,
+to pick the junction (`junctionSelect`); from there everything is measured from the junction's own
+middle, so two clicks that pick the same site give the same clear. What can still differ is which
+site a click picks: a few metres off the registry point can land on a neighbour, or on another
+part of a split junction.
+
+    bash reg75click.sh TAG                 # every registry junction, both modes, six clicks each
+
+The six clicks: the registry point, 4 m east, west, south and north of it (`OFF=` sets the 4), and
+the crossing the registry click's clear works on ("clearing the one at" in the log). Each run is
+`dbgseq.lua` with `SITE=1`, which adds the site the selection locked and the crossing it cleared
+(`SITE`, `CROSSING`) to its usual print-out (`TOOK`, `ROUTE`, `COUNTS`, every `EDIT` by place).
+`reg75clickTAG_1.txt` / `_0.txt` give one line per junction: `same`, or `DIFFERS at` the clicks
+whose output is not the registry click's, with each one's site (`same`, or where it moved to),
+points taken and check counts. A difference with the same site would be the clear depending on the
+click; with a moved site it is the selection picking another junction. `refused` means every
+click was refused (already clear, say): nothing was compared, so it is not counted as `same`.
+Skips 67 and 68 (`SKIP=`). Run it twice: identical.
+
+What it can and cannot see: the click only picks the site, and the clear then works from the
+site's middle, so on a given network two clicks that pick the same site give the same clear by
+construction. A `same` line therefore says the selection is steady, not that the clear is right.
+A fault that comes from the network itself - as j39's did, below - shows the same from every
+click, and only on that network: run it with the drop's network as `GRAPH=`.
+
+To run it on a network from a debug drop (the game's own, which can differ from the export: see
+the j39 note below), export it with `export_route.py` and pass it as `GRAPH=`; a `REG=` file with
+just the junctions wanted (lines of `n="39" x="6.9" z="-13.6"`) keeps it short.
+
+j39, 2026-10: the in-game clear cut the main road and the harness's did not, from any click. The
+click was not the cause: the game's network had two turns that cross inside 39 folded into one
+point, 0.23 m apart, by an earlier clean-up. That point read as a fork and moved 39's middle 3.4 m.
+Now a point where two lanes cross straight through is walked through, not read as a fork
+(`jxCrossingPairs`, in `junctionCentres`), and the clean-up no longer folds two lanes that cross
+(`jxLanesCross`, in `networkIntegritySweep`).
+
+## Undo after a clear
+
+`dbgundo.lua` loads the real undo (`scripts/editor/EditorHistory.lua`) over the harness's
+stub, clears a junction, then undoes and redoes it, comparing every field of every point.
+
+    LEAVE=1 lua dbgundo.lua X Z            # one junction: UNDO ok|FAIL pushed= changed= undo= redo=
+    bash reg75undo.sh TAG                  # every registry junction, both through modes
+
+A clear must leave exactly one undo step if it changed anything and none if it did not, and
+undo must give back the network exactly as it was before the clear - cleaning included. Each
+line ends with `after=`, a checksum of the network after the clear: the same junction run on
+two builds with the same checksum was cleared identically. `EH_SRC=...` runs another copy of
+the undo, as `FE_SRC` does for the editor.
+
+`NOTHING_LEFT=1` makes the site read as having nothing to clear, so the clear cleans it and
+stops (`stopped=yes`). No registry junction does that on its own; it is the one way a clear
+changes the network without clearing anything, and that change needs its undo step too.
+
+## The swept-path prediction (SweptSim)
+
+`reg75.sh` never drives the design rig: it tests the clear, and the harness loads no SweptSim.
+A change to `scripts/editor/SweptSim.lua` is measured with these instead. Build mode, rebuild
+on, so each junction's turns are re-solved and the preset rig (`SweptSim.EXAMPLE_RIG`) is
+driven through every one. With `TERRAIN=1` the road check is live, so the swept gate (trailer
+off the road) and the sweep-wide reshape run too.
+
+    TERRAIN=1 lua dbgswept.lua X Z         # one junction: each turn's cut-in, then a summary
+    TERRAIN=1 bash sweptreg.sh TAG         # every registry junction -> sweptregTAG.txt
+
+A turn refused with no curve at all (its last radius laid nothing) is listed as `no connector`.
+`SWEPT_SRC=<file>` loads another SweptSim (an old copy from git, to compare). The summary
+counts the twin's runs that hit their time limit (`out of time`) - a slower driver needs
+longer to cover the same route.
+
+## Real ground (TERRAIN=1)
+
+By default the harness sees road everywhere, flat ground at height 0, no fields and no
+physics. `TERRAIN=1` swaps those for the real map, so the editor's own in-game reads
+answer offline with the values the game would give:
+
+- `getTerrainAttributesAtWorldPos` - colour, softness, materialId of the main paint per
+  1 m cell (the savegame's `terrain.lod.type.cache`, layer attributes from `mapUS.i3d`)
+- `getVehicleNavigationMapCostAtWorldPos` via `g_currentMission.aiSystem.navigationMap` -
+  the AI drive-cost byte and blocked (255), from `vehicleNavigationCostmap.dat`
+- `getTerrainHeightAtWorldPos` (bilinear), `getTerrainNormalAtWorldPos`, and
+  `AutoDrive:getTerrainHeightAtWorldPos` - from `terrain.heightmap.png`
+- `getDensityAtWorldPos` on `g_currentMission.terrainDetailId` - non-zero inside the map's
+  field outlines (a stand-in for the field layer)
+- `raycastClosest` - hits the terrain only (no road meshes, bridges, signs or trees offline).
+  It is what lets the road check get past its "no physics, call it road" guard to the
+  paint. `TERRAIN_RAY=0` keeps it nil.
+
+Make the data once per map/save (pure Python, a couple of seconds, ~17 MB into the
+git-ignored `terrain_data/`; `TERRAIN_DIR=...` points elsewhere):
+
+    python make_terrain.py ["<FS25 profile>/savegame6"] [out folder]
+
+Then any script takes it, e.g. `TERRAIN=1 bash reg75.sh TAG`. Loading adds about 0.12 s
+and 15 MB per process. Look at the ground round a point, or test the road check:
+
+    lua dbgterrain.lua X Z [R] [STEP]   # paint / cost / height / field / road grids
+    lua dbgterrain.lua check            # isRoadAt at known spots: asphalt, verge, rock, field, gravel
+
+Not offline: anything standing on the ground, and paint the player changed after the save
+(the type cache is what the save wrote).
+
 ## Replaying a debug drop
 
 A drop from `savegame6/flyoverDebug/NNNN_clear_.../` carries the network before and

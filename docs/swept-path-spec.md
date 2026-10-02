@@ -39,7 +39,9 @@ Decisions locked in the interview:
 
 Read from stock AutoDrive 3.0.0.8 source (`scripts/Modules/DrivePathModule.lua`,
 `scripts/Utils/AutoDriveUtilFuncs.lua`). This is the "framework for understanding" the model is
-built on; every number here is a fact of that code, not an assumption.
+built on; every number here is a fact of that code, not an assumption. Re-read against 3.0.1.2,
+the installed version, on 2026-10-01: `DrivePathModule.lua` differs from 3.0.0.8 only in
+debug-print guards.
 
 **Pure pursuit** (`ADDrivePathModule:getLookAheadTarget`, ~L693). AutoDrive does not drive *on* the
 waypoints. From the vehicle's **steering node** it walks the polyline forward until it has covered
@@ -74,8 +76,13 @@ inside**. The recorder logs `rotatedTime` (±0.9 = full lock on the MT635) preci
 the term this law is calibrated on.
 
 **Speed** (`getMaxSpeedForAngle`, ~L570). Speed is set by the **sharpest angle between consecutive
-segments visible ahead** (scan up to `MAXLOOKAHEADPOINTS = 20` points / `LOOKAHEADDISTANCE = 20 m`,
-scaled by mass and speed, capped 150 m):
+segments visible ahead**. The scan (`getHighestApproachingAngle`) takes up to `MAXLOOKAHEADPOINTS =
+20` points, none further (straight line, from the current waypoint) than `getCurrentLookAheadDistance`:
+`LOOKAHEADDISTANCE` (20 m) × mass factor `clamp((t + 20) / 30, 1, 3)` × speed factor
+`clamp((km/h + 10) / 20, 0.25, 4)`, capped 150 m, where `t` is `getTotalMass(false)` - tow,
+trailer and load - and below 10 km/h the mass factor drops to the speed factor. For the loaded
+semi (57.5 t) that is ~100 m at 30 km/h and 20 m at 10 km/h; empty (12 t), 43 m at 30 km/h. The
+caps are recomputed every 4th frame. The limit by angle:
 
 | max angle ahead | speed limit |
 |---|---|
@@ -97,12 +104,13 @@ The predictor never hardcodes driver behaviour. It reads a profile:
 
 ```
 DriverProfile = {
-  name             = "stock-3.0.0.8",
+  name             = "stock-3.0.1.2",
   lookAhead        = function(rig) -> metres   -- transcribed getMinLookaheadByVehicleType
   steeringLaw      = function(lx, lz, cap) -> steer angle  -- transcribed AIVehicleUtil law
   steerCapDeg      = 60 (or rig.maxRotation),
   speedRule        = function(maxAngleAhead) -> km/h        -- transcribed getMaxSpeedForAngle
-  speedScanPoints  = 20, speedScanMetres = 20,
+  speedScanPoints  = 20,
+  scanDistance     = function(totalMassT, km/h) -> metres   -- transcribed getCurrentLookAheadDistance
 }
 ```
 
@@ -123,6 +131,7 @@ Parameters (per preset; the user named these as what models the system):
 | `hitchOffset` | **signed** distance from the tow's rear axle to the hitch point along the body axis. `≈ 0` for a fifth-wheel/semi (kingpin over the axle); **negative** (behind the axle) for a drawbar trailer. |
 | `trailerLength` | hitch point ↔ trailer axle (or bogie centre) |
 | `trailerWidth` | body envelope |
+| `totalMass` | tow + trailer + load, tonnes. Not geometry: it sets how far ahead the driver looks for bends (§2), so how early it slows. Captured as it stands; the preset is the semi loaded (57.5 t) - slowest, so most cut-in. |
 | *(multi-trailer)* | **Not in V1.** A dolly + second trailer would be a repeated (`hitchOffset`, `trailerLength`) pair; the tractrix chains naturally, so nothing in the model forbids it — but no preset, no capture, no UI until there is a reason. Parked (jokingly, ~V5). |
 
 Why the signed hitch offset matters: a fifth-wheel trailer is a single-pivot tractrix — it tracks
@@ -338,6 +347,79 @@ still needs the sweep-wide reshape's search budget, or is refused when it should
 
 "Both hitch types via one signed offset" (§4) has now been exercised for real - by getting the sign
 wrong and measuring the cost.
+
+**Speed re-check (2026-10-01, AutoDrive 3.0.1.2).** The bend scan had been transcribed as a fixed
+20 m; AutoDrive scales it with mass and speed (§2), in 3.0.0.8 as much as in 3.0.1.2. `SweptSim` now
+does too (`STOCK_DRIVER.scanDistance`, rig `totalMass`): a corner of 45° bends, capped at 12 km/h and
+driven at ~27 km/h with 20 m, is driven at 12. Where the wheels go hardly moves - 0.2 m at most in
+`tools/xt-study/curves.lua`, 0.08 m on any turn the preview lays across the 75 registry junctions
+(`tools/junction-harness/sweptreg.sh`). One turn of 281 changed: j74's 5894 → 9857 is laid at 10 m,
+not 11, because the road gate probes the body edges per time step, so a slower corner gets more of
+the probes (104 against 58) and the off-road share crossed 15%.
+`tools/swept-replay/replay.lua` (new) rebuilds the followed line from a recording and drives the twin
+over it. Mean speed error, recorded vs twin: `clean90` 10.1 → 5.9 km/h, `looptest` 11.3 → 6.9,
+`clip1` 5.0 → 2.0. What the replay shows:
+
+- **The cornering-speed match above does not reproduce.** c1 is recorded at 10.3 km/h, the twin
+  takes it at 16; c2 at 15 vs 31 - old twin and new alike. The lock clamp is the cause:
+  `getSpeedLimitBySteeringAngle` tests `deg(|rotatedTime|) > 0.95 × deg(maxRotation)`, reading
+  rotatedTime as radians, so on the Transtar (maxRotation 45°, lock 1.18) it fires at rotatedTime
+  0.746 - 63% of lock - not at 95%. The recording holds 10 km/h exactly while rot > 0.746. With that
+  rule (now in the twin - see the follow-up below) c1 is 10.0, c2 21.4, and the clean90 error 5.0 km/h.
+- **The other low speeds are arrivals.** Once the destination is nearer than the scan reaches,
+  AutoDrive holds the limit near `max(8, 2 + metres left)` km/h. Modelled as `opts.routeEnds`, for
+  replays only - a preview's run-out is not a destination. With it the second clean90 piece matches
+  within 1.2 km/h.
+- **No braking dead band, and the cap holds.** AutoDrive brakes actively only beyond 6 km/h over
+  (`MAX_SPEED_DEVIATION`) and puts the plain speed setting back on three frames in four, but the
+  game's own limiter (`WheelsUtil.updateWheelsPhysics`) brakes on any overspeed: c1 braked 21.7 →
+  10.3 km/h at ~5 m/s² and held 10.3-10.7. Neither is modelled. Braking ~5 m/s² and acceleration
+  1.3-2.0 m/s² against the twin's 2.5 and 1.2 change the clean90 error by 0.1 km/h; left as they are.
+- **Steering speed.** `DrivePathModule:reset` sets `aiSteeringSpeed` to 0.004/ms (4/s); the twin has
+  1/s. Replaying at 4/s changes nothing measurable - the rate is not what limits these corners.
+- **The outside swing is still over-predicted**, by 0.5-0.8 m at the rear axle on every clean90 corner.
+  The preset rig has no `steerLimitDeg`, so it steers with the generic 60° where the captured Transtar
+  has 45° (`maxRotation`). With 45° the swing turns into a ~0.4 m under-prediction and the gentle
+  corners cut ~0.4 m too far inside. The preset now has the 45° (follow-up below); the remaining
+  ~0.4 m either way is still open.
+
+**Follow-up (2026-10-02): three fixes from the re-check.**
+
+1. **Lock clamp as AutoDrive tests it** (`SweptSim.simulate`): `deg(|rotatedTime|) > 0.95 ×` the
+   rig's steering limit. It only bites with a real limit - with the generic 60° it fires at
+   rotatedTime 0.995 and clean90 is unchanged - so:
+2. **The preset has the Transtar's 45°** (`EXAMPLE_RIG.steerLimitDeg`), as a capture records it.
+   Mean speed error with both: clean90 5.9 → 5.0 km/h, looptest 6.9 → 3.5, clip1 2.0 → 1.9.
+3. **The swept road gate probes by distance, and every body edge.** `junctionSweptPredict` kept every
+   18th point of sets of six, so the gate had only ever probed the tow's **rear-left** corner -
+   never the trailer, never the right side (the "samples both sides of the tow" above was the
+   intent, not the code). Now all six edges, once per `FLYOVER_JUNCTION_SWEPT_PROBE_STEP` (1 m) of
+   travel, so the corner speed cannot shift the off-road share either.
+
+Across the 75 registry junctions (`sweptreg.sh`, real ground) 13 of 281 turns change: six take a
+1 m sweep, one no longer needs one, three are laid 1-2 m tighter, j24's 9175 → 1522 is laid (was
+refused, trailer off the road) and j59's 5279 → 5241 is refused (was laid). Laid 179, refused 102,
+as before. j59 shows what the full probe set exposes: its "turn" is a 2-3 point link, and the
+window also covers ~30 m of the existing lane either side, along which the truck's right-hand
+edges sit off the asphalt 40% of the time and its left never. The gate is judging the LANE there,
+not the turn - a lane laid along a road edge gets a turn refused.
+
+**Second follow-up (2026-10-02): the gate judges only the ground the turn adds.** A body edge no
+further from the route line than its body's half-width plus `FLYOVER_JUNCTION_SWEPT_LINE_MARGIN`
+(0.3 m) is where the rig would be driving the line exactly: on the lanes that is the existing road,
+on the connector it is the strip the corridor check already covers. Those edges are now neither
+probed nor counted, and the off-road share is taken over the rest - the ground the rig reaches only
+because of how it takes the turn. j59's link passes again (192 of 192 probes on the line).
+
+Counting the on-line edges as "on the road" instead (tried first) is wrong: it dilutes real
+excursions away. j74's 9857 → 3156, trailer 6 m inside, had 73 of its 167 own probes off the road
+(44%) and passed at 73 of 564. With the share over the turn's own ground, it stays refused.
+
+What the gate now sees for the first time is the tow's front swinging out and the trailer cutting
+in. Across the 75 junctions, 45 of 348 listed turns change (`sweptreg.sh` now also lists turns
+refused with no connector): 30 are laid with a sweep, mostly a 1 m kickout - j3's four turns, for
+one, whose trailers cut 2.5 m inside onto the verge (20 of 74 own probes off the road) - 5 laid
+turns are refused (j21, j24, j45, j65, j74), j59's link is laid, and 9 change radius. reg75 unchanged.
 
 **Calibration loop.** For each class: simulate → record → compare (max lateral error of the tow and
 trailer lines, and the cut-in depth at entry/exit). Tune the profile's effective look-ahead and

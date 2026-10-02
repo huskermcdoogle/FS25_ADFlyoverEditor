@@ -19,8 +19,10 @@ Model, transcribed rather than approximated:
     the bearing angle, saturating at full lock once the target is `steerLimitDeg` off the nose;
     `rotatedTime` slews toward it at aiSteeringSpeed (1.0/s stock), and the wheel angle is
     rotatedTime/maxRotTime of full lock.
-  * speed: ADDrivePathModule:getMaxSpeedForAngle over the next 20 points / 20 m, times cornerSpeed,
-    and 10 km/h whenever the wheels are past 95% lock (getSpeedLimitBySteeringAngle).
+  * speed: ADDrivePathModule:getMaxSpeedForAngle over the next 20 points, within the scan distance
+    getCurrentLookAheadDistance gives for the rig's mass and speed, times cornerSpeed, and 10 km/h
+    once rotatedTime, read as radians, passes 95% of the vehicle's maxRotation
+    (getSpeedLimitBySteeringAngle). Recomputed every 4 frames.
   * tow: kinematic bicycle on the rear axle. Trailer: single-pivot tractrix from the hitch; the
     hitch offset is SIGNED (negative = behind the rear axle, a drawbar) so the drawbar's swing-out
     falls out of the same equation.
@@ -30,16 +32,23 @@ SweptSim = {}
 
 local S = SweptSim
 
---- A driver profile: the stock 3.0.0.8 follower. A future driver (the AutoDrive-fork rewrite) is a
---- second table with the same fields; the model never hardcodes these.
+--- A driver profile: the stock follower, read from AutoDrive 3.0.1.2. Everything used here is the
+--- same in 3.0.0.8 - DrivePathModule differs between the two only in debug-print guards. A future
+--- driver (the AutoDrive-fork rewrite) is a second table with the same fields; the model never
+--- hardcodes these.
 S.STOCK_DRIVER = {
-    name = "stock-3.0.0.8",
+    name = "stock-3.0.1.2",
     steerLimitDeg = 60,        -- bearing at which the demand saturates (DrivePathModule maxAngle)
     steerSlewPerSec = 1.0,     -- rotatedTime units per second (AIJobVehicle aiSteeringSpeed default)
     speedScanPoints = 20,      -- MAXLOOKAHEADPOINTS
-    speedScanMetres = 20,      -- LOOKAHEADDISTANCE
+    -- How far the bend scan reaches. Not a fixed 20 m: LOOKAHEADDISTANCE (20) is only the base that
+    -- getCurrentLookAheadDistance scales - see scanDistance. The first twin used the bare 20 m and
+    -- braked late: a corner of 45-degree bends, capped at 12 km/h, was driven at ~27 km/h. Setting
+    -- speedScanMetres pins the window instead (tools/xt-study/curves.lua brackets with 20/50/100 m).
+    speedScanMetres = nil,
+    capEverySec = 4 / 60,      -- the caps are recomputed every PERF_FRAMES_HIGH (4) frames, at 60 fps
     cornerSpeed = 1.0,         -- the cornerSpeed setting
-    lockSpeedKmh = 10,         -- getSpeedLimitBySteeringAngle past 95% lock
+    lockSpeedKmh = 10,         -- getSpeedLimitBySteeringAngle (the lock test is in simulate)
     accel = 1.2,               -- m/s^2 toward the limit (motor model - calibration item)
     decel = 2.5,
     --- km/h for the sharpest angle ahead: ADDrivePathModule:getMaxSpeedForAngle.
@@ -49,6 +58,15 @@ S.STOCK_DRIVER = {
             return 12 + 48 * (1 - math.max(0, math.min(25, angle - 5)) / 25)
         end
         return 3
+    end,
+    --- metres the bend scan reaches: ADDrivePathModule:getCurrentLookAheadDistance. totalMassT is the
+    --- rig's getTotalMass(false) - tow, trailer and load, in tonnes. Below 10 km/h the mass factor
+    --- drops to the speed factor, so a crawling rig sees only 8-20 m whatever it weighs.
+    scanDistance = function(totalMassT, speedKmh)
+        local massFactor = math.max(1, math.min(3, (totalMassT + 20) / 30))
+        local speedFactor = math.max(0.25, math.min(4, (speedKmh + 10) / 20))
+        if speedFactor <= 1 then massFactor = math.min(speedFactor, massFactor) end
+        return math.min(20 * massFactor * speedFactor, 150)
     end,
 }
 
@@ -66,12 +84,22 @@ S.STOCK_DRIVER = {
 --- is now trusted over any wheel-angle formula. maxRotTime is the largest rotatedTime this vehicle was
 --- actually seen to reach (1.18, from the same recording) - not a normalized +-1, so it is read as
 --- whatever the game's own units are and used as-is, never divided by anything.
+--- totalMass (tonnes) is the semi LOADED - the slowest it will take a bend, so the most it cuts in:
+--- Transtar 4.3 t + trailer 6.9 t + 59.4 m3 of wheat at 0.78 t/m3 (46.3 t), from the game's own
+--- vehicle and fill-type files. It is also what a rig with no measured mass is given.
+--- steerLimitDeg is the Transtar's maxRotation, 45 deg, as the capture records it: the preset was
+--- missing it and steered and slowed with the generic 60. Replayed on clean90.xml it took the two
+--- tight corners at 16 and 31 km/h (recorded 10.3 and 15) and swung its rear axle 0.5-0.8 m wider
+--- than the truck on every corner. With 45: 10.0 and 21 km/h, and the swing ~0.4 m narrower than
+--- recorded - while the gentle corners now cut ~0.4 m too far INSIDE, the safe side for the
+--- inside-clearance gates.
 S.EXAMPLE_RIG = {
     name = "Transtar II + SKS 30/1050 (preset)",
     wheelbase = 5.84, steerNodeOffset = 0.66, minTurnRadius = 6.26, maxRotTime = 1.18,
     lookAhead = 10.32, minDistance = 5.9,
     hitchOffset = 0.93, trailerLength = 7.08,
     towWidth = 2.7, trailerWidth = 2.6,
+    totalMass = 57.5, steerLimitDeg = 45,
 }
 
 local function dist2d(ax, az, bx, bz)
@@ -136,17 +164,18 @@ local function advanceIndex(path, i, sx, sz, minDistance)
     return i
 end
 
---- ADDrivePathModule:getHighestApproachingAngle, from the tow's reference position.
-local function highestAngleAhead(path, i, px, pz, driver)
+--- ADDrivePathModule:getHighestApproachingAngle, from the tow's reference position, scanning at
+--- most `maxPoints` points within `scanMetres` (straight-line, from the current waypoint).
+local function highestAngleAhead(path, i, px, pz, scanMetres, maxPoints)
     if i + 2 >= #path then return 0 end
     local cur = path[i]
     local base = dist2d(cur.x, cur.z, px, pz)
     local highest = 0
-    for k = 1, driver.speedScanPoints do
+    for k = 1, maxPoints do
         local ahead, mid, ref = path[i + k], path[i + k - 1], path[i + k - 2]
         if ahead == nil or mid == nil or ref == nil then break end
         local ang = math.abs(angleBetween(ahead.x - mid.x, ahead.z - mid.z, mid.x - ref.x, mid.z - ref.z))
-        if dist2d(cur.x, cur.z, ahead.x, ahead.z) <= (driver.speedScanMetres - base) then
+        if dist2d(cur.x, cur.z, ahead.x, ahead.z) <= (scanMetres - base) then
             if ang < 180 then highest = math.max(highest, ang) end
         else
             break
@@ -157,9 +186,12 @@ end
 
 --- Drive `rig` along `path` starting from `start` = { x, z, heading, trailerHeading, speed, rot }
 --- (rear-axle pose; rot is the initial rotatedTime). Returns a table of steps:
----   { t, x, z, heading, sx, sz, hx, hz, ax, az, trailerHeading, rot, v, wp }
---- with positions of rear axle (x,z), steering node (sx,sz), hitch (hx,hz), trailer axle (ax,az).
---- opts.dt (s, default 0.016), opts.maxTime (s, default 240), opts.speedLimitKmh (the AD setting).
+---   { t, x, z, heading, sx, sz, hx, hz, ax, az, trailerHeading, rot, v, wp, tx, tz, cap, scan }
+--- with positions of rear axle (x,z), steering node (sx,sz), hitch (hx,hz), trailer axle (ax,az),
+--- the look-ahead target (tx,tz), the speed cap in force (km/h) and the bend scan's reach (m).
+--- opts.dt (s, default 0.016), opts.maxTime (s, default 240), opts.speedLimitKmh (the AD setting),
+--- opts.routeEnds (the path's last point is AutoDrive's destination, so it slows to arrive - for
+--- replaying a recorded run; off for a junction preview, whose run-out is not a real route end).
 function S.simulate(path, rig, driver, start, opts)
     driver = driver or S.STOCK_DRIVER
     opts = opts or {}
@@ -187,6 +219,7 @@ function S.simulate(path, rig, driver, start, opts)
 
     local out = {}
     local t = 0
+    local capLimit, capDue, scan = vCap, 0, 0
     while t < maxT and i <= #path do
         fx, fz = math.sin(th), math.cos(th)
         local lx_, lz_ = math.cos(th), -math.sin(th)                  -- vehicle LEFT in world
@@ -215,9 +248,42 @@ function S.simulate(path, rig, driver, start, opts)
         else s = math.max(s - slewNorm * dt, sTarget) end
         local delta = s * deltaMax
 
-        -- Speed: the sharpest angle ahead, and the full-lock clamp.
-        local limit = math.min(vCap, driver.speedForAngle(highestAngleAhead(path, i, x, z, driver)) * driver.cornerSpeed / 3.6)
-        if math.abs(s) > 0.95 then limit = math.min(limit, driver.lockSpeedKmh / 3.6) end
+        -- Speed: the sharpest angle ahead and the full-lock clamp, recomputed every capEverySec and
+        -- held in between. followWaypoints itself puts the plain speed setting back on the other
+        -- three frames, but the cap holds in the game anyway: clean90.xml, first corner, braked
+        -- 21.7 -> 10.3 km/h at ~5 m/s2 and then held 10.3-10.7 against the 10 km/h lock cap. The
+        -- same corner shows no sign of AutoDrive's 6 km/h braking dead band (MAX_SPEED_DEVIATION):
+        -- the game's own limiter (WheelsUtil.updateWheelsPhysics) brakes on ANY overspeed, so the
+        -- dead band is not modelled.
+        if t >= capDue then
+            capDue = t + (driver.capEverySec or 0)
+            scan = driver.speedScanMetres or driver.scanDistance(rig.totalMass or S.EXAMPLE_RIG.totalMass, v * 3.6)
+            local ang = highestAngleAhead(path, i, x, z, scan, driver.speedScanPoints)
+            capLimit = math.min(vCap, driver.speedForAngle(ang) * driver.cornerSpeed / 3.6)
+            -- Arriving (opts.routeEnds): once the last point is within 40 points and nearer along the
+            -- line than the scan reaches, the limit is held between min(8, 2 + metres left) and
+            -- max(8, 2 + metres left) km/h (followWaypoints, getDistanceToLastWaypoint(40)).
+            if opts.routeEnds and i + 40 >= #path then
+                local left = 0
+                for k = i + 1, math.min(#path, i + 39) do
+                    left = left + dist2d(path[k - 1].x, path[k - 1].z, path[k].x, path[k].z)
+                end
+                if left < scan then
+                    capLimit = math.max(math.min(8, 2 + left) / 3.6, math.min(capLimit, math.max(8, 2 + left) / 3.6))
+                end
+            end
+            -- The lock clamp, getSpeedLimitBySteeringAngle: deg(|rotatedTime|) > 0.95 x maxAngle, with
+            -- maxAngle the same steering limit the steering law uses (deg(maxRotation), else 60).
+            -- rotatedTime is read as RADIANS there, not as a share of full lock: on the Transtar
+            -- (maxRotation 45 deg, lock 1.18) it fires at rotatedTime 0.746 - 63% of lock - and
+            -- clean90.xml holds 10 km/h exactly while it is past that. (The first twin used 95% of
+            -- lock and took clean90's first corner at 16 km/h, against 10.3 recorded.)
+            local lockDeg = rig.steerLimitDeg or driver.steerLimitDeg
+            if math.deg(math.abs(s) * (rig.maxRotTime or 1)) > 0.95 * lockDeg then
+                capLimit = math.min(capLimit, driver.lockSpeedKmh / 3.6)
+            end
+        end
+        local limit = capLimit
         if v < limit then v = math.min(limit, v + driver.accel * dt)
         else v = math.max(limit, v - driver.decel * dt) end
 
@@ -237,7 +303,7 @@ function S.simulate(path, rig, driver, start, opts)
         t = t + dt
         out[#out + 1] = { t = t, x = x, z = z, heading = th, sx = sx, sz = sz, hx = hx, hz = hz,
             ax = ax, az = az, trailerHeading = phi, rot = s * (rig.maxRotTime or 1), v = v * 3.6, wp = i,
-            tx = tx, tz = tz }
+            tx = tx, tz = tz, cap = capLimit * 3.6, scan = scan }
     end
     return out
 end
