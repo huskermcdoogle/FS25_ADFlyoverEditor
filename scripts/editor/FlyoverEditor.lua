@@ -358,6 +358,11 @@ AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP = 1.0
 -- MANY METRES of the tow's travel through a turn - by distance, so how fast the twin takes the
 -- corner cannot change the share of probes that land off the road.
 AutoDrive.FLYOVER_JUNCTION_SWEPT_PROBE_STEP = 1.0
+-- ...and judges only the ground the TURN adds: a body edge within its half-width plus THIS MANY
+-- METRES of the route line is where the rig would be driving the line exactly (the existing lanes,
+-- or the connector's own strip, which the corridor check already covers), so it is neither probed
+-- nor counted - the off-road share is taken over the turn's own ground alone.
+AutoDrive.FLYOVER_JUNCTION_SWEPT_LINE_MARGIN = 0.3
 
 -- After a clear, a lane that dead-ends at the junction is trimmed back or run forward so it stops
 -- THIS FAR FROM THE EDGE OF THE ROAD IT MEETS, and any points added get the lane's own spacing.
@@ -13843,6 +13848,7 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
     local edges = {}          -- body-edge points to probe the road surface at
     local probeStep2 = (AutoDrive.FLYOVER_JUNCTION_SWEPT_PROBE_STEP or 1.0) ^ 2
     local probeX, probeZ = nil, nil   -- the tow's rear axle at the last set of edge probes
+    local lineMargin = AutoDrive.FLYOVER_JUNCTION_SWEPT_LINE_MARGIN or 0.3
     local towTrack, trlTrack = {}, {}  -- axle tracks to probe obstacles along (within the window)
     local halfTow, halfTrl = (rig.towWidth or 2.5) / 2, (rig.trailerWidth or 2.5) / 2
     -- Past the exit tie-in B, in the direction of travel out of the connector.
@@ -13928,19 +13934,31 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
                 -- one (j74's 5894 -> 9857 changed radius over it when the twin learned to slow
                 -- down). The per-step version also kept every 18th point of sets of six, so it only
                 -- ever probed the tow's rear-left corner - never the trailer, never the right side.
+                -- Each edge also records whether it is ON THE LINE's own footprint - no further from
+                -- the route than its body's half-width plus a margin, where it would be if the rig
+                -- drove the lanes and the connector exactly. Only ground the TURN adds is the gate's
+                -- to judge: the lanes are the existing road, not this turn's doing, and the
+                -- connector's own strip is the corridor check's job. j59's 5279 -> 5241 was refused
+                -- for its lane, which runs along the verge: 79 of 192 probes off the road, every one
+                -- on the right, at half a body from the line, on a 2-3 point link the rig tracked
+                -- to 0.01 m.
                 if probeX == nil or (s.x - probeX) ^ 2 + (s.z - probeZ) ^ 2 >= probeStep2 then
                     probeX, probeZ = s.x, s.z
                     local lx, lz = math.cos(s.heading), -math.sin(s.heading)
                     local fx, fz = math.sin(s.heading), math.cos(s.heading)
                     local frx, frz = s.x + fx * rig.wheelbase, s.z + fz * rig.wheelbase
                     local tlx, tlz = math.cos(s.trailerHeading), -math.sin(s.trailerHeading)
-                    edges[#edges + 1] = { x = s.x + lx * halfTow, z = s.z + lz * halfTow }
-                    edges[#edges + 1] = { x = s.x - lx * halfTow, z = s.z - lz * halfTow }
-                    edges[#edges + 1] = { x = frx + lx * halfTow, z = frz + lz * halfTow }
-                    edges[#edges + 1] = { x = frx - lx * halfTow, z = frz - lz * halfTow }
+                    local function edge(px, pz, half, sLo, sHi)
+                        local d = math.abs(offsetNear(px, pz, sLo, sHi))
+                        edges[#edges + 1] = { x = px, z = pz, onLine = d <= half + lineMargin }
+                    end
+                    edge(s.x + lx * halfTow, s.z + lz * halfTow, halfTow, sTow - 8, sTow + 4)
+                    edge(s.x - lx * halfTow, s.z - lz * halfTow, halfTow, sTow - 8, sTow + 4)
+                    edge(frx + lx * halfTow, frz + lz * halfTow, halfTow, sTow - 4, sTow + rig.wheelbase + 4)
+                    edge(frx - lx * halfTow, frz - lz * halfTow, halfTow, sTow - 4, sTow + rig.wheelbase + 4)
                     if (rig.trailerLength or 0) > 0 then
-                        edges[#edges + 1] = { x = s.ax + tlx * halfTrl, z = s.az + tlz * halfTrl }
-                        edges[#edges + 1] = { x = s.ax - tlx * halfTrl, z = s.az - tlz * halfTrl }
+                        edge(s.ax + tlx * halfTrl, s.az + tlz * halfTrl, halfTrl, sTow - rigLen - 10, sTow + 2)
+                        edge(s.ax - tlx * halfTrl, s.az - tlz * halfTrl, halfTrl, sTow - rigLen - 10, sTow + 2)
                     end
                 end
             end
@@ -13971,8 +13989,15 @@ end
 function ADFlyoverEditor:junctionSweptOffRoad(sw)
     local off, total = 0, 0
     for _, p in ipairs(sw.edges or {}) do
-        total = total + 1
-        if not isRoadAt(p.x, p.z) then off = off + 1 end
+        -- An edge on the line's own footprint is the lane's or the corridor's business, not this
+        -- turn's (see junctionSweptPredict): it is left out altogether, so the share is "of the
+        -- ground this turn adds, how much is off the road". Counting those edges as on the road
+        -- instead diluted real excursions away: j74's 9857 -> 3156, trailer 6 m inside, had 73 of
+        -- its 167 own probes off the road (44%) and passed at 73 of 564.
+        if not p.onLine then
+            total = total + 1
+            if not isRoadAt(p.x, p.z) then off = off + 1 end
+        end
     end
     if total == 0 then return false, 0, 0 end
     local tolerance = math.max(1, math.ceil(total * 0.15))

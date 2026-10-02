@@ -102,6 +102,7 @@ off the road) and the sweep-wide reshape run too.
     TERRAIN=1 lua dbgswept.lua X Z         # one junction: each turn's cut-in, then a summary
     TERRAIN=1 bash sweptreg.sh TAG         # every registry junction -> sweptregTAG.txt
 
+A turn refused with no curve at all (its last radius laid nothing) is listed as `no connector`.
 `SWEPT_SRC=<file>` loads another SweptSim (an old copy from git, to compare). The summary
 counts the twin's runs that hit their time limit (`out of time`) - a slower driver needs
 longer to cover the same route.

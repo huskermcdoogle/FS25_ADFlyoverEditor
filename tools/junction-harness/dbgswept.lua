@@ -52,6 +52,10 @@ for _, m in ipairs(jp.movements or {}) do
             c.sweep and string.format(" sweep %.1f m%s", c.sweep, c.kickEarly and " kickout" or " inside") or "",
             sw and string.format("%s tow in %.2f, trailer in %.2f out %.2f -> %s", sw.leftTurn and "L" or "R",
                 sw.towIn, sw.trailerIn, sw.trailerOut, sw.wide and "PAST CORRIDOR" or "fits") or "no prediction")
+    elseif m.refused ~= nil and (not m.exists or m.rebuild) then
+        -- Refused with nothing to show (the last radius tried laid no curve at all) - still a turn.
+        rows[#rows + 1] = string.format("  %d->%d r=%s REFUSED %s | no connector",
+            m.from.wp.id, m.to.wp.id, m.usedRadius and string.format("%.0f", m.usedRadius) or "-", m.refused)
     end
 end
 table.sort(rows)

@@ -402,7 +402,24 @@ refused, trailer off the road) and j59's 5279 → 5241 is refused (was laid). La
 as before. j59 shows what the full probe set exposes: its "turn" is a 2-3 point link, and the
 window also covers ~30 m of the existing lane either side, along which the truck's right-hand
 edges sit off the asphalt 40% of the time and its left never. The gate is judging the LANE there,
-not the turn - a lane laid along a road edge gets a turn refused. Open.
+not the turn - a lane laid along a road edge gets a turn refused.
+
+**Second follow-up (2026-10-02): the gate judges only the ground the turn adds.** A body edge no
+further from the route line than its body's half-width plus `FLYOVER_JUNCTION_SWEPT_LINE_MARGIN`
+(0.3 m) is where the rig would be driving the line exactly: on the lanes that is the existing road,
+on the connector it is the strip the corridor check already covers. Those edges are now neither
+probed nor counted, and the off-road share is taken over the rest - the ground the rig reaches only
+because of how it takes the turn. j59's link passes again (192 of 192 probes on the line).
+
+Counting the on-line edges as "on the road" instead (tried first) is wrong: it dilutes real
+excursions away. j74's 9857 → 3156, trailer 6 m inside, had 73 of its 167 own probes off the road
+(44%) and passed at 73 of 564. With the share over the turn's own ground, it stays refused.
+
+What the gate now sees for the first time is the tow's front swinging out and the trailer cutting
+in. Across the 75 junctions, 45 of 348 listed turns change (`sweptreg.sh` now also lists turns
+refused with no connector): 30 are laid with a sweep, mostly a 1 m kickout - j3's four turns, for
+one, whose trailers cut 2.5 m inside onto the verge (20 of 74 own probes off the road) - 5 laid
+turns are refused (j21, j24, j45, j65, j74), j59's link is laid, and 9 change radius. reg75 unchanged.
 
 **Calibration loop.** For each class: simulate → record → compare (max lateral error of the tow and
 trailer lines, and the cut-in depth at entry/exit). Tune the profile's effective look-ahead and
