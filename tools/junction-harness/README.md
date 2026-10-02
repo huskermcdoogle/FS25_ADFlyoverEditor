@@ -153,6 +153,60 @@ Now a point where two lanes cross straight through is walked through, not read a
 (`jxCrossingPairs`, in `junctionCentres`), and the clean-up no longer folds two lanes that cross
 (`jxLanesCross`, in `networkIntegritySweep`).
 
+## Split junctions: the user's decisions and the parts' names
+
+The game saves each junction's number, and the user's decision on splitting it, in the savegame's
+`ADFlyoverEditor_junctions.xml`: `decision="split"` with one `<part name="39se" x= z=/>` a part,
+`decision="whole"`, or nothing (not decided). The card offers the choice where the tool suggests a
+split, once a click has locked the junction; a lock on a saved part is then called by it ("j39se") on
+the card, in the log, in debug-capture folder names and in the check after the clear. The harness
+numbers the map afresh and knows no decisions unless it is given a file.
+
+A change of mind keeps the names. "Keep whole" and "not decided" set a split's parts aside: they
+stay in the file as `<part>` lines under `decision="whole"` (or no decision), and "split" brings back
+exactly those names at exactly those places. The card says so ("split brings back j39nw, j39,
+j39se") and has one more button, "forget these names", the only thing that lets them go; after it a
+split takes the card's fresh letters again. (Lettered afresh with 39se cleared, the two places left
+at 39 were named j39nw and j39se - the user's j39 had become "j39se".) A part set aside still claims
+a lock near it for its junction, and still stops the numbering handing a new number out there.
+
+Numbers and decisions are only ever written into the folder they were read from, while that game is
+still loaded. A decision made before a career's first save waits for that save; if the player loads
+another savegame first (the old editor keeps getting update() until its files are sourced again), or
+the game's folder changes, what was waiting is dropped and said so in the log, and the numbers are
+read afresh from the game loaded now - never written over another career's file.
+
+    lua split_registry.lua <junctions.xml> split_decisions.txt <out.xml>   # decisions into a copy
+    REGDIR=<folder holding that file> bash reg75check.sh TAG                # any script, with them
+    bash regnames.sh                                                       # the names' answer key
+
+- `split_registry.lua` reads a junction file and `split_decisions.txt` with the editor's own reader
+  and writer, and writes a copy with the decisions in it. It only writes the path it is given, and
+  refuses one inside a folder holding `careerSavegame.xml`. To put it in the game: close FS25, then
+  copy it over `<savegame>/ADFlyoverEditor_junctions.xml` (the game reads it once a session).
+- `REGDIR` (harness.lua) makes the editor read that folder's file at its first numbering, as the game
+  does; it refuses a real savegame folder. Unset, nothing changes. `dbgcheck.lua` prints `NAME`.
+- `regnames.sh` (`OUT=` for its working folder, default `regnames_out/`): every part the user named
+  names itself; cleared 72 and 73, whose halves share one middle, read as the bare number with
+  "covers j72w and j72e"; the kept-whole junctions stay bare; with 39se cleared, 39 and 39nw keep
+  their names and no new number appears, and with 39nw cleared 39se's check calls what is left at 39
+  "j39" (lettered afresh it was "j39nw"); a part moved 3 m keeps its name, 6 m is "not at one of j39's
+  parts" (the saved point is moved, standing in for a crossing that moved); the Y beside 39se that
+  belongs to 30 stays "j30" (a saved part claims a lock only within 8 m); a cleared part covers a
+  neighbour only when a click on the neighbour locks the same cleared site - never while the
+  neighbour is still wired, however near; the decision buttons appear only once a click has locked
+  the junction; a decision made before the career's first save is written by that save (the folder
+  worked out from the slot number, then named by the save); with another game loaded before that
+  save, or the folder changed under it, the other career's file is left byte for byte as it was and
+  the names are its own (`switch`, `switchfolder`); 39, with 39se cleared, kept whole, not decided
+  and split again comes back as j39nw, j39, j39se at the same places, the card says so, and after a
+  restart too - and only "forget these names" makes a split letter it afresh (`decide1`, `decide2`);
+  the file round-trips, with names set aside too, and the savegame's own file reads and writes back
+  byte for byte unchanged; and split_registry.lua and the reader refuse what they must.
+- An older junction-rework build (numbers saved, no decisions) reads a file with decisions without
+  complaint, but the next time it gains a number it writes the file back with numbers only, and
+  every decision is gone. Keep a copy of the file before running an older build on the savegame.
+
 ## Undo after a clear
 
 `dbgundo.lua` loads the real undo (`scripts/editor/EditorHistory.lua`) over the harness's

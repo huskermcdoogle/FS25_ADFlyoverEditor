@@ -38,6 +38,9 @@ if jp == nil then
     print("REFUSED: " .. tostring(ADFlyoverEditor.junctionRefused))
     return
 end
+-- What the card and the log call the locked site: "j39se" once 39 is split (REGDIR=<a registry
+-- with the user's decisions>), the bare number otherwise. Not read by reg75check.sh.
+print("NAME " .. tostring(jp.junctionName) .. (jp.junctionNameNote and (" | " .. jp.junctionNameNote) or ""))
 local THROW = os.getenv("THROW")
 if THROW ~= nil and THROW ~= "" then
     -- The two reads are the clear's own locals; they are swapped through its upvalues.

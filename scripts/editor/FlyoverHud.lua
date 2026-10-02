@@ -755,6 +755,74 @@ function ADFlyoverHud:buildRows(editor)
             add("header", string.format("%d selected - right-click deletes them, Esc clears", editor.selectionCount))
         end
     elseif editor.tool == editor.TOOL.JUNCTION then
+        -- WHICH JUNCTION: its name, "j39se" once the user has split 39 and the lock is on that part
+        -- (jp.junctionName, worked out from where the selection locked it), else the bare number.
+        local function junctionLabel(jp)
+            if jp.junctionName ~= nil then return jp.junctionName end
+            if jp.junctionNumber ~= nil then return string.format("j%02d", jp.junctionNumber) end
+            return "unnumbered"
+        end
+        -- SPLIT OR KEEP WHOLE: the user's call, made here. Only where there is something to decide -
+        -- a numbered site the tool thinks may be more than one junction, or one already decided - so
+        -- most cards do not change. One selector from the card kit; "not decided" is how a decision
+        -- is undone (Q/E stay the undo for the road network). Under it, what the choice means.
+        local function junctionDecisionRows(jp)
+            local n, d, note = jp.junctionNumber, jp.junctionDecision, jp.junctionPartsNote
+            -- The names the parts had when it was split, kept by "keep whole" and "not decided": a
+            -- split brings exactly these back.
+            local aside = jp.junctionNamesAside
+            if n == nil or jp.onSite ~= true or (note == nil and d == nil and aside == nil) then
+                -- The suggestion alone, as it has always been shown: no number to save a decision
+                -- to, build placing freely (no junction to decide about), or nothing to decide.
+                for _, line in ipairs(note or {}) do add("note", line) end
+                return
+            end
+            -- THE BUTTONS ONLY FOR A JUNCTION A CLICK HAS LOCKED. Only pointed at, the site follows
+            -- the cursor, and the cursor stays where it last was in the world while the mouse is on
+            -- this card - so a button would act on whatever junction the mouse last passed over, and
+            -- a decision saves to the savegame at once. Pointed at, the card still says what was
+            -- decided.
+            local locked = (jp.lockedOnSite == true)
+            local offer = jp.junctionOffer
+            local canSplit = aside ~= nil or (offer ~= nil and offer.parts ~= nil and #offer.parts >= 2)
+            if locked then
+                -- The lit choice does nothing when clicked again: picking "split" a second time
+                -- would move saved parts, and a saved part is only ever moved on purpose (not
+                -- decided, forget the names, then split).
+                local splitAction = nil
+                if canSplit and d ~= "split" then splitAction = function() editor:junctionDecide(n, "split") end end
+                local wholeAction = nil
+                if d ~= "whole" then wholeAction = function() editor:junctionDecide(n, "whole") end end
+                local undoAction = nil
+                if d ~= nil then undoAction = function() editor:junctionDecide(n, nil) end end
+                seg("decision", {
+                    { label = "not decided", active = (d == nil), action = undoAction },
+                    { label = "split", active = (d == "split"), action = splitAction,
+                      dull = (d ~= "split" and not canSplit) },
+                    { label = "keep whole", active = (d == "whole"), action = wholeAction },
+                })
+            end
+            if d == "split" then
+                add("note", "split: " .. table.concat(jp.junctionSplitNames or {}, ", "))
+                if jp.junctionNameNote ~= nil then add("note", jp.junctionNameNote) end
+            elseif aside ~= nil then
+                -- Not the roads' suggestion here: lettered afresh, it can put one of these names on
+                -- another place. Forgetting them is its own button, so no other click loses them.
+                if d == "whole" then add("note", "kept whole") end
+                add("note", "split brings back " .. table.concat(aside, ", "))
+                if locked then btn("forget these names", function() editor:junctionForgetParts(n) end, true) end
+            elseif d == "whole" then
+                add("note", "kept whole")
+            else
+                for _, line in ipairs(note or {}) do add("note", line) end
+                -- what the split button would do, said only where there is a button
+                if locked and canSplit then
+                    add("note", "split names them " .. table.concat(offer.names or {}, ", "))
+                elseif locked then
+                    add("note", jp.junctionOfferWhy or "these parts have no names yet - can't split here")
+                end
+            end
+        end
         -- First row always: which job the tool is doing. "clear" reuses everything build does to
         -- find a site's own runs and old wiring, but shows a much shorter card - none of the turn-
         -- solving settings below apply when nothing is being laid.
@@ -786,7 +854,9 @@ function ADFlyoverHud:buildRows(editor)
             -- again after a redo.
             local lastCheck = editor:junctionLastCheckShown()
             if lastCheck ~= nil and lastCheck.card ~= nil then
-                if lastCheck.number ~= nil then
+                if lastCheck.name ~= nil then
+                    add("toggle", "last clear", lastCheck.name)
+                elseif lastCheck.number ~= nil then
                     add("toggle", "last clear", string.format("j%02d", lastCheck.number))
                 else
                     add("toggle", "last clear", string.format("%.0f, %.0f", lastCheck.x or 0, lastCheck.z or 0))
@@ -816,21 +886,15 @@ function ADFlyoverHud:buildRows(editor)
                 -- its own label - "j60  -  4W offset (14 m stagger)" against a label of "junction" -
                 -- and the number is the one thing on this card that has to be readable at a glance,
                 -- since it is how the site gets named out loud afterwards.
-                if cjp.junctionNumber ~= nil then
-                    add("toggle", "junction", string.format("j%02d", cjp.junctionNumber))
-                else
-                    add("toggle", "junction", "unnumbered")
-                end
+                add("toggle", "junction", junctionLabel(cjp))
                 if cjp.junctionType ~= nil then
                     add("toggle", "type", tostring(cjp.junctionType))
                 end
                 -- MAYBE MORE THAN ONE JUNCTION: the roads meet in more than one place here, or the
-                -- number is shared with another place roads meet (see junctionPartsNote). Only said,
-                -- never acted on - the user decides which sites to split. A row per line: a note row
-                -- is a single line and does not wrap.
-                for _, line in ipairs(cjp.junctionPartsNote or {}) do
-                    add("note", line)
-                end
+                -- number is shared with another place roads meet (see junctionPartsNote). The tool
+                -- only suggests; the user decides, with the selector this adds. A row per line: a
+                -- note row is a single line and does not wrap.
+                junctionDecisionRows(cjp)
                 if cjp.junctionSituation ~= nil then
                     add("toggle", "situation", tostring(cjp.junctionSituation))
                 end
@@ -900,15 +964,12 @@ function ADFlyoverHud:buildRows(editor)
             -- Number and state on rows of their own, the same as the clear card: together they made
             -- a value long enough to print back through its own label.
             if jp.junctionNumber ~= nil or jp.junctionState ~= nil then
-                add("toggle", "junction",
-                    jp.junctionNumber and string.format("j%02d", jp.junctionNumber) or "unnumbered")
+                add("toggle", "junction", junctionLabel(jp))
                 if jp.junctionState ~= nil then
                     add("toggle", "state", tostring(jp.junctionState))
                 end
-                -- The same suggestion the clear card makes (see junctionPartsNote).
-                for _, line in ipairs(jp.junctionPartsNote or {}) do
-                    add("note", line)
-                end
+                -- The same suggestion and decision the clear card has (see junctionPartsNote).
+                junctionDecisionRows(jp)
             elseif editor.junctionRefused ~= nil then
                 add("toggle", "free placement", "")
                 add("note", tostring(editor.junctionRefused))

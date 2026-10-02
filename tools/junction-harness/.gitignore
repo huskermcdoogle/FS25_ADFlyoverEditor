@@ -10,3 +10,4 @@ captest/
 captures*/
 *.zip
 terrain_data/
+regnames_out/

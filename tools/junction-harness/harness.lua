@@ -45,6 +45,26 @@ CollisionFlag = { STATIC_OBJECT = 1, TREE = 2, BUILDING = 4, DEFAULT = 8, DYNAMI
 -- drive cost, heights and fields (terrain.lua; data from make_terrain.py). Off by default so every
 -- existing run and its saved results stay exactly as they were.
 if os.getenv("TERRAIN") == "1" then dofile("terrain.lua") end
+-- The user's junction numbers and split decisions, opt-in: REGDIR=<folder holding an
+-- ADFlyoverEditor_junctions.xml> makes the editor read that file at its first numbering, exactly as
+-- the game reads the savegame's (split_registry.lua writes one). Unset, the harness numbers the map
+-- afresh as it always has. Never a real savegame: a folder with careerSavegame.xml in it is refused,
+-- and since the editor only ever writes the file into a folder that has one, the harness cannot
+-- write it at all.
+do
+    local regDir = os.getenv("REGDIR")
+    if regDir ~= nil and regDir ~= "" then
+        dofile("xmlstub.lua")
+        regDir = regDir:gsub("[/\\]+$", "")
+        if fileExists(regDir .. "/careerSavegame.xml") then
+            error("REGDIR=" .. regDir .. " is a real savegame (it has careerSavegame.xml). Point it at a copy.")
+        end
+        if not fileExists(regDir .. "/ADFlyoverEditor_junctions.xml") then
+            error("REGDIR=" .. regDir .. " has no ADFlyoverEditor_junctions.xml")
+        end
+        g_currentMission.missionInfo = { savegameDirectory = regDir }
+    end
+end
 
 -- ------------------------------------------------------------------------------- the graph itself
 local raw = dofile(os.getenv("GRAPH") or "graph_data.lua")
