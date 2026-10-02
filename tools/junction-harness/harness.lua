@@ -5,6 +5,11 @@
 -- the game engine is stubbed below; anything it touches that ISN'T stubbed will error loudly rather
 -- than silently behaving differently from the game.
 
+-- SHUFFLE=<seed> walks every pairs() in a random order fixed by the seed (shuffle.lua) - as the
+-- game can once a clear has renumbered points. A result that changes with the seed depends on
+-- loop order. Unset (or 0), nothing changes.
+if (tonumber(os.getenv("SHUFFLE") or "") or 0) ~= 0 then dofile("shuffle.lua") end
+
 -- ---------------------------------------------------------------------------- FS Lua extensions
 function table.contains(t, v)
     for _, x in pairs(t or {}) do if x == v then return true end end
