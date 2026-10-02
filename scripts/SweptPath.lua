@@ -129,6 +129,9 @@ function R.captureRig(vehicle)
         minTurnRadius = vehicle.maxTurningRadius or 6.0,
         lookAhead = 4, minDistance = 1.8,
         hitchOffset = 0, trailerLength = 0, trailerWidth = 0,
+        -- Tonnes, tow + trailer + load, as AutoDrive's bend scan reads it (getTotalMass(false)).
+        -- Whatever is on board NOW: capture loaded for the slowest, most cutting-in line.
+        totalMass = vehicle.getTotalMass ~= nil and vehicle:getTotalMass(false) or nil,
     }
     -- FULL LOCK: vehicle.maxTurningRadius is PRIMARY, not a fallback - this took two wrong turns to
     -- reach. First try read wheel.physics.rotMax (45 deg -> 5.8 m); when that number didn't move,
@@ -189,12 +192,13 @@ end
 
 function R.describeRig(rig)
     if rig == nil then return "no rig captured (FlyoverSweptRig with a vehicle entered)" end
-    return string.format("%s: wheelbase %.2f, steer node %+.2f, full-lock R %.1f (wheels %.0f deg; game's nominal %s), look-ahead %.1f, reach %.1f, hitch %+.2f (%s), trailer %.2f (w %.1f/%.1f)",
+    return string.format("%s: wheelbase %.2f, steer node %+.2f, full-lock R %.1f (wheels %.0f deg; game's nominal %s), look-ahead %.1f, reach %.1f, hitch %+.2f (%s), trailer %.2f (w %.1f/%.1f), mass %s",
         rig.name, rig.wheelbase, rig.steerNodeOffset, rig.minTurnRadius, rig.maxWheelAngleDeg or 0,
         rig.nominalTurnRadius and string.format("%.1f", rig.nominalTurnRadius) or "n/a",
         rig.lookAhead, rig.minDistance, rig.hitchOffset,
         (rig.hitchOffset or 0) >= 0 and "fifth wheel, ahead of the rear axle" or "drawbar, behind the rear axle",
-        rig.trailerLength, rig.towWidth or 0, rig.trailerWidth or 0)
+        rig.trailerLength, rig.towWidth or 0, rig.trailerWidth or 0,
+        rig.totalMass and string.format("%.1f t", rig.totalMass) or "n/a")
 end
 
 --- Console: capture the entered vehicle as the design rig the junction preview simulates with.
