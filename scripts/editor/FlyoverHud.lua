@@ -892,6 +892,21 @@ function ADFlyoverHud:buildRows(editor)
                     (editor.junctionClearance or 5) + dir * AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP))
             editor.junctionPreviewKey = nil
         end
+        -- WHAT THE ROUTE CHECK SAID ABOUT THE LAST BUILD, as the clear card shows its own check:
+        -- display only, named by number, hidden once the network round it is no longer what the build
+        -- left (an undo), back after a redo. A build with an extra route is built anyway and marked
+        -- here (decided 2026-10-02).
+        local lastBuild = editor.junctionLastBuildShown and editor:junctionLastBuildShown()
+        if lastBuild ~= nil and lastBuild.card ~= nil then
+            if lastBuild.number ~= nil then
+                add("toggle", "last build", string.format("j%02d", lastBuild.number))
+            else
+                add("toggle", "last build", string.format("%.0f, %.0f", lastBuild.x or 0, lastBuild.z or 0))
+            end
+            for _, line in ipairs(lastBuild.card) do
+                add("note", line)
+            end
+        end
         local jp = editor.junctionPreview
         if jp ~= nil then
             -- The same naming the clear card has: which junction the click resolved to, and whether

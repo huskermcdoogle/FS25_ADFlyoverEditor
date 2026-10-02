@@ -273,7 +273,26 @@ branch.
 
    Build regression: crossings without a shared point fell from 284 at 66 junctions to 1, at j55, a
    tangle of points a metre apart, which the build logs.
-2. **Next:** the route check. Shared points raised the U-turn routes from 10 to 15, as expected.
+2. **The route check:** built 2026-10-02 (`junctionRouteCheck`). It runs after the shared crossings
+   and reports only, for now:
+   - From every lane in, it follows every route AutoDrive could take under its 80° rule to a lane out.
+   - It lists any lane-in/lane-out pair that was not meant: skipped as a U-turn, refused, or never
+     planned.
+   - It only counts routes that use at least one link the build laid. Routes the roads already offered
+     are not the build's doing.
+
+   Build regression: 432 routes at 71 built junctions, **27 extra at 14 junctions**. Without the shared
+   crossings, today's builder alone gives 17 at 8.
+
+   **What the extra routes are:** mostly U-turns at crossroads. The four left turns cross each other
+   near the middle, and every left turn bends the same way. So at the shared points AutoDrive can hop
+   from one left turn to the next (bends of 30-78°) and go round a small ring back the way it came.
+   This is the risk "The route check" section predicted.
+
+   **Fixing it** belongs to the left-turn work (step 5 below: opposite left turns through one point,
+   and curve sizes that make the left turns cross at more than 80°). Meanwhile a build with an extra
+   route still builds, and the build card marks it under "last build" (decided 2026-10-02). The mark
+   hides after an undo of the build, as the clear card's check does.
 3. Then: two-way roads ending at the mouth, the speed bend and spacing with the gap check, the curve
    ceiling from the paving, opposite left turns through one point, and one undo for clear and build.
 
@@ -317,4 +336,7 @@ branch.
 2. ~~Two junctions close together on one two-way road.~~ Settled 2026-10-02: the road between them stays
    two-way.
 3. ~~The 5-point reach on one-way approaches.~~ Measured 2026-10-02: see "Stopping in time".
+   ~~What a build does when the route check finds an extra route.~~ Decided 2026-10-02: it **builds anyway
+   and the card marks it** ("last build jNN - Route check: N route(s) we did not lay"), until the
+   left-turn work can reshape the turns. Then it may become "refuse and undo".
 4. ~~Through traffic speed at junctions.~~ Decided 2026-10-02: road speed (see Decided).

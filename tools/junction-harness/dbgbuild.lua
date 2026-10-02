@@ -12,6 +12,8 @@
 -- The last line, COUNTS, is one line for a regression to collect.
 LOG_ECHO = false
 local H = dofile("harness.lua")
+-- NOSHARE=1 builds without the shared-crossing step, to see what the rest of the builder does alone.
+if os.getenv("NOSHARE") == "1" then AutoDrive.FLYOVER_JUNCTION_SHARE_CROSSINGS = false end
 local CX, CZ = tonumber(arg[1]), tonumber(arg[2])
 if CX == nil or CZ == nil then
     print("usage: lua dbgbuild.lua X Z [turnRadius]")
@@ -129,10 +131,10 @@ local function uTurnRoutes(newKeys)
             for _, bid in ipairs(a.out or {}) do
                 local b = ADGraphManager:getWayPointById(bid)
                 if b ~= nil and d(b) <= IN then
-                    local seen, stack = {}, { { a, b, false } }
+                    local seen, stack = {}, { { a, b, false, { a, b } } }
                     while #stack > 0 do
                         local top = table.remove(stack)
-                        local prev, cur, usedNew = top[1], top[2], top[3]
+                        local prev, cur, usedNew, path = top[1], top[2], top[3], top[4]
                         local key = prev.id .. ">" .. cur.id
                         if not seen[key] then
                             seen[key] = true
@@ -145,10 +147,26 @@ local function uTurnRoutes(newKeys)
                                             local ex, ez = nx.x - cur.x, nx.z - cur.z
                                             local ix, iz = b.x - a.x, b.z - a.z
                                             local c = (ex * ix + ez * iz) / math.max(1e-9, math.sqrt((ex * ex + ez * ez) * (ix * ix + iz * iz)))
-                                            if c < math.cos(math.rad(150)) then count = count + 1 end
+                                            if c < math.cos(math.rad(150)) then
+                                                count = count + 1
+                                                if os.getenv("SHOWUTURN") == "1" then
+                                                    local parts = {}
+                                                    for _, w in ipairs(path) do
+                                                        local nb = {}
+                                                        local dual = contains(w.out, (path[1] or w).id)
+                                                        parts[#parts + 1] = string.format("%d(%.0f,%.0f)%s%s", w.id, w.x, w.z,
+                                                            (#(w.out or {}) + #(w.incoming or {}) > 2) and "*" or "", newKeys and "" or "")
+                                                    end
+                                                    parts[#parts + 1] = string.format("%d(%.0f,%.0f)", nx.id, nx.x, nx.z)
+                                                    print("  U-turn route: " .. table.concat(parts, " > "))
+                                                end
+                                            end
                                         end
                                     elseif d(nx) < OUT then
-                                        stack[#stack + 1] = { cur, nx, un }
+                                        local np = {}
+                                        for _, w in ipairs(path) do np[#np + 1] = w end
+                                        np[#np + 1] = nx
+                                        stack[#stack + 1] = { cur, nx, un, np }
                                     end
                                 end
                             end
@@ -231,8 +249,46 @@ do
         end
     end
 end
-print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d U-turn route(s) through new links",
-    dualTurns, crossNo, uturns))
-print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d uturn=%d",
+-- RULE: every route AutoDrive could take is one we meant - the BUILDER's own route check.
+local rc = ADFlyoverEditor.junctionLastRouteCheck
+-- What the build card shows (the record the HUD reads through junctionLastBuildShown).
+do
+    local shown = ADFlyoverEditor:junctionLastBuildShown()
+    if shown ~= nil and shown.card ~= nil then
+        print(string.format("card: last build %s", shown.number and string.format("j%02d", shown.number) or "(no number)"))
+        for _, line in ipairs(shown.card) do print("card:   " .. line) end
+    else
+        print("card: (no last build shown)")
+    end
+end
+local extra = rc and #rc.extra or -1
+if rc ~= nil then
+    for _, e in ipairs(rc.extra) do
+        print(string.format("  extra route: lane in at %.1f, %.1f -> lane out at %.1f, %.1f (%s)",
+            e.from.x, e.from.z, e.to.x, e.to.z, e.why))
+        if os.getenv("SHOWPATH") == "1" and e.path then
+            -- * marks a point where paths meet or part; the bend into each point is shown after it.
+            local parts = {}
+            for i, w in ipairs(e.path) do
+                local nb, n = {}, 0
+                for _, id in ipairs(w.out or {}) do if not nb[id] then nb[id] = true n = n + 1 end end
+                for _, id in ipairs(w.incoming or {}) do if not nb[id] then nb[id] = true n = n + 1 end end
+                local b = ""
+                if i > 1 and i < #e.path then
+                    local p, q = e.path[i - 1], e.path[i + 1]
+                    local ux, uz, vx, vz = w.x - p.x, w.z - p.z, q.x - w.x, q.z - w.z
+                    local c = (ux * vx + uz * vz) / math.max(1e-9, math.sqrt((ux * ux + uz * uz) * (vx * vx + vz * vz)))
+                    b = string.format("/%.0f", math.deg(math.acos(math.max(-1, math.min(1, c)))))
+                end
+                parts[#parts + 1] = string.format("(%.0f,%.0f)%s%s", w.x, w.z, n > 2 and "*" or "", b)
+            end
+            print("    path: " .. table.concat(parts, " "))
+        end
+    end
+end
+print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d extra route(s) of %d | (%d long U-turn guesses)",
+    dualTurns, crossNo, extra, rc and rc.routes or 0, uturns))
+local sh = ADFlyoverEditor.junctionLastShared or { joined = 0, shallow = 0 }
+print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    dualTurns, after.teal - before.teal, crossNo, uturns))
+    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow))

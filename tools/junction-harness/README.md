@@ -100,6 +100,19 @@ So earlier figures are not comparable. With the corrected checker:
     75 built, 0 refused, 0 Lua errors | 319 turns laid, 19 refused
     rules: two-way turn links 10 at 9 junctions | crossings without a shared point 1 at 1 | U-turn routes 13 at 8
 
+The U-turn figures above came from a guess in dbgbuild.lua: a route that left the 30 m circle heading
+back the way it came in. Roads that bend or loop just past the junction fooled it. Since 2026-10-02 the
+regression reads the **builder's own route check** instead (`junctionRouteCheck`, the `extra=` and
+`routes=` columns). It counts lane-in/lane-out pairs AutoDrive could drive that were not meant, over
+links the build laid. With step 1, after the merge:
+
+    75 built, 0 refused, 0 Lua errors | 319 turns laid, 19 refused
+    rules: two-way turn links 10 at 9 junctions | crossings without a shared point 1 at 1 | extra routes 27 at 14 (of 432 routes; 4 junctions with no route check)
+
+`NOSHARE=1` builds without the shared crossings: 17 extra routes at 8 junctions. A junction with nothing
+new to lay stops before the route check, and shows as `extra=-1`. `SHOWPATH=1` prints each extra route's
+path, with the bend at every point.
+
 What is left, and why:
 - The one crossing left is j55, a tangle of points a metre apart. The build logs that its crossings did
   not settle.

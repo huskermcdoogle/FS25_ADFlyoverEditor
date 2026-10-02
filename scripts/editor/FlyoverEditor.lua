@@ -10487,8 +10487,10 @@ end
 --   * One crossing is resolved at a time and the search starts again, since every splice changes the
 --     links around it.
 -- Returns how many crossings it joined.
+local jxShallowJoins = 0
 local function junctionShareCrossings(cx, cz, reach)
     if jxBuildNew == nil then return 0 end
+    jxShallowJoins = 0
     -- EDGE only keeps out crossings AT a link's end (two links meeting at a point already share it);
     -- a crossing merely near an end is handled by SNAP, through that end.
     local SNAP, EDGE, MAXH = 0.75, 1e-4, 2.0
@@ -10580,6 +10582,20 @@ local function junctionShareCrossings(cx, cz, reach)
         local L1, L2 = found.L1, found.L2
         local function near(w) return (w.x - found.x) ^ 2 + (w.z - found.z) ^ 2 <= SNAP * SNAP end
         tried[pairKey(L1, L2)] = true
+        -- A crossing at 80 degrees or less lets AutoDrive switch between the two paths here (the route
+        -- check then shows what that opens). Counted, so the build log says how many there were.
+        do
+            local ux, uz = L1.b.x - L1.a.x, L1.b.z - L1.a.z
+            local vx, vz = L2.b.x - L2.a.x, L2.b.z - L2.a.z
+            local nu, nv = math.sqrt(ux * ux + uz * uz), math.sqrt(vx * vx + vz * vz)
+            if nu > 1e-6 and nv > 1e-6 then
+                local ang = math.deg(math.acos(math.max(-1, math.min(1, (ux * vx + uz * vz) / (nu * nv)))))
+                -- A two-way link runs both ways, so either direction can make the shallow side.
+                if ang <= 80 or ((L1.dual or L2.dual) and ang >= 100) then
+                    jxShallowJoins = (jxShallowJoins or 0) + 1
+                end
+            end
+        end
         if near(L2.a) or near(L2.b) then
             splice(L1.a, L1.b, L1.dual, near(L2.a) and L2.a or L2.b)
         elseif near(L1.a) or near(L1.b) then
@@ -10603,6 +10619,94 @@ local function junctionShareCrossings(cx, cz, reach)
     return joined
 end
 
+
+-- THE ROUTE CHECK (docs/junction-tool/06-one-click-build.md, layout rule 7). A shared point lets
+-- AutoDrive switch from one path to another wherever the bend there is 80 degrees or less
+-- (GraphManager.prepareWayPoints), so two paths crossing at a shallow angle can open a route nobody
+-- laid - a U-turn among them. From every lane in, this follows every route AutoDrive could take under
+-- that rule until it reaches a lane out, and compares each lane-in/lane-out pair it finds with the
+-- turns meant to be there: movements that already existed, and those this build laid. Anything else -
+-- a pair skipped as a U-turn, refused as undrivable, or never asked for - is an extra route, but only
+-- when it runs over at least one link this build laid: a route the roads already offered is not the
+-- build's doing.
+-- Returns { routes = <pairs found>, extra = { { from = <in node>, to = <out node>, why = ... } } }.
+local function junctionRouteCheck(jp, placedSet, cx, cz, reach)
+    local ins, outAt = {}, {}
+    local function alive(w) return w ~= nil and w.id ~= nil and ADGraphManager:getWayPointById(w.id) == w end
+    for _, ap in ipairs(jp.approaches or {}) do
+        if alive(ap.wp) then
+            if ap.dir == "in" then ins[#ins + 1] = ap else outAt[ap.wp] = true end
+        end
+    end
+    -- What is meant: every movement that existed, and every one this build laid, by its two nodes.
+    local meant, why = {}, {}
+    local function key(a, b) return tostring(a) .. ">" .. tostring(b) end
+    for _, m in ipairs(jp.movements or {}) do
+        local k = key(m.from.wp, m.to.wp)
+        if m.exists or placedSet[m] then
+            meant[k] = true
+        elseif why[k] == nil then
+            why[k] = (m.refused ~= nil) and ("refused: " .. tostring(m.refused)) or "planned but not laid"
+        end
+    end
+    local R2 = (reach + 10) ^ 2
+    local function inRegion(w) return (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= R2 or outAt[w] ~= nil end
+    local function bend(a, b, c)
+        local ux, uz, vx, vz = b.x - a.x, b.z - a.z, c.x - b.x, c.z - b.z
+        local nu, nv = math.sqrt(ux * ux + uz * uz), math.sqrt(vx * vx + vz * vz)
+        if nu < 1e-6 or nv < 1e-6 then return 0 end
+        return math.deg(math.acos(math.max(-1, math.min(1, (ux * vx + uz * vz) / (nu * nv)))))
+    end
+    local found, nRoutes, extra = {}, 0, {}
+    for _, e in ipairs(ins) do
+        local start = e.wp
+        -- Seeded from every link into the lane's first point, so its first bend is judged too.
+        local stack, seen = {}, {}
+        for _, pid in ipairs(start.incoming or {}) do
+            local p = ADGraphManager:getWayPointById(pid)
+            if p ~= nil then stack[#stack + 1] = { p, start, false, { start } } end
+        end
+        if #stack == 0 then stack[1] = { nil, start, false, { start } } end
+        while #stack > 0 do
+            local top = table.remove(stack)
+            local prev, cur, usedNew, path = top[1], top[2], top[3], top[4]
+            local sk = tostring(prev) .. ">" .. tostring(cur) .. (usedNew and "+" or "")
+            if not seen[sk] then
+                seen[sk] = true
+                if cur ~= start and outAt[cur] then
+                    local k = key(start, cur)
+                    if not found[k] then
+                        found[k] = true
+                        nRoutes = nRoutes + 1
+                    end
+                    if not meant[k] and usedNew and not found["x" .. k] then
+                        found["x" .. k] = true
+                        extra[#extra + 1] = { from = start, to = cur, why = why[k] or "no such turn was planned", path = path }
+                    end
+                else
+                    for _, nid in ipairs(cur.out or {}) do
+                        local nx = ADGraphManager:getWayPointById(nid)
+                        if nx ~= nil and nx ~= prev and inRegion(nx)
+                            and (prev == nil or bend(prev, cur, nx) <= 80) then
+                            local np = {}
+                            for i = 1, #path do np[i] = path[i] end
+                            np[#np + 1] = nx
+                            stack[#stack + 1] = { cur, nx, usedNew or jxIsNewLink(cur, nx), np }
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- In a fixed order, so the log reads the same every run.
+    table.sort(extra, function(p, q)
+        if p.from.x ~= q.from.x then return p.from.x < q.from.x end
+        if p.from.z ~= q.from.z then return p.from.z < q.from.z end
+        if p.to.x ~= q.to.x then return p.to.x < q.to.x end
+        return p.to.z < q.to.z
+    end)
+    return { routes = nRoutes, extra = extra }
+end
 
 -- How far a fork may sit from the middle of its group and still belong to it, for the SELECTION's
 -- fork clusters. Named, and up here, because the registry below has to hold lane ends away from
@@ -22634,7 +22738,8 @@ end
 --- Keep the result for the card, with what the network looked like when the check was made. Every
 --- field is worked out before any is set, so an error part-way leaves the result as it was rather
 --- than half marked: a result with a signature but nothing to compare it with would stop the card.
-function ADFlyoverEditor:junctionCheckKeep(res)
+--- Marks a result with the network it describes. Shared by the clear's check and the build's (below).
+local function jxKeepRecord(self, res)
     if res ~= nil and res.x ~= nil then
         local list = ADGraphManager:getWayPoints()
         local sig = jxCheckSignature(res.x, res.z)
@@ -22643,7 +22748,11 @@ function ADFlyoverEditor:junctionCheckKeep(res)
         res.seenCount, res.shown, res.askedAt = #(list or {}), true, self:nowMs()
         res.sig = sig
     end
-    self.junctionLastCheck = res
+    return res
+end
+
+function ADFlyoverEditor:junctionCheckKeep(res)
+    self.junctionLastCheck = jxKeepRecord(self, res)
 end
 
 function ADFlyoverEditor:junctionClearCheck(ck)
@@ -22694,8 +22803,7 @@ end
 --- itself, not to an undo step: an undo step is a new table after a redo, falls off the 25-step stack
 --- after 25 more edits, and a clear with nothing to cut takes none. The card draws this every frame,
 --- so an error comparing hides the line rather than taking the card down.
-function ADFlyoverEditor:junctionLastCheckShown()
-    local r = self.junctionLastCheck
+local function jxRecordShown(self, r)
     if r == nil or r.sig == nil or r.seen == nil then return r end
     local list = ADGraphManager:getWayPoints()
     local n = #(list or {})
@@ -22707,6 +22815,22 @@ function ADFlyoverEditor:junctionLastCheckShown()
     end
     if r.shown then return r end
     return nil
+end
+
+function ADFlyoverEditor:junctionLastCheckShown()
+    return jxRecordShown(self, self.junctionLastCheck)
+end
+
+--- WHAT THE ROUTE CHECK SAID ABOUT THE LAST BUILD, for the build card: the same record as the clear's
+--- check, kept and hidden the same way (gone after an undo of the build, back after a redo).
+--- Decided 2026-10-02: a build with an extra route still builds, and the card marks it (doc 06, Still
+--- open 3), until the left-turn work can reshape the turns that cause them.
+function ADFlyoverEditor:junctionBuildCheckKeep(res)
+    self.junctionLastBuild = jxKeepRecord(self, res)
+end
+
+function ADFlyoverEditor:junctionLastBuildShown()
+    return jxRecordShown(self, self.junctionLastBuild)
 end
 
 --- WHERE THE ROADS MET BEFORE THE CLEAR, when the one number stands for more than one such place - a
@@ -23444,6 +23568,7 @@ function ADFlyoverEditor:applyJunction()
     -- gate makes the guarantee independent of that reasoning ever being wrong.
     local allowDual = (jp.siteHasTwoWay == true)
     local baseCount = ADGraphManager:getWayPointsCount()
+    local placedSet = {}   -- movements laid by this build, for the route check
     for _, m in ipairs(newMoves) do
         local key = pairKey(m.from.wp.id, m.to.wp.id)
         if dualPairPlaced[key] then
@@ -23467,12 +23592,18 @@ function ADFlyoverEditor:applyJunction()
             end
             if ok then
                 placed = placed + 1
+                placedSet[m] = true
                 if m.rebuild then rebuiltPlaced = rebuiltPlaced + 1 end
             end
             for _, s in ipairs(stubsA) do allStubs[#allStubs + 1] = s end
             for _, s in ipairs(stubsB) do allStubs[#allStubs + 1] = s end
         end
         end
+    end
+
+    -- A mirrored pair folded into one two-way connector was laid by that connector too.
+    for _, m in ipairs(newMoves) do
+        if dualPairPlaced[pairKey(m.from.wp.id, m.to.wp.id)] then placedSet[m] = true end
     end
 
     -- Tripwire for THE invariant, run BEFORE stub deletion renumbers ids: on a one-way site, no node
@@ -23560,10 +23691,44 @@ function ADFlyoverEditor:applyJunction()
     -- Last of all, once the stubs and old debris are gone, so a crossing is never shared with a link
     -- that is about to be deleted.
     local shared = 0
-    tryCall("junction share crossings", function() shared = junctionShareCrossings(cx, cz, radius) end)
+    if AutoDrive.FLYOVER_JUNCTION_SHARE_CROSSINGS ~= false then
+        tryCall("junction share crossings", function() shared = junctionShareCrossings(cx, cz, radius) end)
+    end
     if shared > 0 then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d crossing(s) joined at a shared point, so AutoDrive makes one driver wait there.",
-            shared)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d crossing(s) joined at a shared point, so AutoDrive makes one driver wait there (%d of them at 80 deg or less, where it can also switch paths).",
+            shared, jxShallowJoins)
+    end
+    self.junctionLastShared = { joined = shared, shallow = jxShallowJoins }
+    -- THE ROUTE CHECK, on the junction as built (report only, like the clear's own check).
+    local rc = nil
+    tryCall("junction route check", function() rc = junctionRouteCheck(jp, placedSet, cx, cz, radius) end)
+    self.junctionLastRouteCheck = rc
+    -- The card's record of this build. Built anyway when a route is extra; the card says so.
+    tryCall("junction route check (card)", function()
+        local card
+        if rc == nil then
+            card = { "Route check: could not run - see the log" }
+        elseif #rc.extra == 0 then
+            card = { string.format("Route check: all %d routes as meant", rc.routes) }
+        else
+            card = { string.format("Route check: %d route(s) we did not lay", #rc.extra),
+                     "most likely U-turns - AutoDrive can drive them, see the log" }
+        end
+        self:junctionBuildCheckKeep({ card = card, number = jp.junctionNumber, x = cx, z = cz,
+            extra = rc and #rc.extra or nil })
+    end)
+    if rc ~= nil then
+        if #rc.extra == 0 then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction route check - %d route(s) AutoDrive can take through here, all of them turns we meant.",
+                rc.routes)
+        else
+            Logging.warning("[FlyoverEditor]: junction route check - %d route(s) AutoDrive can take through here that we did not mean to lay:",
+                #rc.extra)
+            for _, e in ipairs(rc.extra) do
+                Logging.warning("[FlyoverEditor]:   from the lane in at %.1f, %.1f to the lane out at %.1f, %.1f (%s).",
+                    e.from.x, e.from.z, e.to.x, e.to.z, e.why)
+            end
+        end
     end
     jxBuildEnd()
     self:invalidateIdReferences()

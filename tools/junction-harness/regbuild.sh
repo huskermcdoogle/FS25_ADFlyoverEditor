@@ -27,9 +27,10 @@ awk -F'|' '
     match(s, /refused=([0-9]+)/, B); rf += B[1]
     match(s, /dual=(-?[0-9]+)/, C); if (C[1] + 0 > 0) { du += C[1]; dj++ }
     match(s, /cross=([0-9]+)/, D); if (D[1] + 0 > 0) { cr += D[1]; cj++ }
-    match(s, /uturn=([0-9]+)/, E); if (E[1] + 0 > 0) { ut += E[1]; uj++ }
+    match(s, /extra=(-?[0-9]+)/, E); if (E[1] + 0 > 0) { ut += E[1]; uj++ }; if (E[1] + 0 < 0) nc++
+    match(s, /routes=([0-9]+)/, F); rt += F[1]
     if ($3 !~ /err=0/) e++ }
   END {
     printf "%d built, %d refused, %d Lua errors | %d turns laid, %d refused\n", n, r + 0, e + 0, nw, rf
-    printf "rules: two-way turn links %d at %d junctions | crossings without a shared point %d at %d | U-turn routes %d at %d\n", du + 0, dj + 0, cr + 0, cj + 0, ut + 0, uj + 0
+    printf "rules: two-way turn links %d at %d junctions | crossings without a shared point %d at %d | extra routes %d at %d (of %d routes; %d junctions with no route check)\n", du + 0, dj + 0, cr + 0, cj + 0, ut + 0, uj + 0, rt + 0, nc + 0
   }' "$OUT"
