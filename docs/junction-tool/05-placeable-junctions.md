@@ -78,12 +78,12 @@ wheels.*
 
 - **Size makes almost no difference.** The 3 m and 6 m pieces drive almost the same line. The truck
   steers at a point about 10 m ahead, so it never sees the small corner shapes.
-- **Right turns:** the truck swings about 3 m wide into the new road's oncoming lane. The trailer's
-  wheels cut the inside corner by up to 4.6 m.
-- **Left turns:** run 2-3 m wide on the far side. The trailer cuts the inside by 3.5-4.5 m.
-- **Turn speed: 12 km/h.** Every turn has a 45° bend somewhere, and that caps the speed. An earlier
-  draft said 21-27 km/h. That came from our twin, which looks only 20 m ahead for bends and so brakes
-  late. AutoDrive 3.0.1.2 looks further ahead (see "How point spacing sets the speed").
+- **Right turns:** the truck swings about 1.3 m wide, its nose 2.7 m, toward the new road's oncoming
+  lane. The trailer's wheels cut the inside corner by up to 5.2 m.
+- **Left turns:** run 1-2 m wide on the far side. The trailer cuts the inside by 4.2-4.5 m.
+- **Turn speed: 10-12 km/h.** Every turn has a 45° bend somewhere, which caps it at 12 km/h, and the
+  wheels near full lock hold most turns at 10. An earlier draft said 21-27 km/h: the first twin looked
+  only 20 m ahead for bends and so braked late.
 - **Straight on:** clean, full speed.
 - **One rig only.** A smaller tractor looks less far ahead (AutoDrive allows down to 2 m), so it would
   follow the corners more closely. Not tested.
@@ -103,16 +103,19 @@ Lanes 6 m apart, our default 12 m curve against the mod:
 
 | | Right turn: curve | Right turn: mod | Left turn: curve | Left turn: mod |
 |---|---|---|---|---|
-| Truck cuts inside the line | 0.7 m | 2.0 m | 0.7 m | 1.3 m |
-| Trailer strays from the line | 1.7 m | 3.3 m | 1.7 m | 2.3 m |
-| Truck swings wide of the line | 2.1 m | 2.7 m | 2.1 m | 2.3 m |
-| Wheels into oncoming lane | 1.5 m | 2.3 m | 0.4 m | 0 |
-| Wheels off a square corner | 2.6 m | 1.3 m | 1.5 m | 1.7 m |
-| Slowest | 39 km/h | 12 km/h | 37 km/h | 12 km/h |
+| Truck cuts inside the line | 1.0 m | 2.6 m | 1.0 m | 1.6 m |
+| Trailer strays from the line | 2.3 m | 3.9 m | 2.3 m | 2.9 m |
+| Truck swings wide of the line | 1.0 m | 1.3 m | 1.0 m | 1.1 m |
+| Wheels into oncoming lane | 0.2 m | 0.9 m | 0.9 m | 0.3 m |
+| Wheels off a square corner | 3.1 m | 1.9 m | 0.2 m | 0.4 m |
+| Slowest | 39 km/h | 10 km/h | 37 km/h | 10 km/h |
+
+*Redone 2026-10-02 with the corrected truck twin (junction-rework a008a46). The first twin swung the
+truck about 1 m wider and cut the trailer in less.*
 
 What it shows:
 
-- **The truck follows a curve.** The trailer strays about half as far. So, unlike the mod, the line we
+- **The truck follows a curve.** The trailer strays about 40% less. So, unlike the mod, the line we
   lay decides where the truck goes. That makes getting the line right worth the effort.
 - **The curve has to fit the road.**
   - With square corners, a right-turn curve bigger than about 1.7 times the lane gap leaves the road
@@ -125,8 +128,8 @@ What it shows:
   pass exactly through the centre. That is one shared point, like the mod's.
 - **AutoDrive barely slows on a smooth curve.** It slows for the bend between neighbouring points, and a
   curve with points 2 m apart has almost none. It takes our 12 m turn at 37-39 km/h. The mod's corners
-  bring it down to 12 km/h. We chose 20-25 km/h (next section).
-- **The truck still swings about 2 m wide** on every curve, at any speed. That comes from how AutoDrive
+  bring it down to 10 km/h. We chose 20-25 km/h (next section).
+- **The truck still swings about 1 m wide** on every curve, at any speed. That comes from how AutoDrive
   steers, so the builder should leave room for it on the outside of each turn.
 
 ## How point spacing sets the speed
@@ -171,8 +174,9 @@ points, and make the **last two pieces** of the curve each turn by the target be
 - Every point stays on the curve, so the shape does not change.
 - The bend sits at the end because AutoDrive only counts bends still ahead of it. At the end, the
   bend holds the speed down all the way round.
-- Tested in the twin with a realistic look-ahead: 8, 10 and 12 m right curves aimed at 20 km/h all took
-  exactly 20 km/h. Left curves aimed at 22, 23 and 25 km/h took exactly those.
+- Tested in the corrected twin: 10 and 12 m right curves aimed at 20 km/h took exactly 20 km/h, and
+  left curves aimed at 22, 23 and 25 km/h took exactly those. An 8 m right curve took 12.4 km/h: that
+  tight, the wheels near full lock slow it further than the bend asks.
 
 Things to know:
 - **It slows down in time.** AutoDrive looks for bends further ahead the faster and heavier it is
@@ -182,9 +186,8 @@ Things to know:
 - **Spacing also changes when drivers notice each other.** The "who waits" check counts points, not
   metres: a driver looks 5 points ahead. At 2 m spacing that is only 10 m; at 5 m it is 25 m. Wider
   spacing inside the junction means drivers spot each other earlier.
-- **AutoDrive only brakes hard once it is more than 6 km/h over the cap.** Below that it lets the
-  speed fall off on its own. The twin does not model this, so real trucks may run a few km/h faster
-  than aimed. Check in game.
+- **AutoDrive's own code only brakes hard once it is more than 6 km/h over the cap,** but that never
+  shows in the recorded drives: the game's speed limiter brakes on any overspeed anyway.
 
 ## Hooking them up today
 

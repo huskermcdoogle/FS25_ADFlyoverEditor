@@ -60,7 +60,7 @@ local function run(D, s, R, turn, vAim, c, scan, decel, extraKmh)
   local path, idx = buildPath(D, s, R, turn, vAim, c)
   local driver = {}
   for k, v in pairs(S.STOCK_DRIVER) do driver[k] = v end
-  driver.speedScanMetres = scan
+  driver.speedScanMetres = (scan ~= "own") and scan or nil
   local st = S.simulate(path, rig, driver, { x = path[1].x, z = 0, heading = math.pi / 2, speed = 40 },
     { speedLimitKmh = 40, dt = 1 / 60, maxTime = 120 })
   for k, step in ipairs(st) do
@@ -85,8 +85,8 @@ for _, case in ipairs({ { "right", 10, 20, 0, "narrow: guard at the mouth" }, { 
                         { "right", 10, 20, 4, "wide, no turn points before the shared point", true } }) do
   local turn, R, vAim, c, label = case[1], case[2], case[3], case[4], case[5]
   SPARSE = case[6]
-  for _, scan in ipairs({ 50 }) do
-    print(string.format("\n== %s turn R=%d aiming %d km/h, %s, bend scan %d m", turn, R, vAim, label, scan))
+  for _, scan in ipairs({ "own" }) do
+    print(string.format("\n== %s turn R=%d aiming %d km/h, %s, bend scan %s", turn, R, vAim, label, (scan == "own") and "the twin's own" or (scan .. " m")))
     print("  split  spacing |  speed when it sees C | front stops at (brake 2.0 / 3.0 / 4.0 m/s2)   | +6 km/h, brake 3.0")
     for _, s in ipairs({ 2, 3, 4, 5 }) do
       for _, D in ipairs({ 5, 10, 15, 20, 25, 30, 40 }) do

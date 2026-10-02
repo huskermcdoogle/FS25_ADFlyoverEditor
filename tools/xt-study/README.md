@@ -13,8 +13,9 @@ FS25_AutoDrive_XT_Intersection pieces. Nothing here loads in game. Python 3 and 
     lua curves.lua ../../scripts/editor <out folder>        # builder-style arcs vs the mod's corners
 
 `curves.lua` writes `curves_results.txt` and four `curve-*.svg` pictures (6 m lanes). Its last
-section re-runs the speed cases with 20, 50 and 100 m bend-scan windows. SweptSim's fixed 20 m comes from
-AutoDrive 3.0.0.8. 3.0.1.2 scans further, so use the 50/100 m rows for speed.
+section re-runs the speed cases with the twin's own bend scan (AutoDrive's: 20 m x mass x speed factor,
+up to 20 points), then with fixed 20, 50 and 100 m windows to bracket it. The first twin used a bare
+20 m, a transcription shortcut rather than AutoDrive 3.0.0.8's behaviour. It was corrected in a008a46.
     lua splitdist.lua ../../scripts/editor                  # how far back a two-way road must split
 
     lua throughdist.lua ../../scripts/editor                # one-way lanes: stopping vs speed and spacing

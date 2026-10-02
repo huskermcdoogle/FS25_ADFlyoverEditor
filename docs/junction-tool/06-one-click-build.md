@@ -59,7 +59,7 @@ From doc 05. Each one is there because of how AutoDrive drives:
 
 - **A real curve,** not a corner. The truck follows a curve, so the curve decides where the wheels go.
 - **The size comes from the paved area at this junction.** It is the largest curve whose line stays on
-  the paving, checked with the truck twin. It must also leave about 2 m spare on the outside, where the
+  the paving, checked with the truck twin. It must also leave about 1 m spare on the outside, where the
   truck swings wide.
 - **The speed comes from one deliberate bend** at the end of each curve. The last two pieces of the
   curve each turn by the bend for the target speed:
@@ -128,7 +128,7 @@ twin showed it fails (`tools/xt-study/splitpair.lua`, `overlap.lua`):
   never checks, and drives in.
 - **Between two close junctions:** a guarded one-way stretch met head-on in most runs beyond 10 m.
   Left two-way: no meetings at 10-40 m.
-- **A wide split** (two lanes at least 6.5 m apart, about 9.5 m of paving) would avoid the narrow
+- **A wide split** (two lanes at least 5.5 m apart, about 8.5 m of paving) would avoid the narrow
   stretch. Two-way roads that wide are rare, so it is not built (`tools/xt-study/twowidth.lua`).
 
 Two AutoDrive behaviours found on the way, which matter anywhere:
@@ -141,7 +141,8 @@ Two AutoDrive behaviours found on the way, which matter anywhere:
 ## Stopping in time (every approach)
 
 Measured 2026-10-02 in the truck twin on one-way lanes (`tools/xt-study/throughdist.lua`). Another
-truck holds a shared point; where does ours stop?
+truck holds a shared point; where does ours stop? A straight road has no bends, so the corrected twin
+gives the same figures.
 
 **AutoDrive only sees a shared point once it is among the truck's next 5 points.** So how far ahead it
 sees is set by the **last four gaps between points** before that shared point, not by any distance
@@ -177,7 +178,8 @@ and it overruns.
 
 **Turning trucks are fine** at their 20-25 km/h, with points 4-5 m apart and no crowding. Measured the
 same way on a truck coming in from a side lane (`tools/xt-study/splitdist.lua`): a 20 m one-way lane
-with points every 4-5 m stops its front about 10 m short of the mouth.
+with points every 4-5 m stops its front about 13 m short of the mouth turning right, and 11 m turning
+left (corrected twin).
 
 What this means for the builder:
 
@@ -215,7 +217,7 @@ What this means for the builder:
 ## Settings
 
 - Target speeds: right turns, and left turns at small and large curves.
-- Spare room on the outside of a turn (default 2 m).
+- Spare room on the outside of a turn (default 1 m).
 - Through roads kept or not (existing setting).
 - Signs as obstacles (existing setting).
 
@@ -285,7 +287,7 @@ branch.
 ## How we test it
 
 - **Offline, on the square X and T sites in the 75-site registry:** run all the checks above. Drive
-  every turn in the truck twin, after its bend scan is brought up to AutoDrive 3.0.1.2.
+  every turn in the truck twin. Its bend scan follows AutoDrive 3.0.1.2 since junction-rework a008a46.
 - **In game:**
   - two trucks meeting at a built X and at a T, to confirm who waits;
   - the turn speeds against their targets;

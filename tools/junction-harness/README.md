@@ -96,6 +96,10 @@ So earlier figures are not comparable. With the corrected checker:
     75 built, 0 refused, 0 Lua errors | 310 turns laid, 17 refused
     rules: two-way turn links 17 at 12 junctions | crossings without a shared point 1 at 1 | U-turn routes 15 at 11
 
+    after merging junction-rework a008a46 (corrected twin, wider road gate) into the new builder:
+    75 built, 0 refused, 0 Lua errors | 319 turns laid, 19 refused
+    rules: two-way turn links 10 at 9 junctions | crossings without a shared point 1 at 1 | U-turn routes 13 at 8
+
 What is left, and why:
 - The one crossing left is j55, a tangle of points a metre apart. The build logs that its crossings did
   not settle.

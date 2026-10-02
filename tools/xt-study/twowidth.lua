@@ -10,7 +10,6 @@ local S = SweptSim
 local rig = S.EXAMPLE_RIG
 local driver = {}
 for k, v in pairs(S.STOCK_DRIVER) do driver[k] = v end
-driver.speedScanMetres = 50
 local MOUTH, TRUCK_LEN, TRAILER_REAR = 6, 18, 2.0     -- waiting rig length; trailer body past its axle
 
 local function arcPath(turn, g, R)

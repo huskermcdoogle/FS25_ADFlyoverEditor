@@ -225,14 +225,15 @@ local function speedArcPath(turn, L, R, v)
   return p
 end
 
--- The twin scans a fixed 20 m for bends (AutoDrive 3.0.0.8). 3.0.1.2 scans 20 m x mass factor (1-3) x
--- speed factor ((km/h + 10) / 20), and never more than 20 points. Bracket it with fixed windows.
+-- AutoDrive (3.0.0.8 and 3.0.1.2 alike) scans 20 m x mass factor (1-3) x speed factor ((km/h + 10) / 20)
+-- for bends, never more than 20 points. The twin does the same ("own"); the fixed windows bracket it.
+-- The first twin used a bare 20 m, which was a transcription shortcut, not an AutoDrive behaviour.
 local baseDriver = drv
-for _, win in ipairs({ 20, 50, 100 }) do
+for _, win in ipairs({ "own", 20, 50, 100 }) do
   drv = {}
   for k, v in pairs(baseDriver) do drv[k] = v end
-  drv.speedScanMetres = win
-  rows[#rows+1] = string.format("-- target speed by one sharpest bend at the end, lanes 6 m apart, bend scan %d m --", win)
+  drv.speedScanMetres = (win ~= "own") and win or nil
+  rows[#rows+1] = string.format("-- target speed by one sharpest bend at the end, lanes 6 m apart, bend scan %s --", (win == "own") and "the twin's own" or (win .. " m"))
   for _, c in ipairs({ { "right", 8, 20 }, { "right", 10, 20 }, { "right", 12, 20 },
                        { "left", 10, 22 }, { "left", 12, 23 }, { "left", 15, 25 } }) do
     run(string.format("R=%d aim %d", c[2], c[3]), speedArcPath(c[1], 6, c[2], c[3]), c[1], 6, false)
