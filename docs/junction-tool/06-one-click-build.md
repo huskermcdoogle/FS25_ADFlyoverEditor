@@ -293,8 +293,58 @@ branch.
    and curve sizes that make the left turns cross at more than 80°). Meanwhile a build with an extra
    route still builds, and the build card marks it under "last build" (decided 2026-10-02). The mark
    hides after an undo of the build, as the clear card's check does.
-3. Then: two-way roads ending at the mouth, the speed bend and spacing with the gap check, the curve
-   ceiling from the paving, opposite left turns through one point, and one undo for clear and build.
+3. **Left turns through the centre: first try failed, switched off** (2026-10-02). The idea came from
+   the mod: every left turn passes through one centre point, heading halfway between its way in and
+   its way out, so left turns cross there 90° apart and AutoDrive cannot hop between them.
+   - **What we tried:** each left turn as two curves (biarcs) meeting at the centre. It is kept behind
+     `AutoDrive.FLYOVER_JUNCTION_LEFTS_THROUGH_CENTRE = true`.
+   - **Result, worse:** extra routes went from 27 to 41-42, and refused turns from 19 to 27-37.
+   - **Why:** forcing a truck-sized curve through one point along a fixed heading bends it into hooks.
+     Those cross other paths at shallow angles, which opens new places to hop. The mod gets away with
+     straight diagonals only because its pieces are tiny.
+   - **Bigger curves do not fix it either** (offline, 2026-10-02):
+
+     | Turn radius setting | Extra routes | Refused turns |
+     |---|---|---|
+     | 8 m | 21 at 15 | 17 |
+     | 12 m (default) | 26 at 14 | 20 |
+     | 16 m | 46 at 20 | 29 |
+     | 20 m | 41 at 16 | 39 |
+
+     With the builder's real curves, a bigger radius moves the tie-ins back, so a turn sweeps across
+     more of the junction and crosses more paths. The square-junction crossing-angle study does not hold
+     on real junctions.
+   - **Where the switches happen** (each laid point now carries its turn's label; `HOPS=1` in
+     dbgbuild). Of the 26 extra routes, switches with a bend over 20°:
+     - left turn → left turn: 33 switches, in 13 routes, bends 27-78° (median 55°);
+     - lane joint → left turn: 13, in 9 routes; left turn → lane joint: 9, in 7 routes;
+     - anything with a right turn: 3 or fewer routes each.
+
+     So the cause is left turns crossing other paths, mostly other left turns, at less than 80°.
+   - **Proposed fix, at the crossing itself:** where two paths cross at under about 85°, give the NEW
+     path(s) a small S-bend in the last metre or two either side of the shared point. They then meet at
+     over 80°, and AutoDrive refuses to switch there.
+     - It shifts the line well under a metre; the truck looks 10 m ahead anyway.
+     - Road lanes are never bent.
+     - The small bends also slow trucks a little, which suits the 20-25 km/h turn speeds.
+     - Not built yet.
+4. **Two-way roads to the mouth:** built 2026-10-02.
+   - **No more two-way turns.** Each direction gets its own one-way turn
+     (`FLYOVER_JUNCTION_DUAL_TURNS = true` brings the old behaviour back).
+   - **One tie-in point per two-way road.** Where a two-way road ends at the junction, every turn into
+     or out of it ties in at one point on it, the turn-radius setting back from its end.
+     - Not at its very end: that sits at the other road's edge, where turns had no room to curve. Tying
+       there refused 7 more turns.
+     - Switched by `FLYOVER_JUNCTION_TWO_WAY_AT_MOUTH`.
+   - **A fix on the way:** the builder's "no two-way link on a one-way site" safety check was keyed to
+     "two-way turns allowed". With those switched off, it started "repairing" the two-way roads
+     themselves where turns spliced into them. It is now keyed to whether the site has a two-way road.
+   - **The route check** no longer counts a route the planner skipped as a duplicate of a closer lane
+     ("lane"), or one between two separate crossings ("far").
+   - Build regression: two-way turn links 10 → **0**; turns laid 319 → 318 and refused 19 → 20 (j2);
+     extra routes 26 at 14 (16 at 8 without the shared crossings). Identical on repeat.
+5. Then: left turns (offline study first, see 3), the speed bend and spacing with the gap check, the
+   curve ceiling from the paving, and one undo for clear and build.
 
 ## Not in version 1
 

@@ -109,7 +109,16 @@ links the build laid. With step 1, after the merge:
     75 built, 0 refused, 0 Lua errors | 319 turns laid, 19 refused
     rules: two-way turn links 10 at 9 junctions | crossings without a shared point 1 at 1 | extra routes 27 at 14 (of 432 routes; 4 junctions with no route check)
 
-`NOSHARE=1` builds without the shared crossings: 17 extra routes at 8 junctions. A junction with nothing
+`NOSHARE=1` builds without the shared crossings: 17 extra routes at 8 junctions.
+
+After two-way roads to the mouth (2026-10-02), identical on repeat:
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 1 at 1 | extra routes 26 at 14 (of 439 routes; 4 junctions with no route check)
+
+The two-way column now counts only links whose point has BOTH its links two-way, which a two-way turn
+has. A two-way road's new end, where a turn joins it, has one two-way link and one one-way, and is not
+counted. `SHOWDUAL=1` lists them. A junction with nothing
 new to lay stops before the route check, and shows as `extra=-1`. `SHOWPATH=1` prints each extra route's
 path, with the bend at every point.
 

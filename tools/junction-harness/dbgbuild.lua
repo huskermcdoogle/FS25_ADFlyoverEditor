@@ -19,7 +19,7 @@ if CX == nil or CZ == nil then
     print("usage: lua dbgbuild.lua X Z [turnRadius]")
     os.exit(1)
 end
-local TURN = tonumber(arg[3] or "") or 12
+local TURN = tonumber(arg[3] or "") or tonumber(os.getenv("TURNR") or "") or 12
 local R = 40
 
 local function contains(t, v)
@@ -244,7 +244,25 @@ do
                     local p = linksBefore[kk]
                     if p[1] == w or p[2] == w then wasThere = true break end
                 end
-                if n == 2 and not wasThere then dualTurns = dualTurns + 1 break end
+                -- A point along a two-way TURN has both its links two-way; the new end of a two-way road
+                -- where a turn joins it has one two-way link (the road) and one one-way (the turn).
+                local bothDual = true
+                for _, id in ipairs(w.out or {}) do if not contains(w.incoming, id) then bothDual = false end end
+                for _, id in ipairs(w.incoming or {}) do if not contains(w.out, id) then bothDual = false end end
+                if n == 2 and not wasThere and bothDual then
+                    dualTurns = dualTurns + 1
+                    if os.getenv("SHOWDUAL") == "1" then
+                        local function nbs(p)
+                            local s = {}
+                            for _, id in ipairs(p.out or {}) do s[#s + 1] = "out" .. id end
+                            for _, id in ipairs(p.incoming or {}) do s[#s + 1] = "in" .. id end
+                            return table.concat(s, ",")
+                        end
+                        print(string.format("  two-way link %d(%.1f,%.1f)[%s] <-> %d(%.1f,%.1f)[%s]",
+                            a.id, a.x, a.z, nbs(a), b.id, b.x, b.z, nbs(b)))
+                    end
+                    break
+                end
             end
         end
     end
@@ -266,6 +284,40 @@ if rc ~= nil then
     for _, e in ipairs(rc.extra) do
         print(string.format("  extra route: lane in at %.1f, %.1f -> lane out at %.1f, %.1f (%s)",
             e.from.x, e.from.z, e.to.x, e.to.z, e.why))
+        -- HOPS=1: where along the route AutoDrive switches from one path to another, and between what.
+        -- Each link is named by the turn it belongs to (L90, R85, S = straight-ish connector, from the
+        -- build's own labels), "road" for a link the build did not lay, and the switch is a point where
+        -- that name changes, with the bend there.
+        if os.getenv("HOPS") == "1" and e.path then
+            local labels = ADFlyoverEditor.junctionLastNodeLabels or {}
+            local function kind(l) return (l == nil) and "road" or l end
+            local function linkName(p, q)
+                local lp, lq = labels[p], labels[q]
+                for _, l in ipairs({ lp, lq }) do
+                    if l ~= nil and l ~= "x" and l ~= "tie" then return l end
+                end
+                if lp == nil and lq == nil then return "road" end
+                -- both ends are tie-ins or shared crossings: a short joining piece
+                return "joint"
+            end
+            local story, lastName = {}, nil
+            for i = 1, #e.path - 1 do
+                local name = linkName(e.path[i], e.path[i + 1])
+                if name ~= lastName then
+                    if lastName ~= nil and i > 1 then
+                        local p, w, q = e.path[i - 1], e.path[i], e.path[i + 1]
+                        local ux, uz, vx, vz = w.x - p.x, w.z - p.z, q.x - w.x, q.z - w.z
+                        local c = (ux * vx + uz * vz) / math.max(1e-9, math.sqrt((ux * ux + uz * uz) * (vx * vx + vz * vz)))
+                        local bend = math.deg(math.acos(math.max(-1, math.min(1, c))))
+                        story[#story + 1] = string.format("[%s %.0f]", kind(labels[w]), bend)
+                        print(string.format("HOP %s -> %s at a %s point, bend %.0f", lastName, name, kind(labels[w]), bend))
+                    end
+                    story[#story + 1] = name
+                    lastName = name
+                end
+            end
+            print("    story: " .. table.concat(story, " > "))
+        end
         if os.getenv("SHOWPATH") == "1" and e.path then
             -- * marks a point where paths meet or part; the bend into each point is shown after it.
             local parts = {}

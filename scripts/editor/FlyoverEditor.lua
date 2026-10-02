@@ -10088,8 +10088,18 @@ local jxBuildNew = nil
 --- the same as "is new". Nil outside a build.
 local jxBuildOldLinks = nil
 
+--- The one point every left turn of the current build runs through (see junctionTrackConnector's
+--- left turns through the centre). Made by the first left turn laid, reused by the rest.
+local jxCentreNode = nil
+--- What each point the current build laid is part of, for the harness's route study: "L90" / "R90"
+--- (a left or right turn of that many degrees), "tie" (a tie-in spliced into a lane), "x" (a shared
+--- crossing). jxLayLabel is the label of the turn being laid at the moment. Report only.
+local jxNodeLabel, jxLayLabel = nil, nil
+
 local function jxBuildBegin()
     jxBuildNew, jxBuildOldLinks = {}, {}
+    jxCentreNode = nil
+    jxNodeLabel, jxLayLabel = {}, nil
     for _, a in pairs(ADGraphManager:getWayPoints()) do
         if a ~= nil and a.id ~= nil and #(a.out or {}) > 0 then
             local s = {}
@@ -10102,7 +10112,23 @@ local function jxBuildBegin()
     end
 end
 
-local function jxBuildEnd() jxBuildNew, jxBuildOldLinks = nil, nil end
+local function jxBuildEnd()
+    jxBuildNew, jxBuildOldLinks, jxCentreNode = nil, nil, nil
+    jxNodeLabel, jxLayLabel = nil, nil
+end
+
+--- "L90" / "R45" for a connector: which way it turns and by how much, from its first and last legs.
+local function jxTurnLabel(c)
+    local pts = c.points or {}
+    if #pts == 0 then return "S" end
+    local ux, uz = pts[1].x - c.ax, pts[1].z - c.az
+    local vx, vz = c.bx - pts[#pts].x, c.bz - pts[#pts].z
+    local nu, nv = math.sqrt(ux * ux + uz * uz), math.sqrt(vx * vx + vz * vz)
+    if nu < 1e-6 or nv < 1e-6 then return "S" end
+    local ang = math.deg(math.acos(math.max(-1, math.min(1, (ux * vx + uz * vz) / (nu * nv)))))
+    if ang < 20 then return "S" end
+    return string.format("%s%.0f", ((ux * vz - uz * vx) < 0) and "L" or "R", ang)
+end
 
 local function jxIsNewLink(a, b)
     if jxBuildOldLinks == nil then return false end
@@ -10113,6 +10139,7 @@ end
 local function jxNoteAdded(w)
     if w ~= nil then jxNote("add", w) end
     if w ~= nil and jxBuildNew ~= nil then jxBuildNew[w] = true end
+    if w ~= nil and jxNodeLabel ~= nil and jxNodeLabel[w] == nil then jxNodeLabel[w] = jxLayLabel or "tie" end
 end
 
 --- A point the clear has just moved, recorded where it now stands.
@@ -10464,10 +10491,20 @@ end
 local function junctionLayChain(NA, points, NB, dual, flags)
     local prev = NA
     for _, p in ipairs(points) do
-        local wp = ADFlyoverRecordWayPoint(p.x, p.y, p.z, false, false, false, 0,
-            flags or AutoDrive.FLAG_NONE, false)
-        jxNoteAdded(wp)
-        if wp == nil then return false end
+        local wp
+        -- A left turn's centre point is the SAME point for every left turn of this build: that one
+        -- shared point is what makes AutoDrive take left turns one at a time, and the 90 degrees
+        -- between their headings there is what stops it hopping from one to another.
+        if p.centre and jxCentreNode ~= nil and jxCentreNode.id ~= nil
+            and ADGraphManager:getWayPointById(jxCentreNode.id) == jxCentreNode then
+            wp = jxCentreNode
+        else
+            wp = ADFlyoverRecordWayPoint(p.x, p.y, p.z, false, false, false, 0,
+                flags or AutoDrive.FLAG_NONE, false)
+            jxNoteAdded(wp)
+            if wp == nil then return false end
+            if p.centre and jxBuildNew ~= nil then jxCentreNode = wp end
+        end
         junctionConnect(prev, wp, dual)
         prev = wp
     end
@@ -10605,7 +10642,9 @@ local function junctionShareCrossings(cx, cz, reach)
             local road = L2.new and L1 or L2
             local N = ADFlyoverRecordWayPoint(found.x, found.y, found.z, false, false, false, 0,
                 road.a.flags or AutoDrive.FLAG_NONE, false)
+            jxLayLabel = "x"
             jxNoteAdded(N)
+            jxLayLabel = nil
             if N == nil then break end
             splice(L1.a, L1.b, L1.dual, N)
             splice(L2.a, L2.b, L2.dual, N)
@@ -10643,7 +10682,10 @@ local function junctionRouteCheck(jp, placedSet, cx, cz, reach)
     local function key(a, b) return tostring(a) .. ">" .. tostring(b) end
     for _, m in ipairs(jp.movements or {}) do
         local k = key(m.from.wp, m.to.wp)
-        if m.exists or placedSet[m] then
+        -- "lane": skipped only because a closer lane makes the same turn - driving it is the same turn.
+        -- "far": the two lanes belong to two separate crossings in one scope - a route between them runs
+        -- through both junctions, and is neither junction's turn to judge.
+        if m.exists or placedSet[m] or m.refused == "lane" or m.refused == "far" then
             meant[k] = true
         elseif why[k] == nil then
             why[k] = (m.refused ~= nil) and ("refused: " .. tostring(m.refused)) or "planned but not laid"
@@ -13713,6 +13755,22 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- this filter only needs to catch geometry that is not a turn at all.
     local uTurn = math.rad(170)
     local logSite = (self.junctionArmed ~= nil)
+    -- Where every left turn of a BUILD meets the others: where the lanes cross, else the site. Read by
+    -- junctionTrackConnector during the solve below, and dropped once the solve is done.
+    -- OFF by default (2026-10-02): a first try made the route check WORSE - 27 extra routes became
+    -- 41-42 and refused turns 19 became 27-37 across the 75 registry junctions. Forcing truck-sized
+    -- curves through one point along a fixed heading bends them into hooks that cross other paths at
+    -- shallow angles. Kept behind the switch for the offline geometry work that has to come first.
+    if not clearMode and AutoDrive.FLYOVER_JUNCTION_LEFTS_THROUGH_CENTRE == true then
+        if lockedCrossing ~= nil and AutoDrive.FLYOVER_JUNCTION_LEFT_CENTRE_AT_LANES == true then
+            self.junctionLeftCentre = { x = lockedCrossing.mergedX or lockedCrossing.x,
+                z = lockedCrossing.mergedZ or lockedCrossing.z }
+        else
+            self.junctionLeftCentre = { x = cx, z = cz }
+        end
+    else
+        self.junctionLeftCentre = nil
+    end
     for _, e in ipairs(approaches) do
         if e.dir == "in" then
             for _, x in ipairs(approaches) do
@@ -14684,6 +14742,50 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     -- turn radius comparable to the scope radius). There the walk clamps at the boundary instead.
     local pax, pay, paz, tadx, tadz = junctionWalkBack(chainA, iA, t - sA, extend and deadEndA)
     local pbx, pby, pbz, tbdx, tbdz = junctionWalkBack(chainB, iB, t - sB, extend and deadEndB)
+    -- A TWO-WAY ROAD STAYS TWO-WAY RIGHT UP TO THE MOUTH (docs/junction-tool/06-one-click-build.md,
+    -- "Two-way roads"). Where a lane is two-way and ends at this junction, every turn into or out of it
+    -- starts or ends at ONE point on it, instead of each at its own tie-in. A truck leaving the
+    -- junction then checks the whole two-way road ahead from there, and waits off the road.
+    -- The point is the turn-radius setting back from the road's end, not the end itself: the end sits
+    -- at the other road's edge, where a turn has no room left to curve (tying turns at the very end
+    -- refused 7 more of them across the registry, "tight"). The same distance for every turn of the
+    -- road puts them all on the same spot, and the placement then ties them all to one point there.
+    if AutoDrive.FLYOVER_JUNCTION_TWO_WAY_AT_MOUTH ~= false then
+        local back = self.junctionTurnRadius or 12
+        local function twoWayMouth(chain, deadEnd)
+            if not deadEnd or #chain < 2 then return nil end
+            local tip, before = chain[#chain], chain[#chain - 1]
+            if tip.virtual or before.virtual then return nil end
+            if not (table.contains(tip.out or {}, before.id) and table.contains(before.out or {}, tip.id)) then
+                return nil
+            end
+            -- Walk back from the end along the chain, as far as the chain stays two-way.
+            local left = back
+            for i = #chain, 2, -1 do
+                local a, b = chain[i], chain[i - 1]
+                if b.virtual or not (table.contains(a.out or {}, b.id) and table.contains(b.out or {}, a.id)) then
+                    break
+                end
+                local dx, dz = a.x - b.x, a.z - b.z
+                local seg = math.sqrt(dx * dx + dz * dz)
+                if seg > 1e-6 then
+                    if seg >= left then
+                        local f = left / seg
+                        return a.x - dx * f, (a.y or 0) - ((a.y or 0) - (b.y or 0)) * f, a.z - dz * f, dx / seg, dz / seg
+                    end
+                    left = left - seg
+                end
+            end
+            -- The two-way stretch is shorter than that: its far end, then.
+            return nil
+        end
+        -- Both chains run from the edge of the work region in towards the junction, so the direction
+        -- along the chain is the way in for A, and the reverse of the way out for B.
+        local mx, my, mz, mdx, mdz = twoWayMouth(chainA, deadEndA)
+        if mx ~= nil then pax, pay, paz, tadx, tadz = mx, my, mz, mdx, mdz end
+        mx, my, mz, mdx, mdz = twoWayMouth(chainB, deadEndB)
+        if mx ~= nil then pbx, pby, pbz, tbdx, tbdz = mx, my, mz, mdx, mdz end
+    end
     -- A leaves along its chain direction (toward the interior); B is arrived at heading out (negated).
     -- BOTH curve engines solve and the SHORTER path wins. This is not indecision - it is the guard
     -- against Dubins' degenerate configuration: two poses on the SAME tangent circle, which is
@@ -14707,6 +14809,40 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     end
     local bi = bia
     if dub ~= nil and pathLen(dub) < pathLen(bia) - 0.1 then bi = dub end
+    -- LEFT TURNS THROUGH THE CENTRE (docs/junction-tool/06-one-click-build.md, opposite left turns;
+    -- the route check found why). A left turn is laid as two curves meeting at the junction's centre,
+    -- arriving there along the line halfway between its way in and its way out. Every left turn then
+    -- crosses the others at that one shared point, 90 degrees apart on a square junction - more than
+    -- AutoDrive's 80, so it can never hop from one left turn to another and drive round in a ring (the
+    -- U-turns the route check found). It also makes opposite left turns go one at a time.
+    -- Only for a left turn of roughly 90 degrees (55-125); anything else keeps its plain curve, and so
+    -- does a left turn whose centre does not lie ahead of its way in and behind its way out.
+    local lc = self.junctionLeftCentre
+    if lc ~= nil and bi ~= nil then
+        local ux, uz = tadx, tadz                   -- heading on the way in
+        local vx, vz = -tbdx, -tbdz                 -- heading on the way out
+        local turnCross = ux * vz - uz * vx          -- negative: a left turn (x east, z south)
+        local turnAng = math.deg(math.acos(math.max(-1, math.min(1, ux * vx + uz * vz))))
+        if turnCross < 0 and turnAng >= 55 and turnAng <= 125 then
+            local hx, hz = ux + vx, uz + vz
+            local hn = math.sqrt(hx * hx + hz * hz)
+            local ahead = (lc.x - pax) * ux + (lc.z - paz) * uz
+            local behind = (pbx - lc.x) * vx + (pbz - lc.z) * vz
+            if hn > 1e-6 and ahead > 1 and behind > 1 then
+                hx, hz = hx / hn, hz / hn
+                local cy = (pay + pby) / 2
+                local in1 = junctionBiarc(pax, paz, ux, uz, lc.x, lc.z, hx, hz, pay, cy)
+                local in2 = junctionBiarc(lc.x, lc.z, hx, hz, pbx, pbz, vx, vz, cy, pby)
+                if in1 ~= nil and in2 ~= nil then
+                    local pts = {}
+                    for _, p in ipairs(in1.points) do pts[#pts + 1] = p end
+                    pts[#pts + 1] = { x = lc.x, y = cy, z = lc.z, centre = true }
+                    for _, p in ipairs(in2.points) do pts[#pts + 1] = p end
+                    bi = { points = pts, minRadius = math.min(in1.minRadius, in2.minRadius), throughCentre = true }
+                end
+            end
+        end
+    end
     if bi == nil then
         roadNote(string.format("nofit:%d_%d", fromAp.wp.id, toAp.wp.id),
             "junction - entry id=%d -> exit id=%d: neither curve engine fit (delta %.0f deg, t %.1f, sA %.1f, sB %.1f, tie-ins %.1f m apart) - refused.",
@@ -14714,7 +14850,8 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
         return nil, "nofit"
     end
     return { ax = pax, ay = pay, az = paz, bx = pbx, by = pby, bz = pbz,
-        points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd) }
+        points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd),
+        throughCentre = bi.throughCentre }
 end
 
 --- How many of a connector's corridor samples leave the road surface, and how many were taken. Every
@@ -23566,7 +23703,10 @@ function ADFlyoverEditor:applyJunction()
     -- (jp.siteHasTwoWay, established structurally while scoping), then NOTHING placed here may be
     -- two-way. The mirror-pair signal cannot fire without two-way boundary nodes anyway, but this
     -- gate makes the guarantee independent of that reasoning ever being wrong.
-    local allowDual = (jp.siteHasTwoWay == true)
+    -- No two-way TURNS since 2026-10-02 (doc 06, "Two-way roads"): on a two-way link AutoDrive stops
+    -- checking for traffic, so each direction gets its own one-way turn, tied in at the two-way road's
+    -- mouth (see junctionTrackConnector). FLYOVER_JUNCTION_DUAL_TURNS = true brings the old behaviour back.
+    local allowDual = (jp.siteHasTwoWay == true) and AutoDrive.FLYOVER_JUNCTION_DUAL_TURNS == true
     local baseCount = ADGraphManager:getWayPointsCount()
     local placedSet = {}   -- movements laid by this build, for the route check
     for _, m in ipairs(newMoves) do
@@ -23582,9 +23722,11 @@ function ADFlyoverEditor:applyJunction()
             -- Our own deterministic chain-layer - NOT createSplineConnection, whose links go through
             -- toggleConnectionBetween (a flip, not a set). Flags match the joined (exit) road and are
             -- set at creation.
+            jxLayLabel = jxTurnLabel(c)
             local ok, laid = tryCall("junction lay chain", function()
                 return junctionLayChain(NA, c.points, NB, dual, exitFlags)
             end)
+            jxLayLabel = nil
             ok = ok and laid == true
             if ok and dual then
                 dualPlaced = dualPlaced + 1
@@ -23612,7 +23754,10 @@ function ADFlyoverEditor:applyJunction()
     -- real bug, and it says so loudly instead of quietly shipping a blue link. Where the intended
     -- direction is provable (both nodes new: createSplineConnection appends interior points in travel
     -- order, so lower id -> higher id IS the travel direction), it also repairs on the spot.
-    if not allowDual then
+    -- Keyed to the SITE, not to allowDual: since two-way turns stopped (2026-10-02) allowDual is false on
+    -- every site, and a tie-in spliced into a two-way road rightly keeps that road two-way. Keyed to
+    -- allowDual, this "repaired" those road links into one-way ones.
+    if jp.siteHasTwoWay ~= true then
         local total = ADGraphManager:getWayPointsCount()
         for id = baseCount + 1, total do
             local n = ADGraphManager:getWayPointById(id)
@@ -23730,6 +23875,7 @@ function ADFlyoverEditor:applyJunction()
             end
         end
     end
+    self.junctionLastNodeLabels = jxNodeLabel   -- for the harness's route study; nothing in game reads it
     jxBuildEnd()
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
