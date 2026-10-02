@@ -354,6 +354,10 @@ AutoDrive.FLYOVER_JUNCTION_WORK_REACH = 60
 AutoDrive.FLYOVER_JUNCTION_OWN_TOLERANCE = 5
 AutoDrive.FLYOVER_JUNCTION_SWEEP_MAX = 3.0
 AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP = 1.0
+-- The swept road gate probes the design rig's body edges (tow corners, trailer sides) once per THIS
+-- MANY METRES of the tow's travel through a turn - by distance, so how fast the twin takes the
+-- corner cannot change the share of probes that land off the road.
+AutoDrive.FLYOVER_JUNCTION_SWEPT_PROBE_STEP = 1.0
 
 -- After a clear, a lane that dead-ends at the junction is trimmed back or run forward so it stops
 -- THIS FAR FROM THE EDGE OF THE ROAD IT MEETS, and any points added get the lane's own spacing.
@@ -13837,6 +13841,8 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
     -- turn's doing; whatever happens on the plain straights before and after is not.
     local started, ended = false, false
     local edges = {}          -- body-edge points to probe the road surface at
+    local probeStep2 = (AutoDrive.FLYOVER_JUNCTION_SWEPT_PROBE_STEP or 1.0) ^ 2
+    local probeX, probeZ = nil, nil   -- the tow's rear axle at the last set of edge probes
     local towTrack, trlTrack = {}, {}  -- axle tracks to probe obstacles along (within the window)
     local halfTow, halfTrl = (rig.towWidth or 2.5) / 2, (rig.trailerWidth or 2.5) / 2
     -- Past the exit tie-in B, in the direction of travel out of the connector.
@@ -13916,18 +13922,26 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
                 towTrack[#towTrack + 1] = { x = s.x, z = s.z }
                 trlTrack[#trlTrack + 1] = { x = s.ax, z = s.az }
                 -- Body edges: rear and front axle of the tow, and the trailer axle, each +-half width
-                -- along the body's LEFT vector (cos h, -sin h).
-                local lx, lz = math.cos(s.heading), -math.sin(s.heading)
-                local fx, fz = math.sin(s.heading), math.cos(s.heading)
-                local frx, frz = s.x + fx * rig.wheelbase, s.z + fz * rig.wheelbase
-                local tlx, tlz = math.cos(s.trailerHeading), -math.sin(s.trailerHeading)
-                edges[#edges + 1] = { x = s.x + lx * halfTow, z = s.z + lz * halfTow }
-                edges[#edges + 1] = { x = s.x - lx * halfTow, z = s.z - lz * halfTow }
-                edges[#edges + 1] = { x = frx + lx * halfTow, z = frz + lz * halfTow }
-                edges[#edges + 1] = { x = frx - lx * halfTow, z = frz - lz * halfTow }
-                if (rig.trailerLength or 0) > 0 then
-                    edges[#edges + 1] = { x = s.ax + tlx * halfTrl, z = s.az + tlz * halfTrl }
-                    edges[#edges + 1] = { x = s.ax - tlx * halfTrl, z = s.az - tlz * halfTrl }
+                -- along the body's LEFT vector (cos h, -sin h) - all of them, once per probe step of
+                -- the tow's travel. Per METRE, not per simulation step: the gate judges the share of
+                -- probes off the road, and per step a slow corner got more of the probes than a fast
+                -- one (j74's 5894 -> 9857 changed radius over it when the twin learned to slow
+                -- down). The per-step version also kept every 18th point of sets of six, so it only
+                -- ever probed the tow's rear-left corner - never the trailer, never the right side.
+                if probeX == nil or (s.x - probeX) ^ 2 + (s.z - probeZ) ^ 2 >= probeStep2 then
+                    probeX, probeZ = s.x, s.z
+                    local lx, lz = math.cos(s.heading), -math.sin(s.heading)
+                    local fx, fz = math.sin(s.heading), math.cos(s.heading)
+                    local frx, frz = s.x + fx * rig.wheelbase, s.z + fz * rig.wheelbase
+                    local tlx, tlz = math.cos(s.trailerHeading), -math.sin(s.trailerHeading)
+                    edges[#edges + 1] = { x = s.x + lx * halfTow, z = s.z + lz * halfTow }
+                    edges[#edges + 1] = { x = s.x - lx * halfTow, z = s.z - lz * halfTow }
+                    edges[#edges + 1] = { x = frx + lx * halfTow, z = frz + lz * halfTow }
+                    edges[#edges + 1] = { x = frx - lx * halfTow, z = frz - lz * halfTow }
+                    if (rig.trailerLength or 0) > 0 then
+                        edges[#edges + 1] = { x = s.ax + tlx * halfTrl, z = s.az + tlz * halfTrl }
+                        edges[#edges + 1] = { x = s.ax - tlx * halfTrl, z = s.az - tlz * halfTrl }
+                    end
                 end
             end
         end
@@ -13939,7 +13953,8 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
         tow[#tow + 1] = { x = s.x, z = s.z }
         trailer[#trailer + 1] = { x = s.ax, z = s.az }
     end
-    -- Thin the probe sets the same way: a probe every ~0.5 m of travel is plenty for a raycast.
+    -- Thin the obstacle tracks the same way: a probe every ~0.5-1 m of travel is plenty for an
+    -- overlap test. (The edges are already spaced by distance, above.)
     local function thin(pts, every)
         local out = {}
         for k = 1, #pts, every do out[#out + 1] = pts[k] end
@@ -13947,7 +13962,7 @@ function ADFlyoverEditor:junctionSweptPredict(fromAp, toAp, c, cx, cz, radius, r
         return out
     end
     return { tow = tow, trailer = trailer, trailerIn = trailerIn, towIn = towIn, trailerOut = trailerOut,
-             leftTurn = leftTurn, edges = thin(edges, 6 * 3), towTrack = thin(towTrack, 6), trlTrack = thin(trlTrack, 6) }
+             leftTurn = leftTurn, edges = edges, towTrack = thin(towTrack, 6), trlTrack = thin(trlTrack, 6) }
 end
 
 --- Do the design rig's BODY EDGES leave the road during the turn? Same tolerance rule as the

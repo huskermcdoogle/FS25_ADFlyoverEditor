@@ -365,7 +365,7 @@ over it. Mean speed error, recorded vs twin: `clean90` 10.1 → 5.9 km/h, `loopt
   `getSpeedLimitBySteeringAngle` tests `deg(|rotatedTime|) > 0.95 × deg(maxRotation)`, reading
   rotatedTime as radians, so on the Transtar (maxRotation 45°, lock 1.18) it fires at rotatedTime
   0.746 - 63% of lock - not at 95%. The recording holds 10 km/h exactly while rot > 0.746. With that
-  rule (tried, not yet in the twin) c1 is 10.0, c2 21.4, and the clean90 error 5.0 km/h.
+  rule (now in the twin - see the follow-up below) c1 is 10.0, c2 21.4, and the clean90 error 5.0 km/h.
 - **The other low speeds are arrivals.** Once the destination is nearer than the scan reaches,
   AutoDrive holds the limit near `max(8, 2 + metres left)` km/h. Modelled as `opts.routeEnds`, for
   replays only - a preview's run-out is not a destination. With it the second clean90 piece matches
@@ -380,7 +380,29 @@ over it. Mean speed error, recorded vs twin: `clean90` 10.1 → 5.9 km/h, `loopt
 - **The outside swing is still over-predicted**, by 0.5-0.8 m at the rear axle on every clean90 corner.
   The preset rig has no `steerLimitDeg`, so it steers with the generic 60° where the captured Transtar
   has 45° (`maxRotation`). With 45° the swing turns into a ~0.4 m under-prediction and the gentle
-  corners cut ~0.4 m too far inside. Still open.
+  corners cut ~0.4 m too far inside. The preset now has the 45° (follow-up below); the remaining
+  ~0.4 m either way is still open.
+
+**Follow-up (2026-10-02): three fixes from the re-check.**
+
+1. **Lock clamp as AutoDrive tests it** (`SweptSim.simulate`): `deg(|rotatedTime|) > 0.95 ×` the
+   rig's steering limit. It only bites with a real limit - with the generic 60° it fires at
+   rotatedTime 0.995 and clean90 is unchanged - so:
+2. **The preset has the Transtar's 45°** (`EXAMPLE_RIG.steerLimitDeg`), as a capture records it.
+   Mean speed error with both: clean90 5.9 → 5.0 km/h, looptest 6.9 → 3.5, clip1 2.0 → 1.9.
+3. **The swept road gate probes by distance, and every body edge.** `junctionSweptPredict` kept every
+   18th point of sets of six, so the gate had only ever probed the tow's **rear-left** corner -
+   never the trailer, never the right side (the "samples both sides of the tow" above was the
+   intent, not the code). Now all six edges, once per `FLYOVER_JUNCTION_SWEPT_PROBE_STEP` (1 m) of
+   travel, so the corner speed cannot shift the off-road share either.
+
+Across the 75 registry junctions (`sweptreg.sh`, real ground) 13 of 281 turns change: six take a
+1 m sweep, one no longer needs one, three are laid 1-2 m tighter, j24's 9175 → 1522 is laid (was
+refused, trailer off the road) and j59's 5279 → 5241 is refused (was laid). Laid 179, refused 102,
+as before. j59 shows what the full probe set exposes: its "turn" is a 2-3 point link, and the
+window also covers ~30 m of the existing lane either side, along which the truck's right-hand
+edges sit off the asphalt 40% of the time and its left never. The gate is judging the LANE there,
+not the turn - a lane laid along a road edge gets a turn refused. Open.
 
 **Calibration loop.** For each class: simulate → record → compare (max lateral error of the tow and
 trailer lines, and the cut-in depth at entry/exit). Tune the profile's effective look-ahead and

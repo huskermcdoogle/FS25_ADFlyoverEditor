@@ -21,7 +21,8 @@ Model, transcribed rather than approximated:
     rotatedTime/maxRotTime of full lock.
   * speed: ADDrivePathModule:getMaxSpeedForAngle over the next 20 points, within the scan distance
     getCurrentLookAheadDistance gives for the rig's mass and speed, times cornerSpeed, and 10 km/h
-    whenever the wheels are past 95% lock (getSpeedLimitBySteeringAngle). Recomputed every 4 frames.
+    once rotatedTime, read as radians, passes 95% of the vehicle's maxRotation
+    (getSpeedLimitBySteeringAngle). Recomputed every 4 frames.
   * tow: kinematic bicycle on the rear axle. Trailer: single-pivot tractrix from the hitch; the
     hitch offset is SIGNED (negative = behind the rear axle, a drawbar) so the drawbar's swing-out
     falls out of the same equation.
@@ -47,7 +48,7 @@ S.STOCK_DRIVER = {
     speedScanMetres = nil,
     capEverySec = 4 / 60,      -- the caps are recomputed every PERF_FRAMES_HIGH (4) frames, at 60 fps
     cornerSpeed = 1.0,         -- the cornerSpeed setting
-    lockSpeedKmh = 10,         -- getSpeedLimitBySteeringAngle past 95% lock
+    lockSpeedKmh = 10,         -- getSpeedLimitBySteeringAngle (the lock test is in simulate)
     accel = 1.2,               -- m/s^2 toward the limit (motor model - calibration item)
     decel = 2.5,
     --- km/h for the sharpest angle ahead: ADDrivePathModule:getMaxSpeedForAngle.
@@ -86,13 +87,19 @@ S.STOCK_DRIVER = {
 --- totalMass (tonnes) is the semi LOADED - the slowest it will take a bend, so the most it cuts in:
 --- Transtar 4.3 t + trailer 6.9 t + 59.4 m3 of wheat at 0.78 t/m3 (46.3 t), from the game's own
 --- vehicle and fill-type files. It is also what a rig with no measured mass is given.
+--- steerLimitDeg is the Transtar's maxRotation, 45 deg, as the capture records it: the preset was
+--- missing it and steered and slowed with the generic 60. Replayed on clean90.xml it took the two
+--- tight corners at 16 and 31 km/h (recorded 10.3 and 15) and swung its rear axle 0.5-0.8 m wider
+--- than the truck on every corner. With 45: 10.0 and 21 km/h, and the swing ~0.4 m narrower than
+--- recorded - while the gentle corners now cut ~0.4 m too far INSIDE, the safe side for the
+--- inside-clearance gates.
 S.EXAMPLE_RIG = {
     name = "Transtar II + SKS 30/1050 (preset)",
     wheelbase = 5.84, steerNodeOffset = 0.66, minTurnRadius = 6.26, maxRotTime = 1.18,
     lookAhead = 10.32, minDistance = 5.9,
     hitchOffset = 0.93, trailerLength = 7.08,
     towWidth = 2.7, trailerWidth = 2.6,
-    totalMass = 57.5,
+    totalMass = 57.5, steerLimitDeg = 45,
 }
 
 local function dist2d(ax, az, bx, bz)
@@ -265,7 +272,16 @@ function S.simulate(path, rig, driver, start, opts)
                     capLimit = math.max(math.min(8, 2 + left) / 3.6, math.min(capLimit, math.max(8, 2 + left) / 3.6))
                 end
             end
-            if math.abs(s) > 0.95 then capLimit = math.min(capLimit, driver.lockSpeedKmh / 3.6) end
+            -- The lock clamp, getSpeedLimitBySteeringAngle: deg(|rotatedTime|) > 0.95 x maxAngle, with
+            -- maxAngle the same steering limit the steering law uses (deg(maxRotation), else 60).
+            -- rotatedTime is read as RADIANS there, not as a share of full lock: on the Transtar
+            -- (maxRotation 45 deg, lock 1.18) it fires at rotatedTime 0.746 - 63% of lock - and
+            -- clean90.xml holds 10 km/h exactly while it is past that. (The first twin used 95% of
+            -- lock and took clean90's first corner at 16 km/h, against 10.3 recorded.)
+            local lockDeg = rig.steerLimitDeg or driver.steerLimitDeg
+            if math.deg(math.abs(s) * (rig.maxRotTime or 1)) > 0.95 * lockDeg then
+                capLimit = math.min(capLimit, driver.lockSpeedKmh / 3.6)
+            end
         end
         local limit = capLimit
         if v < limit then v = math.min(limit, v + driver.accel * dt)

@@ -177,6 +177,15 @@ for _, pc in ipairs(pieces) do
         local lo2 = first
         local inC, c = false, nil
         local sumErr, n = 0, 0
+        local function closeCorner(note)
+            inC = false
+            if c.k1 - c.k0 >= 8 then
+                emit("  corner %4d-%4d %s | slowest km/h: rec %5.1f twin %5.1f (cap %s) | rear axle in/out m: rec %.2f/%.2f twin %.2f/%.2f | peak rot %.2f%s%s",
+                    c.k0, c.k1, c.side > 0 and "L" or "R", c.recMin, c.simMin,
+                    c.simCap < 1e9 and string.format("%4.1f", c.simCap) or "   -",
+                    c.recIn, c.recOut, c.simIn, c.simOut, c.recRot, c.recRot > 0.746 and " LOCK" or "", note or "")
+            end
+        end
         for k = pc.from, pc.to do
             local s = rec[k]
             local p
@@ -201,15 +210,10 @@ for _, pc in ipairs(pieces) do
                     c.recIn, c.recOut = math.max(c.recIn, ro), math.max(c.recOut, -ro)
                     c.simIn, c.simOut = math.max(c.simIn, so), math.max(c.simOut, -so)
                 end
-                if inC and (not turned or k == pc.to) then
-                    inC = false
-                    if c.k1 - c.k0 >= 8 then
-                        emit("  corner %4d-%4d %s | slowest km/h: rec %5.1f twin %5.1f (cap %s) | rear axle in/out m: rec %.2f/%.2f twin %.2f/%.2f | peak rot %.2f%s",
-                            c.k0, c.k1, c.side > 0 and "L" or "R", c.recMin, c.simMin,
-                            c.simCap < 1e9 and string.format("%4.1f", c.simCap) or "   -",
-                            c.recIn, c.recOut, c.simIn, c.simOut, c.recRot, c.recRot > 0.746 and " LOCK" or "")
-                    end
-                end
+                if inC and (not turned or k == pc.to) then closeCorner() end
+            elseif inC then
+                -- The twin's run ended before the truck got here (it finished the line sooner).
+                closeCorner(" - twin's run ended inside this corner")
             end
         end
         if n > 0 then
