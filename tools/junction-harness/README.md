@@ -78,10 +78,33 @@ picker:
 - Exported fresh from the save, the picker finds all 8 within 2.4 m of their registry positions.
 
 Baseline on the save's own network (export it with `export_graph.py` and point `GRAPH=` at it),
-identical on two runs:
+identical on two runs.
 
+The checker was corrected 2026-10-02 in three ways:
+- links are keyed by their point tables, not ids (removing a point renumbers the rest, which made old
+  links look new);
+- a two-way road split where a turn crosses it no longer counts as a two-way turn;
+- crossings more than 2 m apart in height are bridges, not crossings.
+
+So earlier figures are not comparable. With the corrected checker:
+
+    today's builder (1caa96e):
     75 built, 0 refused, 0 Lua errors | 310 turns laid, 17 refused
-    rules: new two-way links 7 at 6 junctions | crossings without a shared point 293 at 66 | U-turn routes 11 at 8
+    rules: two-way turn links 13 at 10 junctions | crossings without a shared point 284 at 66 | U-turn routes 10 at 7
+
+    with shared crossings (step 1 of the new builder):
+    75 built, 0 refused, 0 Lua errors | 310 turns laid, 17 refused
+    rules: two-way turn links 17 at 12 junctions | crossings without a shared point 1 at 1 | U-turn routes 15 at 11
+
+What is left, and why:
+- The one crossing left is j55, a tangle of points a metre apart. The build logs that its crossings did
+  not settle.
+- Two-way turn links rise only because a shared crossing splits a two-way turn in two. Those turns go in
+  a later step (two-way roads end at the mouth).
+- The U-turn routes rise because shared points give AutoDrive more places to switch paths. The route
+  check deals with them next.
+
+To compare against an older builder, point `FE_SRC=` at a saved copy of it.
 
 The crossings and U-turns are expected: today's builder ties each turn in on its own and adds no shared
 points. They are what the new builder must bring to 0.

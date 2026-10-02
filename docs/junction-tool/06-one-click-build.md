@@ -261,6 +261,20 @@ branch.
 - **A build entry in the offline harness, and a build regression.** Today the harness can only run the
   clear (`harness.lua` `M.apply`), so building has no offline test at all.
 
+## Build progress
+
+1. **Shared points where paths cross:** built 2026-10-02 (`junctionShareCrossings` in
+   `FlyoverEditor.lua`). It runs as the last step of a build:
+   - every place a new link crosses another link gets one point that both run through;
+   - a crossing within 0.75 m of an existing point uses that point;
+   - links more than 2 m apart in height are left alone, since that is a bridge.
+
+   Build regression: crossings without a shared point fell from 284 at 66 junctions to 1, at j55, a
+   tangle of points a metre apart, which the build logs.
+2. **Next:** the route check. Shared points raised the U-turn routes from 10 to 15, as expected.
+3. Then: two-way roads ending at the mouth, the speed bend and spacing with the gap check, the curve
+   ceiling from the paving, opposite left turns through one point, and one undo for clear and build.
+
 ## Not in version 1
 
 - Skew T, Y and corner T.

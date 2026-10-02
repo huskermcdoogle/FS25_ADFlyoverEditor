@@ -31,5 +31,5 @@ awk -F'|' '
     if ($3 !~ /err=0/) e++ }
   END {
     printf "%d built, %d refused, %d Lua errors | %d turns laid, %d refused\n", n, r + 0, e + 0, nw, rf
-    printf "rules: new two-way links %d at %d junctions | crossings without a shared point %d at %d | U-turn routes %d at %d\n", du + 0, dj + 0, cr + 0, cj + 0, ut + 0, uj + 0
+    printf "rules: two-way turn links %d at %d junctions | crossings without a shared point %d at %d | U-turn routes %d at %d\n", du + 0, dj + 0, cr + 0, cj + 0, ut + 0, uj + 0
   }' "$OUT"

@@ -9931,8 +9931,40 @@ local function jxNote(op, a, b, why)
 end
 
 --- A point the clear has just laid. Nil-safe, so it can follow any creation call unguarded.
+--- The points the current BUILD has created, as a set of point tables (ids shift when stubs are
+--- removed, tables do not). Nil outside a build. Filled here so every way a build adds a point -
+--- laying a turn, splicing a tie-in, sharing a crossing - is counted without each having to remember.
+local jxBuildNew = nil
+--- Every link that existed when the current build started, as oldLinks[from][to] = true on point
+--- tables. A build can lay a turn straight between two existing points, so "has a new end" is not
+--- the same as "is new". Nil outside a build.
+local jxBuildOldLinks = nil
+
+local function jxBuildBegin()
+    jxBuildNew, jxBuildOldLinks = {}, {}
+    for _, a in pairs(ADGraphManager:getWayPoints()) do
+        if a ~= nil and a.id ~= nil and #(a.out or {}) > 0 then
+            local s = {}
+            for _, bid in ipairs(a.out) do
+                local b = ADGraphManager:getWayPointById(bid)
+                if b ~= nil then s[b] = true end
+            end
+            jxBuildOldLinks[a] = s
+        end
+    end
+end
+
+local function jxBuildEnd() jxBuildNew, jxBuildOldLinks = nil, nil end
+
+local function jxIsNewLink(a, b)
+    if jxBuildOldLinks == nil then return false end
+    local s = jxBuildOldLinks[a]
+    return s == nil or s[b] ~= true
+end
+
 local function jxNoteAdded(w)
     if w ~= nil then jxNote("add", w) end
+    if w ~= nil and jxBuildNew ~= nil then jxBuildNew[w] = true end
 end
 
 --- A point the clear has just moved, recorded where it now stands.
@@ -10291,6 +10323,134 @@ local function junctionLayChain(NA, points, NB, dual, flags)
     end
     junctionConnect(prev, NB, dual)
     return true
+end
+
+-- EVERY CROSSING IS A SHARED POINT (docs/junction-tool/06-one-click-build.md, layout rule 1).
+-- AutoDrive only makes a driver wait where two routes share a point (CollisionDetectionModule:
+-- detectAdTrafficOnRoute matches point ids), so two paths that cross in open space are invisible to
+-- it. After a build has laid its turns, every place where one of its new links crosses another link
+-- near the junction gets one point that both links run through.
+--   * A crossing within SNAP of an existing end of either link reuses that point instead of stacking
+--     a new one beside it.
+--   * Links more than 2 m apart in height where they cross are left alone: a road over a bridge is
+--     not a crossing.
+--   * One crossing is resolved at a time and the search starts again, since every splice changes the
+--     links around it.
+-- Returns how many crossings it joined.
+local function junctionShareCrossings(cx, cz, reach)
+    if jxBuildNew == nil then return 0 end
+    -- EDGE only keeps out crossings AT a link's end (two links meeting at a point already share it);
+    -- a crossing merely near an end is handled by SNAP, through that end.
+    local SNAP, EDGE, MAXH = 0.75, 1e-4, 2.0
+    -- Where to look: the junction's own circle, widened to take in every point the build added (a
+    -- turn's tie-in can land well up a road), plus a margin for the links running on from there.
+    local R2 = (reach + 15) ^ 2
+    local minX, maxX, minZ, maxZ = cx, cx, cz, cz
+    for w in pairs(jxBuildNew) do
+        if w.x ~= nil then
+            minX, maxX = math.min(minX, w.x), math.max(maxX, w.x)
+            minZ, maxZ = math.min(minZ, w.z), math.max(maxZ, w.z)
+        end
+    end
+    minX, maxX, minZ, maxZ = minX - 20, maxX + 20, minZ - 20, maxZ + 20
+    local function inRegion(w)
+        return (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= R2
+            or (w.x >= minX and w.x <= maxX and w.z >= minZ and w.z <= maxZ)
+    end
+    local function splice(a, b, dual, N)
+        junctionDisconnect(a, b)
+        junctionConnect(a, N, dual)
+        junctionConnect(N, b, dual)
+    end
+    local joined = 0
+    -- A pair of links met before is not joined again: in a tangle of points a metre apart, running one
+    -- link through an existing point can make new links that cross the same pair again, and the
+    -- search would go round in circles. Such a site is left with the crossing, and said so.
+    local tried = {}
+    local function pairKey(L1, L2)
+        return tostring(L1.a) .. tostring(L1.b) .. "|" .. tostring(L2.a) .. tostring(L2.b)
+    end
+    local settled = false
+    for _ = 1, 400 do
+        -- Every link with both ends in the region, a two-way link once.
+        local links = {}
+        for _, a in pairs(ADGraphManager:getWayPoints()) do
+            if a ~= nil and a.id ~= nil and inRegion(a) then
+                for _, bid in ipairs(a.out or {}) do
+                    local b = ADGraphManager:getWayPointById(bid)
+                    if b ~= nil and b ~= a and inRegion(b) then
+                        local dual = table.contains(b.out or {}, a.id)
+                        if not dual or a.id < b.id then
+                            links[#links + 1] = { a = a, b = b, dual = dual,
+                                new = jxIsNewLink(a, b) or (dual and jxIsNewLink(b, a)) }
+                        end
+                    end
+                end
+            end
+        end
+        -- In a fixed order, so the same network always shares the same crossings first.
+        table.sort(links, function(p, q)
+            if p.a.x ~= q.a.x then return p.a.x < q.a.x end
+            if p.a.z ~= q.a.z then return p.a.z < q.a.z end
+            if p.b.x ~= q.b.x then return p.b.x < q.b.x end
+            return p.b.z < q.b.z
+        end)
+        local found = nil
+        for i = 1, #links do
+            local L1 = links[i]
+            if L1.new then
+                for j = 1, #links do
+                    local L2 = links[j]
+                    if j ~= i and L1.a ~= L2.a and L1.a ~= L2.b and L1.b ~= L2.a and L1.b ~= L2.b
+                        and not tried[pairKey(L1, L2)] then
+                        local ax, az, bx, bz = L1.a.x, L1.a.z, L1.b.x, L1.b.z
+                        local qx, qz, rx, rz = L2.a.x, L2.a.z, L2.b.x, L2.b.z
+                        local den = (bx - ax) * (rz - qz) - (bz - az) * (rx - qx)
+                        if math.abs(den) > 1e-9 then
+                            local t = ((qx - ax) * (rz - qz) - (qz - az) * (rx - qx)) / den
+                            local u = ((qx - ax) * (bz - az) - (qz - az) * (bx - ax)) / den
+                            if t > EDGE and t < 1 - EDGE and u > EDGE and u < 1 - EDGE then
+                                local y1 = (L1.a.y or 0) + ((L1.b.y or 0) - (L1.a.y or 0)) * t
+                                local y2 = (L2.a.y or 0) + ((L2.b.y or 0) - (L2.a.y or 0)) * u
+                                if math.abs(y1 - y2) <= MAXH then
+                                    found = { L1 = L1, L2 = L2, x = ax + t * (bx - ax), z = az + t * (bz - az), y = (y1 + y2) / 2 }
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if found ~= nil then break end
+        end
+        if found == nil then
+            settled = true
+            break
+        end
+        local L1, L2 = found.L1, found.L2
+        local function near(w) return (w.x - found.x) ^ 2 + (w.z - found.z) ^ 2 <= SNAP * SNAP end
+        tried[pairKey(L1, L2)] = true
+        if near(L2.a) or near(L2.b) then
+            splice(L1.a, L1.b, L1.dual, near(L2.a) and L2.a or L2.b)
+        elseif near(L1.a) or near(L1.b) then
+            splice(L2.a, L2.b, L2.dual, near(L1.a) and L1.a or L1.b)
+        else
+            -- The existing road's flags, so a crossing point on it keeps the road's priority.
+            local road = L2.new and L1 or L2
+            local N = ADFlyoverRecordWayPoint(found.x, found.y, found.z, false, false, false, 0,
+                road.a.flags or AutoDrive.FLAG_NONE, false)
+            jxNoteAdded(N)
+            if N == nil then break end
+            splice(L1.a, L1.b, L1.dual, N)
+            splice(L2.a, L2.b, L2.dual, N)
+        end
+        joined = joined + 1
+    end
+    if not settled then
+        Logging.warning("[FlyoverEditor]: junction - the crossings here did not settle after %d joins (a tangle of points too close together); some may be left without a shared point.",
+            joined)
+    end
+    return joined
 end
 
 
@@ -22559,6 +22719,7 @@ function ADFlyoverEditor:applyJunction()
     end
 
     ADEditorHistory:snapshot("junction")
+    jxBuildBegin()
     -- The WORK region, not the search circle: tie-ins and kickouts land wherever the geometry puts
     -- them on the tracks, which is routinely outside the circle that merely found those tracks.
     local cx, cz, radius = jp.cx, jp.cz, (jp.workRadius or jp.radius)
@@ -22720,6 +22881,15 @@ function ADFlyoverEditor:applyJunction()
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction placed %d connector(s) (%d dual, %d rebuilt over old ones), consumed %d stub point(s).",
         placed, dualPlaced, rebuiltPlaced, #allStubs)
+    -- Last of all, once the stubs and old debris are gone, so a crossing is never shared with a link
+    -- that is about to be deleted.
+    local shared = 0
+    tryCall("junction share crossings", function() shared = junctionShareCrossings(cx, cz, radius) end)
+    if shared > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d crossing(s) joined at a shared point, so AutoDrive makes one driver wait there.",
+            shared)
+    end
+    jxBuildEnd()
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
     self:debugCaptureEnd(cap)

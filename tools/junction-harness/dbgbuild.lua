@@ -56,14 +56,16 @@ local function survey()
     return s
 end
 
--- Every link with both ends within R, keyed "from>to".
+-- Every link with both ends within R, keyed by the two POINT TABLES, not their ids: removing a point
+-- renumbers every point after it, so an id key makes old links look new after a build.
+local function linkKey(p, q) return tostring(p) .. ">" .. tostring(q) end
 local function linkSet()
     local s = {}
     for _, p in pairs(ADGraphManager:getWayPoints()) do
         if p ~= nil and p.id ~= nil and (p.x - CX) ^ 2 + (p.z - CZ) ^ 2 <= R * R then
             for _, o in ipairs(p.out or {}) do
                 local q = ADGraphManager:getWayPointById(o)
-                if q ~= nil and (q.x - CX) ^ 2 + (q.z - CZ) ^ 2 <= R * R then s[p.id .. ">" .. q.id] = { p, q } end
+                if q ~= nil and (q.x - CX) ^ 2 + (q.z - CZ) ^ 2 <= R * R then s[linkKey(p, q)] = { p, q } end
             end
         end
     end
@@ -76,7 +78,7 @@ local function crossingsWithoutPoint(links, newKeys)
     local list = {}
     for k, l in pairs(links) do
         local a, b = l[1], l[2]
-        if not links[b.id .. ">" .. a.id] or a.id < b.id then list[#list + 1] = { k = k, a = a, b = b } end
+        if not links[linkKey(b, a)] or a.id < b.id then list[#list + 1] = { k = k, a = a, b = b } end
     end
     local n = 0
     for i = 1, #list do
@@ -89,7 +91,19 @@ local function crossingsWithoutPoint(links, newKeys)
                 if math.abs(den) > 1e-9 then
                     local t = ((cx - ax) * (dz - cz) - (cz - az) * (dx - cx)) / den
                     local u = ((cx - ax) * (bz - az) - (cz - az) * (bx - ax)) / den
-                    if t > 0.02 and t < 0.98 and u > 0.02 and u < 0.98 then n = n + 1 end
+                    -- More than 2 m apart in height is a bridge, not a crossing (as the builder judges it).
+                    local hy1 = (L1.a.y or 0) + ((L1.b.y or 0) - (L1.a.y or 0)) * t
+                    local hy2 = (L2.a.y or 0) + ((L2.b.y or 0) - (L2.a.y or 0)) * u
+                    if t > 0.02 and t < 0.98 and u > 0.02 and u < 0.98 and math.abs(hy1 - hy2) <= 2.0 then
+                        n = n + 1
+                        if os.getenv("SHOWCROSS") == "1" then
+                            local px, pz = ax + t * (bx - ax), az + t * (bz - az)
+                            print(string.format("  crossing at %.1f, %.1f (%.1f m from the site): %s%s, %s%s | heights %.1f / %.1f",
+                                px, pz, math.sqrt((px - CX) ^ 2 + (pz - CZ) ^ 2),
+                                L1.a.id .. ">" .. L1.b.id, newKeys[L1.k] and " (new)" or "", L2.a.id .. ">" .. L2.b.id, newKeys[L2.k] and " (new)" or "",
+                                (L1.a.y or 0) + ((L1.b.y or 0) - (L1.a.y or 0)) * t, (L2.a.y or 0) + ((L2.b.y or 0) - (L2.a.y or 0)) * u))
+                        end
+                    end
                 end
             end
         end
@@ -125,7 +139,7 @@ local function uTurnRoutes(newKeys)
                             for _, nid in ipairs(cur.out or {}) do
                                 local nx = ADGraphManager:getWayPointById(nid)
                                 if nx ~= nil and nx ~= prev and bend(prev, cur, nx) <= 80 then
-                                    local un = usedNew or newKeys[cur.id .. ">" .. nx.id] ~= nil
+                                    local un = usedNew or newKeys[linkKey(cur, nx)] ~= nil
                                     if d(nx) > IN then
                                         if un and bend(a, b, nx) >= 0 then
                                             local ex, ez = nx.x - cur.x, nx.z - cur.z
@@ -193,8 +207,32 @@ local crossNo = crossingsWithoutPoint(linksAfter, newKeys)
 local uturns = uTurnRoutes(newKeys)
 print(string.format("points %d -> %d | links %d -> %d | two-way links %d -> %d | teal dots %d -> %d",
     before.points, after.points, before.links, after.links, before.dual, after.dual, before.teal, after.teal))
-print(string.format("rules: %d new two-way link(s) | %d crossing(s) without a shared point | %d U-turn route(s) through new links",
-    after.dual - before.dual, crossNo, uturns))
+-- RULE: no two-way TURNS. A two-way link counts when one of its ends is a new point with exactly two
+-- neighbours - a point along a new turn. A two-way road split where a turn crosses it is still the
+-- road, and is not counted.
+local dualTurns = 0
+do
+    local newPts = {}
+    for k in pairs(newKeys) do
+        local l = linksAfter[k]
+        local a, b = l[1], l[2]
+        if contains(b.out, a.id) and a.id < b.id then
+            for _, w in ipairs({ a, b }) do
+                local nb, n = {}, 0
+                for _, id in ipairs(w.out or {}) do if not nb[id] then nb[id] = true n = n + 1 end end
+                for _, id in ipairs(w.incoming or {}) do if not nb[id] then nb[id] = true n = n + 1 end end
+                local wasThere = false
+                for kk in pairs(linksBefore) do
+                    local p = linksBefore[kk]
+                    if p[1] == w or p[2] == w then wasThere = true break end
+                end
+                if n == 2 and not wasThere then dualTurns = dualTurns + 1 break end
+            end
+        end
+    end
+end
+print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d U-turn route(s) through new links",
+    dualTurns, crossNo, uturns))
 print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d uturn=%d",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    after.dual - before.dual, after.teal - before.teal, crossNo, uturns))
+    dualTurns, after.teal - before.teal, crossNo, uturns))
