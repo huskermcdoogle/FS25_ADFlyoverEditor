@@ -91,6 +91,30 @@ Reading a join line:
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
 
+## Loop order: SHUFFLE and one junction after another
+
+A clear renumbers the points above every one it removes, and a set keyed by point ids (or
+by the points themselves) comes back from `pairs()` in an order set by those numbers (or by
+memory). Wherever that order reached a choice, clearing one junction changed the clear of
+its neighbour: clearing 30 and then 39 cut 39's road from the south. The editor now walks
+such sets by place (`jxByPlace` in FlyoverEditor.lua). Two tests keep it that way:
+
+    SHUFFLE=7 bash reg75.sh TAG            # any script: pairs() in a random order, fixed by the seed
+    bash seqreg.sh TAG                     # clear A, then B, for every pair within 90 m
+
+- `SHUFFLE=<seed>` (harness.lua loads `shuffle.lua`) walks every `pairs()` in a random
+  order. Results must be byte-identical to a run without it, for any seed. A difference
+  is a choice that depends on loop order.
+- `seqreg.sh` clears junction A, then B, and compares B's result with B cleared on the
+  fresh network, both through modes. It skips 67 and 68 (test junk) and the already
+  cleared 69-75 (`SKIP=`); `NEAR=` sets the 90 m. `dbgseq.lua` prints each run by place,
+  not by point number (`TOOK`, kept `ROUTE`s, the check's `COUNTS`, every `EDIT`), so two
+  runs diff line for line. `seq<TAG>_1.txt` / `_0.txt` give one line per pair, `same` or
+  `DIFFERS`, with how close A's own edits came to B's centre. Where A's edits reach B's
+  roads, B cannot come out as on a fresh network (A shortened a road B keeps, say), so a
+  difference there is not a fault in itself. Where A's edits stay clear of B, B must
+  match. Run it again with `SHUFFLE=7`: every file must be identical.
+
 ## Real ground (TERRAIN=1)
 
 By default the harness sees road everywhere, flat ground at height 0, no fields and no

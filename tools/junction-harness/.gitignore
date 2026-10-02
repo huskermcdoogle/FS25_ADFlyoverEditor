@@ -2,6 +2,8 @@
 graph_data.lua
 graph_*.lua
 reg*_*.txt
+seq*_*.txt
+seq*/
 captest/
 captures*/
 *.zip

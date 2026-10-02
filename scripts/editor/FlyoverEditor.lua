@@ -9821,6 +9821,58 @@ local function junctionBiarc(p0x, p0z, t0x, t0z, p1x, p1z, t1x, t1z, y0, y1)
     return { points = pts, minRadius = math.min(r1, r2), jx = jx, jz = jz }
 end
 
+--- A SET WALKED IN THE SAME ORDER EVERY TIME: by place on the map. pairs() over a set keyed by
+--- point id comes back in an order set by the ids, and one keyed by the points themselves in an
+--- order set by where they lie in memory. Every clear renumbers the points above each one it
+--- removes, so clearing one junction changed the order at its neighbours - and wherever that order
+--- picked a lane, a group's leader or the first of a list, the neighbour's clear came out
+--- differently (clearing 30 and then 39 cut 39's road from the south). Keys are points or point
+--- ids; each is placed by x, then z, then height, and two points on one spot by id. Any other key
+--- (a string) sorts as itself after the points. Use in place of pairs() wherever the order can
+--- reach a result; counting, summing and building another set need no order and keep pairs().
+local function jxPlaceOf(k, v)
+    if type(k) == "table" and k.x ~= nil then return k end
+    if type(k) == "number" then
+        if type(v) == "table" and v.x ~= nil and v.id == k then return v end
+        return ADGraphManager:getWayPointById(k)
+    end
+    return nil
+end
+local function jxBeforeInPlace(a, b)
+    if a.x ~= b.x then return a.x < b.x end
+    if a.z ~= b.z then return a.z < b.z end
+    if (a.y or 0) ~= (b.y or 0) then return (a.y or 0) < (b.y or 0) end
+    return (a.id or 0) < (b.id or 0)
+end
+local function jxByPlace(t)
+    local keys, at = {}, {}
+    for k, v in pairs(t) do
+        keys[#keys + 1] = k
+        at[k] = jxPlaceOf(k, v) or false
+    end
+    table.sort(keys, function(a, b)
+        local pa, pb = at[a], at[b]
+        if pa and pb then
+            if pa ~= pb then return jxBeforeInPlace(pa, pb) end
+            return tostring(a) < tostring(b)
+        end
+        if pa then return true end
+        if pb then return false end
+        if type(a) == type(b) and (type(a) == "string" or type(a) == "number") then return a < b end
+        return tostring(a) < tostring(b)
+    end)
+    -- A key emptied while the walk is under way is skipped, as pairs() would.
+    local i = 0
+    return function()
+        while true do
+            i = i + 1
+            local k = keys[i]
+            if k == nil then return nil end
+            if t[k] ~= nil then return k, t[k] end
+        end
+    end
+end
+
 --- How far a way on from a fork has TURNED by the time it next meets something, in radians.
 ---
 --- The branch is followed from `first`, straightest way on at each node, until it reaches the next
@@ -10619,7 +10671,7 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
         local arms = {}
         for _, f in ipairs(best.nodes) do
             local nb = neighbours(f)
-            for id in pairs(nb) do
+            for id in jxByPlace(nb) do
                 if not inCluster[id] then
                     local w = ADGraphManager:getWayPointById(id)
                     -- a way on that is one of this junction's own connectors is not an arm of it
@@ -10635,7 +10687,7 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                             local cnb, cdeg = neighbours(cur)
                             if cdeg >= 3 then hitFork = true break end
                             local nxt = nil
-                            for nid in pairs(cnb) do
+                            for nid in jxByPlace(cnb) do
                                 if not seen[nid] then nxt = ADGraphManager:getWayPointById(nid) break end
                             end
                             if nxt == nil then break end
@@ -11537,7 +11589,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- scope is an entry, one going OUT is an exit; a two-way lane yields both. Anchored at the inside
     -- boundary node; bearing is the direction of travel (atan2(dx, dz), the convention FS bearings use).
     local raw = {}
-    for _, wp in pairs(inside) do
+    for _, wp in jxByPlace(inside) do
         for _, tid in pairs(wp.out or {}) do
             if inside[tid] == nil then
                 local t = ADGraphManager:getWayPointById(tid)
@@ -11589,7 +11641,7 @@ function ADFlyoverEditor:updateJunctionPreview()
             end
             return false
         end
-        for _, wp in pairs(inside) do
+        for _, wp in jxByPlace(inside) do
             local nOut, nIn = #(wp.out or {}), #(wp.incoming or {})
             if nOut == 0 and nIn == 1 and stubInto(wp, "incoming") then
                 local p = ADGraphManager:getWayPointById(wp.incoming[1])
@@ -12840,7 +12892,7 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
         local reach2 = runReach * runReach
         local seenF = {}
-        for id in pairs(skeleton) do
+        for id in jxByPlace(skeleton) do
             local w = inside[id] or ADGraphManager:getWayPointById(id)
             if w ~= nil then
                 for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
@@ -12929,8 +12981,11 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- whichever of the two was cleared first, and the neighbour lost the movement.
     local groupTip = {}
     if lockedCrossing ~= nil then
-        for ai, tipN in pairs(laneTipOf) do
-            local c = crossingOf(tipN)
+        -- By approach, in their own (fixed) order: two lanes of one group could disagree, and
+        -- then the later one decides.
+        for ai = 1, #approaches do
+            local tipN = laneTipOf[ai]
+            local c = tipN and crossingOf(tipN)
             if c ~= nil then
                 groupTip[findGroup(ai)] = (c == lockedCrossing or c.partOfLocked == true) and "ours" or "theirs"
             end
@@ -12974,7 +13029,7 @@ function ADFlyoverEditor:updateJunctionPreview()
         -- above). `debris`/`staleLinks` stay the full set (every existing rebuild caller is
         -- unaffected); `turnDebris`/`throughDebris` split it for clear mode alone.
         local seen, staleSeen = {}, {}
-        for id in pairs(skeleton) do
+        for id in jxByPlace(skeleton) do
             local w = inside[id] or ADGraphManager:getWayPointById(id)
             if w ~= nil then
                 local gHere = owner[id] and findGroup(owner[id]) or nil
@@ -13177,7 +13232,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     if clearMode and lockedCrossing ~= nil then
         local extent2 = math.max(12, turnR * 1.5) ^ 2
         local seenLink = {}
-        for id in pairs(protectedNodes) do
+        for id in jxByPlace(protectedNodes) do
             local w = inside[id] or ADGraphManager:getWayPointById(id)
             if w ~= nil then
                 for _, nid in pairs(w.out or {}) do
@@ -13247,7 +13302,7 @@ function ADFlyoverEditor:updateJunctionPreview()
                 piece[#piece + 1] = p
                 local nb, n = plainNb(p)
                 if n <= 2 and #piece < 200 then
-                    for id in pairs(nb) do
+                    for id in jxByPlace(nb) do
                         local q = inside[id] or ADGraphManager:getWayPointById(id)
                         if q ~= nil and not seenP[q] and not protectedNodes[q.id] and not runNode[q.id] then
                             local _, qn = plainNb(q)
@@ -13268,7 +13323,7 @@ function ADFlyoverEditor:updateJunctionPreview()
             return ok
         end
         local extra = 0
-        for _, w in pairs(work) do
+        for _, w in jxByPlace(work) do
             if not already[w.id] and not protectedNodes[w.id] and not runNode[w.id]
                 and not foreignWiring[w]
                 and (w.x - lockedCrossing.x) ^ 2 + (w.z - lockedCrossing.z) ^ 2 <= extentR2
@@ -13860,7 +13915,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- how that shows up: a survivor whose id appears here is protected-as-road, not rejected.
     if clearMode and logSite2 then
         local ids, n = {}, 0
-        for id in pairs(skeleton) do
+        for id in jxByPlace(skeleton) do
             local w = inside[id] or ADGraphManager:getWayPointById(id)
             if w ~= nil and isOwn(w) then
                 n = n + 1
@@ -16652,7 +16707,7 @@ function ADFlyoverEditor:junctionClearStubs(jp)
     end
 
     local doomed, seen = {}, {}
-    for node in pairs(onLane) do
+    for node in jxByPlace(onLane) do
         if (node.x - centre.x) ^ 2 + (node.z - centre.z) ^ 2 <= REACH * REACH then
             for _, lst in ipairs({ node.out or {}, node.incoming or {} }) do
                 for _, nid in pairs(lst) do
@@ -19049,12 +19104,10 @@ function ADFlyoverEditor:junctionVirginReading(site)
     if site == nil then return nil end
     local cx, cz = site.x, site.z
     local R2 = JUNCTION_CLEARED_READ_R * JUNCTION_CLEARED_READ_R
-    -- IN BUILD'S OWN ORDER, the same table built the same way and walked by pairs(): keyed by id
-    -- numbers, so the order follows from the ids and the order they went in, the same in every run
-    -- (no table addresses in it). It matters because the classifier groups a cleared site's lanes
-    -- first come, first served: walked in id order instead, 70 read T skew instead of T square and
-    -- 74 T square instead of T skew. In this order the reading is the one build gives at its
-    -- default radius, the one the user reviewed.
+    -- IN BUILD'S OWN ORDER, by place (jxByPlace), as build walks its circle. It matters because the
+    -- classifier groups a cleared site's lanes first come, first served: the order alone has
+    -- changed the kind read at 70 and 74. This used to be pairs() over the id-keyed table, an order
+    -- a clear anywhere nearby reshuffles.
     local inside = {}
     for _, wp in pairs(ADGraphManager:getWayPoints()) do
         local dx, dz = wp.x - cx, wp.z - cz
@@ -19063,7 +19116,7 @@ function ADFlyoverEditor:junctionVirginReading(site)
         end
     end
     local raw = {}
-    for _, wp in pairs(inside) do
+    for _, wp in jxByPlace(inside) do
         for _, tid in pairs(wp.out or {}) do
             if inside[tid] == nil then
                 local t = ADGraphManager:getWayPointById(tid)
@@ -19135,6 +19188,17 @@ function ADFlyoverEditor:junctionVirginReading(site)
             into.count = into.count + 1
             if onLoosePiece(into.wp) and not onLoosePiece(ap.wp) then
                 into.wp, into.bearing = ap.wp, ap.bearing
+            elseif onLoosePiece(into.wp) == onLoosePiece(ap.wp) then
+                -- The lane that runs on away from the junction speaks for the pair, as in build
+                -- (updateJunctionPreview, at 39): the one ending farther out 20 m along, a dead heat
+                -- to the more westerly, then the more northerly.
+                local fi, fa = outward(into.wp, ap.dir, 20), outward(ap.wp, ap.dir, 20)
+                local di = (fi.x - cx) ^ 2 + (fi.z - cz) ^ 2
+                local da = (fa.x - cx) ^ 2 + (fa.z - cz) ^ 2
+                if da > di + 1e-6 or (math.abs(da - di) <= 1e-6
+                    and (ap.wp.x < into.wp.x or (ap.wp.x == into.wp.x and ap.wp.z < into.wp.z))) then
+                    into.wp, into.bearing = ap.wp, ap.bearing
+                end
             end
         else
             approaches[#approaches + 1] = { wp = ap.wp, dir = ap.dir, bearing = ap.bearing, count = 1 }
