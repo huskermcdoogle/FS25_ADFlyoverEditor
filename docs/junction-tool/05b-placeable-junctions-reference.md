@@ -1,6 +1,7 @@
 # Placeable junctions: reference
 
-*Draft 1, 2026-10-01. Sources and numbers behind [Placeable X and T junctions](05-placeable-junctions.md).*
+*Draft 1, 2026-10-01. Sources and numbers behind [Placeable X and T junctions](05-placeable-junctions.md).
+Drive and curve figures redone 2026-10-02 with the corrected twin (see the drive-test note).*
 
 ## Sources
 
@@ -110,7 +111,9 @@
 - The cap is applied every 4 frames (`:279-293`). Off the network (pathfinder paths) it is doubled and
   at least 12.
 - `getMaxSpeedForAngle` (`:570-585`), times `cornerSpeed`. The full-lock clamp (`:587-605`) gives
-  10 km/h past 95% lock.
+  10 km/h once `deg(|rotatedTime|)` passes 95% of `maxRotation` in degrees. It reads rotatedTime as
+  radians, so on the Transtar (maxRotation 45°, full lock 1.18) it fires at 0.746: 63% of full lock,
+  not 95%. A recorded drive holds 10 km/h exactly while past it.
 - Bend for a target speed V between 12 and 60 km/h: θ = 5° + 25° × (60 − V) / 48. Spacing = R × θ
   (radians).
 - For a right-angle arc in n equal pieces, the sharpest bend is 90°/n. The tangent joins at each end
@@ -124,26 +127,36 @@
 
 ## Drive test
 
-`drive.lua`, `SweptSim.EXAMPLE_RIG` (Transtar II + SKS 30/1050 semi, look-ahead 10.32 m) and
-`STOCK_DRIVER`, 40 km/h limit, a 45 m straight lead in and out along each arm. Offsets are from the
-driven path, judged within 1.5L + 12 m of the centre.
+`drive.lua`, `SweptSim.EXAMPLE_RIG` (Transtar II + SKS 30/1050 semi loaded, 57.5 t, look-ahead
+10.32 m, steering limit 45°) and `STOCK_DRIVER`, 40 km/h limit, a 45 m straight lead in and out along
+each arm. Offsets are from the driven path, judged within 1.5L + 12 m of the centre.
 
 | Piece | Move | Truck axle out / in | Trailer wheel edge out / in | Slowest |
 |---|---|---|---|---|
-| X 6 m | right | 2.7 / 2.0 m | 2.9 / 4.6 m | 26.9 km/h |
-| X 6 m | left via centre | 2.3 / 1.3 m | 2.6 / 3.6 m | 21.3 km/h |
-| X 3 m | right | 2.8 / 2.0 m | 2.9 / 4.5 m | 27.0 km/h |
-| X 3 m | left via centre | 2.5 / 1.6 m | 2.8 / 4.4 m | 24.6 km/h |
-| T 6 m | side, left onto main | 2.0 / 1.5 m | 2.5 / 3.9 m | 26.9 km/h |
-| T 6 m | main, left into side | 2.3 / 0.8 m | 2.6 / 3.6 m | 21.7 km/h |
+| X 6 m | right | 1.3 / 2.6 m | 1.8 / 5.2 m | 10.0 km/h |
+| X 6 m | left via centre | 1.1 / 1.6 m | 1.7 / 4.2 m | 10.0 km/h |
+| X 3 m | right | 1.4 / 2.4 m | 1.6 / 5.1 m | 10.0 km/h |
+| X 3 m | left via centre | 1.3 / 2.0 m | 1.7 / 5.1 m | 10.0 km/h |
+| T 6 m | side, left onto main | 0.9 / 1.9 m | 1.6 / 4.5 m | 12.0 km/h |
+| T 6 m | main, left into side | 1.1 / 1.6 m | 1.7 / 4.5 m | 10.0 km/h |
 
 "Out" is the outside of the turn and "in" the inside. Straight moves: 0. Full table: `drive_results.txt`
 from `drive.lua`.
 
-**The "Slowest" column is wrong for AutoDrive 3.0.1.2.** `SweptSim` scans a fixed 20 m for bends
-(`speedScanMetres`, from 3.0.0.8). 3.0.1.2 scans a distance that grows with speed and mass, up to 20
-points. With a 50 m or 100 m scan the mod's right turn takes 12 km/h (the cap for its 45° bends), not
-27. The offsets barely change (1.4 / 2.2 m against 1.3 / 2.3 m).
+**Redone with the corrected twin (2026-10-02).** The first table came from a twin with three faults,
+found by replaying recorded drives (`docs/swept-path-spec.md` §8, `tools/swept-replay/`):
+
+- It scanned a fixed 20 m for bends. That was a shortcut when the twin was written, not a 3.0.0.8
+  behaviour: 3.0.0.8 already scans the mass-and-speed distance above. Now it scans the same way.
+- It slowed for full lock at 95% of lock, not at AutoDrive's 63% (above).
+- The preset steered with the generic 60° instead of the Transtar's 45°.
+
+What changed: every turn now takes 10-12 km/h, because the wheels pass AutoDrive's full-lock point
+before the 45° bends' 12 km/h cap matters. The truck's outside swing drops by 1.1-1.4 m and the
+trailer's inside cut grows by 0.6-0.9 m. On recorded drives the corrected twin swings ~0.4 m narrower
+than the real truck and cuts gentle corners ~0.4 m too far inside, so read these offsets as ±0.4 m.
+These figures need the twin from `claude/sweptsim-ad3012` (going into junction-rework); this branch's
+own `SweptSim.lua` still gives the old ones. The old table is in this file's history (e48ca68).
 
 ## Curve test
 
@@ -165,37 +178,39 @@ points. With a 50 m or 100 m scan the mod's right turn takes 12 km/h (the cap fo
   - A left arc's centre is at (L/2 − R, L/2 − R). It passes through (0, 0) when R = L / (2 − √2) ≈ 1.71L,
     and by symmetry the opposite left arc does too.
 - **Speed:** with 1-3 m spacing the slowest is unchanged. It drops at 4 m (35 km/h) and 5 m (26 km/h).
-  The swing-wide figure stays 2.1 m throughout. The table below uses the twin's 20 m bend scan, so the
-  "mod corner" slowest figures should read 12 km/h (see the drive-test note).
+  The swing-wide figure stays 1.0 m throughout.
 - **One deliberate bend** (`speedArcPath`): the arc's last two pieces each subtend θ(V). Every point
-  stays on the arc. Slowest speed by bend-scan window:
+  stays on the arc. Slowest speed, corrected twin, against the first twin's fixed 20 m scan:
 
-  | Curve | Aim | 20 m scan | 50 m scan | 100 m scan |
-  |---|---|---|---|---|
-  | right R=8 | 20 | 26.9 | 20.0 | 20.0 |
-  | right R=10 | 20 | 27.0 | 20.0 | 20.0 |
-  | right R=12 | 20 | 29.4 | 20.0 | 20.0 |
-  | left R=10 | 22 | 27.2 | 22.0 | 22.0 |
-  | left R=12 | 23 | 30.1 | 23.0 | 23.0 |
-  | left R=15 | 25 | 33.2 | 25.0 | 25.0 |
-  | right R=12, even 2 m | none | 39.1 | 39.1 | 39.1 |
-  | right, mod corner | none | 26.9 | 12.0 | 12.0 |
+  | Curve | Aim | Slowest | First twin (20 m scan) |
+  |---|---|---|---|
+  | right R=8 | 20 | 12.4 | 26.9 |
+  | right R=10 | 20 | 20.0 | 27.0 |
+  | right R=12 | 20 | 20.0 | 29.4 |
+  | left R=10 | 22 | 22.0 | 27.2 |
+  | left R=12 | 23 | 23.0 | 30.1 |
+  | left R=15 | 25 | 25.0 | 33.2 |
+  | right R=12, even 2 m | none | 39.1 | 39.1 |
+  | right, mod corner | none | 10.0 | 26.9 |
 
-  Wheel offsets match the plain arcs within 0.1 m. Not modelled: AutoDrive's 6 km/h braking dead band
-  (`MAX_SPEED_DEVIATION = 6`, `DrivePathModule.lua:5, 354-363`).
+  Right R=8 misses its aim: on that tight a curve the wheels pass AutoDrive's full-lock point, and the
+  10 km/h clamp takes over for part of the turn. Wheel offsets match the plain arcs within 0.1 m.
+  AutoDrive's 6 km/h braking dead band (`MAX_SPEED_DEVIATION = 6`, `DrivePathModule.lua:5, 354-363`) is
+  left out on purpose: in a recorded drive the game's own speed limiter brakes on any overspeed, so it
+  never shows.
 
-    right L=6m  mod corner  | line: off 0.0 wrong 0.0 | truck off line: out 2.7 in 2.0, trailer 3.3 | wheels: off road 1.3 into oncoming 2.3 | slowest 26.9
-    right L=6m  arc R=8     | line: off 0.0 wrong 0.0 | truck off line: out 2.3 in 1.0, trailer 2.4 | wheels: off road 2.0 into oncoming 1.8 | slowest 37.4
-    right L=6m  arc R=10    | line: off 0.0 wrong 0.0 | truck off line: out 2.2 in 0.8, trailer 2.0 | wheels: off road 2.3 into oncoming 1.6 | slowest 38.2
-    right L=6m  arc R=12    | line: off 0.5 wrong 0.0 | truck off line: out 2.1 in 0.7, trailer 1.7 | wheels: off road 2.6 into oncoming 1.5 | slowest 39.1
-    right L=6m  arc R=15    | line: off 1.4 wrong 0.0 | truck off line: out 1.9 in 0.5, trailer 1.4 | wheels: off road 3.1 into oncoming 1.2 | slowest 40.0
-    right L=6m  arc R=20    | line: off 2.9 wrong 0.0 | truck off line: out 1.6 in 0.4, trailer 1.0 | wheels: off road 4.2 into oncoming 0.7 | slowest 40.0
-    left  L=6m  mod corner  | line: off 0.0 wrong 0.0 | truck off line: out 2.3 in 1.3, trailer 2.3 | wheels: off road 1.7 into oncoming 0.0 | slowest 21.3
-    left  L=6m  arc R=8     | line: off 0.0 wrong 0.0 | truck off line: out 2.3 in 1.0, trailer 2.4 | wheels: off road 1.8 into oncoming 0.0 | slowest 34.8
-    left  L=6m  arc R=10    | line: off 0.0 wrong 0.0 | truck off line: out 2.2 in 0.8, trailer 2.0 | wheels: off road 1.6 into oncoming 0.0 | slowest 35.7
-    left  L=6m  arc R=12    | line: off 0.0 wrong 0.0 | truck off line: out 2.1 in 0.7, trailer 1.7 | wheels: off road 1.5 into oncoming 0.4 | slowest 36.6
-    left  L=6m  arc R=15    | line: off 0.0 wrong 0.0 | truck off line: out 1.9 in 0.5, trailer 1.4 | wheels: off road 1.2 into oncoming 1.1 | slowest 37.8
-    left  L=6m  arc R=20    | line: off 0.0 wrong 0.2 | truck off line: out 1.6 in 0.4, trailer 1.0 | wheels: off road 0.7 into oncoming 2.9 | slowest 39.8
+    right L=6m  mod corner  | line: off 0.0 wrong 0.0 | truck off line: out 1.3 in 2.6, trailer 3.9 | wheels: off road 1.9 into oncoming 0.9 | slowest 10.0
+    right L=6m  arc R=8     | line: off 0.0 wrong 0.0 | truck off line: out 1.1 in 1.4, trailer 3.1 | wheels: off road 2.4 into oncoming 0.5 | slowest 36.4
+    right L=6m  arc R=10    | line: off 0.0 wrong 0.0 | truck off line: out 1.1 in 1.2, trailer 2.7 | wheels: off road 2.7 into oncoming 0.4 | slowest 38.2
+    right L=6m  arc R=12    | line: off 0.5 wrong 0.0 | truck off line: out 1.0 in 1.0, trailer 2.3 | wheels: off road 3.1 into oncoming 0.2 | slowest 39.1
+    right L=6m  arc R=15    | line: off 1.4 wrong 0.0 | truck off line: out 0.9 in 0.8, trailer 1.9 | wheels: off road 3.6 into oncoming 0.0 | slowest 40.0
+    right L=6m  arc R=20    | line: off 2.9 wrong 0.0 | truck off line: out 0.7 in 0.6, trailer 1.4 | wheels: off road 4.7 into oncoming 0.0 | slowest 40.0
+    left  L=6m  mod corner  | line: off 0.0 wrong 0.0 | truck off line: out 1.1 in 1.6, trailer 2.9 | wheels: off road 0.4 into oncoming 0.3 | slowest 10.0
+    left  L=6m  arc R=8     | line: off 0.0 wrong 0.0 | truck off line: out 1.1 in 1.4, trailer 3.1 | wheels: off road 0.5 into oncoming 0.1 | slowest 34.8
+    left  L=6m  arc R=10    | line: off 0.0 wrong 0.0 | truck off line: out 1.1 in 1.2, trailer 2.7 | wheels: off road 0.4 into oncoming 0.4 | slowest 35.7
+    left  L=6m  arc R=12    | line: off 0.0 wrong 0.0 | truck off line: out 1.0 in 1.0, trailer 2.3 | wheels: off road 0.2 into oncoming 0.9 | slowest 36.6
+    left  L=6m  arc R=15    | line: off 0.0 wrong 0.0 | truck off line: out 0.9 in 0.8, trailer 1.9 | wheels: off road 0.0 into oncoming 1.8 | slowest 37.8
+    left  L=6m  arc R=20    | line: off 0.0 wrong 0.2 | truck off line: out 0.7 in 0.6, trailer 1.4 | wheels: off road 0.0 into oncoming 3.5 | slowest 39.8
 
 The 3 m and 4 m rows are in `curves_results.txt`. Same pattern, but every arc of 8 m or more already
 leaves the road on a right turn (3 m: 0.9-4.4 m; 4 m: 0.4-3.9 m).
