@@ -150,11 +150,17 @@ end
 if os.getenv("CLEARFIRST") == "1" then
     local cjp = H.lock(CX, CZ, { mode = "clear", radius = 12, leaveThrough = true })
     if cjp == nil then
-        print("CLEAR REFUSED: " .. tostring(ADFlyoverEditor.junctionRefused))
-        return
+        local why = tostring(ADFlyoverEditor.junctionRefused)
+        -- A site with nothing wired is what the build starts from anyway: skip the clear, build on.
+        if not why:find("already clear") then
+            print("CLEAR REFUSED: " .. why)
+            return
+        end
+        print("already clear - building on it as it is")
+    else
+        H.apply()
+        print("cleared the site first (through roads kept)")
     end
-    H.apply()
-    print("cleared the site first (through roads kept)")
 end
 
 local before = survey()

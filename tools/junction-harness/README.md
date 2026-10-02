@@ -59,10 +59,20 @@ Clears and then builds every registry junction (the same list as reg75.sh), and 
 junction to `regbuildTAG.txt` plus a summary: built, refused, Lua errors, turns laid and refused, and
 the three rule counts. Run it twice and diff, as for the clear.
 
-First baseline, today's builder on this branch (2026-10-02), identical on two runs:
+Baseline, today's builder on this branch (2026-10-02), identical on two runs, with the map export of
+2026-09-27 12:47:
 
-    60 built, 15 refused, 0 Lua errors | 248 turns laid, 14 refused
-    rules: new two-way links 1 at 1 junctions | crossings without a shared point 241 at 55 | U-turn routes 3 at 3
+    67 built, 8 refused, 0 Lua errors | 283 turns laid, 17 refused
+    rules: new two-way links 4 at 4 junctions | crossings without a shared point 282 at 61 | U-turn routes 7 at 7
+
+A junction the clear calls "already clear" is built as it stands. The 8 still refused are all refused
+by the clear's picker, never by the build. `bash whyrefused.sh TAG` gives each one's reason:
+
+- **j67, j68:** the placeable T and X from FS25_AutoDrive_XT_Intersection. That export has no points
+  there (it predates them), so this is a map mismatch, not the picker.
+- **j4, j24, j25, j31, j65, j66:** the export has forks 10-28 m away, but the picker does not take them
+  for a junction ("no junction near", or "the nearest junction is 35-62 m away"). The registry is an
+  hour newer than the export, so these may also differ on the newer network. Not looked into yet.
 
 The crossings and U-turns are expected: today's builder ties each turn in on its own and adds no shared
 points. They are what the new builder must bring to 0.
