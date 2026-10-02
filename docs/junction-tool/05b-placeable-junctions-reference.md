@@ -57,7 +57,16 @@
 - Runs every 20 frames (`AutoDrive.PERF_FRAMES = 20`, `AutoDrive.lua:69`), on the same frame for every
   vehicle.
 - Skipped when the vehicle's current link is two-way (`:95-100`).
-- Gathers my next points: the first 5, plus more while the links stay two-way (`:104-121`).
+- Gathers my next points: the first 5, plus more while the links stay two-way (`:104-121`). So
+  approaching a two-way stretch, the check covers the whole stretch.
+- This is intended. Commit e44458fb4 (Axel32019, 2025-12-30, "extend right-of-way to all route
+  Y-connections") states the rules:
+  - several vehicles over a common waypoint from different directions: priority is given;
+  - ±4 waypoints around the common waypoint;
+  - "On two-way routes, priority is granted proactively along the entire two-way route".
+- No issue was found about two two-way roads meeting. Issue #252 (crossroad pile-up): the AutoDrive team
+  suggested "adding a small zigzag line" to slow vehicles before a junction, which is the deliberate-bend
+  lever.
 - For each other active AutoDrive vehicle, scans its points from 4 behind to 4 ahead of its current one
   (`:132-167`).
 - A matching id counts only if the point before it differs between the two routes, "Y right-of-way"

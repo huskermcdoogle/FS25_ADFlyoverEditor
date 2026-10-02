@@ -46,7 +46,12 @@ captured truck and semi.
   crash, at short range.
 - **No main road and no side road.** Nothing says "the main road goes first". The first driver to notice
   the other waits, unless the other is already waiting. Distance and who arrived first play no part.
-- **No check on two-way stretches.** A driver on a two-way link does not look for traffic at all.
+- **Two-way stretches work like a one-lane road.** Before driving onto one, a driver checks the whole
+  stretch ahead for anyone coming the other way. Once on it, the driver has right of way and stops
+  checking, so everyone else gives way to it. This is on purpose: AutoDrive's own commit of 2025-12-30
+  says "priority is granted proactively along the entire two-way route". The weak spot is that the check
+  happens once, at the start of the stretch. Trucks that reach a junction further along later are never
+  checked.
 - **The teal dots are display only.** They mark points where paths come together. AutoDrive draws
   them and uses them for nothing else.
 
