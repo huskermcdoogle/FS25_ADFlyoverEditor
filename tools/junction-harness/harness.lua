@@ -190,6 +190,8 @@ function M.lock(cx, cz, opts)
     E.junctionSwept = false            -- needs SweptSim + a rig
     E.junctionExtendTrim = true
     E.junctionUseDubins = true
+    -- Build layout (doc 07): PATTERN=exact (default, as in game) | smooth | off.
+    E.junctionPattern = opts.pattern or os.getenv("PATTERN") or "exact"
     E.cursorX, E.cursorZ, E.cursorY = cx, cz, 0
     E.junctionArmed = { cx = cx, cz = cz, cy = 0 }
     E.junctionPreviewKey = nil

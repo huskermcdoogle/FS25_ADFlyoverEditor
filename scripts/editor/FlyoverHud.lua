@@ -872,6 +872,9 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleJunctionExtendTrim() end)
         add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
             function() editor:toggleJunctionRebuild() end)
+        local layoutName = { exact = "mod X", smooth = "smooth X", off = "turn by turn" }
+        add("toggle", "layout", layoutName[editor.junctionPattern or "exact"] or "mod X", false,
+            function() editor:toggleJunctionPattern() end)
         add("toggle", "curve", (editor.junctionUseDubins ~= false) and "dubins" or "biarc", false,
             function() editor:toggleJunctionCurveEngine() end)
         add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,

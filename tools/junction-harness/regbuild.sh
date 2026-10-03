@@ -31,9 +31,12 @@ awk -F'|' '
     match(s, /routes=([0-9]+)/, F); rt += F[1]
     match(s, /kink30=([0-9]+)/, G); k3 += G[1]; match(s, /kink50=([0-9]+)/, K); k5 += K[1]
     match(s, /short=([0-9]+)/, Q); sl += Q[1]
+    if (s ~ /pattern=(exact|smooth)/) pt++
+    match(s, /missing=([0-9]+)/, MS); if (MS[1] + 0 > 0) { ms += MS[1]; mj++ }
     if ($3 !~ /err=0/) e++ }
   END {
     printf "%d built, %d refused, %d Lua errors | %d turns laid, %d refused\n", n, r + 0, e + 0, nw, rf
     printf "rules: two-way turn links %d at %d junctions | crossings without a shared point %d at %d | extra routes %d at %d (of %d routes; %d junctions with no route check)\n", du + 0, dj + 0, cr + 0, cj + 0, ut + 0, uj + 0, rt + 0, nc + 0
     printf "speed: sharp bends on our turns: %d at 30-50 deg (12 km/h), %d at 50+ (3 km/h) | links under 0.3 m: %d\n", k3 + 0, k5 + 0, sl + 0
+    printf "pattern placed at %d junctions (the rest laid turn by turn) | turns laid but not drivable: %d at %d\n", pt + 0, ms + 0, mj + 0
   }' "$OUT"

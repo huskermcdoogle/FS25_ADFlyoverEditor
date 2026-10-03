@@ -129,6 +129,23 @@ bend 30 degrees or more (`SHOWKINK=1` lists them). `HOPS=1` traces where an extr
 `NODEAT=x,z` prints every in/out pair at one point. `SQUARE=1` turns on the S-bend (off by default),
 `SNAP=m` sets the snap distance, `TURNR=m` the turn radius.
 
+After the pattern builder (doc 07, 2026-10-03), `PATTERN=exact` (the default, as in game):
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 0 at 0 | extra routes 19 at 10 (of 448 routes; 4 junctions with no route check)
+    speed: sharp bends on our turns: 0 at 30-50 deg (12 km/h), 56 at 50+ (3 km/h) | links under 0.3 m: 38
+    pattern placed at 7 junctions (the rest laid turn by turn) | turns laid but not drivable: 46 at 33
+
+- The pattern places only at square X's (7 of 75); the rest are built turn by turn as before.
+- The 56 sharp bends are the mod X's spokes counted against each other (corner -> centre -> next
+  corner, 90 degrees), which AutoDrive never drives. Not a real speed cap.
+- "Turns laid but not drivable" is new: a turn the build laid that no route can drive under the
+  80-degree rule. 44 of the 46 are at junctions built turn by turn, and are there with or without
+  the shared points (j5). The other 2 are the mod X at j55 and j56.
+- `PATTERN=smooth` places the smooth X where it fits (the mod X where a lane bends away too soon);
+  `PATTERN=off` is the old builder. `SHOWMISSING=1` lists the turns that cannot be driven and the
+  bends that stop them. `dump_build.lua` + `../xt-study/drawbuilt.py` draw what a build laid.
+
 The two-way column now counts only links whose point has BOTH its links two-way, which a two-way turn
 has. A two-way road's new end, where a turn joins it, has one two-way link and one one-way, and is not
 counted. `SHOWDUAL=1` lists them. A junction with nothing

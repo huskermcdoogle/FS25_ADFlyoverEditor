@@ -240,6 +240,10 @@ ADFlyoverEditor = {
     -- Connector curve engine: Dubins (default - radius-bounded pose-to-pose via AutoDrive's own
     -- ADDubins) or the tangent biarc (also the automatic fallback when Dubins declines).
     junctionUseDubins = true,
+    -- Build layout (doc 07): "exact" = the mod's X fitted to the junction, "smooth" = the same pattern
+    -- with curves, "off" = one curve per turn as before. The pattern needs a square X; elsewhere the
+    -- build lays turn by turn whatever this says.
+    junctionPattern = "exact",
     -- Static-obstacle check (trees, buildings, fences/poles/signs), on by default: a corridor that
     -- overlaps one shrinks its radius to swing clear, and refuses (red, "blocked") if nothing fits.
     junctionCheckObstacles = true,
@@ -6622,6 +6626,13 @@ function ADFlyoverEditor:toggleJunctionCheckObstacles()
 end
 
 --- Toggle the connector curve engine between Dubins (radius-bounded pose-to-pose) and the biarc.
+function ADFlyoverEditor:toggleJunctionPattern()
+    local nextOf = { exact = "smooth", smooth = "off", off = "exact" }
+    self.junctionPattern = nextOf[self.junctionPattern or "exact"] or "exact"
+    self.junctionPreviewKey = nil
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction build layout: %s.", self.junctionPattern)
+end
+
 function ADFlyoverEditor:toggleJunctionCurveEngine()
     self.junctionUseDubins = not (self.junctionUseDubins ~= false)
     self.junctionPreviewKey = nil
@@ -10875,6 +10886,354 @@ local function junctionShareCrossings(cx, cz, reach)
     return joined
 end
 
+-- THE PATTERN (docs/junction-tool/07-pattern-build.md). Instead of fitting one curve per turn, place the
+-- X we studied in the mod (doc 05), fitted to this junction:
+--   * the FRAME comes from the kept through lanes: they cross at four inner corners; the middle of those
+--     is the centre, their spacing the lane gap L, the lane directions the axes;
+--   * "exact" lays the mod's own shape: a shared point at each inner corner, a short 45-degree cut for
+--     each right turn, and every left turn through one centre point on two-way spokes;
+--   * "smooth" lays the same pattern with curves: rights of 1.5 L hugging each corner, lefts of 1.71 L,
+--     the size at which all four pass exactly through the one centre point.
+-- Sizes come from the lane gap for now (decided 2026-10-02). Version 1 is a square X on one-way lanes;
+-- anything else returns nil with the reason, and the caller builds turn by turn as before.
+-- Mod frame: +x along one through lane; +z is +x turned a quarter to the right (FS25 x east, z south), so
+-- with right-hand traffic the +x lane runs at z = +0.5 L. Returns { shape, turns, L } or nil, why.
+local JX_PATTERN_RIGHT, JX_PATTERN_LEFT = 1.5, 1.71
+local function junctionPlacePattern(cx, cz, reach, shape)
+    local R = math.max(reach or 15, 15)
+    local function near(w, r) return (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= r * r end
+    local function linksNear(px, pz, r)
+        local t = {}
+        for _, a in pairs(ADGraphManager:getWayPoints()) do
+            if a ~= nil and a.id ~= nil and (a.x - px) ^ 2 + (a.z - pz) ^ 2 <= r * r then
+                for _, bid in ipairs(a.out or {}) do
+                    local b = ADGraphManager:getWayPointById(bid)
+                    if b ~= nil and b ~= a then t[#t + 1] = { a = a, b = b } end
+                end
+            end
+        end
+        table.sort(t, function(p, q)
+            if p.a.id ~= q.a.id then return p.a.id < q.a.id end
+            return p.b.id < q.b.id
+        end)
+        return t
+    end
+    local function unit(x, z)
+        local n = math.sqrt(x * x + z * z)
+        if n < 1e-9 then return 0, 0 end
+        return x / n, z / n
+    end
+
+    -- 1. INNER CORNERS: two lanes crossing at a real angle near the site, either in open space or at a
+    -- point they already share.
+    local corners = {}
+    local function addCorner(x, z, u1x, u1z, u2x, u2z)
+        if not near({ x = x, z = z }, 12) then return end
+        for _, c in ipairs(corners) do
+            if (c.x - x) ^ 2 + (c.z - z) ^ 2 < 0.25 then return end
+        end
+        corners[#corners + 1] = { x = x, z = z, dirs = { { u1x, u1z }, { u2x, u2z } } }
+    end
+    local L0 = linksNear(cx, cz, R + 10)
+    for i = 1, #L0 do
+        for j = i + 1, #L0 do
+            local p, q = L0[i], L0[j]
+            if p.a ~= q.a and p.a ~= q.b and p.b ~= q.a and p.b ~= q.b then
+                local ax, az, bx, bz = p.a.x, p.a.z, p.b.x, p.b.z
+                local qx, qz, rx, rz = q.a.x, q.a.z, q.b.x, q.b.z
+                local den = (bx - ax) * (rz - qz) - (bz - az) * (rx - qx)
+                if math.abs(den) > 1e-9 then
+                    local t = ((qx - ax) * (rz - qz) - (qz - az) * (rx - qx)) / den
+                    local u = ((qx - ax) * (bz - az) - (qz - az) * (bx - ax)) / den
+                    if t > 0 and t < 1 and u > 0 and u < 1 then
+                        local u1x, u1z = unit(bx - ax, bz - az)
+                        local u2x, u2z = unit(rx - qx, rz - qz)
+                        if math.abs(u1x * u2x + u1z * u2z) < 0.5 then
+                            addCorner(ax + t * (bx - ax), az + t * (bz - az), u1x, u1z, u2x, u2z)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- Lanes that already share a point where they cross: two straight runs through one point.
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil and near(w, 12) and #(w.incoming or {}) >= 2 and #(w.out or {}) >= 2 then
+            local runs = {}
+            for _, iid in ipairs(w.incoming) do
+                local i = ADGraphManager:getWayPointById(iid)
+                for _, oid in ipairs(w.out) do
+                    local o = ADGraphManager:getWayPointById(oid)
+                    if i ~= nil and o ~= nil and i ~= o then
+                        local ax, az = unit(w.x - i.x, w.z - i.z)
+                        local bx, bz = unit(o.x - w.x, o.z - w.z)
+                        if ax * bx + az * bz > 0.94 then runs[#runs + 1] = { ax, az } end
+                    end
+                end
+            end
+            for a = 1, #runs do
+                for b = a + 1, #runs do
+                    if math.abs(runs[a][1] * runs[b][1] + runs[a][2] * runs[b][2]) < 0.5 then
+                        addCorner(w.x, w.z, runs[a][1], runs[a][2], runs[b][1], runs[b][2])
+                    end
+                end
+            end
+        end
+    end
+    if #corners ~= 4 then
+        return nil, string.format("found %d places where through lanes cross, not the 4 of a square X", #corners)
+    end
+
+    -- 2. THE FRAME.
+    local ox, oz = 0, 0
+    for _, c in ipairs(corners) do ox, oz = ox + c.x / 4, oz + c.z / 4 end
+    local ex, ez = nil, nil
+    for _, c in ipairs(corners) do
+        for _, d in ipairs(c.dirs) do
+            -- +z is +x turned a quarter to the right; the +x lane must run on the +z side of the centre.
+            local zx, zz = -d[2], d[1]
+            if ex == nil and (c.x - ox) * zx + (c.z - oz) * zz > 0 then ex = d end
+        end
+    end
+    if ex == nil then return nil, "could not tell the lane directions apart" end
+    local ux, uz = ex[1], ex[2]
+    local vx, vz = -uz, ux
+    local L = 0
+    for _, c in ipairs(corners) do
+        local lx, lz = (c.x - ox) * ux + (c.z - oz) * uz, (c.x - ox) * vx + (c.z - oz) * vz
+        L = L + (math.abs(lx) + math.abs(lz)) / 4
+        c.lx, c.lz = lx, lz
+    end
+    for _, c in ipairs(corners) do
+        if math.abs(math.abs(c.lx) - L / 2) > 0.25 * L or math.abs(math.abs(c.lz) - L / 2) > 0.25 * L then
+            return nil, string.format("the lanes do not cross in a square (lane gap %.1f m)", L)
+        end
+        for _, d in ipairs(c.dirs) do
+            local along = math.max(math.abs(d[1] * ux + d[2] * uz), math.abs(d[1] * vx + d[2] * vz))
+            if along < 0.966 then return nil, "the roads do not cross square (more than 15 degrees off)" end
+        end
+    end
+    if L < 2 or L > 12 then return nil, string.format("lane gap %.1f m is outside 2-12 m", L) end
+    local function W(mx, mz) return ox + L * (mx * ux + mz * vx), oz + L * (mx * uz + mz * vz) end
+    local function D(mx, mz) return mx * ux + mz * vx, mx * uz + mz * vz end
+    local function rot(x, z, k)
+        for _ = 1, k do x, z = -z, x end
+        return x, z
+    end
+    local function groundY(x, z, fallback)
+        local y = nil
+        if getTerrainHeightAtWorldPos ~= nil and g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil then
+            local ok, v = pcall(getTerrainHeightAtWorldPos, g_currentMission.terrainRootNode, x, 1, z)
+            if ok then y = v end
+        end
+        -- A junction on a bridge: the ground is far below the road, keep the road's height.
+        if y == nil or (fallback ~= nil and math.abs(y - fallback) > 2) then return fallback end
+        return y
+    end
+
+    -- 3. A POINT ON A LANE: the lane running in direction (dx, dz) that passes nearest (px, pz). An end
+    -- of that link within 0.3 m is used as it is; otherwise a point is spliced in. `through` runs the
+    -- lane through a given point instead (a corner the other lane already has). dry only says whether
+    -- there is such a lane. A lane may bend a little past the junction: up to 1.5 m off the frame's
+    -- straight line and 30 degrees off its direction still counts, and the turn ends on the real lane.
+    local function onLane(px, pz, dx, dz, through, dry)
+        local best, bd, bt = nil, 1.5, 0
+        for _, l in ipairs(linksNear(px, pz, 20)) do
+            local sx, sz = l.b.x - l.a.x, l.b.z - l.a.z
+            local len2 = sx * sx + sz * sz
+            if len2 > 1e-6 then
+                local lx, lz = unit(sx, sz)
+                if lx * dx + lz * dz > 0.87 then
+                    local t = ((px - l.a.x) * sx + (pz - l.a.z) * sz) / len2
+                    if t >= 0 and t <= 1 then
+                        local d = math.abs((px - l.a.x) * lz - (pz - l.a.z) * lx)
+                        if d < bd then best, bd, bt = l, d, t end
+                    end
+                end
+            end
+        end
+        if best == nil then return nil end
+        if dry then return true end
+        local a, b = best.a, best.b
+        if through ~= nil then
+            if through == a or through == b then return through end
+            local dual = table.contains(b.out or {}, a.id)
+            junctionDisconnect(a, b)
+            junctionConnect(a, through, dual)
+            junctionConnect(through, b, dual)
+            return through
+        end
+        local slen = math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+        if bt * slen <= 0.3 then return a end
+        if (1 - bt) * slen <= 0.3 then return b end
+        local x, z = a.x + bt * (b.x - a.x), a.z + bt * (b.z - a.z)
+        local y = (a.y or 0) + bt * ((b.y or 0) - (a.y or 0))
+        local N = ADFlyoverRecordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false)
+        jxNoteAdded(N)
+        if N == nil then return nil end
+        local dual = table.contains(b.out or {}, a.id)
+        junctionDisconnect(a, b)
+        junctionConnect(a, N, dual)
+        junctionConnect(N, b, dual)
+        return N
+    end
+
+    -- ALL OR NOTHING: every point the shape needs must have its lane before anything is laid. The smooth
+    -- turns end further out (2 L), where a lane may already have bent away; the mod's X stays within
+    -- 0.75 L of the centre, so where smooth does not fit, the mod's X is placed instead.
+    local function needs(sh)
+        local t = {}
+        for k = 0, 3 do
+            local d1x, d1z = D(rot(1, 0, k))
+            local d2x, d2z = D(rot(0, 1, k))
+            local d3x, d3z = D(rot(0, -1, k))
+            local function add(mx, mz, dx, dz, what) local x, z = W(mx, mz) t[#t + 1] = { x, z, dx, dz, what } end
+            local cx1, cz1 = rot(-0.5, 0.5, k)
+            add(cx1, cz1, d1x, d1z, "inner corner")
+            add(cx1, cz1, d2x, d2z, "inner corner")
+            if sh == "exact" then
+                local ax, az = rot(-0.75, 0.5, k)
+                local bx, bz = rot(-0.5, 0.75, k)
+                add(ax, az, d1x, d1z, "right turn start")
+                add(bx, bz, d2x, d2z, "right turn end")
+            else
+                local RR, LR = JX_PATTERN_RIGHT, JX_PATTERN_LEFT
+                local ax, az = rot(-0.5 - RR, 0.5, k)
+                local bx, bz = rot(-0.5, 0.5 + RR, k)
+                add(ax, az, d1x, d1z, "right turn start")
+                add(bx, bz, d2x, d2z, "right turn end")
+                ax, az = rot(0.5 - LR, 0.5, k)
+                bx, bz = rot(0.5, 0.5 - LR, k)
+                add(ax, az, d1x, d1z, "left turn start")
+                add(bx, bz, d3x, d3z, "left turn end")
+            end
+        end
+        return t
+    end
+    local function fits(sh)
+        for _, n in ipairs(needs(sh)) do
+            if not onLane(n[1], n[2], n[3], n[4], nil, true) then
+                return false, string.format("no lane under the %s at %.1f, %.1f", n[5], n[1], n[2])
+            end
+        end
+        return true
+    end
+    local okFit, whyNot = fits(shape)
+    if not okFit and shape == "smooth" and fits("exact") then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the smooth X does not fit here (%s); placing the mod's X instead.", whyNot)
+        shape = "exact"
+    elseif not okFit then
+        return nil, whyNot
+    end
+
+    -- 4. THE CORNERS, shared by both lanes. Corner k sits at (-0.5, 0.5) turned k quarters: where the +x
+    -- lane (turned k) crosses the +z lane (turned k).
+    local cornerNode = {}
+    for k = 0, 3 do
+        local mx, mz = rot(-0.5, 0.5, k)
+        local px, pz = W(mx, mz)
+        local d1x, d1z = D(rot(1, 0, k))
+        local d2x, d2z = D(rot(0, 1, k))
+        local N = onLane(px, pz, d1x, d1z)
+        if N == nil then return nil, "lost a lane at an inner corner" end
+        if onLane(px, pz, d2x, d2z, N) == nil then return nil, "lost a lane at an inner corner" end
+        cornerNode[k] = N
+    end
+
+    -- 5. THE TURNS, one approach at a time (the +x lane turned k quarters).
+    local turns = 0
+    local function noLane(kind, which, x, z)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - %s turn: no lane under its %s end at %.1f, %.1f - not laid.",
+            kind, which, x, z)
+    end
+    local function label(kind)
+        jxLaySeq = jxLaySeq + 1
+        jxLayLabel = kind .. "#" .. jxLaySeq
+    end
+    local function lay(A, pts, B, kind)
+        if A == nil or B == nil or A == B then return false end
+        label(kind)
+        local ok, laid = tryCall("junction pattern lay", function()
+            return junctionLayChain(A, pts, B, false, B.flags or AutoDrive.FLAG_NONE)
+        end)
+        jxLayLabel = nil
+        if ok and laid == true then turns = turns + 1 return true end
+        return false
+    end
+    -- Interior points of an arc in mod units, about every 2 m, as world points; `centreAt` marks the
+    -- sample that is the junction's centre (the lefts' shared point).
+    local function arcPoints(acx, acz, r, a0, a1, k, centreMid, y0, y1)
+        local len = math.abs(a1 - a0) * r * L
+        local n = math.max(2, math.floor(len / 2 + 0.5))
+        if centreMid and n % 2 == 1 then n = n + 1 end
+        local pts = {}
+        for i = 1, n - 1 do
+            local a = a0 + (a1 - a0) * i / n
+            local mx, mz = rot(acx + r * math.cos(a), acz + r * math.sin(a), k)
+            local x, z = W(mx, mz)
+            local fy = y0 + (y1 - y0) * i / n
+            pts[#pts + 1] = { x = x, z = z, y = groundY(x, z, fy), centre = (centreMid and i == n / 2) or nil }
+        end
+        return pts
+    end
+
+    if shape == "exact" then
+        local cxw, czw = W(0, 0)
+        local cy = 0
+        for k = 0, 3 do cy = cy + (cornerNode[k].y or 0) / 4 end
+        local O = ADFlyoverRecordWayPoint(cxw, groundY(cxw, czw, cy), czw, false, false, false, 0,
+            cornerNode[0].flags or AutoDrive.FLAG_NONE, false)
+        jxLayLabel = "centre"
+        jxNoteAdded(O)
+        jxLayLabel = nil
+        if O == nil then return nil, "could not add the centre point" end
+        -- The spokes: every left turn goes corner -> centre -> corner, so each spoke runs both ways.
+        label("L-spokes")
+        for k = 0, 3 do junctionConnect(O, cornerNode[k], true) end
+        jxLayLabel = nil
+        turns = turns + 4
+        for k = 0, 3 do
+            local d1x, d1z = D(rot(1, 0, k))
+            local d2x, d2z = D(rot(0, 1, k))
+            local ax, az = W(rot(-0.75, 0.5, k))
+            local bx, bz = W(rot(-0.5, 0.75, k))
+            local A = onLane(ax, az, d1x, d1z)
+            local B = onLane(bx, bz, d2x, d2z)
+            lay(A, {}, B, "R45")
+        end
+    else
+        local RR, LR = JX_PATTERN_RIGHT, JX_PATTERN_LEFT
+        for k = 0, 3 do
+            local d1x, d1z = D(rot(1, 0, k))     -- in, along +x
+            local d2x, d2z = D(rot(0, 1, k))     -- right, out along +z
+            local d3x, d3z = D(rot(0, -1, k))    -- left, out along -z
+            -- Right: centre (-0.5 - r, 0.5 + r), from straight above it round to its right.
+            local ax, az = W(rot(-0.5 - RR, 0.5, k))
+            local bx, bz = W(rot(-0.5, 0.5 + RR, k))
+            local A = onLane(ax, az, d1x, d1z)
+            local B = onLane(bx, bz, d2x, d2z)
+            if A == nil then noLane("right", "start", ax, az) end
+            if B == nil then noLane("right", "end", bx, bz) end
+            if A ~= nil and B ~= nil then
+                lay(A, arcPoints(-0.5 - RR, 0.5 + RR, RR, -math.pi / 2, 0, k, false, A.y or 0, B.y or 0), B, "R90")
+            end
+            -- Left: centre (0.5 - r, 0.5 - r), from below it round to its right, through the centre.
+            ax, az = W(rot(0.5 - LR, 0.5, k))
+            bx, bz = W(rot(0.5, 0.5 - LR, k))
+            A = onLane(ax, az, d1x, d1z)
+            B = onLane(bx, bz, d3x, d3z)
+            if A == nil then noLane("left", "start", ax, az) end
+            if B == nil then noLane("left", "end", bx, bz) end
+            if A ~= nil and B ~= nil then
+                lay(A, arcPoints(0.5 - LR, 0.5 - LR, LR, math.pi / 2, 0, k, true, A.y or 0, B.y or 0), B, "L90")
+            end
+        end
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: square X, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
+        shape, L, ox, oz, turns)
+    return { shape = shape, turns = turns, L = L }
+end
+
 
 -- THE ROUTE CHECK (docs/junction-tool/06-one-click-build.md, layout rule 7). A shared point lets
 -- AutoDrive switch from one path to another wherever the bend there is 80 degrees or less
@@ -10964,7 +11323,19 @@ local function junctionRouteCheck(jp, placedSet, cx, cz, reach)
         if p.to.x ~= q.to.x then return p.to.x < q.to.x end
         return p.to.z < q.to.z
     end)
-    return { routes = nRoutes, extra = extra }
+    -- And the other way round: a turn this build laid that no route can actually drive (a piece that
+    -- did not join, or a bend over 80 degrees on the way).
+    local missing = {}
+    for _, m in ipairs(jp.movements or {}) do
+        if placedSet[m] and alive(m.from.wp) and alive(m.to.wp) then
+            local k = key(m.from.wp, m.to.wp)
+            if not found[k] and not found["m" .. k] then
+                found["m" .. k] = true
+                missing[#missing + 1] = { from = m.from.wp, to = m.to.wp }
+            end
+        end
+    end
+    return { routes = nRoutes, extra = extra, missing = missing }
 end
 
 -- How far a fork may sit from the middle of its group and still belong to it, for the SELECTION's
@@ -23926,7 +24297,23 @@ function ADFlyoverEditor:applyJunction()
     local allowDual = (jp.siteHasTwoWay == true) and AutoDrive.FLYOVER_JUNCTION_DUAL_TURNS == true
     local baseCount = ADGraphManager:getWayPointsCount()
     local placedSet = {}   -- movements laid by this build, for the route check
-    for _, m in ipairs(newMoves) do
+    -- THE PATTERN first (doc 07): on a square X it places the studied X fitted to the junction and lays
+    -- every turn at once. Anywhere else it says why and the turns are laid one by one as before.
+    local pattern = nil
+    local shape = self.junctionPattern or "exact"
+    if shape ~= "off" then
+        local okP, res, why = tryCall("junction pattern", function() return junctionPlacePattern(cx, cz, radius, shape) end)
+        if okP and res ~= nil then
+            pattern = res
+            placed = res.turns
+            for _, m in ipairs(newMoves) do placedSet[m] = true end
+        else
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) not placed: %s - laying the turns one by one.",
+                shape, tostring(why or "it failed, see above"))
+        end
+    end
+    self.junctionLastPattern = pattern
+    for _, m in ipairs(pattern == nil and newMoves or {}) do
         local key = pairKey(m.from.wp.id, m.to.wp.id)
         if dualPairPlaced[key] then
             mirrorsSkipped = mirrorsSkipped + 1
@@ -23975,7 +24362,8 @@ function ADFlyoverEditor:applyJunction()
     -- Keyed to the SITE, not to allowDual: since two-way turns stopped (2026-10-02) allowDual is false on
     -- every site, and a tie-in spliced into a two-way road rightly keeps that road two-way. Keyed to
     -- allowDual, this "repaired" those road links into one-way ones.
-    if jp.siteHasTwoWay ~= true then
+    -- The exact pattern's spokes run both ways by design (doc 07, choice A).
+    if jp.siteHasTwoWay ~= true and not (pattern ~= nil and pattern.shape == "exact") then
         local total = ADGraphManager:getWayPointsCount()
         for id = baseCount + 1, total do
             local n = ADGraphManager:getWayPointById(id)
@@ -24075,8 +24463,10 @@ function ADFlyoverEditor:applyJunction()
         local card
         if rc == nil then
             card = { "Route check: could not run - see the log" }
-        elseif #rc.extra == 0 then
+        elseif #rc.extra == 0 and #(rc.missing or {}) == 0 then
             card = { string.format("Route check: all %d routes as meant", rc.routes) }
+        elseif #rc.extra == 0 then
+            card = { string.format("Route check: %d turn(s) we laid cannot be driven", #rc.missing), "see the log" }
         else
             card = { string.format("Route check: %d route(s) we did not lay", #rc.extra),
                      "most likely U-turns - AutoDrive can drive them, see the log" }
@@ -24084,6 +24474,13 @@ function ADFlyoverEditor:applyJunction()
         self:junctionBuildCheckKeep({ card = card, number = jp.junctionNumber, x = cx, z = cz,
             extra = rc and #rc.extra or nil })
     end)
+    if rc ~= nil and #(rc.missing or {}) > 0 then
+        Logging.warning("[FlyoverEditor]: junction route check - %d turn(s) we laid cannot be driven:", #rc.missing)
+        for _, e in ipairs(rc.missing) do
+            Logging.warning("[FlyoverEditor]:   from the lane in at %.1f, %.1f to the lane out at %.1f, %.1f.",
+                e.from.x, e.from.z, e.to.x, e.to.z)
+        end
+    end
     if rc ~= nil then
         if #rc.extra == 0 then
             ADFlyoverSettings.debugLog("[FlyoverEditor]: junction route check - %d route(s) AutoDrive can take through here, all of them turns we meant.",

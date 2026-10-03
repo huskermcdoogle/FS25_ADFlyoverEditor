@@ -387,6 +387,35 @@ do
         end
     end
 end
+-- SHOWMISSING=1: for each turn the route check could not drive, the bends over 80 degrees that stop it:
+-- every point on a laid turn where coming in from one link and going out on the next bends past 80.
+if os.getenv("SHOWMISSING") == "1" and rc and rc.missing then
+    for _, e in ipairs(rc.missing) do
+        print(string.format("MISSING from lane in at %.1f, %.1f to lane out at %.1f, %.1f", e.from.x, e.from.z, e.to.x, e.to.z))
+    end
+    local LL = ADFlyoverEditor.junctionLastLinkLabels or {}
+    for a, outs in pairs(LL) do
+        if type(a) == "table" then
+            for N, lab in pairs(outs) do
+                if contains(a.out, N.id) then
+                    -- into the turn: from whatever runs into a; out of it: whatever N leads on to
+                    for _, pid in ipairs(a.incoming or {}) do
+                        local p = ADGraphManager:getWayPointById(pid)
+                        if p ~= nil and p ~= N then
+                            local ux, uz, vx, vz = a.x - p.x, a.z - p.z, N.x - a.x, N.z - a.z
+                            local c = (ux * vx + uz * vz) / math.max(1e-9, math.sqrt((ux * ux + uz * uz) * (vx * vx + vz * vz)))
+                            local ang = math.deg(math.acos(math.max(-1, math.min(1, c))))
+                            if ang > 80 and not ((LL[p] or {})[a] ~= nil and (LL[p] or {})[a] ~= lab) then
+                                print(string.format("  SHARP %s: %.0f deg at (%.1f, %.1f) coming from (%.1f, %.1f) [%s]", lab, ang, a.x, a.z, p.x, p.z,
+                                    tostring((LL[p] or {})[a] or "lane")))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
 -- NODEAT=x,z prints what meets at the point nearest there: every link in and out, its label, and the
 -- bend for each in -> out pair a driver could take.
 if os.getenv("NODEAT") then
@@ -419,6 +448,6 @@ end
 print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d extra route(s) of %d | (%d long U-turn guesses)",
     dualTurns, crossNo, extra, rc and rc.routes or 0, uturns))
 local sh = ADFlyoverEditor.junctionLastShared or { joined = 0, shallow = 0 }
-print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d",
+print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d pattern=%s missing=%d",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short))
+    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short, ADFlyoverEditor.junctionLastPattern and ADFlyoverEditor.junctionLastPattern.shape or "no", rc and rc.missing and #rc.missing or 0))
