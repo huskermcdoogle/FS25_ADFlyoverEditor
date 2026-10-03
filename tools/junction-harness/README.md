@@ -116,6 +116,19 @@ After two-way roads to the mouth (2026-10-02), identical on repeat:
     75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
     rules: two-way turn links 0 at 0 junctions | crossings without a shared point 1 at 1 | extra routes 26 at 14 (of 439 routes; 4 junctions with no route check)
 
+After the shared point SLIDES instead of snapping (2026-10-02), identical on repeat:
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 0 at 0 | extra routes 18 at 10 (of 447 routes; 4 junctions with no route check)
+    speed: sharp bends on our turns: 0 at 30-50 deg (12 km/h), 0 at 50+ (3 km/h) | links under 0.3 m: 50
+
+The old snap (run a path through any point within 0.75 m) gave 194 sharp bends on our turns, 124 of them
+past 50 degrees, where AutoDrive crawls at 3 km/h. 14 of the 18 extra routes left have no sharp switch:
+they go round the block on existing roads. The `speed:` line counts, on the build's own turns, points that
+bend 30 degrees or more (`SHOWKINK=1` lists them). `HOPS=1` traces where an extra route switches paths,
+`NODEAT=x,z` prints every in/out pair at one point. `SQUARE=1` turns on the S-bend (off by default),
+`SNAP=m` sets the snap distance, `TURNR=m` the turn radius.
+
 The two-way column now counts only links whose point has BOTH its links two-way, which a two-way turn
 has. A two-way road's new end, where a turn joins it, has one two-way link and one one-way, and is not
 counted. `SHOWDUAL=1` lists them. A junction with nothing

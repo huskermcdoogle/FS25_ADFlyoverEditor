@@ -321,13 +321,29 @@ branch.
      - anything with a right turn: 3 or fewer routes each.
 
      So the cause is left turns crossing other paths, mostly other left turns, at less than 80°.
-   - **Proposed fix, at the crossing itself:** where two paths cross at under about 85°, give the NEW
-     path(s) a small S-bend in the last metre or two either side of the shared point. They then meet at
-     over 80°, and AutoDrive refuses to switch there.
-     - It shifts the line well under a metre; the truck looks 10 m ahead anyway.
-     - Road lanes are never bent.
-     - The small bends also slow trucks a little, which suits the 20-25 km/h turn speeds.
-     - Not built yet.
+   - **S-bend tried, then the real cause found** (2026-10-02):
+     - The S-bend (extra points either side of the shared point, square to the crossed path) cut extra
+       routes 26 → 13. But it added sharp bends to our turns.
+     - AutoDrive caps speed at each point by its bend: 30° or more → 12 km/h, 50° or more → 3 km/h.
+     - The real cause was the step 1 **snap**: a crossing within 0.75 m of a point ran the other path
+       through that point, bending it up to 88°. That gave 194 sharp bends on our turns before any
+       S-bend, and most of the shallow switches.
+   - **Fix built: the shared point slides.** One of our own turn points near the crossing, with nothing
+     else joined to it, moves onto the crossing (it is already on its own line). Otherwise an existing
+     point is shared only if that bends the other path 10° or less; otherwise the crossing gets its own
+     point. Road lanes are never bent.
+
+     | Build | Extra routes | Bends ≥30° on our turns |
+     |---|---|---|
+     | Snap 0.75 m (step 1) | 25 at 14 | 194 |
+     | Slide | 18 at 10 | 0 |
+     | Slide + S-bend | 17 at 9 | 20 |
+
+   - The S-bend stays in the code, **off** (`FLYOVER_JUNCTION_SQUARE_CROSSINGS`): 1 route is not worth
+     20 crawl points.
+   - Of the 18 left, 14 have no sharp switch: they go round the block on existing roads and come back.
+     The other 4: a right turn ending where a left turn starts (j19, 40°) and a road meeting a left turn
+     at 59° (j31).
 4. **Two-way roads to the mouth:** built 2026-10-02.
    - **No more two-way turns.** Each direction gets its own one-way turn
      (`FLYOVER_JUNCTION_DUAL_TURNS = true` brings the old behaviour back).

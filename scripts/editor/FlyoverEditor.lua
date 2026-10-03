@@ -10095,11 +10095,16 @@ local jxCentreNode = nil
 --- (a left or right turn of that many degrees), "tie" (a tie-in spliced into a lane), "x" (a shared
 --- crossing). jxLayLabel is the label of the turn being laid at the moment. Report only.
 local jxNodeLabel, jxLayLabel = nil, nil
+--- The same for each LINK the build laid, jxLinkLabel[from][to] = label: a link spliced at a crossing keeps
+--- the label of the link it was cut from, so the study can tell which turn a driver is on. Report only.
+local jxLinkLabel = nil
+local jxLaySeq = 0   -- numbers each turn of a build, so two turns of the same shape are told apart
 
 local function jxBuildBegin()
     jxBuildNew, jxBuildOldLinks = {}, {}
     jxCentreNode = nil
-    jxNodeLabel, jxLayLabel = {}, nil
+    jxNodeLabel, jxLayLabel, jxLinkLabel = {}, nil, {}
+    jxLaySeq = 0
     for _, a in pairs(ADGraphManager:getWayPoints()) do
         if a ~= nil and a.id ~= nil and #(a.out or {}) > 0 then
             local s = {}
@@ -10114,7 +10119,7 @@ end
 
 local function jxBuildEnd()
     jxBuildNew, jxBuildOldLinks, jxCentreNode = nil, nil, nil
-    jxNodeLabel, jxLayLabel = nil, nil
+    jxNodeLabel, jxLayLabel, jxLinkLabel = nil, nil, nil
 end
 
 --- "L90" / "R45" for a connector: which way it turns and by how much, from its first and last legs.
@@ -10416,6 +10421,14 @@ local function junctionConnect(a, b, dual)
     if a == nil or b == nil or a.id == b.id then return end
     if not table.contains(a.out, b.id) then table.insert(a.out, b.id) jxNote("out+", a, b) end
     if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) jxNote("in+", b, a) end
+    if jxLinkLabel ~= nil and jxLayLabel ~= nil and jxLayLabel ~= "x" then
+        jxLinkLabel[a] = jxLinkLabel[a] or {}
+        jxLinkLabel[a][b] = jxLayLabel
+        if dual then
+            jxLinkLabel[b] = jxLinkLabel[b] or {}
+            jxLinkLabel[b][a] = jxLayLabel
+        end
+    end
     if dual then
         if not table.contains(b.out, a.id) then table.insert(b.out, a.id) jxNote("out+", b, a) end
         if not table.contains(a.incoming, b.id) then table.insert(a.incoming, b.id) jxNote("in+", a, b) end
@@ -10438,6 +10451,10 @@ local function junctionDisconnect(a, b)
     table.removeValue(b.incoming, a.id)
     table.removeValue(b.out, a.id)
     table.removeValue(a.incoming, b.id)
+    if jxLinkLabel ~= nil then
+        if jxLinkLabel[a] ~= nil then jxLinkLabel[a][b] = nil end
+        if jxLinkLabel[b] ~= nil then jxLinkLabel[b][a] = nil end
+    end
 end
 
 --- The connector curve via AutoDrive's own ADDubins solver (scripts/Utils/Dubins.lua): the shortest
@@ -10525,12 +10542,151 @@ end
 --     links around it.
 -- Returns how many crossings it joined.
 local jxShallowJoins = 0
+
+-- SQUARE UP A SHALLOW CROSSING. AutoDrive refuses to switch paths at a shared point only where the
+-- bend is over 80 degrees, so two paths crossing at 55 degrees let a driver hop from one to the other.
+-- Here the NEW path (p -> N -> q) gets a small S-bend: one extra point either side of N, up to a metre
+-- out, on the line square to the path it crosses. It then meets that path at 90 degrees (a two-way
+-- path counts both ways round, so it must sit near 90 from both sides). The line moves well under a
+-- metre; road lanes are never bent, since only a path this build laid comes here.
+-- sq = { p, N, q, dual = our path two-way, vx, vz = the crossed path's direction, otherDual }
+local jxSquaredJoins = 0
+-- Points the squaring made or moved this build. They never move (again): a moved point's other link can
+-- cross something new, and moving the next one along would walk a chain of moves across the junction.
+local jxSquareMade = {}
+-- Points the sharing slid onto a crossing this build. They never slide again.
+local jxSlid = {}
+
+--- A point this build laid on one of its own paths with nothing else joined to it: one link each way (or
+--- a two-way link to each of the same two neighbours). Such a point can move without touching anything
+--- but its own path.
+local function jxPlainOurs(s)
+    if jxBuildNew == nil or not jxBuildNew[s] or s == jxCentreNode or jxSquareMade[s] or jxSlid[s] then return false end
+    local nb = {}
+    for _, id in ipairs(s.out or {}) do nb[id] = true end
+    for _, id in ipairs(s.incoming or {}) do nb[id] = true end
+    local n = 0
+    for _ in pairs(nb) do n = n + 1 end
+    local o, i = #(s.out or {}), #(s.incoming or {})
+    return n == 2 and o == i and (o == 1 or o == 2)
+end
+
+local function junctionSquareUp(sq)
+    local p, N, q = sq.p, sq.N, sq.q
+    if p == nil or q == nil or N == nil or p == N or q == N or p == q then return false end
+    local ux, uz = q.x - p.x, q.z - p.z
+    local nu = math.sqrt(ux * ux + uz * uz)
+    local nv = math.sqrt(sq.vx * sq.vx + sq.vz * sq.vz)
+    if nu < 1e-6 or nv < 1e-6 then return false end
+    ux, uz = ux / nu, uz / nu
+    local vx, vz = sq.vx / nv, sq.vz / nv
+    local ang = math.deg(math.acos(math.max(-1, math.min(1, ux * vx + uz * vz))))
+    -- Nearly parallel paths are left alone: turning ours square across one would zigzag it over the
+    -- other again and again.
+    if ang < 30 or ang > 150 then return false end
+    -- The bends a driver would really take at N, switching between our path and any other link there.
+    -- A snap through a point beside the crossing bends our own path, so the crossing angle alone can
+    -- say 85 where the switch is 55. 5 degrees of margin on AutoDrive's 80.
+    local function bend(a, b, c)
+        local x1, z1, x2, z2 = b.x - a.x, b.z - a.z, c.x - b.x, c.z - b.z
+        local n1, n2 = math.sqrt(x1 * x1 + z1 * z1), math.sqrt(x2 * x2 + z2 * z2)
+        if n1 < 1e-6 or n2 < 1e-6 then return 180 end
+        return math.deg(math.acos(math.max(-1, math.min(1, (x1 * x2 + z1 * z2) / (n1 * n2)))))
+    end
+    local function others(list)
+        local t = {}
+        for _, id in ipairs(list or {}) do
+            local w = ADGraphManager:getWayPointById(id)
+            if w ~= nil and w ~= p and w ~= q then t[#t + 1] = w end
+        end
+        return t
+    end
+    local ins, outs = others(N.incoming), others(N.out)
+    local shallow = false
+    for _, o in ipairs(outs) do
+        if bend(p, N, o) <= 85 or (sq.dual and bend(q, N, o) <= 85) then shallow = true end
+    end
+    for _, i in ipairs(ins) do
+        if bend(i, N, q) <= 85 or (sq.dual and bend(i, N, p) <= 85) then shallow = true end
+    end
+    if not shallow then return false end
+    -- The crossed path bends a little at N too when it is a curve: square to the average of its way
+    -- in and way out, so both switches come out near 90, not one at 81.
+    if #ins == 1 and #outs == 1 and ins[1] ~= outs[1] then
+        local i, o = ins[1], outs[1]
+        local ax, az = N.x - i.x, N.z - i.z
+        local bx, bz = o.x - N.x, o.z - N.z
+        local na, nb = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
+        if na > 1e-6 and nb > 1e-6 then
+            local mx, mz = ax / na + bx / nb, az / na + bz / nb
+            local nm = math.sqrt(mx * mx + mz * mz)
+            if nm > 1e-6 then vx, vz = mx / nm, mz / nm end
+        end
+    end
+    -- Square to the crossed path, on the side our path already runs.
+    local sx, sz = -vz, vx
+    if sx * ux + sz * uz < 0 then sx, sz = -sx, -sz end
+    local flags = N.flags or AutoDrive.FLAG_NONE
+    if jxBuildNew[p] then flags = p.flags elseif jxBuildNew[q] then flags = q.flags end
+    local label = nil
+    if jxLinkLabel ~= nil then label = (jxLinkLabel[p] or {})[N] or (jxLinkLabel[N] or {})[q] end
+    local bent = false
+    -- A point of our own path with nothing else joined to it: one link each way (both to the same two
+    -- neighbours when the path is two-way). Such a point can simply move.
+    local function plain(s)
+        if not jxBuildNew[s] or s == jxCentreNode or jxSquareMade[s] or jxSquareMade[N] then return false end
+        local nb = {}
+        for _, id in ipairs(s.out or {}) do nb[id] = true end
+        for _, id in ipairs(s.incoming or {}) do nb[id] = true end
+        local n = 0
+        for _ in pairs(nb) do n = n + 1 end
+        return n == 2 and #(s.out or {}) == (sq.dual and 2 or 1) and #(s.incoming or {}) == (sq.dual and 2 or 1)
+    end
+    local function bendSide(s, sign)
+        local ds = math.sqrt((s.x - N.x) ^ 2 + (s.z - N.z) ^ 2)
+        local d = math.min(1.0, 0.5 * ds)
+        if d < 0.3 then
+            -- Too close to put a point between: swing the neighbour itself onto the square line, at
+            -- the same distance.
+            if ds < 0.1 or not plain(s) then return end
+            ADGraphManager:moveWayPoint(s.id, N.x + sign * ds * sx, s.y, N.z + sign * ds * sz, s.flags, false)
+            jxNoteMoved(s)
+            jxSquareMade[s] = true
+            bent = true
+            return
+        end
+        local wp = ADFlyoverRecordWayPoint(N.x + sign * d * sx, N.y + (s.y - N.y) * (d / ds),
+            N.z + sign * d * sz, false, false, false, 0, flags or AutoDrive.FLAG_NONE, false)
+        jxLayLabel = label
+        jxNoteAdded(wp)
+        if wp == nil then jxLayLabel = nil return end
+        jxSquareMade[wp] = true
+        if sign < 0 then
+            junctionDisconnect(s, N)
+            junctionConnect(s, wp, sq.dual)
+            junctionConnect(wp, N, sq.dual)
+        else
+            junctionDisconnect(N, s)
+            junctionConnect(N, wp, sq.dual)
+            junctionConnect(wp, s, sq.dual)
+        end
+        jxLayLabel = nil
+        bent = true
+    end
+    bendSide(p, -1)
+    bendSide(q, 1)
+    return bent
+end
+
 local function junctionShareCrossings(cx, cz, reach)
     if jxBuildNew == nil then return 0 end
     jxShallowJoins = 0
+    jxSquaredJoins = 0
+    jxSquareMade = {}
+    jxSlid = {}
     -- EDGE only keeps out crossings AT a link's end (two links meeting at a point already share it);
     -- a crossing merely near an end is handled by SNAP, through that end.
-    local SNAP, EDGE, MAXH = 0.75, 1e-4, 2.0
+    local SNAP, EDGE, MAXH = AutoDrive.FLYOVER_JUNCTION_SHARE_SNAP or 0.75, 1e-4, 2.0
     -- Where to look: the junction's own circle, widened to take in every point the build added (a
     -- turn's tie-in can land well up a road), plus a margin for the links running on from there.
     local R2 = (reach + 15) ^ 2
@@ -10547,9 +10703,12 @@ local function junctionShareCrossings(cx, cz, reach)
             or (w.x >= minX and w.x <= maxX and w.z >= minZ and w.z <= maxZ)
     end
     local function splice(a, b, dual, N)
+        local was = jxLayLabel
+        jxLayLabel = jxLinkLabel ~= nil and ((jxLinkLabel[a] or {})[b] or (jxLinkLabel[b] or {})[a]) or nil
         junctionDisconnect(a, b)
         junctionConnect(a, N, dual)
         junctionConnect(N, b, dual)
+        jxLayLabel = was
     end
     local joined = 0
     -- A pair of links met before is not joined again: in a tangle of points a metre apart, running one
@@ -10633,14 +10792,65 @@ local function junctionShareCrossings(cx, cz, reach)
                 end
             end
         end
-        if near(L2.a) or near(L2.b) then
-            splice(L1.a, L1.b, L1.dual, near(L2.a) and L2.a or L2.b)
-        elseif near(L1.a) or near(L1.b) then
-            splice(L2.a, L2.b, L2.dual, near(L1.a) and L1.a or L1.b)
+        -- WHERE THE SHARED POINT GOES. A path run through a point BESIDE the crossing is bent there: a
+        -- turn snapped through a point 0.7 m to its side bent 50-88 degrees, and AutoDrive crawls at
+        -- 3 km/h past 50 (DrivePathModule.getMaxSpeedForAngle). Road lanes are never bent at all. So:
+        --   1. one of OUR points near the crossing, with nothing else joined to it, SLIDES onto the
+        --      crossing - the crossing lies on its own link, so our turn keeps its line - and the other
+        --      path runs through it;
+        --   2. an existing point near the crossing is shared as it stands only where running the other
+        --      path through it bends that path 10 degrees or less;
+        --   3. otherwise the crossing gets its own point, exactly where the two cross.
+        local function dirOf(L) return L.b.x - L.a.x, L.b.z - L.a.z end
+        local function bendVia(L, M)
+            local x1, z1, x2, z2 = M.x - L.a.x, M.z - L.a.z, L.b.x - M.x, L.b.z - M.z
+            local n1, n2 = math.sqrt(x1 * x1 + z1 * z1), math.sqrt(x2 * x2 + z2 * z2)
+            if n1 < 1e-6 or n2 < 1e-6 then return 180 end
+            return math.deg(math.acos(math.max(-1, math.min(1, (x1 * x2 + z1 * z2) / (n1 * n2)))))
+        end
+        -- N = the shared point, own = the link N is an end of, through = the link spliced through N.
+        local N, own, through = nil, nil, nil
+        local ownP, ownQ = nil, nil   -- own path's points either side of N, for squaring it up
+        for _, c in ipairs({ { L1.a, L1, L2 }, { L1.b, L1, L2 }, { L2.a, L2, L1 }, { L2.b, L2, L1 } }) do
+            local M = c[1]
+            if N == nil and c[2].new and near(M) and jxPlainOurs(M) then
+                local far = (M == c[2].a) and c[2].b or c[2].a
+                local beyond = nil
+                for _, id in ipairs(M.out or {}) do
+                    local w = ADGraphManager:getWayPointById(id)
+                    if w ~= nil and w ~= far then beyond = w end
+                end
+                for _, id in ipairs(M.incoming or {}) do
+                    local w = ADGraphManager:getWayPointById(id)
+                    if w ~= nil and w ~= far then beyond = w end
+                end
+                ADGraphManager:moveWayPoint(M.id, found.x, M.y, found.z, M.flags, false)
+                jxNoteMoved(M)
+                jxSlid[M] = true
+                N, own, through = M, c[2], c[3]
+                if M == c[2].b then ownP, ownQ = c[2].a, beyond else ownP, ownQ = beyond, c[2].b end
+            end
+        end
+        if N == nil then
+            for _, c in ipairs({ { L2.a, L2, L1 }, { L2.b, L2, L1 }, { L1.a, L1, L2 }, { L1.b, L1, L2 } }) do
+                local M = c[1]
+                if N == nil and near(M) and bendVia(c[3], M) <= 10 then N, own, through = M, c[2], c[3] end
+            end
+        end
+        local sq = nil
+        if N ~= nil then
+            splice(through.a, through.b, through.dual, N)
+            if through.new then
+                local vx, vz = dirOf(own)
+                sq = { p = through.a, N = N, q = through.b, dual = through.dual, vx = vx, vz = vz, otherDual = own.dual }
+            elseif ownP ~= nil and ownQ ~= nil then
+                local vx, vz = dirOf(through)
+                sq = { p = ownP, N = N, q = ownQ, dual = own.dual, vx = vx, vz = vz, otherDual = through.dual }
+            end
         else
             -- The existing road's flags, so a crossing point on it keeps the road's priority.
             local road = L2.new and L1 or L2
-            local N = ADFlyoverRecordWayPoint(found.x, found.y, found.z, false, false, false, 0,
+            N = ADFlyoverRecordWayPoint(found.x, found.y, found.z, false, false, false, 0,
                 road.a.flags or AutoDrive.FLAG_NONE, false)
             jxLayLabel = "x"
             jxNoteAdded(N)
@@ -10648,6 +10858,13 @@ local function junctionShareCrossings(cx, cz, reach)
             if N == nil then break end
             splice(L1.a, L1.b, L1.dual, N)
             splice(L2.a, L2.b, L2.dual, N)
+            local vx, vz = dirOf(L2)
+            sq = { p = L1.a, N = N, q = L1.b, dual = L1.dual, vx = vx, vz = vz, otherDual = L2.dual }
+        end
+        -- OFF by default: once the shared point slides instead of snapping, it saved 1 extra route of 18 and
+        -- put 20 sharp bends (12 or 3 km/h) into our turns (offline, 2026-10-02).
+        if sq ~= nil and AutoDrive.FLYOVER_JUNCTION_SQUARE_CROSSINGS == true then
+            if junctionSquareUp(sq) then jxSquaredJoins = jxSquaredJoins + 1 end
         end
         joined = joined + 1
     end
@@ -23722,7 +23939,8 @@ function ADFlyoverEditor:applyJunction()
             -- Our own deterministic chain-layer - NOT createSplineConnection, whose links go through
             -- toggleConnectionBetween (a flip, not a set). Flags match the joined (exit) road and are
             -- set at creation.
-            jxLayLabel = jxTurnLabel(c)
+            jxLaySeq = jxLaySeq + 1
+            jxLayLabel = jxTurnLabel(c) .. "#" .. jxLaySeq
             local ok, laid = tryCall("junction lay chain", function()
                 return junctionLayChain(NA, c.points, NB, dual, exitFlags)
             end)
@@ -23843,7 +24061,11 @@ function ADFlyoverEditor:applyJunction()
         ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d crossing(s) joined at a shared point, so AutoDrive makes one driver wait there (%d of them at 80 deg or less, where it can also switch paths).",
             shared, jxShallowJoins)
     end
-    self.junctionLastShared = { joined = shared, shallow = jxShallowJoins }
+    if jxSquaredJoins > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d shallow crossing(s) squared up with a small S-bend in the new path, so AutoDrive cannot switch paths there.",
+            jxSquaredJoins)
+    end
+    self.junctionLastShared = { joined = shared, shallow = jxShallowJoins, squared = jxSquaredJoins }
     -- THE ROUTE CHECK, on the junction as built (report only, like the clear's own check).
     local rc = nil
     tryCall("junction route check", function() rc = junctionRouteCheck(jp, placedSet, cx, cz, radius) end)
@@ -23875,6 +24097,7 @@ function ADFlyoverEditor:applyJunction()
             end
         end
     end
+    self.junctionLastLinkLabels = jxLinkLabel
     self.junctionLastNodeLabels = jxNodeLabel   -- for the harness's route study; nothing in game reads it
     jxBuildEnd()
     self:invalidateIdReferences()

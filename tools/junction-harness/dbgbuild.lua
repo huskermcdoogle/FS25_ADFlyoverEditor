@@ -14,6 +14,10 @@ LOG_ECHO = false
 local H = dofile("harness.lua")
 -- NOSHARE=1 builds without the shared-crossing step, to see what the rest of the builder does alone.
 if os.getenv("NOSHARE") == "1" then AutoDrive.FLYOVER_JUNCTION_SHARE_CROSSINGS = false end
+-- SQUARE=1 turns on the S-bend at shallow shared crossings (off in the builder by default).
+if os.getenv("SQUARE") == "1" then AutoDrive.FLYOVER_JUNCTION_SQUARE_CROSSINGS = true end
+-- SNAP=m: how close a crossing must be to an existing point to run through that point instead.
+if os.getenv("SNAP") then AutoDrive.FLYOVER_JUNCTION_SHARE_SNAP = tonumber(os.getenv("SNAP")) end
 local CX, CZ = tonumber(arg[1]), tonumber(arg[2])
 if CX == nil or CZ == nil then
     print("usage: lua dbgbuild.lua X Z [turnRadius]")
@@ -290,8 +294,12 @@ if rc ~= nil then
         -- that name changes, with the bend there.
         if os.getenv("HOPS") == "1" and e.path then
             local labels = ADFlyoverEditor.junctionLastNodeLabels or {}
+            local linkLabels = ADFlyoverEditor.junctionLastLinkLabels or {}
             local function kind(l) return (l == nil) and "road" or l end
             local function linkName(p, q)
+                -- The link's own label (it follows the link through every splice) is the true answer.
+                local own = (linkLabels[p] or {})[q]
+                if own ~= nil then return own end
                 local lp, lq = labels[p], labels[q]
                 for _, l in ipairs({ lp, lq }) do
                     if l ~= nil and l ~= "x" and l ~= "tie" then return l end
@@ -310,7 +318,7 @@ if rc ~= nil then
                         local c = (ux * vx + uz * vz) / math.max(1e-9, math.sqrt((ux * ux + uz * uz) * (vx * vx + vz * vz)))
                         local bend = math.deg(math.acos(math.max(-1, math.min(1, c))))
                         story[#story + 1] = string.format("[%s %.0f]", kind(labels[w]), bend)
-                        print(string.format("HOP %s -> %s at a %s point, bend %.0f", lastName, name, kind(labels[w]), bend))
+                        print(string.format("HOP %s -> %s at a %s point, bend %.0f  (%.1f, %.1f)", lastName, name, kind(labels[w]), bend, w.x, w.z))
                     end
                     story[#story + 1] = name
                     lastName = name
@@ -338,9 +346,79 @@ if rc ~= nil then
         end
     end
 end
+-- SHARP BENDS ON OUR TURNS. AutoDrive caps speed at the sharpest bend ahead, point by point
+-- (DrivePathModule.getMaxSpeedForAngle): 30 degrees or more -> 12 km/h, 50 or more -> 3 km/h. Counted at
+-- every point where a link of one turn leads on into a link of the SAME turn (by the build's link labels).
+local kink30, kink50 = 0, 0
+-- Short links among the points the build laid: points closer than 0.3 m sit on top of each other in game.
+local short = 0
+do
+    for _, a in pairs(ADGraphManager:getWayPoints()) do
+        if (a.x - CX) ^ 2 + (a.z - CZ) ^ 2 <= R * R then
+            for _, id in ipairs(a.out or {}) do
+                local b = ADGraphManager:getWayPointById(id)
+                if b ~= nil and ((ADFlyoverEditor.junctionLastNodeLabels or {})[a] or (ADFlyoverEditor.junctionLastNodeLabels or {})[b])
+                    and (b.x - a.x) ^ 2 + (b.z - a.z) ^ 2 < 0.09 and not (contains(b.out, a.id) and a.id > b.id) then
+                    short = short + 1
+                end
+            end
+        end
+    end
+end
+do
+    local LL = ADFlyoverEditor.junctionLastLinkLabels or {}
+    for a, outs in pairs(LL) do
+        if type(a) == "table" then
+            for N, lab in pairs(outs) do
+                for b, lab2 in pairs(LL[N] or {}) do
+                    if lab2 == lab and b ~= a and contains(a.out, N.id) and contains(N.out, b.id) then
+                        local ux, uz, vx, vz = N.x - a.x, N.z - a.z, b.x - N.x, b.z - N.z
+                        local c = (ux * vx + uz * vz) / math.max(1e-9, math.sqrt((ux * ux + uz * uz) * (vx * vx + vz * vz)))
+                        local ang = math.deg(math.acos(math.max(-1, math.min(1, c))))
+                        if ang < 150 then   -- not a two-way link's way back
+                            if ang >= 50 then kink50 = kink50 + 1 elseif ang >= 30 then kink30 = kink30 + 1 end
+                            if os.getenv("SHOWKINK") == "1" and ang >= 30 then
+                                print(string.format("KINK %s %.0f deg at (%.1f, %.1f)", lab, ang, N.x, N.z))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+-- NODEAT=x,z prints what meets at the point nearest there: every link in and out, its label, and the
+-- bend for each in -> out pair a driver could take.
+if os.getenv("NODEAT") then
+    local nx, nz = os.getenv("NODEAT"):match("(-?[%d.]+),(-?[%d.]+)")
+    nx, nz = tonumber(nx), tonumber(nz)
+    local best, bd = nil, 1e9
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        local d = (w.x - nx) ^ 2 + (w.z - nz) ^ 2
+        if d < bd then best, bd = w, d end
+    end
+    local LL = ADFlyoverEditor.junctionLastLinkLabels or {}
+    local NL = ADFlyoverEditor.junctionLastNodeLabels or {}
+    local N = best
+    print(string.format("NODE %d at (%.2f, %.2f) label %s", N.id, N.x, N.z, tostring(NL[N])))
+    local function lab(a, b) return tostring((LL[a] or {})[b] or "road") end
+    for _, id in ipairs(N.incoming or {}) do
+        local a = ADGraphManager:getWayPointById(id)
+        for _, oid in ipairs(N.out or {}) do
+            local b = ADGraphManager:getWayPointById(oid)
+            if a ~= b then
+                local ux, uz, vx, vz = N.x - a.x, N.z - a.z, b.x - N.x, b.z - N.z
+                local c = (ux * vx + uz * vz) / math.max(1e-9, math.sqrt((ux * ux + uz * uz) * (vx * vx + vz * vz)))
+                print(string.format("  in %s from (%.2f,%.2f) %.2f m  ->  out %s to (%.2f,%.2f) %.2f m   bend %.0f",
+                    lab(a, N), a.x, a.z, math.sqrt(ux * ux + uz * uz), lab(N, b), b.x, b.z, math.sqrt(vx * vx + vz * vz),
+                    math.deg(math.acos(math.max(-1, math.min(1, c))))))
+            end
+        end
+    end
+end
 print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d extra route(s) of %d | (%d long U-turn guesses)",
     dualTurns, crossNo, extra, rc and rc.routes or 0, uturns))
 local sh = ADFlyoverEditor.junctionLastShared or { joined = 0, shallow = 0 }
-print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d",
+print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow))
+    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short))
