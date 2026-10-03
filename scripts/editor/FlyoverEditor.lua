@@ -10980,40 +10980,114 @@ local function junctionPlacePattern(cx, cz, reach, shape)
             end
         end
     end
-    if #corners ~= 4 then
-        return nil, string.format("found %d places where through lanes cross, not the 4 of a square X", #corners)
-    end
-
-    -- 2. THE FRAME.
-    local ox, oz = 0, 0
-    for _, c in ipairs(corners) do ox, oz = ox + c.x / 4, oz + c.z / 4 end
-    local ex, ez = nil, nil
-    for _, c in ipairs(corners) do
-        for _, d in ipairs(c.dirs) do
-            -- +z is +x turned a quarter to the right; the +x lane must run on the +z side of the centre.
-            local zx, zz = -d[2], d[1]
-            if ex == nil and (c.x - ox) * zx + (c.z - oz) * zz > 0 then ex = d end
+    -- 2. THE FRAME. An X: from its four inner corners. A T: from where the side road's two lanes end,
+    -- and the main road's two lanes, which run straight past.
+    local kind, ox, oz, ux, uz, vx, vz, L = nil, 0, 0, nil, nil, nil, nil, 0
+    local sideIn, sideOut = nil, nil
+    if #corners == 4 then
+        kind = "X"
+        for _, c in ipairs(corners) do ox, oz = ox + c.x / 4, oz + c.z / 4 end
+        local ex = nil
+        for _, c in ipairs(corners) do
+            for _, d in ipairs(c.dirs) do
+                -- +z is +x turned a quarter to the right; the +x lane must run on the +z side of the centre.
+                local zx, zz = -d[2], d[1]
+                if ex == nil and (c.x - ox) * zx + (c.z - oz) * zz > 0 then ex = d end
+            end
         end
-    end
-    if ex == nil then return nil, "could not tell the lane directions apart" end
-    local ux, uz = ex[1], ex[2]
-    local vx, vz = -uz, ux
-    local L = 0
-    for _, c in ipairs(corners) do
-        local lx, lz = (c.x - ox) * ux + (c.z - oz) * uz, (c.x - ox) * vx + (c.z - oz) * vz
-        L = L + (math.abs(lx) + math.abs(lz)) / 4
-        c.lx, c.lz = lx, lz
-    end
-    for _, c in ipairs(corners) do
-        if math.abs(math.abs(c.lx) - L / 2) > 0.25 * L or math.abs(math.abs(c.lz) - L / 2) > 0.25 * L then
-            return nil, string.format("the lanes do not cross in a square (lane gap %.1f m)", L)
+        if ex == nil then return nil, "could not tell the lane directions apart" end
+        ux, uz = ex[1], ex[2]
+        vx, vz = -uz, ux
+        for _, c in ipairs(corners) do
+            local lx, lz = (c.x - ox) * ux + (c.z - oz) * uz, (c.x - ox) * vx + (c.z - oz) * vz
+            L = L + (math.abs(lx) + math.abs(lz)) / 4
+            c.lx, c.lz = lx, lz
         end
-        for _, d in ipairs(c.dirs) do
-            local along = math.max(math.abs(d[1] * ux + d[2] * uz), math.abs(d[1] * vx + d[2] * vz))
-            if along < 0.966 then return nil, "the roads do not cross square (more than 15 degrees off)" end
+        for _, c in ipairs(corners) do
+            if math.abs(math.abs(c.lx) - L / 2) > 0.25 * L or math.abs(math.abs(c.lz) - L / 2) > 0.25 * L then
+                return nil, string.format("the lanes do not cross in a square (lane gap %.1f m)", L)
+            end
+            for _, d in ipairs(c.dirs) do
+                local along = math.max(math.abs(d[1] * ux + d[2] * uz), math.abs(d[1] * vx + d[2] * vz))
+                if along < 0.966 then return nil, "the roads do not cross square (more than 15 degrees off)" end
+            end
         end
+    else
+        kind = "T"
+        -- The side road: one lane in that stops near the main road, one lane out that starts there.
+        local ends, starts = {}, {}
+        for _, w in pairs(ADGraphManager:getWayPoints()) do
+            if w ~= nil and w.id ~= nil and near(w, 14) then
+                local nin, nout = #(w.incoming or {}), #(w.out or {})
+                if nout == 0 and nin >= 1 then ends[#ends + 1] = w end
+                if nin == 0 and nout >= 1 then starts[#starts + 1] = w end
+            end
+        end
+        if #corners ~= 0 or #ends ~= 1 or #starts ~= 1 then
+            return nil, string.format("not a square X (%d lane crossings) and not a T (%d lane ends, %d lane starts near the middle)",
+                #corners, #ends, #starts)
+        end
+        sideIn, sideOut = ends[1], starts[1]
+        local p = ADGraphManager:getWayPointById(sideIn.incoming[1])
+        local q = ADGraphManager:getWayPointById(sideOut.out[1])
+        if p == nil or q == nil then return nil, "lost the side road's lanes" end
+        local dix, diz = unit(sideIn.x - p.x, sideIn.z - p.z)      -- heading in, towards the main road
+        local dox, doz = unit(q.x - sideOut.x, q.z - sideOut.z)    -- heading out, away from it
+        if dix * dox + diz * doz > -0.94 then return nil, "the side road's two lanes do not run opposite ways" end
+        -- First guess: square to the side road. Then the main road's own lanes at the mouth set +x, and
+        -- the side road may sit up to 15 degrees off square to them.
+        vx, vz = -dix, -diz      -- +z runs down the side road
+        ux, uz = vz, -vx         -- +x is +z turned a quarter back to the left
+        local xOut, xm, east, west
+        local function pickMain(minAlong)
+            -- Where the side road's lanes sit across it: in at x = 0 (from sideIn), out at about -L.
+            xOut = (sideOut.x - sideIn.x) * ux + (sideOut.z - sideIn.z) * uz
+            xm = xOut / 2
+            -- The main road's two lanes passing the mouth: the +x one nearer, the -x one next beyond it.
+            -- Positions measured along +z from sideIn.
+            local cand = {}
+            for _, l in ipairs(linksNear(sideIn.x, sideIn.z, 25)) do
+                local lx, lz = unit(l.b.x - l.a.x, l.b.z - l.a.z)
+                local along = lx * ux + lz * uz
+                local ua = (l.a.x - sideIn.x) * ux + (l.a.z - sideIn.z) * uz
+                local ub = (l.b.x - sideIn.x) * ux + (l.b.z - sideIn.z) * uz
+                if math.abs(along) > minAlong and math.min(ua, ub) <= xm and math.max(ua, ub) >= xm then
+                    local tt = (xm - ua) / (ub - ua)
+                    local zl = ((l.a.x + tt * (l.b.x - l.a.x)) - sideIn.x) * vx + ((l.a.z + tt * (l.b.z - l.a.z)) - sideIn.z) * vz
+                    if zl < 0 then cand[#cand + 1] = { zl = zl, dir = along > 0 and 1 or -1, dx = lx, dz = lz } end
+                end
+            end
+            local e, w = nil, nil
+            for _, c in ipairs(cand) do
+                if c.dir > 0 and (e == nil or c.zl > e.zl) then e = c end
+            end
+            if e == nil then return nil, "no main-road lane runs past the side road the right way" end
+            for _, c in ipairs(cand) do
+                if c.dir < 0 and c.zl < e.zl - 0.5 and (w == nil or c.zl > w.zl) then w = c end
+            end
+            if w == nil then return nil, "no second main-road lane beyond the first" end
+            return e, w
+        end
+        local e, w = pickMain(0.7)
+        if e == nil then return nil, w end
+        ux, uz = unit(e.dx - w.dx, e.dz - w.dz)
+        vx, vz = -uz, ux
+        if -(dix * vx + diz * vz) < 0.966 then
+            return nil, "the side road meets the main road more than 15 degrees off square"
+        end
+        e, w = pickMain(0.966)
+        if e == nil then return nil, w end
+        east, west = e.zl, w.zl
+        L = east - west
+        if xOut > -0.6 * L or xOut < -1.6 * L then
+            return nil, string.format("the side road's lanes are %.1f m apart, not like the main road's %.1f m", -xOut, L)
+        end        local zm = (east + west) / 2
+        ox = sideIn.x + xm * ux + zm * vx
+        oz = sideIn.z + xm * uz + zm * vz
     end
     if L < 2 or L > 12 then return nil, string.format("lane gap %.1f m is outside 2-12 m", L) end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - frame: %s, centre %.1f, %.1f, lane gap %.1f m, +x heading %.2f, %.2f.",
+        kind, ox, oz, L, ux, uz)
     local function W(mx, mz) return ox + L * (mx * ux + mz * vx), oz + L * (mx * uz + mz * vz) end
     local function D(mx, mz) return mx * ux + mz * vx, mx * uz + mz * vz end
     local function rot(x, z, k)
@@ -11078,81 +11152,125 @@ local function junctionPlacePattern(cx, cz, reach, shape)
         return N
     end
 
+    -- A POINT THE PATTERN NEEDS on the lane running (ddx, ddz) in the mod frame. In a T the side road's
+    -- lanes stop short of the main road; a point between a lane's end and the main road extends that
+    -- lane to it (in: lane end -> point; out: point -> lane start). `dry` only says whether it can.
+    local function lanePoint(mx, mz, ddx, ddz, dry)
+        local px, pz = W(mx, mz)
+        local dx, dz = D(ddx, ddz)
+        local r = onLane(px, pz, dx, dz, nil, dry)
+        if r ~= nil then return r end
+        if kind ~= "T" or math.abs(ddx) > 0.5 then return nil end
+        local stub, forward = sideOut, false
+        if ddz < 0 then stub, forward = sideIn, true end
+        local ahead = (px - stub.x) * dx + (pz - stub.z) * dz
+        if (forward and ahead <= 0.3) or (not forward and ahead >= -0.3) then return nil end
+        if math.sqrt((px - stub.x) ^ 2 + (pz - stub.z) ^ 2) > 2.5 * L then return nil end
+        if dry then return true end
+        local N = ADFlyoverRecordWayPoint(px, groundY(px, pz, stub.y or 0), pz, false, false, false, 0,
+            stub.flags or AutoDrive.FLAG_NONE, false)
+        jxNoteAdded(N)
+        if N == nil then return nil end
+        if forward then junctionConnect(stub, N, false) else junctionConnect(N, stub, false) end
+        return N
+    end
+
+    -- THE TURNS OF EACH SHAPE, in the mod frame (doc 05's node numbers in the comments).
+    -- Smooth: a right of approach k (the +x lane turned k quarters) runs on a circle centred
+    -- (-0.5 - r, 0.5 + r), a left on one centred (0.5 - r, 0.5 - r) through the centre.
+    local RR, LR = JX_PATTERN_RIGHT, JX_PATTERN_LEFT
+    local function smoothRight(k)
+        local ax, az = rot(-0.5 - RR, 0.5, k)
+        local bx, bz = rot(-0.5, 0.5 + RR, k)
+        local d1x, d1z = rot(1, 0, k)
+        local d2x, d2z = rot(0, 1, k)
+        return { a = { ax, az, d1x, d1z, "right turn start" }, b = { bx, bz, d2x, d2z, "right turn end" },
+                 arc = { -0.5 - RR, 0.5 + RR, RR, -math.pi / 2, 0, k, false }, kind = "R90" }
+    end
+    local function smoothLeft(k)
+        local ax, az = rot(0.5 - LR, 0.5, k)
+        local bx, bz = rot(0.5, 0.5 - LR, k)
+        local d1x, d1z = rot(1, 0, k)
+        local d3x, d3z = rot(0, -1, k)
+        return { a = { ax, az, d1x, d1z, "left turn start" }, b = { bx, bz, d3x, d3z, "left turn end" },
+                 arc = { 0.5 - LR, 0.5 - LR, LR, math.pi / 2, 0, k, true }, kind = "L90" }
+    end
+    -- A T keeps only the turns that exist: the side road is to the +z side. Rights: +x into the side
+    -- road (k 0), the side road into +x (k 3). Lefts: -x into the side road (k 2), the side road into -x (k 3).
+    local function smoothTurns()
+        local t = {}
+        if kind == "X" then
+            for k = 0, 3 do t[#t + 1] = smoothRight(k) t[#t + 1] = smoothLeft(k) end
+        else
+            t = { smoothRight(0), smoothRight(3), smoothLeft(2), smoothLeft(3) }
+        end
+        return t
+    end
+    -- The mod's T: points on the +x lane 3 (-0.75), 2 (-0.5), 9 (0.5), 10 (0.75); on the -x lane 12 (1.5)
+    -- and 13 (-1.5); the side road's out lane at 5 (-0.5, 0.75), its in lane at 8 (0.5, 0.75).
+    local T_EXACT = {
+        n3 = { -0.75, 0.5, 1, 0, "right turn start" }, n2 = { -0.5, 0.5, 1, 0, "inner corner" },
+        n9 = { 0.5, 0.5, 1, 0, "inner corner" }, n10 = { 0.75, 0.5, 1, 0, "right turn end" },
+        n12 = { 1.5, -0.5, -1, 0, "left turn start" }, n13 = { -1.5, -0.5, -1, 0, "left turn end" },
+        n5 = { -0.5, 0.75, 0, 1, "side road's lane out" }, n8 = { 0.5, 0.75, 0, -1, "side road's lane in" },
+    }
+    local T_ORDER = { "n3", "n2", "n9", "n10", "n12", "n13", "n5", "n8" }
+
     -- ALL OR NOTHING: every point the shape needs must have its lane before anything is laid. The smooth
-    -- turns end further out (2 L), where a lane may already have bent away; the mod's X stays within
-    -- 0.75 L of the centre, so where smooth does not fit, the mod's X is placed instead.
+    -- turns end further out (2 L), where a lane may already have bent away; the mod's shape stays within
+    -- about 0.75 L of the centre (1.5 L along a T's main road), so where smooth does not fit, the mod's
+    -- shape is placed instead.
     local function needs(sh)
         local t = {}
-        for k = 0, 3 do
-            local d1x, d1z = D(rot(1, 0, k))
-            local d2x, d2z = D(rot(0, 1, k))
-            local d3x, d3z = D(rot(0, -1, k))
-            local function add(mx, mz, dx, dz, what) local x, z = W(mx, mz) t[#t + 1] = { x, z, dx, dz, what } end
-            local cx1, cz1 = rot(-0.5, 0.5, k)
-            add(cx1, cz1, d1x, d1z, "inner corner")
-            add(cx1, cz1, d2x, d2z, "inner corner")
-            if sh == "exact" then
-                local ax, az = rot(-0.75, 0.5, k)
-                local bx, bz = rot(-0.5, 0.75, k)
-                add(ax, az, d1x, d1z, "right turn start")
-                add(bx, bz, d2x, d2z, "right turn end")
-            else
-                local RR, LR = JX_PATTERN_RIGHT, JX_PATTERN_LEFT
-                local ax, az = rot(-0.5 - RR, 0.5, k)
-                local bx, bz = rot(-0.5, 0.5 + RR, k)
-                add(ax, az, d1x, d1z, "right turn start")
-                add(bx, bz, d2x, d2z, "right turn end")
-                ax, az = rot(0.5 - LR, 0.5, k)
-                bx, bz = rot(0.5, 0.5 - LR, k)
-                add(ax, az, d1x, d1z, "left turn start")
-                add(bx, bz, d3x, d3z, "left turn end")
+        if kind == "X" then
+            for k = 0, 3 do
+                local cx1, cz1 = rot(-0.5, 0.5, k)
+                local d1x, d1z = rot(1, 0, k)
+                local d2x, d2z = rot(0, 1, k)
+                t[#t + 1] = { cx1, cz1, d1x, d1z, "inner corner" }
+                t[#t + 1] = { cx1, cz1, d2x, d2z, "inner corner" }
+                if sh == "exact" then
+                    local ax, az = rot(-0.75, 0.5, k)
+                    local bx, bz = rot(-0.5, 0.75, k)
+                    t[#t + 1] = { ax, az, d1x, d1z, "right turn start" }
+                    t[#t + 1] = { bx, bz, d2x, d2z, "right turn end" }
+                end
             end
+        elseif sh == "exact" then
+            for _, key in ipairs(T_ORDER) do t[#t + 1] = T_EXACT[key] end
+        end
+        if sh ~= "exact" then
+            for _, turn in ipairs(smoothTurns()) do t[#t + 1] = turn.a t[#t + 1] = turn.b end
         end
         return t
     end
     local function fits(sh)
         for _, n in ipairs(needs(sh)) do
-            if not onLane(n[1], n[2], n[3], n[4], nil, true) then
-                return false, string.format("no lane under the %s at %.1f, %.1f", n[5], n[1], n[2])
+            if not lanePoint(n[1], n[2], n[3], n[4], true) then
+                local x, z = W(n[1], n[2])
+                return false, string.format("no lane under the %s at %.1f, %.1f", n[5], x, z)
             end
         end
         return true
     end
     local okFit, whyNot = fits(shape)
     if not okFit and shape == "smooth" and fits("exact") then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the smooth X does not fit here (%s); placing the mod's X instead.", whyNot)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the smooth %s does not fit here (%s); placing the mod's %s instead.",
+            kind, whyNot, kind)
         shape = "exact"
     elseif not okFit then
         return nil, whyNot
     end
 
-    -- 4. THE CORNERS, shared by both lanes. Corner k sits at (-0.5, 0.5) turned k quarters: where the +x
-    -- lane (turned k) crosses the +z lane (turned k).
-    local cornerNode = {}
-    for k = 0, 3 do
-        local mx, mz = rot(-0.5, 0.5, k)
-        local px, pz = W(mx, mz)
-        local d1x, d1z = D(rot(1, 0, k))
-        local d2x, d2z = D(rot(0, 1, k))
-        local N = onLane(px, pz, d1x, d1z)
-        if N == nil then return nil, "lost a lane at an inner corner" end
-        if onLane(px, pz, d2x, d2z, N) == nil then return nil, "lost a lane at an inner corner" end
-        cornerNode[k] = N
-    end
-
-    -- 5. THE TURNS, one approach at a time (the +x lane turned k quarters).
+    -- 4. LAYING.
     local turns = 0
-    local function noLane(kind, which, x, z)
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - %s turn: no lane under its %s end at %.1f, %.1f - not laid.",
-            kind, which, x, z)
-    end
-    local function label(kind)
+    local function label(k)
         jxLaySeq = jxLaySeq + 1
-        jxLayLabel = kind .. "#" .. jxLaySeq
+        jxLayLabel = k .. "#" .. jxLaySeq
     end
-    local function lay(A, pts, B, kind)
+    local function lay(A, pts, B, k)
         if A == nil or B == nil or A == B then return false end
-        label(kind)
+        label(k)
         local ok, laid = tryCall("junction pattern lay", function()
             return junctionLayChain(A, pts, B, false, B.flags or AutoDrive.FLAG_NONE)
         end)
@@ -11160,8 +11278,8 @@ local function junctionPlacePattern(cx, cz, reach, shape)
         if ok and laid == true then turns = turns + 1 return true end
         return false
     end
-    -- Interior points of an arc in mod units, about every 2 m, as world points; `centreAt` marks the
-    -- sample that is the junction's centre (the lefts' shared point).
+    -- Interior points of an arc in mod units, about every 2 m, as world points; with centreMid the
+    -- middle sample is the junction's centre (the lefts' shared point).
     local function arcPoints(acx, acz, r, a0, a1, k, centreMid, y0, y1)
         local len = math.abs(a1 - a0) * r * L
         local n = math.max(2, math.floor(len / 2 + 0.5))
@@ -11176,16 +11294,36 @@ local function junctionPlacePattern(cx, cz, reach, shape)
         end
         return pts
     end
-
-    if shape == "exact" then
+    local function newCentre(flags, y)
         local cxw, czw = W(0, 0)
-        local cy = 0
-        for k = 0, 3 do cy = cy + (cornerNode[k].y or 0) / 4 end
-        local O = ADFlyoverRecordWayPoint(cxw, groundY(cxw, czw, cy), czw, false, false, false, 0,
-            cornerNode[0].flags or AutoDrive.FLAG_NONE, false)
+        local O = ADFlyoverRecordWayPoint(cxw, groundY(cxw, czw, y), czw, false, false, false, 0,
+            flags or AutoDrive.FLAG_NONE, false)
         jxLayLabel = "centre"
         jxNoteAdded(O)
         jxLayLabel = nil
+        return O
+    end
+
+    -- An X's inner corners, shared by both lanes. Corner k sits at (-0.5, 0.5) turned k quarters: where
+    -- the +x lane (turned k) crosses the +z lane (turned k).
+    local cornerNode = {}
+    if kind == "X" then
+        for k = 0, 3 do
+            local mx, mz = rot(-0.5, 0.5, k)
+            local px, pz = W(mx, mz)
+            local d2x, d2z = D(rot(0, 1, k))
+            local d1mx, d1mz = rot(1, 0, k)
+            local N = lanePoint(mx, mz, d1mx, d1mz)
+            if N == nil then return nil, "lost a lane at an inner corner" end
+            if onLane(px, pz, d2x, d2z, N) == nil then return nil, "lost a lane at an inner corner" end
+            cornerNode[k] = N
+        end
+    end
+
+    if shape == "exact" and kind == "X" then
+        local cy = 0
+        for k = 0, 3 do cy = cy + (cornerNode[k].y or 0) / 4 end
+        local O = newCentre(cornerNode[0].flags, cy)
         if O == nil then return nil, "could not add the centre point" end
         -- The spokes: every left turn goes corner -> centre -> corner, so each spoke runs both ways.
         label("L-spokes")
@@ -11193,45 +11331,73 @@ local function junctionPlacePattern(cx, cz, reach, shape)
         jxLayLabel = nil
         turns = turns + 4
         for k = 0, 3 do
-            local d1x, d1z = D(rot(1, 0, k))
-            local d2x, d2z = D(rot(0, 1, k))
-            local ax, az = W(rot(-0.75, 0.5, k))
-            local bx, bz = W(rot(-0.5, 0.75, k))
-            local A = onLane(ax, az, d1x, d1z)
-            local B = onLane(bx, bz, d2x, d2z)
-            lay(A, {}, B, "R45")
+            local ax, az = rot(-0.75, 0.5, k)
+            local bx, bz = rot(-0.5, 0.75, k)
+            local d1x, d1z = rot(1, 0, k)
+            local d2x, d2z = rot(0, 1, k)
+            lay(lanePoint(ax, az, d1x, d1z), {}, lanePoint(bx, bz, d2x, d2z), "R45")
         end
+    elseif shape == "exact" then
+        -- The mod's T (doc 05): every path one-way. The left from -x into the side road runs 12 ->
+        -- centre -> 2 -> 5; the left out of the side road 8 -> 9 -> centre -> 13; they take turns at the
+        -- centre. The rights are the short cuts 3 -> 5 and 8 -> 10.
+        local n = {}
+        for _, key in ipairs(T_ORDER) do
+            local s = T_EXACT[key]
+            n[key] = lanePoint(s[1], s[2], s[3], s[4])
+            if n[key] == nil then return nil, "lost the lane under the " .. s[5] end
+        end
+        local O = newCentre(n.n2.flags, ((n.n2.y or 0) + (n.n9.y or 0)) / 2)
+        if O == nil then return nil, "could not add the centre point" end
+        lay(n.n3, {}, n.n5, "R45")
+        lay(n.n8, {}, n.n10, "R45")
+        label("L-in")
+        junctionConnect(n.n12, O, false)
+        junctionConnect(O, n.n2, false)
+        junctionConnect(n.n2, n.n5, false)
+        jxLayLabel = nil
+        label("L-out")
+        junctionConnect(n.n8, n.n9, false)
+        junctionConnect(n.n9, O, false)
+        junctionConnect(O, n.n13, false)
+        jxLayLabel = nil
+        turns = turns + 2
     else
-        local RR, LR = JX_PATTERN_RIGHT, JX_PATTERN_LEFT
-        for k = 0, 3 do
-            local d1x, d1z = D(rot(1, 0, k))     -- in, along +x
-            local d2x, d2z = D(rot(0, 1, k))     -- right, out along +z
-            local d3x, d3z = D(rot(0, -1, k))    -- left, out along -z
-            -- Right: centre (-0.5 - r, 0.5 + r), from straight above it round to its right.
-            local ax, az = W(rot(-0.5 - RR, 0.5, k))
-            local bx, bz = W(rot(-0.5, 0.5 + RR, k))
-            local A = onLane(ax, az, d1x, d1z)
-            local B = onLane(bx, bz, d2x, d2z)
-            if A == nil then noLane("right", "start", ax, az) end
-            if B == nil then noLane("right", "end", bx, bz) end
+        for _, turn in ipairs(smoothTurns()) do
+            local A = lanePoint(turn.a[1], turn.a[2], turn.a[3], turn.a[4])
+            local B = lanePoint(turn.b[1], turn.b[2], turn.b[3], turn.b[4])
             if A ~= nil and B ~= nil then
-                lay(A, arcPoints(-0.5 - RR, 0.5 + RR, RR, -math.pi / 2, 0, k, false, A.y or 0, B.y or 0), B, "R90")
-            end
-            -- Left: centre (0.5 - r, 0.5 - r), from below it round to its right, through the centre.
-            ax, az = W(rot(0.5 - LR, 0.5, k))
-            bx, bz = W(rot(0.5, 0.5 - LR, k))
-            A = onLane(ax, az, d1x, d1z)
-            B = onLane(bx, bz, d3x, d3z)
-            if A == nil then noLane("left", "start", ax, az) end
-            if B == nil then noLane("left", "end", bx, bz) end
-            if A ~= nil and B ~= nil then
-                lay(A, arcPoints(0.5 - LR, 0.5 - LR, LR, math.pi / 2, 0, k, true, A.y or 0, B.y or 0), B, "L90")
+                local c = turn.arc
+                lay(A, arcPoints(c[1], c[2], c[3], c[4], c[5], c[6], c[7], A.y or 0, B.y or 0), B, turn.kind)
             end
         end
     end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: square X, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
-        shape, L, ox, oz, turns)
-    return { shape = shape, turns = turns, L = L }
+
+    -- A T's side lanes may now run on past the turns towards the main road, to an end nothing uses:
+    -- take those bits back to the first point a turn uses.
+    if kind == "T" then
+        local function tidy(w, back)
+            for _ = 1, 30 do
+                if w == nil or w.id == nil or ADGraphManager:getWayPointById(w.id) ~= w then return end
+                local nout, nin = #(w.out or {}), #(w.incoming or {})
+                local nextW = nil
+                if back and nout == 0 and nin == 1 then
+                    nextW = ADGraphManager:getWayPointById(w.incoming[1])
+                elseif not back and nin == 0 and nout == 1 then
+                    nextW = ADGraphManager:getWayPointById(w.out[1])
+                else
+                    return
+                end
+                jxRemove(w, "junction pattern unused lane end", true)
+                w = nextW
+            end
+        end
+        tidy(sideIn, true)
+        tidy(sideOut, false)
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: square %s, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
+        shape, kind, L, ox, oz, turns)
+    return { shape = shape, kind = kind, turns = turns, L = L }
 end
 
 
@@ -24310,6 +24476,7 @@ function ADFlyoverEditor:applyJunction()
         else
             ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) not placed: %s - laying the turns one by one.",
                 shape, tostring(why or "it failed, see above"))
+            self.junctionLastPatternWhy = tostring(why or "it failed")
         end
     end
     self.junctionLastPattern = pattern

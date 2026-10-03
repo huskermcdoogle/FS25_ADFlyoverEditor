@@ -146,6 +146,19 @@ After the pattern builder (doc 07, 2026-10-03), `PATTERN=exact` (the default, as
   `PATTERN=off` is the old builder. `SHOWMISSING=1` lists the turns that cannot be driven and the
   bends that stop them. `dump_build.lua` + `../xt-study/drawbuilt.py` draw what a build laid.
 
+With the T pattern too (2026-10-03), identical on repeat:
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 0 at 0 | extra routes 21 at 10 (of 468 routes; 4 junctions with no route check)
+    speed: sharp bends on our turns: 48 at 30-50 deg (12 km/h), 58 at 50+ (3 km/h) | links under 0.3 m: 25
+    pattern placed at 32 junctions (the rest laid turn by turn) | turns laid but not drivable: 34 at 20
+
+- 7 X's and 25 T's take the pattern. Of the 34 undrivable turns, 5 are at pattern junctions (j2, j55,
+  j56) and 29 at junctions still built turn by turn.
+- The 48 bends at 30-50 degrees are the mod T's 45-degree corners (12 km/h, as in the mod).
+- Why the rest fall back is in the `why=` column. Skewed T's (more than 15 degrees off square), T's whose
+  side road is one two-way road or one-way, and X's where the clear kept only one through road.
+
 The two-way column now counts only links whose point has BOTH its links two-way, which a two-way turn
 has. A two-way road's new end, where a turn joins it, has one two-way link and one one-way, and is not
 counted. `SHOWDUAL=1` lists them. A junction with nothing

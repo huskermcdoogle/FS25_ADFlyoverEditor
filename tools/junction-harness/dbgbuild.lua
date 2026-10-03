@@ -448,6 +448,6 @@ end
 print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d extra route(s) of %d | (%d long U-turn guesses)",
     dualTurns, crossNo, extra, rc and rc.routes or 0, uturns))
 local sh = ADFlyoverEditor.junctionLastShared or { joined = 0, shallow = 0 }
-print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d pattern=%s missing=%d",
+print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d pattern=%s missing=%d why=%s",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short, ADFlyoverEditor.junctionLastPattern and ADFlyoverEditor.junctionLastPattern.shape or "no", rc and rc.missing and #rc.missing or 0))
+    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short, ADFlyoverEditor.junctionLastPattern and ADFlyoverEditor.junctionLastPattern.shape or "no", rc and rc.missing and #rc.missing or 0, (ADFlyoverEditor.junctionLastPatternWhy or "-"):gsub(" ", "_")))
