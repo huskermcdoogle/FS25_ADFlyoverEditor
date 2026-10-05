@@ -3367,7 +3367,34 @@ function ADFlyoverEditor:drawNetwork()
     -- Junction preview: the scope circle, the approaches it cuts (green = entry, amber = exit, with a
     -- stub along the travel direction), and each new turn drawn as its track-tangent connector curve.
     -- Nothing here changes the network until right-click.
-    if self.tool == self.TOOL.JUNCTION and self.junctionPreview ~= nil then
+    -- PLACE MODE's preview (doc 08): the piece that right-click will lay. WHITE = the pattern fitted to the
+    -- crossing, AMBER = the plain piece (it does not fit), dimmer while it still follows the cursor; small
+    -- white spheres = its shared points, RED spheres = the loose ends you join by hand. Where it cannot
+    -- place at all, one red sphere at the cursor (the card says why).
+    if self.tool == self.TOOL.JUNCTION and self.junctionPreview ~= nil and self.junctionPreview.placeMode then
+        local jp = self.junctionPreview
+        local k = (self.junctionArmed ~= nil) and 1 or 0.55
+        if jp.ok and jp.plan ~= nil then
+            local r, g, b = 1, 1, 1
+            if jp.plan.shape == "plain" then r, g, b = 1, 0.72, 0.18 end
+            for _, line in ipairs(jp.plan.lines or {}) do
+                local pts = line.pts
+                for i = 2, #pts do
+                    local q, p = pts[i - 1], pts[i]
+                    ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.5, q.z, p.x, (p.y or 0) + 0.5, p.z, lw,
+                        r * k, g * k, b * k)
+                end
+            end
+            for _, m in ipairs(jp.plan.marks or {}) do
+                ADDrawingManager:addSphereTask(m.x, (m.y or 0) + 0.5, m.z, 1.4, k, k, k, 0.15)
+            end
+            for _, e in ipairs(jp.plan.loose or {}) do
+                ADDrawingManager:addSphereTask(e.x, (e.y or 0) + 0.6, e.z, 2.2, 1, 0.2, 0.15, 0.2)
+            end
+        else
+            ADDrawingManager:addSphereTask(jp.cx, (jp.cy or 0) + 0.6, jp.cz, 2.2, 1, 0.2, 0.15, 0.2)
+        end
+    elseif self.tool == self.TOOL.JUNCTION and self.junctionPreview ~= nil then
         local jp = self.junctionPreview
         local baseY = (jp.cy or AutoDrive:getTerrainHeightAtWorldPos(jp.cx, jp.cz) or 0)
         -- NB: addLineTask is (sx, sy, sz, ex, ey, ez, SCALE, r, g, b) - scale (line width) then colour,
@@ -7858,6 +7885,19 @@ function ADFlyoverEditor:getNextStepLines()
             end
             return L("Point at a junction and left-click to lock it. Wheel = scope; right-click leaves the tool.")
         end
+        if self.junctionMode == "place" then
+            if jp ~= nil and jp.placeMode and jp.ok and jp.plan ~= nil then
+                local what = string.format("%s %s", jp.plan.shape == "exact" and "mod" or tostring(jp.plan.shape),
+                    tostring(jp.plan.kind))
+                if self.junctionArmed ~= nil then
+                    return string.format(L("Locked: right-click places the %s. Left-click moves the lock."), what)
+                end
+                return string.format(L("A %s goes here. Left-click locks it."), what)
+            elseif jp ~= nil and jp.placeMode then
+                return L("Nothing can be placed here - the card says why.")
+            end
+            return L("Point where roads cross and left-click to lock.")
+        end
         local placeable = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) or 0
         if self.junctionArmed ~= nil then
             if placeable > 0 then
@@ -10984,6 +11024,32 @@ end
 -- Mod frame: +x along one through lane; +z is +x turned a quarter to the right (FS25 x east, z south), so
 -- with right-hand traffic the +x lane runs at z = +0.5 L. Returns { shape, kind, turns, L } or nil, why,
 -- wired. dry (place mode's preview) only works out what would be placed and changes nothing.
+-- THE PLAIN PIECE (docs/junction-tool/08-place-junction.md). Where the crossing doesn't fit the pattern,
+-- the mod's own square X or T is placed anyway, lined up with the main road at the cursor: never refused,
+-- never the old builder. Each of its points that lands on a lane running its way joins that lane; the
+-- rest are laid free, and any of the piece's arm ends left free is a LOOSE END, listed on the card, to
+-- join by hand. The pieces in doc 05's numbering, in lane gaps (the T's side road to +z).
+local JX_PLAIN = {
+    X = {
+        nodes = { [1] = { 0, 0 }, [2] = { -0.5, 0.5 }, [3] = { -0.75, 0.5 }, [4] = { -1.5, 0.5 }, [5] = { -0.5, 0.75 },
+            [6] = { -0.5, 1.5 }, [7] = { 0.5, 1.5 }, [8] = { 0.5, 0.75 }, [9] = { 0.5, 0.5 }, [10] = { 0.75, 0.5 },
+            [11] = { 1.5, 0.5 }, [12] = { 1.5, -0.5 }, [13] = { 0.75, -0.5 }, [14] = { 0.5, -0.5 }, [15] = { 0.5, -0.75 },
+            [16] = { 0.5, -1.5 }, [17] = { -0.5, -1.5 }, [18] = { -0.5, -0.75 }, [19] = { -0.5, -0.5 }, [20] = { -0.75, -0.5 },
+            [21] = { -1.5, -0.5 } },
+        links = { { 1, 2 }, { 2, 1 }, { 1, 9 }, { 9, 1 }, { 1, 14 }, { 14, 1 }, { 1, 19 }, { 19, 1 }, { 2, 5 }, { 2, 9 },
+            { 3, 2 }, { 3, 5 }, { 4, 3 }, { 5, 6 }, { 7, 8 }, { 8, 9 }, { 8, 10 }, { 9, 10 }, { 9, 14 }, { 10, 11 },
+            { 12, 13 }, { 13, 14 }, { 13, 15 }, { 14, 15 }, { 14, 19 }, { 15, 16 }, { 17, 18 }, { 18, 19 }, { 18, 20 },
+            { 19, 20 }, { 19, 2 }, { 20, 21 } },
+    },
+    T = {
+        nodes = { [1] = { 0, 0 }, [2] = { -0.5, 0.5 }, [3] = { -0.75, 0.5 }, [4] = { -1.5, 0.5 }, [5] = { -0.5, 0.75 },
+            [6] = { -0.5, 1.5 }, [7] = { 0.5, 1.5 }, [8] = { 0.5, 0.75 }, [9] = { 0.5, 0.5 }, [10] = { 0.75, 0.5 },
+            [11] = { 1.5, 0.5 }, [12] = { 1.5, -0.5 }, [13] = { -1.5, -0.5 } },
+        links = { { 1, 2 }, { 1, 13 }, { 2, 5 }, { 2, 9 }, { 3, 2 }, { 3, 5 }, { 4, 3 }, { 5, 6 }, { 7, 8 }, { 8, 9 },
+            { 8, 10 }, { 9, 10 }, { 9, 1 }, { 10, 11 }, { 12, 13 }, { 12, 1 } },
+    },
+}
+
 local JX_PATTERN_RIGHT, JX_PATTERN_LEFT = 1.5, 1.71
 local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     local R = math.max(reach or 15, 15)
@@ -11272,7 +11338,36 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         return nil, whyNot
     end
     if dry then
-        return { shape = shape, kind = kind, L = L, ox = ox, oz = oz, ux = ux, uz = uz, turns = 0 }
+        -- What the preview draws: each new path as a line through world points, and the shared points.
+        local lines, marks = {}, {}
+        local function P(mx, mz) local x, z = W(mx, mz) return { x = x, z = z } end
+        local piece = JX_PLAIN[kind]
+        if shape == "exact" then
+            local new = (kind == "X")
+                and { { 1, 2, true }, { 1, 9, true }, { 1, 14, true }, { 1, 19, true },
+                      { 3, 5 }, { 8, 10 }, { 13, 15 }, { 18, 20 } }
+                or { { 3, 5 }, { 8, 10 }, { 12, 1 }, { 1, 2 }, { 2, 5 }, { 8, 9 }, { 9, 1 }, { 1, 13 } }
+            for _, l in ipairs(new) do
+                local a, b = piece.nodes[l[1]], piece.nodes[l[2]]
+                lines[#lines + 1] = { pts = { P(a[1], a[2]), P(b[1], b[2]) }, dual = l[3] == true }
+            end
+            local shared = (kind == "X") and { 1, 2, 9, 14, 19, 5, 10, 15, 20 } or { 1, 2, 9, 5, 10, 13 }
+            for _, n in ipairs(shared) do marks[#marks + 1] = P(piece.nodes[n][1], piece.nodes[n][2]) end
+        else
+            for _, turn in ipairs(smoothTurns()) do
+                local c = turn.arc
+                local pts = { P(turn.a[1], turn.a[2]) }
+                for i = 1, 11 do
+                    local a = c[4] + (c[5] - c[4]) * i / 12
+                    pts[#pts + 1] = P(rot(c[1] + c[3] * math.cos(a), c[2] + c[3] * math.sin(a), c[6]))
+                end
+                pts[#pts + 1] = P(turn.b[1], turn.b[2])
+                lines[#lines + 1] = { pts = pts }
+            end
+            marks[#marks + 1] = P(0, 0)
+        end
+        return { shape = shape, kind = kind, L = L, ox = ox, oz = oz, ux = ux, uz = uz, turns = 0,
+                 lines = lines, marks = marks }
     end
 
     -- 4. LAYING.
@@ -11413,32 +11508,6 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     return { shape = shape, kind = kind, turns = turns, L = L }
 end
 
--- THE PLAIN PIECE (docs/junction-tool/08-place-junction.md). Where the crossing doesn't fit the pattern,
--- the mod's own square X or T is placed anyway, lined up with the main road at the cursor: never refused,
--- never the old builder. Each of its points that lands on a lane running its way joins that lane; the
--- rest are laid free, and any of the piece's arm ends left free is a LOOSE END, listed on the card, to
--- join by hand. The pieces in doc 05's numbering, in lane gaps (the T's side road to +z).
-local JX_PLAIN = {
-    X = {
-        nodes = { [1] = { 0, 0 }, [2] = { -0.5, 0.5 }, [3] = { -0.75, 0.5 }, [4] = { -1.5, 0.5 }, [5] = { -0.5, 0.75 },
-            [6] = { -0.5, 1.5 }, [7] = { 0.5, 1.5 }, [8] = { 0.5, 0.75 }, [9] = { 0.5, 0.5 }, [10] = { 0.75, 0.5 },
-            [11] = { 1.5, 0.5 }, [12] = { 1.5, -0.5 }, [13] = { 0.75, -0.5 }, [14] = { 0.5, -0.5 }, [15] = { 0.5, -0.75 },
-            [16] = { 0.5, -1.5 }, [17] = { -0.5, -1.5 }, [18] = { -0.5, -0.75 }, [19] = { -0.5, -0.5 }, [20] = { -0.75, -0.5 },
-            [21] = { -1.5, -0.5 } },
-        links = { { 1, 2 }, { 2, 1 }, { 1, 9 }, { 9, 1 }, { 1, 14 }, { 14, 1 }, { 1, 19 }, { 19, 1 }, { 2, 5 }, { 2, 9 },
-            { 3, 2 }, { 3, 5 }, { 4, 3 }, { 5, 6 }, { 7, 8 }, { 8, 9 }, { 8, 10 }, { 9, 10 }, { 9, 14 }, { 10, 11 },
-            { 12, 13 }, { 13, 14 }, { 13, 15 }, { 14, 15 }, { 14, 19 }, { 15, 16 }, { 17, 18 }, { 18, 19 }, { 18, 20 },
-            { 19, 20 }, { 19, 2 }, { 20, 21 } },
-    },
-    T = {
-        nodes = { [1] = { 0, 0 }, [2] = { -0.5, 0.5 }, [3] = { -0.75, 0.5 }, [4] = { -1.5, 0.5 }, [5] = { -0.5, 0.75 },
-            [6] = { -0.5, 1.5 }, [7] = { 0.5, 1.5 }, [8] = { 0.5, 0.75 }, [9] = { 0.5, 0.5 }, [10] = { 0.75, 0.5 },
-            [11] = { 1.5, 0.5 }, [12] = { 1.5, -0.5 }, [13] = { -1.5, -0.5 } },
-        links = { { 1, 2 }, { 1, 13 }, { 2, 5 }, { 2, 9 }, { 3, 2 }, { 3, 5 }, { 4, 3 }, { 5, 6 }, { 7, 8 }, { 8, 9 },
-            { 8, 10 }, { 9, 10 }, { 9, 1 }, { 10, 11 }, { 12, 13 }, { 12, 1 } },
-    },
-}
-
 local function junctionPlacePlain(cx, cz, dry)
     local unit = jxpUnit
     -- THE MAIN ROAD: the lane nearest the cursor, and its partner running the other way beside it.
@@ -11541,8 +11610,20 @@ local function junctionPlacePlain(cx, cz, dry)
                 loose[#loose + 1] = { x = px, z = pz }
             end
         end
+        local lines = {}
+        local set = {}
+        for _, l in ipairs(piece.links) do set[l[1] .. ">" .. l[2]] = true end
+        for _, l in ipairs(piece.links) do
+            local dual = set[l[2] .. ">" .. l[1]] == true
+            if not (dual and l[1] > l[2]) then
+                local a, b = piece.nodes[l[1]], piece.nodes[l[2]]
+                local ax, az = W(a[1], a[2])
+                local bx, bz = W(b[1], b[2])
+                lines[#lines + 1] = { pts = { { x = ax, z = az }, { x = bx, z = bz } }, dual = dual }
+            end
+        end
         return { shape = "plain", kind = kind, L = L, ox = ox, oz = oz, ux = ux, uz = uz, turns = 0,
-                 loose = loose, partner = partner }
+                 loose = loose, partner = partner, lines = lines, marks = {} }
     end
 
     local node, onRole = {}, {}
@@ -12848,14 +12929,22 @@ function ADFlyoverEditor:updatePlacePreview()
     tryCall("junction place: is it wired", function() site = self:junctionSelect(cx, cz) end)
     if site ~= nil and not site.virgin then
         self.junctionPreview = { placeMode = true, cx = cx, cz = cz, shape = shape, ok = false, wired = true,
+            cy = AutoDrive:getTerrainHeightAtWorldPos(cx, cz) or 0,
             why = "turn wiring is still here - clear the junction first" }
         return
     end
     local okCall, res, why, wired = tryCall("junction place preview", function()
         return junctionPlacePattern(cx, cz, 15, shape, true)
     end)
+    -- Ground heights for the drawing, once per preview rather than every frame.
+    local function ground(p) p.y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z) or 0 end
+    if okCall and res ~= nil then
+        for _, line in ipairs(res.lines or {}) do for _, p in ipairs(line.pts) do ground(p) end end
+        for _, p in ipairs(res.marks or {}) do ground(p) end
+        for _, p in ipairs(res.loose or {}) do ground(p) end
+    end
     self.junctionPreview = {
-        placeMode = true, cx = cx, cz = cz, shape = shape,
+        placeMode = true, cx = cx, cz = cz, cy = AutoDrive:getTerrainHeightAtWorldPos(cx, cz) or 0, shape = shape,
         ok = okCall and res ~= nil, plan = res,
         why = okCall and why or "it failed - see the log", wired = wired == true,
     }
@@ -12904,7 +12993,8 @@ function ADFlyoverEditor:applyJunctionPlace()
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
 end
 
-function ADFlyoverEditor:updateJunctionPreview()    -- Armed: the site is locked where it was clicked and the preview stops following the cursor (the
+function ADFlyoverEditor:updateJunctionPreview()
+    -- Armed: the site is locked where it was clicked and the preview stops following the cursor (the
     -- wheel and the turn radius still reshape it). Unarmed: it follows the cursor as a live scout.
     local cx, cz, cy
     if self.junctionArmed ~= nil then

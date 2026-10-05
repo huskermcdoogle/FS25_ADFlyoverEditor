@@ -89,6 +89,16 @@ leftover lane end is taken away.
   find something to take out. A road splitting into its two lanes is no longer mistaken for wiring.
   All 75, cleared first (`regplace.sh`, identical on repeat): 32 fitted, 37 plain, 6 refused (j14, j20,
   j26, j39, j40, j68: the clear leaves wiring there), 0 Lua errors, 74 loose ends at 27 junctions.
+- **Step 3 done offline** (2026-10-05). Place mode draws its own preview:
+  - white lines: the pattern fitted to the crossing;
+  - amber lines: the plain piece;
+  - dimmer while it still follows the cursor;
+  - small white spheres: shared points; red spheres: loose ends;
+  - one red sphere at the cursor where nothing can be placed.
+
+  The hint line under the card says what right-click will place. The old drawing expected a build or
+  clear preview and would have thrown on a place preview in game; place now never reaches it. The real
+  draw routine runs clean offline on both shapes and the plain piece.
 
 ## Not in this plan
 
