@@ -349,7 +349,24 @@ Each is one choice. We'll ask them one at a time.
   grouping not depend on order, rather than tuning the order.
 - **In-game check still to do for the numbering fix** (tested offline only): clear 30, then 39, with
   through roads kept. 39 should keep its road from the south: all three through roads, as on a
-  fresh 39.
+  fresh 39. (Done in game 2026-10-02, build 422: it matched a fresh 39.)
+
+## Split junctions: clearing one part (decided 2026-10-03, not built)
+
+Two parts share one main road, for example 39 / 39se / 39nw or 26n / 26s. Part A is the one you clear;
+part B is its twin. Three patch rounds on the build-422 findings only moved the problem around, so these
+are your decisions to build from:
+
+1. **B's turn inside A's area is left working.** A's clear stops short of where B's turn leaves (or joins)
+   the main road, so B's turn can still be driven. A's stub on that side is longer than usual.
+2. **Both parts cleared, through roads off:** the road between them stays, as a piece of main road for the
+   builder to join to. The check says it is left on purpose.
+3. **One part at a time.** No "clear all parts" choice on the card.
+4. **The check calls B's turn fine only if it still drives:** it follows the turn end to end; if a vehicle
+   can no longer get onto it or off it, that is a problem. The check never relabels or hides a finding.
+
+Already decided before: a lane from one part's side road across the main road into another part's side
+road is a turn, cleared even with through roads kept (the green lane at 39).
 
 ## Sources
 
