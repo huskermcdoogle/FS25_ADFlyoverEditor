@@ -123,6 +123,23 @@ leftover lane end is taken away.
   - j9 leans 14 degrees, j3 29 degrees: both fit now, every end joined. All 75 (identical on repeat):
     43 fitted, 26 plain, 6 refused (the same where the clear leaves wiring), 0 errors, 66 loose ends at
     23 junctions. Before the lean: 32, 37, 6, and 74 at 27.
+- **Second in-game look** (build 446, 2026-10-05): j9 good in both shapes. j3 failed again (the lean
+  went the wrong way and the lock moved with the view); j7 wasn't seen as leaning; at j2 the clear left
+  another branch unconnected. The save hadn't changed since 27 September, so the network matched
+  offline. The differences came from WHERE the click landed:
+  - **The click picks the junction:** pointing anywhere on a junction the clear knows, place works from
+    that junction's own centre, as the clear does. j3 now gives the same mod T from three click spots.
+  - **The side road is a pair:** a lane in and a lane out running opposite ways, a lane gap apart. A
+    stray end the clear left nearby (as at j3 in game) is ignored instead of stopping the fit. The plain
+    piece also leaves ends running along the main road out of its lean.
+  - **Limits from AutoDrive's 80-degree rule on the mod shape:** a T to 50 degrees off square (worst
+    bend 72; at 55 the sharp left bends 81), an X to 35 (its lefts run corner - centre - corner, worst
+    73; at 45 it would be 90). j7 is about 47 degrees off: it fits now.
+  - A skewed road is now reported as skewed, not as "no main-road lane"; the plain piece's debug line no
+    longer fills the log on every cursor move.
+  - All 75 (identical on repeat, both shapes): 47 fitted, 22 plain, 6 refused, 0 errors, 61 loose ends
+    at 20 junctions.
+  - Not done: j2's other branch. The clear leaves it unconnected and place doesn't join it.
 
 ## Not in this plan
 

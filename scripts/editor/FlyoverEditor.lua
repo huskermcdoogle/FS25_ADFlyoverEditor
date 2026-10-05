@@ -11119,8 +11119,9 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     -- and the main road's two lanes, which run straight past.
     -- SKEW (doc 08, 2026-10-05): the frame has two directions of its own, E1 along the main road and E2
     -- along the cross or side road, so a road meeting off square gets the pattern leant to its real angle.
-    -- Straight paths stay straight and curves stay tangent to the lanes they join. Up to 45 degrees off
-    -- square: the sharp corner's right turn is two bends, each under AutoDrive's 80 there.
+    -- Straight paths stay straight and curves stay tangent to the lanes they join. How far off square is
+    -- set by AutoDrive's 80-degree bend limit on the mod's shape: an X to 35 (its lefts run corner - centre -
+    -- corner, worst bend 73), a T to 50 (worst 72; at 55 its sharp left would bend 81).
     local kind, ox, oz, ux, uz, vx, vz, L = nil, 0, 0, nil, nil, nil, nil, 0
     local e1x, e1z, e2x, e2z = nil, nil, nil, nil
     local sideIn, sideOut = nil, nil
@@ -11158,8 +11159,8 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         ux, uz = e1x / n1, e1z / n1
         vx, vz = -uz, ux
         L = math.abs(e2x * vx + e2z * vz)      -- the main road's lane gap, square across it
-        if math.abs((e1x * e2x + e1z * e2z) / (n1 * n2)) > 0.707 then
-            return nil, "the roads cross more than 45 degrees off square"
+        if math.abs((e1x * e2x + e1z * e2z) / (n1 * n2)) > 0.574 then
+            return nil, "the roads cross more than 35 degrees off square"
         end
         for key, c in pairs(q) do
             local sx = key:sub(1, 1) == "+" and 0.5 or -0.5
@@ -11179,11 +11180,32 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
                 if nin == 0 and nout >= 1 then starts[#starts + 1] = w end
             end
         end
-        if #corners ~= 0 or #ends ~= 1 or #starts ~= 1 then
-            return nil, string.format("not a square X (%d lane crossings) and not a T (%d lane ends, %d lane starts near the middle)",
+        -- The side road is a PAIR: a lane in and a lane out running opposite ways, a lane gap apart.
+        -- Another end the clear left nearby is not part of it (in game j3 had one), so the pair nearest the
+        -- middle is taken and any stray is ignored.
+        local bestPair, bestD = nil, nil
+        if #corners == 0 then
+            for _, e in ipairs(ends) do
+                local p = ADGraphManager:getWayPointById(e.incoming[1])
+                for _, s in ipairs(starts) do
+                    local q = ADGraphManager:getWayPointById(s.out[1])
+                    if p ~= nil and q ~= nil then
+                        local ax, az = unit(e.x - p.x, e.z - p.z)
+                        local bx, bz = unit(q.x - s.x, q.z - s.z)
+                        local gap = math.sqrt((e.x - s.x) ^ 2 + (e.z - s.z) ^ 2)
+                        if ax * bx + az * bz < -0.94 and gap > 1.5 and gap < 14 then
+                            local d = ((e.x + s.x) / 2 - cx) ^ 2 + ((e.z + s.z) / 2 - cz) ^ 2
+                            if bestD == nil or d < bestD then bestPair, bestD = { e, s }, d end
+                        end
+                    end
+                end
+            end
+        end
+        if bestPair == nil then
+            return nil, string.format("not an X (%d lane crossings) and no side road found (%d lane ends, %d lane starts near the middle)",
                 #corners, #ends, #starts)
         end
-        sideIn, sideOut = ends[1], starts[1]
+        sideIn, sideOut = bestPair[1], bestPair[2]
         local p = ADGraphManager:getWayPointById(sideIn.incoming[1])
         local q = ADGraphManager:getWayPointById(sideOut.out[1])
         if p == nil or q == nil then return nil, "lost the side road's lanes" end
@@ -11191,7 +11213,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         local dox, doz = unit(q.x - sideOut.x, q.z - sideOut.z)    -- heading out, away from it
         if dix * dox + diz * doz > -0.94 then return nil, "the side road's two lanes do not run opposite ways" end
         -- First guess: square to the side road. Then the main road's own lanes at the mouth set +x, and
-        -- the side road may sit up to 45 degrees off square to them.
+        -- the side road may sit up to 50 degrees off square to them.
         vx, vz = -dix, -diz      -- +z runs down the side road
         ux, uz = vz, -vx         -- +x is +z turned a quarter back to the left
         local xOut, xm, east, west
@@ -11224,15 +11246,15 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
             if w == nil then return nil, "no second main-road lane beyond the first" end
             return e, w
         end
-        local e, w = pickMain(0.7)
+        local e, w = pickMain(0.5)
         if e == nil then return nil, w end
         ux, uz = unit(e.dx - w.dx, e.dz - w.dz)
         vx, vz = -uz, ux
         -- The side road's own direction, away from the main road: the average of its two lanes.
         local sdx, sdz = unit(dox - dix, doz - diz)
         local cosS = sdx * vx + sdz * vz
-        if cosS < 0.707 then
-            return nil, "the side road meets the main road more than 45 degrees off square"
+        if cosS < 0.643 then
+            return nil, "the side road meets the main road more than 50 degrees off square"
         end
         e, w = pickMain(0.966)
         if e == nil then return nil, w end
@@ -11632,8 +11654,8 @@ local function junctionPlacePlain(cx, cz, dry)
         end
     end
     L = L or 4
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction plain - main lane %.1f, %.1f -> %.1f, %.1f (cursor %.1f m off), lane gap %.1f m%s.",
-        best.l.a.x, best.l.a.z, best.l.b.x, best.l.b.z, bd, L, partner and "" or " (no partner)")
+    if not dry then ADFlyoverSettings.debugLog("[FlyoverEditor]: junction plain - main lane %.1f, %.1f -> %.1f, %.1f (cursor %.1f m off), lane gap %.1f m%s.",
+        best.l.a.x, best.l.a.z, best.l.b.x, best.l.b.z, bd, L, partner and "" or " (no partner)") end
 
     -- WHICH PIECE, and which way round: side-road lanes stopping near the cursor make it a T with its side
     -- road towards them; lanes crossing near it make an X; nothing else to go by, an X.
@@ -11677,7 +11699,7 @@ local function junctionPlacePlain(cx, cz, dry)
     local along = (tx - ox) * ux + (tz - oz) * uz
     ox, oz = ox + along * ux, oz + along * uz
     -- SKEW: the side (or cross) road's own direction, from how its lanes run away from their ends. The
-    -- piece's side arm leans to it, up to 45 degrees off square; past that it stays square.
+    -- piece's side arm leans to it (an X to 35 degrees off square, a T to 50); past that it stays square.
     local s2x, s2z = vx, vz
     if sx ~= nil then
         local ax, az, n = 0, 0, 0
@@ -11686,14 +11708,16 @@ local function junctionPlacePlain(cx, cz, dry)
             local nb = nbId ~= nil and ADGraphManager:getWayPointById(nbId) or nil
             if nb ~= nil then
                 local ex, ez = unit(nb.x - w.x, nb.z - w.z)      -- away from the main road
-                -- Ends across the road (an X cut in two) run the other way: fold them onto +z.
+                -- Ends across the road (an X cut in two) run the other way: fold them onto +z. An end running
+                -- along the main road (a stray) says nothing about the side road's angle: left out.
                 if ex * vx + ez * vz < 0 then ex, ez = -ex, -ez end
-                ax, az, n = ax + ex, az + ez, n + 1
+                if ex * vx + ez * vz >= 0.5 then ax, az, n = ax + ex, az + ez, n + 1 end
             end
         end
         if n > 0 then
             local mx2, mz2 = unit(ax, az)
-            if mx2 * vx + mz2 * vz >= 0.707 then s2x, s2z = mx2, mz2 end
+            -- As far as the mod's shape stays drivable: an X to 35 degrees off square, a T to 50.
+            if mx2 * vx + mz2 * vz >= ((kind == "X") and 0.819 or 0.643) then s2x, s2z = mx2, mz2 end
         end
         -- The centre: where the side road's middle line meets the main road's.
         local c = s2x * vx + s2z * vz
@@ -13071,6 +13095,10 @@ function ADFlyoverEditor:updatePlacePreview()
     -- fork alone is no sign of it: a two-way road splitting into its two lanes is a fork too.)
     local site = nil
     tryCall("junction place: is it wired", function() site = self:junctionSelect(cx, cz) end)
+    -- THE CLICK PICKS THE JUNCTION, as in the clear: pointing anywhere on a junction the clear knows, the
+    -- piece is worked out from that junction's own centre, so where you click and how the camera looks
+    -- at it can't change what is placed (in game j3 gave different answers from different clicks).
+    if site ~= nil and site.virgin and site.x ~= nil then cx, cz = site.x, site.z end
     if site ~= nil and not site.virgin then
         self.junctionPreview = { placeMode = true, cx = cx, cz = cz, shape = shape, ok = false, wired = true,
             cy = AutoDrive:getTerrainHeightAtWorldPos(cx, cz) or 0,
@@ -13090,7 +13118,7 @@ function ADFlyoverEditor:updatePlacePreview()
     self.junctionPreview = {
         placeMode = true, cx = cx, cz = cz, cy = AutoDrive:getTerrainHeightAtWorldPos(cx, cz) or 0, shape = shape,
         ok = okCall and res ~= nil, plan = res,
-        why = okCall and why or "it failed - see the log", wired = wired == true,
+        why = (not okCall) and "it failed - see the log" or why, wired = wired == true,
     }
 end
 
