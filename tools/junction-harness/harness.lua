@@ -186,6 +186,10 @@ AutoDrive.FIELD_LOOP_ADAPTIVE_MIN_SPACING = 1.0
 dofile("../../scripts/editor/OffsetGeometry.lua")
 if os.getenv("RIG_TRAILER") then ADFlyoverSweptPath = { rig = { lookAhead = 8, trailerLength = tonumber(os.getenv("RIG_TRAILER")) } } end
 dofile(os.getenv("FE_SRC") or "../../scripts/editor/FlyoverEditor.lua")
+-- ADOPT=<a debug capture's meta.txt>: run on the settings the game had (replay_session.py sets it), not
+-- the harness's defaults. TURNR=<m>: the card's turn radius, which the clear reads too (the game logs it
+-- on every "junction site locked" line).
+if os.getenv("ADOPT") and os.getenv("ADOPT") ~= "" then dofile("adoptmeta.lua")(os.getenv("ADOPT")) end
 
 -- ----------------------------------------------------------------------------------- the scenario
 local E = ADFlyoverEditor
@@ -219,7 +223,7 @@ function M.lock(cx, cz, opts)
     E.junctionMode = opts.mode or "clear"
     E.junctionLeaveThrough = (opts.leaveThrough ~= false)
     E.junctionRadius = opts.radius or 15
-    E.junctionTurnRadius = opts.turnRadius or 12
+    E.junctionTurnRadius = opts.turnRadius or tonumber(os.getenv("TURNR") or "") or 12
     E.junctionRebuild = opts.rebuild == true
     E.junctionCheckSurface = false     -- engine raycast, off
     E.junctionCheckObstacles = false   -- engine overlapBox, off

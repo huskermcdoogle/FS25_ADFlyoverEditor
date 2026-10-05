@@ -6,6 +6,28 @@ minutes instead of one junction at a time in the game.
 
 Nothing here ships: `tools/` is excluded from the mod zip by `tools/build_zip.py`.
 
+## Everyday tools (fast)
+
+One offline clear takes under a second; these run many side by side (PAR, default 16).
+
+- `GRAPH=net.lua bash qc.sh 39 26 "24.5,1.3"` - quick check: clears the named junctions (or x,z
+  points) in both modes and prints what the card and log would say, in seconds. Part names (j39se) come
+  from a private copy of the savegame's junction file.
+- `GRAPH=net.lua python show.py out.html 39 26` - one picture page: before/after each clear, both
+  modes, north up, with a legend and the check lines under each picture.
+- `python replay_session.py <log.txt> --net <pre.xml|AutoDrive_config.xml|.lua> [--since "2026-10-02 14:00"]`
+  - reads a game log, finds every clear (lock point, mode, turn radius, what it took, what the check
+  said) and replays each offline on its own debug capture's network when there is one, with the game's
+  settings (ADOPT) and turn radius (TURNR). Says MATCH, CLOSE (same findings, points within 3) or
+  DIFFERS. A DIFFERS is the first place to look after a test session.
+- `bash ../testbuild.sh [commit] [--no-launch] [--dry-run]` - test build from committed code only, in a
+  temporary checkout; checks the zip's editor file is the commit's; refuses while FS25 runs; installs
+  and launches.
+- `reg75.sh` / `reg75check.sh` - the full pass, about 30 s each since they run in parallel.
+
+Harness switches these use: `ADOPT=<capture meta.txt>` (the game's settings), `TURNR=<m>` (the card's
+turn radius, which the clear reads too).
+
 ## Setup
 
 Lua 5.1 and Python 3. Git Bash on Windows. Run everything from this folder.
