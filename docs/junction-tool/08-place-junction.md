@@ -140,6 +140,41 @@ leftover lane end is taken away.
   - All 75 (identical on repeat, both shapes): 47 fitted, 22 plain, 6 refused, 0 errors, 61 loose ends
     at 20 junctions.
   - Not done: j2's other branch. The clear leaves it unconnected and place doesn't join it.
+- **Third in-game look** (build 447, 2026-10-05): j3 and j7 fit and leaned right in both shapes, no
+  errors. Still to fix: the preview slid about off a junction (and cost time doing it), locking far from
+  the centre moved the piece, a "frame" line logged on every preview, and j66's two-way side road wasn't
+  joined. Fixed offline:
+  - **Only on a junction.** Off a junction place does nothing and says "point at a junction". On one,
+    the piece is worked out from the junction's own place (the clear's finder, or else the numbered
+    list, which keeps a junction's place after the clear has emptied it), and the pick is remembered
+    per 2 m of cursor travel.
+  - **Two-way side road (one road both ways):** the mod T splits it into its two lanes at the mouth
+    (lane out -> road end -> lane in): j4 and j65 fit now. Smooth needs two real side lanes, so it falls
+    back to the mod shape. The plain piece joins its side arms to a two-way road end too, but only where
+    every bend is under 80 degrees: j66 (a Y about 60 degrees off square) would double back, so its
+    arms stay loose.
+  - The frame line is logged only when placing.
+  - All 75 (identical on repeat, both shapes): 49 fitted, 20 plain, 6 refused, 0 errors, 54 loose ends
+    at 18 junctions. Not yet: a two-way MAIN road (j24).
+- **Two-way roads: TABLED** (decided 2026-10-05). How two-way roads should join a placed piece needs its
+  own research first. Until then place refuses any junction where a road running both ways meets: "a
+  two-way road meets here - two-way roads aren't handled yet". This is the one exception to "never
+  refused".
+  - The two-way side road work above stays in the code, switched off
+    (`FLYOVER_JUNCTION_PLACE_TWO_WAY = true` brings it back): the mod T splitting a two-way side road
+    into its two lanes at the mouth, and the plain piece joining its side arms to a two-way road end
+    only where every bend is under 80 degrees.
+  - Refused for it on the 75: j2, j4, j24, j31, j65, j66, j69, j70, j71, j74. (j2 placed fine in game
+    on build 447; its nearby branch is probably the two-way road.)
+  - Open questions for the research: one two-way road splitting into a piece's two lanes, a two-way
+    MAIN road (j24), a Y far off square (j66), and AutoDrive's two-way rule (on a two-way link it
+    stops checking for traffic, doc 05).
+  - All 75 with two-way refused: 46 fitted, 13 plain, 16 refused (10 two-way, 6 wiring left by the
+    clear), 0 errors, 32 loose ends at 11 junctions.
+- **j2's other branch, decided** (2026-10-05): it is a separate junction and must not affect the main
+  one. Place ignores it: it never joins it, never bends to it, and leaves it for you to hook up by hand.
+  Recognising a separate junction nearby, and not cutting it loose in the first place, is the clear's
+  job (junction-rework), not place's.
 
 ## Not in this plan
 

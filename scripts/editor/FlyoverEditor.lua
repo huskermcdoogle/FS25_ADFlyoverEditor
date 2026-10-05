@@ -11125,6 +11125,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     local kind, ox, oz, ux, uz, vx, vz, L = nil, 0, 0, nil, nil, nil, nil, 0
     local e1x, e1z, e2x, e2z = nil, nil, nil, nil
     local sideIn, sideOut = nil, nil
+    local twoWaySide = nil      -- a T whose side road is one two-way road: its end
     if #corners == 4 then
         kind = "X"
         for _, c in ipairs(corners) do ox, oz = ox + c.x / 4, oz + c.z / 4 end
@@ -11201,6 +11202,22 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
                 end
             end
         end
+        -- A SIDE ROAD THAT IS ONE TWO-WAY ROAD: its end (one neighbour, joined both ways) stands for both
+        -- lanes. The piece's two side lanes split from it at the mouth: lane out -> road end -> lane in.
+        if bestPair == nil and #corners == 0 then
+            local bd2 = nil
+            for _, w in pairs(ADGraphManager:getWayPoints()) do
+                if w ~= nil and w.id ~= nil and near(w, 14) then
+                    local nb, n, only = {}, 0, nil
+                    for _, id in ipairs(w.out or {}) do if not nb[id] then nb[id] = true n = n + 1 only = id end end
+                    for _, id in ipairs(w.incoming or {}) do if not nb[id] then nb[id] = true n = n + 1 only = id end end
+                    if n == 1 and table.contains(w.out or {}, only) and table.contains(w.incoming or {}, only) then
+                        local d = (w.x - cx) ^ 2 + (w.z - cz) ^ 2
+                        if bd2 == nil or d < bd2 then bestPair, bd2, twoWaySide = { w, w, only }, d, w end
+                    end
+                end
+            end
+        end
         if bestPair == nil then
             return nil, string.format("not an X (%d lane crossings) and no side road found (%d lane ends, %d lane starts near the middle)",
                 #corners, #ends, #starts)
@@ -11208,9 +11225,11 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         sideIn, sideOut = bestPair[1], bestPair[2]
         local p = ADGraphManager:getWayPointById(sideIn.incoming[1])
         local q = ADGraphManager:getWayPointById(sideOut.out[1])
+        if twoWaySide ~= nil then p = ADGraphManager:getWayPointById(bestPair[3]) q = p end
         if p == nil or q == nil then return nil, "lost the side road's lanes" end
         local dix, diz = unit(sideIn.x - p.x, sideIn.z - p.z)      -- heading in, towards the main road
         local dox, doz = unit(q.x - sideOut.x, q.z - sideOut.z)    -- heading out, away from it
+        if twoWaySide ~= nil then dox, doz = -dix, -diz end
         if dix * dox + diz * doz > -0.94 then return nil, "the side road's two lanes do not run opposite ways" end
         -- First guess: square to the side road. Then the main road's own lanes at the mouth set +x, and
         -- the side road may sit up to 50 degrees off square to them.
@@ -11269,6 +11288,8 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         local pox, poz = sideOut.x + tOut * sdx, sideOut.z + tOut * sdz
         ox, oz = (pix + pox) / 2, (piz + poz) / 2
         e1x, e1z = pix - pox, piz - poz
+        -- One two-way road: its line is the side road's middle; the piece's side lanes go a lane gap apart.
+        if twoWaySide ~= nil then e1x, e1z = L * ux, L * uz end
         local n1 = math.sqrt(e1x * e1x + e1z * e1z)
         if n1 < 0.6 * L or n1 > 1.6 * L then
             return nil, string.format("the side road's lanes are %.1f m apart, not like the main road's %.1f m", n1, L)
@@ -11277,8 +11298,10 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     end    if L < 2 or L > 12 then return nil, string.format("lane gap %.1f m is outside 2-12 m", L) end
     local skew = math.deg(math.acos(math.max(-1, math.min(1, math.abs(e2x * vx + e2z * vz)
         / math.max(1e-6, math.sqrt(e2x * e2x + e2z * e2z))))))
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - frame: %s, centre %.1f, %.1f, lane gap %.1f m, +x heading %.2f, %.2f, %.0f deg off square.",
-        kind, ox, oz, L, ux, uz, skew)
+    if not dry then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - frame: %s, centre %.1f, %.1f, lane gap %.1f m, +x heading %.2f, %.2f, %.0f deg off square.",
+            kind, ox, oz, L, ux, uz, skew)
+    end
     local function W(mx, mz) return ox + mx * e1x + mz * e2x, oz + mx * e1z + mz * e2z end
     local function D(mx, mz) return unit(mx * e1x + mz * e2x, mx * e1z + mz * e2z) end
     -- Curves are sampled by the longer of the two directions.
@@ -11307,7 +11330,9 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     local function lanePoint(mx, mz, ddx, ddz, dry)
         local px, pz = W(mx, mz)
         local dx, dz = D(ddx, ddz)
-        local r = onLane(px, pz, dx, dz, nil, dry)
+        local sidePoint = kind == "T" and math.abs(ddx) <= 0.5
+        local r = nil
+        if not (sidePoint and twoWaySide ~= nil) then r = onLane(px, pz, dx, dz, nil, dry) end
         if r ~= nil then return r end
         if kind ~= "T" or math.abs(ddx) > 0.5 then return nil end
         local stub, forward = sideOut, false
@@ -11393,6 +11418,9 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         return t
     end
     local function fits(sh)
+        if twoWaySide ~= nil and sh ~= "exact" then
+            return false, "the side road is one two-way road, and the smooth shape needs two side lanes"
+        end
         for _, n in ipairs(needs(sh)) do
             if not lanePoint(n[1], n[2], n[3], n[4], true) then
                 local x, z = W(n[1], n[2])
@@ -11760,6 +11788,41 @@ local function junctionPlacePlain(cx, cz, dry)
     -- What would join and what would be left loose, worked out the same way dry or not.
     local loose = {}
     local function isArmEnd(p) return math.abs(p[1]) > 1.4 or math.abs(p[2]) > 1.4 end
+    -- A TWO-WAY SIDE ROAD ending by the side arms (in game j66): its end takes both of them, lane out ->
+    -- road end -> lane in, so they aren't left loose.
+    local twoWayEnd = nil
+    if kind == "T" then
+        local mx0, mz0 = W(0, 1.5)
+        local bd2 = (2 * L + 2) ^ 2
+        for _, w in ipairs(ends) do
+            local only = w.out ~= nil and w.out[1] or nil
+            if only ~= nil and #w.out == 1 and #(w.incoming or {}) == 1 and w.incoming[1] == only then
+                local d = (w.x - mx0) ^ 2 + (w.z - mz0) ^ 2
+                if d < bd2 then twoWayEnd, bd2 = w, d end
+            end
+        end
+    end
+    -- Only where AutoDrive can drive it: every bend on lane out -> road end and road end -> lane in under
+    -- 80 degrees. A road meeting far off square (j66, a Y) would double back; its arms stay loose instead.
+    if twoWayEnd ~= nil then
+        local function bend(ax, az, bx, bz)
+            local n1, n2 = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
+            if n1 < 1e-6 or n2 < 1e-6 then return 180 end
+            return math.deg(math.acos(math.max(-1, math.min(1, (ax * bx + az * bz) / (n1 * n2)))))
+        end
+        local nb = ADGraphManager:getWayPointById(twoWayEnd.out[1])
+        local p5x, p5z = W(nodePos[5][1], nodePos[5][2])
+        local p6x, p6z = W(nodePos[6][1], nodePos[6][2])
+        local p7x, p7z = W(nodePos[7][1], nodePos[7][2])
+        local p8x, p8z = W(nodePos[8][1], nodePos[8][2])
+        local wx, wz = twoWayEnd.x, twoWayEnd.z
+        local ok = nb ~= nil
+            and bend(p6x - p5x, p6z - p5z, wx - p6x, wz - p6z) < 80              -- out arm into the join
+            and bend(wx - p6x, wz - p6z, nb.x - wx, nb.z - wz) < 80              -- join onto the road
+            and bend(wx - nb.x, wz - nb.z, p7x - wx, p7z - wz) < 80              -- road into the join
+            and bend(p7x - wx, p7z - wz, p8x - p7x, p8z - p7z) < 80              -- join into the in arm
+        if not ok then twoWayEnd = nil end
+    end
     if dry then
         for _, n in ipairs(ids) do
             local p = nodePos[n]
@@ -11771,10 +11834,19 @@ local function junctionPlacePlain(cx, cz, dry)
             end
             if not joined and isArmEnd(p) then
                 local px, pz = W(p[1], p[2])
-                loose[#loose + 1] = { x = px, z = pz }
+                loose[#loose + 1] = { x = px, z = pz, n = n }
             end
         end
         local lines = {}
+        local l6, l7 = nil, nil
+        for i, e in ipairs(loose) do if e.n == 6 then l6 = i elseif e.n == 7 then l7 = i end end
+        if twoWayEnd ~= nil and l6 ~= nil and l7 ~= nil then
+            local a6, a7 = loose[l6], loose[l7]
+            lines[#lines + 1] = { pts = { { x = a6.x, z = a6.z }, { x = twoWayEnd.x, z = twoWayEnd.z } } }
+            lines[#lines + 1] = { pts = { { x = twoWayEnd.x, z = twoWayEnd.z }, { x = a7.x, z = a7.z } } }
+            table.remove(loose, math.max(l6, l7))
+            table.remove(loose, math.min(l6, l7))
+        end
         local set = {}
         for _, l in ipairs(piece.links) do set[l[1] .. ">" .. l[2]] = true end
         for _, l in ipairs(piece.links) do
@@ -11813,7 +11885,7 @@ local function junctionPlacePlain(cx, cz, dry)
             jxLayLabel = nil
             if N == nil then return nil, "could not add a point of the piece" end
             node[n] = N
-            if isArmEnd(p) then loose[#loose + 1] = { x = px, z = pz, node = N } end
+            if isArmEnd(p) then loose[#loose + 1] = { x = px, z = pz, node = N, n = n } end
         end
     end
     local set = {}
@@ -11832,6 +11904,22 @@ local function junctionPlacePlain(cx, cz, dry)
             laid = laid + 1
         end
     end
+    do
+        local l6, l7 = nil, nil
+        for i, e in ipairs(loose) do if e.n == 6 then l6 = i elseif e.n == 7 then l7 = i end end
+        if twoWayEnd ~= nil and l6 ~= nil and l7 ~= nil then
+            jxLaySeq = jxLaySeq + 1
+            jxLayLabel = "plain#" .. jxLaySeq
+            junctionConnect(node[6], twoWayEnd, false)
+            junctionConnect(twoWayEnd, node[7], false)
+            jxLayLabel = nil
+            laid = laid + 2
+            table.remove(loose, math.max(l6, l7))
+            table.remove(loose, math.min(l6, l7))
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction plain - side arms joined to the two-way road's end at %.1f, %.1f.",
+                twoWayEnd.x, twoWayEnd.z)
+        end
+    end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction plain %s placed: lane gap %.1f m%s, centre %.1f, %.1f, %d link(s), %d loose end(s).",
         kind, L, partner and "" or " (no second lane found, 4 m used)", ox, oz, laid, #loose)
     for _, e in ipairs(loose) do
@@ -11844,6 +11932,22 @@ end
 -- PLACE (doc 08): the pattern fitted to the crossing where it fits, the plain piece everywhere else.
 -- Only turn wiring still there, or no road at all, stops it.
 local function junctionPlacePattern(cx, cz, reach, shape, dry)
+    -- TWO-WAY ROADS ARE TABLED (decided 2026-10-05): a junction where any road running both ways meets is
+    -- refused, fitted or plain, until there has been time to research how they should join. The two-way
+    -- side road code below (twoWaySide in the fitted T, twoWayEnd in the plain piece) stays, switched off;
+    -- FLYOVER_JUNCTION_PLACE_TWO_WAY = true brings it back.
+    if AutoDrive.FLYOVER_JUNCTION_PLACE_TWO_WAY ~= true then
+        for _, a in pairs(ADGraphManager:getWayPoints()) do
+            if a ~= nil and a.id ~= nil and (a.x - cx) ^ 2 + (a.z - cz) ^ 2 <= 14 * 14 then
+                for _, bid in ipairs(a.out or {}) do
+                    local b = ADGraphManager:getWayPointById(bid)
+                    if b ~= nil and table.contains(b.out or {}, a.id) then
+                        return nil, "a two-way road meets here - two-way roads aren't handled yet"
+                    end
+                end
+            end
+        end
+    end
     local res, why, wired = nil, "forced plain (test switch)", nil
     -- Test switch (harness): always the plain piece, without trying the fit at all.
     if AutoDrive.FLYOVER_JUNCTION_PLACE_FORCE_PLAIN ~= true then
@@ -13086,26 +13190,53 @@ function ADFlyoverEditor:updatePlacePreview()
         return
     end
     local shape = self.junctionPattern or "exact"
-    local key = string.format("place_%d_%d_%s_%s_%d", math.floor(cx * 2), math.floor(cz * 2), shape,
-        tostring(self.junctionArmed ~= nil), ADGraphManager:getWayPointsCount())
-    if key == self.junctionPreviewKey and self.junctionPreview ~= nil then return end
-    self.junctionPreviewKey = key
-    -- TURN WIRING STILL HERE: place never deletes anything, so it refuses exactly where the clear would
-    -- find something to take out - the clear's own junction finder decides, so the two always agree. (A
-    -- fork alone is no sign of it: a two-way road splitting into its two lanes is a fork too.)
+    -- ONLY ON A JUNCTION (in-game test 2026-10-05): place works on junctions the clear knows, picked the
+    -- clear's way. Anywhere else it does nothing and says so - no piece sliding about under the cursor,
+    -- and nothing worked out at every step of the mouse. The pick itself is remembered per 2 m of cursor
+    -- travel, so pointing around inside one junction costs nothing.
+    local selKey = string.format("%d_%d_%d", math.floor(cx / 2), math.floor(cz / 2), ADGraphManager:getWayPointsCount())
     local site = nil
-    tryCall("junction place: is it wired", function() site = self:junctionSelect(cx, cz) end)
-    -- THE CLICK PICKS THE JUNCTION, as in the clear: pointing anywhere on a junction the clear knows, the
-    -- piece is worked out from that junction's own centre, so where you click and how the camera looks
-    -- at it can't change what is placed (in game j3 gave different answers from different clicks).
-    if site ~= nil and site.virgin and site.x ~= nil then cx, cz = site.x, site.z end
-    if site ~= nil and not site.virgin then
+    if self.placeSelectKey == selKey then
+        site = self.placeSelectSite
+    else
+        tryCall("junction place: which junction", function() site = self:junctionSelect(cx, cz) end)
+        -- A cleared junction the clear's finder no longer sees (an X cleared with its through roads kept has
+        -- no lane ends at all): the numbered list keeps every junction's place, and that anchors it.
+        if site == nil then
+            tryCall("junction place: numbered list", function()
+                local bd = 15 * 15
+                for _, e in ipairs(self:junctionRegistry() or {}) do
+                    local d = (e.x - cx) ^ 2 + (e.z - cz) ^ 2
+                    if d < bd then site, bd = { x = e.x, z = e.z, virgin = true, n = e.n }, d end
+                end
+            end)
+        end
+        self.placeSelectKey, self.placeSelectSite = selKey, site
+    end
+    if site == nil or site.x == nil then
+        self.junctionPreview = { placeMode = true, cx = cx, cz = cz, cy = self.cursorY or 0, shape = shape, ok = false,
+            why = "point at a junction - place works on junctions the clear knows" }
+        self.junctionPreviewKey = nil
+        return
+    end
+    -- THE CLICK PICKS THE JUNCTION, as in the clear: pointing anywhere on it, the piece is worked out from
+    -- the junction's own centre, so where you click and how the camera looks at it can't change what is
+    -- placed (in game j3 gave different answers from different clicks).
+    cx, cz = site.x, site.z
+    -- TURN WIRING STILL HERE: place never deletes anything, so it refuses exactly where the clear would
+    -- find something to take out - the clear's own finder decides, so the two always agree. (A fork alone
+    -- is no sign of it: a two-way road splitting into its two lanes is a fork too.)
+    if not site.virgin then
         self.junctionPreview = { placeMode = true, cx = cx, cz = cz, shape = shape, ok = false, wired = true,
             cy = AutoDrive:getTerrainHeightAtWorldPos(cx, cz) or 0,
             why = "turn wiring is still here - clear the junction first" }
+        self.junctionPreviewKey = nil
         return
     end
-    local okCall, res, why, wired = tryCall("junction place preview", function()
+    local key = string.format("place_%.1f_%.1f_%s_%s_%d", cx, cz, shape,
+        tostring(self.junctionArmed ~= nil), ADGraphManager:getWayPointsCount())
+    if key == self.junctionPreviewKey and self.junctionPreview ~= nil then return end
+    self.junctionPreviewKey = key    local okCall, res, why, wired = tryCall("junction place preview", function()
         return junctionPlacePattern(cx, cz, 15, shape, true)
     end)
     -- Ground heights for the drawing, once per preview rather than every frame.
