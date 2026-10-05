@@ -11,3 +11,4 @@ captest/
 captures*/
 *.zip
 terrain_data/
+regplace*.txt
