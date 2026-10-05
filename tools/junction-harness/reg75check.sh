@@ -11,22 +11,11 @@ export RIG_TRAILER=11
 L="${LUA:-/c/Program Files (x86)/Lua/5.1/lua.exe}"
 TAG=$1
 REG="${REG:-$HOME/OneDrive/Documents/My Games/FarmingSimulator2025/savegame6/ADFlyoverEditor_junctions.xml}"
+export REG GRAPH FE_SRC REGDIR TERRAIN SHUFFLE LUA
+. ./par_sites.sh   # PAR=1 runs one at a time; the output is the same either way
 for mode in 1 0; do
   out=reg75check${TAG}_$mode.txt
-  : > "$out"
-  grep -oE 'n="[0-9]+" x="-?[0-9.]+" z="-?[0-9.]+"' "$REG" | sed -E 's/n="([0-9]+)" x="([^"]+)" z="([^"]+)"/\1 \2 \3/' |
-  while read -r n x z; do
-    o=$(LEAVE=$mode "$L" dbgcheck.lua "$x" "$z" </dev/null 2>&1)
-    er=$(echo "$o" | grep -ciE "attempt to|stack traceback|clear check[^:]* failed|check parts failed|clear stopped")
-    if echo "$o" | grep -q "^REFUSED"; then
-      line="REFUSED"
-    else
-      line=$(echo "$o" | grep "^COUNTS " | sed 's/^COUNTS //')
-      line="${line:-NO CHECK}"
-    fi
-    printf "j%s | %s | err=%s\n" "$n" "$line" "$er" >> "$out"
-    echo "$o" | grep -E "junction - check: |junction - check \(|check after the clear could not run|check parts failed" | sed -E 's/^.*junction - check/    check/' >> "$out"
-  done
+  par_sites $mode reg75check_one.sh "$out"
   # The totals, from the junction lines alone.
   totals=$(awk -F' [|] ' '
     /^j[0-9]+ \| / {
