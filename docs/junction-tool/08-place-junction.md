@@ -99,6 +99,16 @@ leftover lane end is taken away.
   The hint line under the card says what right-click will place. The old drawing expected a build or
   clear preview and would have thrown on a place preview in game; place now never reaches it. The real
   draw routine runs clean offline on both shapes and the plain piece.
+- **First in-game look** (build 444, 2026-10-05; results on the test page): no errors in the log.
+  - **Passed:** the card, the refusal at an uncleared j11, the mod X and smooth X at j11 (on the ground,
+    one undo each), and the mod T and smooth T at j9. A mod T also placed at j2.
+  - **Skew:** at j9 (side road about 12 degrees off square), both shapes stay square to the main road,
+    so they don't follow the side road. The smooth T's right curve meets the side lane badly.
+  - **j3 failed:** the plain T went in, but its side arms didn't reach the angled side road (2 loose
+    ends). In the game's network the fit stopped at "2 lane ends, 1 lane start", not at the angle as
+    offline, but either way the square piece can't reach a road 30 degrees off.
+  - **Locked vs following:** the brightness change isn't noticeable.
+  - **j2:** another road leading into the area near the junction gave trouble.
 
 ## Not in this plan
 
