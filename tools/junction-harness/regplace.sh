@@ -19,6 +19,10 @@ awk -F'|' '
   { s = $2
     if (s ~ /ok=1/) { if (s ~ /shape=plain/) pl++; else fi++ } else rf++
     match(s, /loose=([0-9]+)/, A); lo += A[1]; if (A[1] + 0 > 0) lj++
+    match(s, /extra=([0-9]+)/, X); ex += X[1]; if (X[1] + 0 > 0) xj++
+    match(s, /missing=([0-9]+)/, M); mi += M[1]; if (M[1] + 0 > 0) mj++
+    match(s, /unjoined=([0-9]+)/, U); un += U[1]; if (U[1] + 0 > 0) uj++
     if ($3 !~ /err=0/ || s ~ /it_failed/) e++ }
-  END { printf "%d fitted, %d plain, %d refused, %d Lua errors | loose ends %d at %d junctions\n", fi + 0, pl + 0, rf + 0, e + 0, lo + 0, lj + 0 }' "$OUT"
+  END { printf "%d fitted, %d plain, %d refused, %d Lua errors | loose ends %d at %d junctions\n", fi + 0, pl + 0, rf + 0, e + 0, lo + 0, lj + 0
+        printf "route check: %d route(s) we did not lay at %d junctions | %d turn(s) that cannot be driven at %d | %d road(s) not joined at %d\n", ex + 0, xj + 0, mi + 0, mj + 0, un + 0, uj + 0 }' "$OUT"
 grep -o "why=[^ |]*" "$OUT" | grep -v "why=-" | sort | uniq -c | sort -rn

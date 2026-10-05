@@ -160,6 +160,19 @@ leftover lane end is taken away.
   case under two-way roads).
   - All 75 (identical on repeat, both shapes): 49 fitted, 20 plain, 6 refused, 0 errors, 54 loose ends
     at 18 junctions. Not yet: a two-way MAIN road (j24).
+- **Step 4 done offline** (2026-10-05): the route check runs after every placement, report only.
+  - The build's check (`junctionRouteCheck`) needs a junction's lanes in and out and its meant turns;
+    place works them out from the piece. Lanes in and out are the lanes crossing a circle three lane
+    gaps out. A road is the lanes that run parallel, side by side, on the same side of the centre (by
+    direction from the centre alone, j7's steep side road merged with the main road's arm). Every lane
+    in to every lane out on another road is meant; no U-turns.
+  - A road no route reaches at all is counted apart as "not joined", not as turns that can't be driven:
+    a lane of something else crossing the circle (j34), or a plain piece's loose arm.
+  - The card shows it under "last placed": all routes as meant, or routes we didn't lay / turns that
+    can't be driven / roads nearby not joined. The log lists where.
+  - j11, j9, j3 and j7 all routes as meant, in both shapes. All 75: 4 routes we didn't lay at 3
+    junctions (j35, j56, j64), 12 turns that can't be driven at 5 (j22, j30, j35, j63, j73), 14 roads not
+    joined at 11. Only j22 and j56 are fitted pieces; the rest are plain pieces.
 - **Two-way roads: TABLED** (decided 2026-10-05). How two-way roads should join a placed piece needs its
   own research first. Until then place refuses any junction where a road running both ways meets: "a
   two-way road meets here - two-way roads aren't handled yet". This is the one exception to "never
