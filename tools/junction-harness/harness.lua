@@ -195,6 +195,22 @@ local M = {}
 --- every log line it produced.
 -- Test switches: REAIM=9999 disables the re-aim, NOSWEEP=1 the integrity sweep.
 if os.getenv("REAIM") then AutoDrive.FLYOVER_JUNCTION_REAIM_MIN = tonumber(os.getenv("REAIM")) end
+-- PART_CONNECTORS=0: a lane from one part's side road across the main road to another part's is kept as
+-- a through road again (as before 2026-10-02): at j39 (the session network, the user's split decisions,
+-- through roads kept) the north road's southbound lane then stays, and 39se's right turn off the main
+-- road no longer drives.
+if os.getenv("PART_CONNECTORS") == "0" then AutoDrive.FLYOVER_JUNCTION_PART_CONNECTORS = false end
+-- SIDE_DUPES=0: the tidy carries a side lane to the box even where its whole lane in is a through
+-- road's (as before 2026-10-03): clearing j39 and then 39se, both with through roads kept, then leaves
+-- a dead end off the main road.
+if os.getenv("SIDE_DUPES") == "0" then AutoDrive.FLYOVER_JUNCTION_SIDE_DUPES = false end
+-- RUN_STRAIGHT=0: the "same lane twice" test walks a lane on past its anchor by the nearest point
+-- further out again, not the way straight on at a fork, as before 2026-10-03.
+if os.getenv("RUN_STRAIGHT") == "0" then AutoDrive.FLYOVER_JUNCTION_RUN_STRAIGHT = false end
+-- LOOSE_ENDS=0: the check no longer says a way the clear left leading nowhere, or fed by nothing (as
+-- before 2026-10-03): in the missed-turn test (regmissed.sh) j39's own turn onto the north road, kept on
+-- purpose, is then said by nothing at all.
+if os.getenv("LOOSE_ENDS") == "0" then AutoDrive.FLYOVER_JUNCTION_LOOSE_ENDS = false end
 
 function M.lock(cx, cz, opts)
     opts = opts or {}

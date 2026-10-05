@@ -10510,6 +10510,22 @@ local function junctionVirginSites(forkSites, ends)
     return out
 end
 
+--- WHICH NETWORK A KEPT ANSWER WAS WORKED OUT ON. junctionCentres, junctionVirginCentres and
+--- junctionRegistry keep their last answer while the number of points is unchanged. But undo and
+--- redo put back a COPY of the whole network (EditorHistory's restore), with the same number of
+--- points as before the clear, and the kept answer then named point tables that were no longer the
+--- network's - moved by the clear that was undone, and renumbered by it. At 24, cleared in game right
+--- after 16 had been cleared and undone, its forks were such dead points: the arms were walked from
+--- the wrong live points, the bound read the two-way west road as not this junction's beyond 12 m,
+--- and the tidy laid the road's new end one way only, the wrong way for traffic leaving. At 65,
+--- cleared again after an undo, the check read its middle out to 30 m instead of 12. Point 1 stands
+--- for the whole network: an edit in place keeps that table (or changes the count), and a swap of the
+--- whole network - undo, redo, a route loaded - replaces it. Not the list table itself: the harness
+--- makes a new list on every removal, and AutoDrive does not, so the two would stop agreeing.
+--- Still not seen: an edit that moves points or links without changing the count (the move tool).
+local function jxNetworkMark() return ADGraphManager:getWayPointById(1) end
+local function jxSameNetwork(mark) return mark == ADGraphManager:getWayPointById(1) end
+
 --- WHERE THE ROADS MEET, found from the roads and not from the forks. A cluster of forks is where
 --- CONNECTORS START, and at a wide junction the tie forks sit 15-20 m out along every arm: clustering
 --- them finds several "junctions" around one, puts the chosen one's middle on one end of it, and
@@ -10536,7 +10552,9 @@ end
 --- connectors were. Three or more, away from any fork, and their middle is the junction.
 function ADFlyoverEditor:junctionVirginCentres()
     local count = ADGraphManager:getWayPointsCount()
-    if self._jxVirgin ~= nil and self._jxVirginCount == count then return self._jxVirgin end
+    if self._jxVirgin ~= nil and self._jxVirginCount == count and jxSameNetwork(self._jxVirginNet) then
+        return self._jxVirgin
+    end
     local forks, ends = {}, {}
     for _, w in pairs(ADGraphManager:getWayPoints()) do
         if w ~= nil and w.id ~= nil then
@@ -10585,14 +10603,15 @@ function ADFlyoverEditor:junctionVirginCentres()
             end
         end
     end
-    self._jxVirgin, self._jxVirginCount = out, count
+    self._jxVirgin, self._jxVirginCount, self._jxVirginNet = out, count, jxNetworkMark()
     return out
 end
 
 function ADFlyoverEditor:junctionCentres()
     local count = ADGraphManager:getWayPointsCount()
     local merge = AutoDrive.FLYOVER_JUNCTION_MERGE or 10
-    if self._jxCentres ~= nil and self._jxCentresCount == count and self._jxCentresMerge == merge then
+    if self._jxCentres ~= nil and self._jxCentresCount == count and self._jxCentresMerge == merge
+        and jxSameNetwork(self._jxCentresNet) then
         return self._jxCentres
     end
     local wps = ADGraphManager:getWayPoints()
@@ -10683,6 +10702,7 @@ function ADFlyoverEditor:junctionCentres()
         if g.n >= 2 then out[#out + 1] = g end
     end
     self._jxCentres, self._jxCentresCount, self._jxCentresMerge = out, count, merge
+    self._jxCentresNet = jxNetworkMark()
     return out
 end
 
@@ -11578,7 +11598,7 @@ function ADFlyoverEditor:junctionRegistryCheckHome()
         Logging.info("[FlyoverEditor]: junction - another savegame is loaded now: the junction numbers and decisions still waiting to be written to %s are dropped, not written into this one.",
             tostring(home ~= nil and home.folder or "an earlier game"))
     end
-    self._jxReg, self._jxRegCount, self._jxRegHome = nil, nil, nil
+    self._jxReg, self._jxRegCount, self._jxRegHome, self._jxRegNet = nil, nil, nil, nil
     self._jxRegUnsaved, self._jxRegWaitMs = false, 0
     return false
 end
@@ -11586,7 +11606,7 @@ end
 function ADFlyoverEditor:junctionRegistry()
     self:junctionRegistryCheckHome()
     local count = ADGraphManager:getWayPointsCount()
-    if self._jxReg ~= nil and self._jxRegCount == count then return self._jxReg end
+    if self._jxReg ~= nil and self._jxRegCount == count and jxSameNetwork(self._jxRegNet) then return self._jxReg end
 
     local wps = ADGraphManager:getWayPoints()
     -- By id, so the order is the graph's own and two builds of the same map agree.
@@ -11784,7 +11804,7 @@ function ADFlyoverEditor:junctionRegistry()
         self._jxRegUnsaved = false
     end
 
-    self._jxReg, self._jxRegCount = found, count
+    self._jxReg, self._jxRegCount, self._jxRegNet = found, count, jxNetworkMark()
     return found
 end
 
@@ -11961,6 +11981,14 @@ local function jxDecisionTaken(self, n, said)
     if self.junctionPreview ~= nil then
         tryCall("junction name", function() self:junctionNameSite(self.junctionPreview) end)
     end
+    -- AND THE PREVIEW IS WORKED OUT AGAIN. A split changes what the clear does, not only what the
+    -- card calls the site: a lane from one part's side road to another part's is a connector, not a
+    -- through road ("A LANE FROM THIS PART'S SIDE ROAD TO ANOTHER PART'S", in updateJunctionPreview).
+    -- The preview is only redone when its key changes, and the key knows nothing of decisions; the
+    -- buttons only show once a click has locked the site, so the usual order is lock, split, clear -
+    -- and that clear used the through roads read before the split. At j39 it came out right only
+    -- because the clear's own cleaning happened to change the site and force a new reading.
+    self.junctionPreviewKey = nil
 end
 
 --- THE USER'S DECISION ON SPLITTING JUNCTION n: "split", "whole", or nil for not decided (which is
@@ -12546,22 +12574,58 @@ function ADFlyoverEditor:updateJunctionPreview()
                     end
                 end
 
+                -- HOW FAR A LANE RUNS ON PAST ITS ANCHOR. AT A FORK, THE WAY STRAIGHT ON. The walk took
+                -- the way out that moved it least further from the seed, and at a fork that can be
+                -- the side branch: at 39 the north road's northbound lane is anchored on the fork
+                -- where a turn to the junction to the north-west leaves it, the walk took that turn
+                -- and stopped after 8 m, and the lane - the north road's other lane, running on for
+                -- hundreds of metres - was "the same lane twice" beside the southbound one. Left out
+                -- of the side roads, it was never brought to the box: cleared, the north road's
+                -- northbound lane started 10.9 m from the main road and its southbound twin 2.7 m.
+                -- Where more than one way leads further from the seed, the one turning least from
+                -- the way the lane came (the run followed out to the anchor, then the walk's own last
+                -- step) is taken; one way on is taken as before.
                 local function runsFor(ap)
                     local w, prev, run, steps = ap.wp, nil, 0, 0
                     if w == nil then return math.huge end
+                    local hx, hz = nil, nil
+                    local rp = ap.runPath
+                    if rp ~= nil and #rp >= 2 and rp[#rp] == w then
+                        local q = rp[#rp - 1]
+                        local l = math.sqrt((w.x - q.x) ^ 2 + (w.z - q.z) ^ 2)
+                        if l > 1e-6 then hx, hz = (w.x - q.x) / l, (w.z - q.z) / l end
+                    end
                     while steps < 40 do
                         local nxt, bd = nil, math.huge
                         local here = (w.x - seed.x) ^ 2 + (w.z - seed.z) ^ 2
+                        local ways = {}
                         for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
                             for _, id in ipairs(lst) do
                                 local t = ADGraphManager:getWayPointById(id)
                                 if t ~= nil and t ~= prev then
                                     local d = (t.x - seed.x) ^ 2 + (t.z - seed.z) ^ 2
-                                    if d > here and d < bd then bd, nxt = d, t end
+                                    if d > here then
+                                        ways[#ways + 1] = t
+                                        if d < bd then bd, nxt = d, t end
+                                    end
+                                end
+                            end
+                        end
+                        if #ways >= 2 and hx ~= nil and AutoDrive.FLYOVER_JUNCTION_RUN_STRAIGHT ~= false then
+                            local bestDot = -math.huge
+                            for _, t in ipairs(ways) do
+                                local l = math.sqrt((t.x - w.x) ^ 2 + (t.z - w.z) ^ 2)
+                                if l > 1e-6 then
+                                    local dot = ((t.x - w.x) * hx + (t.z - w.z) * hz) / l
+                                    if dot > bestDot + 1e-9 then bestDot, nxt = dot, t end
                                 end
                             end
                         end
                         if nxt == nil then break end
+                        do
+                            local l = math.sqrt((nxt.x - w.x) ^ 2 + (nxt.z - w.z) ^ 2)
+                            if l > 1e-6 then hx, hz = (nxt.x - w.x) / l, (nxt.z - w.z) / l end
+                        end
                         run = run + math.sqrt((nxt.x - w.x) ^ 2 + (nxt.z - w.z) ^ 2)
                         prev, w = w, nxt
                         steps = steps + 1
@@ -13368,6 +13432,85 @@ function ADFlyoverEditor:updateJunctionPreview()
             end
             routes = kept
         end
+        -- A LANE FROM THIS PART'S SIDE ROAD TO ANOTHER PART'S IS A CONNECTOR, NOT A THROUGH ROAD.
+        -- Where the user has split a junction, two parts can sit on one main road with their side
+        -- roads across it from each other, a few metres apart: a staggered crossing. A lane can then
+        -- run from one part's side road straight across the main road and on down the other part's
+        -- side road, and the arms pairing above reads the two side roads as one road through this
+        -- part. At j39 the north road's southbound lane ran on across the main road into the south-
+        -- west road, which is 39se's side road; it was kept as j39's through road, and the user, who
+        -- cleared j39 with through roads kept, failed it: "a connector, not a through road". So with
+        -- a split saved, a route both of whose lanes end near here, one at this part and the other
+        -- at another part of the same junction, is dropped from the through roads: its points are
+        -- then turn wiring like any other, taken or left by the clear's usual rules. What lies in the
+        -- other part's area is left to that part - its cluster joins that part's side road, so it is
+        -- that part's wiring (foreignWiring) - and stays wired where it leaves the kept main road, so
+        -- the other part's turn off the main road still drives. This part's own lane on the far side
+        -- is then a side road, cut at the box like any other. With through roads not kept the main
+        -- road is cut at the box, and a turn of the other part's that leaves it inside the box loses
+        -- the point it left from, as it did before this rule (at j39, 39se's right turn: the check says
+        -- its end, from (12.5, -4.4), as the end of a turn the clear cut). What a part's clear leaves of
+        -- the other parts' wiring is not settled yet; this rule only stops the side-to-side lane being
+        -- kept as a through road.
+        -- Where a lane ends is the crossing its tip is nearest (laneTipOf); that crossing is this
+        -- part when it is the locked one, and another part when the saved part nearest it is another
+        -- one of this junction's, within JX_PART_NEAR. Only for a split the user saved: a junction kept
+        -- whole as one staggered crossroads (30) keeps its side-to-side lanes as through roads, and
+        -- an undecided one is treated as whole until the user says otherwise. In both through-road
+        -- settings: a connector is not a through road either way, and with through roads off the
+        -- tidy would otherwise re-lay the other part's piece as this part's road.
+        -- AutoDrive.FLYOVER_JUNCTION_PART_CONNECTORS = false turns this off, for the harness only: it
+        -- shows what the clear and its check did before (tools/junction-harness, README).
+        if clearMode and lockedCrossing ~= nil and #routes > 0 and AutoDrive.FLYOVER_JUNCTION_PART_CONNECTORS ~= false then
+            -- Read under pcall: the numbering reads the savegame's file, and a fault there must not
+            -- stop the clear - the rule is then simply not applied, as on a junction not split.
+            local herePart, entry = nil, nil
+            local okName, _, _, part = pcall(self.junctionNameAt, self, cx, cz, false)
+            if okName then herePart = part end
+            if herePart ~= nil then
+                local okEntry, f = pcall(self.junctionEntryAt, self, cx, cz)
+                if okEntry then entry = f end
+            end
+            if entry ~= nil and entry.decision == "split" and entry.parts ~= nil then
+                -- Which part a lane ends at: "here", another saved part, or nil when it runs on (no
+                -- tip) or its crossing is no part's.
+                local function endsAt(ap)
+                    local tip = laneTipOf[apIndex[ap]]
+                    if tip == nil then return nil end
+                    local c, cd = nil, math.huge
+                    for _, k in ipairs(crossings) do
+                        local d = (tip.x - k.x) ^ 2 + (tip.z - k.z) ^ 2
+                        if d < cd then cd, c = d, k end
+                    end
+                    if c == nil then return nil end
+                    if c == lockedCrossing then return "here" end
+                    local p, pd = nil, JX_PART_NEAR * JX_PART_NEAR
+                    for _, sp in ipairs(entry.parts) do
+                        local d = (c.x - sp.x) ^ 2 + (c.z - sp.z) ^ 2
+                        if d < pd then pd, p = d, sp end
+                    end
+                    if p ~= nil and p ~= herePart then return p end
+                    return nil
+                end
+                local through = {}
+                for _, rt in ipairs(routes) do
+                    local a, b = endsAt(rt.e), endsAt(rt.x)
+                    local other = nil
+                    if a == "here" and type(b) == "table" then other = b
+                    elseif b == "here" and type(a) == "table" then other = a end
+                    if other ~= nil then
+                        if logSite2 then
+                            roadNote(string.format("clearConnector:%d:%d", rt.e.wp.id, rt.x.wp.id),
+                                "junction clear - the lane in at %.1f, %.1f runs across the main road to the side road of j%02d%s (out at %.1f, %.1f): a connector between two parts of a split junction, not a through road here - cleared as turn wiring.",
+                                rt.e.wp.x, rt.e.wp.z, entry.n, other.letter or "", rt.x.wp.x, rt.x.wp.z)
+                        end
+                    else
+                        through[#through + 1] = rt
+                    end
+                end
+                routes = through
+            end
+        end
         self._jxRoutes = routes
         for _, rt in ipairs(routes) do
             local e, x, path, ang = rt.e, rt.x, rt.path, rt.ang
@@ -13584,6 +13727,60 @@ function ADFlyoverEditor:updateJunctionPreview()
     end
     -- Another junction's wiring, by object: nothing later in this clear may take it either.
     local foreignWiring = {}
+    -- A PIECE OF WIRING IS OWNED AS A PIECE, NOT POINT BY POINT. Nearest-crossing alone hands the
+    -- last point or two of another junction's turn to this one wherever that turn swings close,
+    -- and taking that point cuts the turn off its lane: the rest then goes as a stub. The
+    -- crossing points move with every small change to the forks (folding a doubled point beside
+    -- a merge moved one 2.3 m), so whether such a point fell on this side was down to luck - at
+    -- 39 a turn of 39se's ran 9 points round a loop to the main road, 8 of them nearer 39se, and
+    -- the ninth came out nearer 39 once the fold had moved 39se's crossing. So a point is taken
+    -- only when at least half of its piece is this junction's. A piece runs along points with no
+    -- fork (two neighbours at most), not on a through route or a run, and stops at anything else
+    -- (and at 200 points, as the preview runs every frame). Only ever refuses a point the
+    -- nearest-crossing rule would take; it never adds one. Asked only of a point that is not on a
+    -- through route or a run itself: the walk never enters those, so a piece started from one would
+    -- be that point and whatever turn wiring touches it, and the answer kept for that wiring would
+    -- then depend on which of its points was asked first. Used by the cluster pass and by the
+    -- extent sweep below, each with its own `cache` of answers: the cluster pass asks while
+    -- foreignWiring is still being filled, a cluster at a time, so it keeps its answers for one
+    -- cluster only, and they are never the sweep's.
+    local function plainNb(p)
+        local nb, n = {}, 0
+        for _, lst in ipairs({ p.out or {}, p.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                if id ~= p.id and not nb[id] then nb[id] = true n = n + 1 end
+            end
+        end
+        return nb, n
+    end
+    local function mostlyOurs(w, cache)
+        if cache[w] ~= nil then return cache[w] end
+        local piece, seenP, stack = {}, { [w] = true }, { w }
+        while #stack > 0 do
+            local p = table.remove(stack)
+            piece[#piece + 1] = p
+            local nb, n = plainNb(p)
+            if n <= 2 and #piece < 200 then
+                for id in jxByPlace(nb) do
+                    local q = inside[id] or ADGraphManager:getWayPointById(id)
+                    if q ~= nil and not seenP[q] and not protectedNodes[q.id] and not runNode[q.id] then
+                        local _, qn = plainNb(q)
+                        if qn <= 2 then
+                            seenP[q] = true
+                            stack[#stack + 1] = q
+                        end
+                    end
+                end
+            end
+        end
+        local ours = 0
+        for _, p in ipairs(piece) do
+            if not foreignWiring[p] and isOwnForClear(p) then ours = ours + 1 end
+        end
+        local ok = ours * 2 >= #piece
+        for _, p in ipairs(piece) do cache[p] = ok end
+        return ok
+    end
     if logSite2 and clearMode then
         roadNote(string.format("clearVoronoi:%d:%d", math.floor(cx * 2), math.floor(cz * 2)),
             "junction clear - %d crossing(s) in the region; clearing the one at %.1f, %.1f (wiring nearer another crossing is left to it).",
@@ -13771,14 +13968,6 @@ function ADFlyoverEditor:updateJunctionPreview()
                                 end
                                 local diagWhy = string.format("%d group(s), %d of its %d point(s) carry a through route (spared individually)",
                                     nGroups, nProt, #cluster)
-                                if logSite2 then
-                                    local mx, mz, mcount = 0, 0, 0
-                                    for _, cw in ipairs(cluster) do mx, mz, mcount = mx + cw.x, mz + cw.z, mcount + 1 end
-                                    if mcount > 0 then mx, mz = mx / mcount, mz / mcount end
-                                    roadNote(string.format("clearAccept:%.0f:%.0f", mx, mz),
-                                        "junction clear - %d point(s) near %.1f, %.1f: %s -> %d cleared, %d spared.",
-                                        #cluster, mx, mz, diagWhy, #cluster - nProt, nProt)
-                                end
                                 -- Node level: spare what carries a through route, spare what belongs to
                                 -- another crossing, clear the rest. A cluster straddling two junctions
                                 -- is therefore split between them instead of going wholly to whichever
@@ -13791,15 +13980,46 @@ function ADFlyoverEditor:updateJunctionPreview()
                                 -- that toggle off (debris, not turnDebris) deleted the neighbour's
                                 -- wiring: the "we killed another junction" failure, back through a
                                 -- different door. The toggle governs through ROUTES, not ownership.
+                                --
+                                -- AND BY THE PIECE (mostlyOurs), as the extent sweep below does. At
+                                -- 39se, 30's right-turn slip lane - from 30's north-east road onto the
+                                -- road towards 39se - came here inside one of 30's clusters that the
+                                -- flood had to stop, so it was shared out point by point. Its last point
+                                -- before the merge, 21 m out, lay nearer 39se's crossing than 30's (by
+                                -- 0.14 m, once the clean-up had moved that crossing). That one point was
+                                -- taken, the turn was cut off its merge, and 15 m of it was left hanging
+                                -- off 30's road as a dead end. Seven of its eight points are 30's: it
+                                -- is 30's turn, and 30's own clear takes it whole. The same at 20n
+                                -- (turn radius 2): the first four points of 20s's left turn onto its
+                                -- east road lay nearer 20n's crossing, were taken, and left the other
+                                -- five hanging off 20s's road, fed by nothing. A cluster taken whole
+                                -- (a closed connector of this junction's own) is not asked.
+                                -- A through route's own point is shared out by nearest crossing alone, as
+                                -- before: it is not turn wiring (see mostlyOurs).
+                                local nTurn, nThrough, pieceOk = 0, 0, {}
                                 for _, cw in ipairs(cluster) do
-                                    if whole or isOwnForClear(cw) then
+                                    if whole or (isOwnForClear(cw) and (not clearMode or lockedCrossing == nil
+                                        or protectedNodes[cw.id] or runNode[cw.id] or mostlyOurs(cw, pieceOk))) then
                                         debris[#debris + 1] = cw
                                         if protectedNodes[cw.id] then
                                             throughDebris[#throughDebris + 1] = cw
+                                            nThrough = nThrough + 1
                                         else
                                             turnDebris[#turnDebris + 1] = cw
+                                            nTurn = nTurn + 1
                                         end
                                     end
+                                end
+                                -- Counted from what the loop above took, not from the cluster: at 39se
+                                -- this line said 40 of 30's points were cleared when one was taken, and
+                                -- the other 39 were left to 30 - which only instrumenting the clear showed.
+                                if logSite2 then
+                                    local mx, mz, mcount = 0, 0, 0
+                                    for _, cw in ipairs(cluster) do mx, mz, mcount = mx + cw.x, mz + cw.z, mcount + 1 end
+                                    if mcount > 0 then mx, mz = mx / mcount, mz / mcount end
+                                    roadNote(string.format("clearAccept:%.0f:%.0f", mx, mz),
+                                        "junction clear - %d point(s) near %.1f, %.1f: %s -> %d cleared, %d spared, %d left to the junction they belong to.",
+                                        #cluster, mx, mz, diagWhy, nTurn, nThrough, #cluster - nTurn - nThrough)
                                 end
                             end
                         end
@@ -13865,60 +14085,14 @@ function ADFlyoverEditor:updateJunctionPreview()
         local already = {}
         for _, w in ipairs(turnDebris) do already[w.id] = true end
         for _, w in ipairs(throughDebris) do already[w.id] = true end
-        -- A PIECE OF WIRING IS OWNED AS A PIECE, NOT POINT BY POINT. Nearest-crossing alone hands the
-        -- last point or two of another junction's turn to this one wherever that turn swings close,
-        -- and taking that point cuts the turn off its lane: the rest then goes as a stub. The
-        -- crossing points move with every small change to the forks (folding a doubled point beside
-        -- a merge moved one 2.3 m), so whether such a point fell on this side was down to luck - at
-        -- 39 a turn of 39se's ran 9 points round a loop to the main road, 8 of them nearer 39se, and
-        -- the ninth came out nearer 39 once the fold had moved 39se's crossing. So the sweep takes a
-        -- point only when at least half of its piece is this junction's. A piece runs along points
-        -- with no fork (two neighbours at most), not on a through route or a run, and stops at
-        -- anything else (and at 200 points, as the preview runs every frame). Only ever refuses a point the rule below would take; it never adds one.
+        -- Owned as a piece, as the cluster pass is too (mostlyOurs, above the cluster pass).
         local pieceOk = {}
-        local function plainNb(p)
-            local nb, n = {}, 0
-            for _, lst in ipairs({ p.out or {}, p.incoming or {} }) do
-                for _, id in ipairs(lst) do
-                    if id ~= p.id and not nb[id] then nb[id] = true n = n + 1 end
-                end
-            end
-            return nb, n
-        end
-        local function mostlyOurs(w)
-            if pieceOk[w] ~= nil then return pieceOk[w] end
-            local piece, seenP, stack = {}, { [w] = true }, { w }
-            while #stack > 0 do
-                local p = table.remove(stack)
-                piece[#piece + 1] = p
-                local nb, n = plainNb(p)
-                if n <= 2 and #piece < 200 then
-                    for id in jxByPlace(nb) do
-                        local q = inside[id] or ADGraphManager:getWayPointById(id)
-                        if q ~= nil and not seenP[q] and not protectedNodes[q.id] and not runNode[q.id] then
-                            local _, qn = plainNb(q)
-                            if qn <= 2 then
-                                seenP[q] = true
-                                stack[#stack + 1] = q
-                            end
-                        end
-                    end
-                end
-            end
-            local ours = 0
-            for _, p in ipairs(piece) do
-                if not foreignWiring[p] and isOwnForClear(p) then ours = ours + 1 end
-            end
-            local ok = ours * 2 >= #piece
-            for _, p in ipairs(piece) do pieceOk[p] = ok end
-            return ok
-        end
         local extra = 0
         for _, w in jxByPlace(work) do
             if not already[w.id] and not protectedNodes[w.id] and not runNode[w.id]
                 and not foreignWiring[w]
                 and (w.x - lockedCrossing.x) ^ 2 + (w.z - lockedCrossing.z) ^ 2 <= extentR2
-                and isOwnForClear(w) and mostlyOurs(w) then
+                and isOwnForClear(w) and mostlyOurs(w, pieceOk) then
                 turnDebris[#turnDebris + 1] = w
                 debris[#debris + 1] = w
                 extra = extra + 1
@@ -17728,6 +17902,64 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     local leave = self.junctionLeaveThrough ~= false
     local STEP = AutoDrive.FLYOVER_JUNCTION_RESPACE_STEP or 5
 
+    -- A SIDE LANE THAT IS A THROUGH ROAD'S OWN LANE IS NOT CARRIED TO THE BOX. Where a lane splits
+    -- just outside the circle the lanes are picked from, the circle cuts both branches: two entries,
+    -- each followed back out along the one lane they share. The two are folded into one only when
+    -- that walk happens to stop on the same point, and the points are a few metres apart, so it is
+    -- down to the spacing. Where they are not folded, one is paired into the through road and the
+    -- other is left over as a "side road" whose lane comes in to where it is cut along that through
+    -- road. Carried to the box like a side road, it laid a new lane end off the
+    -- through road: at 39se, cleared with through roads kept after 39, the main road's lane in from
+    -- the west forked into a 5 m dead end 12 m from 39se's middle (the clear of 39 had left 39se's
+    -- right turn leaving the main road there, so it read as 39se's own tie point). The side-road
+    -- list still holds it, for the junction's type (which reads that list and is not changed here);
+    -- only the tidy leaves it out. AutoDrive.FLYOVER_JUNCTION_SIDE_DUPES = false puts it back, for
+    -- the harness only (README).
+    local sideLanes = {}
+    do
+        local onRoute = {}
+        for r, nodes in ipairs(routes.through or {}) do
+            local set = {}
+            for _, n in ipairs(nodes) do set[n] = true end
+            onRoute[r] = set
+        end
+        for _, sl in ipairs(routes.side or {}) do
+            local nodes = sl.nodes or {}
+            -- From the lane's far end in to where it is cut - its tie node, or with none, its
+            -- point nearest the middle. Past that a side lane may run on round a turn and down a
+            -- through road, which says nothing.
+            local upto = nil
+            for i, n in ipairs(nodes) do
+                if n == sl.cutNode then upto = i break end
+            end
+            if upto == nil then
+                local bd = math.huge
+                for i, n in ipairs(nodes) do
+                    local d = (n.x - box.centre.x) ^ 2 + (n.z - box.centre.z) ^ 2
+                    if d < bd then bd, upto = d, i end
+                end
+            end
+            -- The lane comes in to where it is cut along a through road: that point and the one before
+            -- it are both that road's. A side road's own lane comes in to its tie node along the side
+            -- road. Not every point out to the lane's far end: the two walks out stop on different
+            -- points, so the far end can lie a point or two past where the through road's own list
+            -- begins (3 on the session network, turn radius 2: a 19 m copy of the main road's lane
+            -- laid beside it, ending in a dead end).
+            local dup = false
+            if upto ~= nil and upto >= 2 and AutoDrive.FLYOVER_JUNCTION_SIDE_DUPES ~= false then
+                for _, set in ipairs(onRoute) do
+                    if set[nodes[upto]] and set[nodes[upto - 1]] then dup = true break end
+                end
+            end
+            if dup then
+                Logging.info("[FlyoverEditor]: junction - the lane read as a side road from %.1f, %.1f comes in along a through road to %.1f, %.1f - that road's own lane twice; not carried to the box.",
+                    nodes[1].x, nodes[1].z, nodes[upto].x, nodes[upto].z)
+            else
+                sideLanes[#sideLanes + 1] = sl
+            end
+        end
+    end
+
     local function live(w) return w ~= nil and w.id ~= nil and ADGraphManager:getWayPointById(w.id) == w end
     local function distLine(line, x, z)
         local best = math.huge
@@ -18089,7 +18321,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     local sharedHeading = {}
     do
         local reads = {}
-        for _, sl in ipairs(routes.side or {}) do
+        for _, sl in ipairs(sideLanes) do
             local lane = {}
             for _, n in ipairs(sl.nodes) do if live(n) then lane[#lane + 1] = n end end
             if #lane >= 2 then
@@ -18202,7 +18434,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     -- SIDE-ROAD LANES - the lane cut nearest the junction first: it is the clean one, and its
     -- finished line is what its partner is laid beside.
     local sideOrder = {}
-    for _, sl in ipairs(routes.side or {}) do sideOrder[#sideOrder + 1] = sl end
+    for _, sl in ipairs(sideLanes) do sideOrder[#sideOrder + 1] = sl end
     table.sort(sideOrder, function(p, q)
         local a1 = sharedHeading[p] and sharedHeading[p].station or math.huge
         local b1 = sharedHeading[q] and sharedHeading[q].station or math.huge
@@ -18624,7 +18856,34 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 if hit ~= nil and hit > 0.5 then
                     carried[sl] = true
                     local back = lane[#lane - 1]
-                    local dual = (back ~= nil) and dualOf(back, tip) or false
+                    -- TWO-WAY OR ONE-WAY IS READ OFF THE ROAD AS IT IS NOW: from the point the tip is
+                    -- joined to on the lane's side, not from the point before it in this lane's list.
+                    -- The list was read before the clear began, and a two-way road is one chain listed
+                    -- once for each way, so its other listing may have been re-laid since. At 24 (in
+                    -- game, cleared after 16 had been cleared and undone) the west road's first listing
+                    -- was respaced 15 to 28 m out, two new points went in between this list's last two,
+                    -- those two were no longer joined at all, and the two-way road was read as one-way:
+                    -- its new end came back one way only, the wrong way for traffic leaving.
+                    local onLane = nil
+                    if back ~= nil then
+                        if live(back) and (table.contains(back.out or {}, tip.id) or table.contains(tip.out or {}, back.id)) then
+                            onLane = back
+                        else
+                            -- the tip's own neighbour nearest where `back` stood: the lane as it runs now
+                            local bd = math.huge
+                            for _, lst in ipairs({ tip.out or {}, tip.incoming or {} }) do
+                                for _, id in ipairs(lst) do
+                                    local t = ADGraphManager:getWayPointById(id)
+                                    if t ~= nil and t ~= tip then
+                                        local d = (t.x - back.x) ^ 2 + (t.z - back.z) ^ 2
+                                        if d < bd then bd, onLane = d, t end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    local dual = false
+                    if onLane ~= nil then dual = dualOf(onLane, tip) end
                     local n = math.max(1, math.floor(hit / STEP + 0.5))
                     local prev = tip
                     for k = 1, n do
@@ -21990,6 +22249,42 @@ local function jxCheckMiddle(C)
             for _, x in ipairs(exits) do
                 local laneOut = outLane[x.w]
                 if laneOut == nil and x.t ~= nil then laneOut = outLane[x.t] end
+                -- PAST A LANE'S OWN FAR END THE DRIVE IS STILL ON THAT LANE. Each lane out is walked in
+                -- from its far end - the point the clear followed its run out to - and that end can lie
+                -- inside the bound: the clear follows a run only as far as its turns need (about 30 m
+                -- at a 2 m turn radius), while the bound runs every arm out to the next junction. At 65,
+                -- turn radius 2, through roads not kept, the south-east lane out's far end lay 40 m from
+                -- the middle and the bound reached past 42 m; the lane's last 2 m inside the bound was
+                -- walked by no lane, so a drive from the lane's own new start, straight along it, read as
+                -- joining "a road the clear did not count as one of this junction's" - itself - and as a
+                -- connection the clear missed, where nothing joined anything. So where the last point
+                -- of the drive that a lane walk covered is a lane out's own far end, and from there the
+                -- drive runs on with no way to choose (one way on at every point, not counting the way
+                -- back on a two-way road), the drive left on that lane. The same rule as a way in that
+                -- lies before its lane (jxDriveOn, above): what lies along a lane beyond its own end is
+                -- not this junction's. Not where the lane ends at a fork, or meets one after its end: the
+                -- east lane out of the unnumbered junction south of 40 (x2 in extra_sites.txt) ends 15 m
+                -- out where its road splits in two, and a drive onto either branch is still said.
+                if laneOut == nil then
+                    local st, plain = { x.w, true }, true
+                    while st do
+                        local v, from = st[1], par[st[2]][st[1]]
+                        local ways, n = {}, 0
+                        for _, id in ipairs(v.out or {}) do
+                            local t = C.node(id)
+                            if t ~= nil and t ~= v and not (from and t == from[1]) and not ways[t] then
+                                ways[t] = true
+                                n = n + 1
+                            end
+                        end
+                        if outLane[v] ~= nil or inLane[v] ~= nil then
+                            if plain and n == 1 and outLane[v] ~= nil and C.outRun[v] == 0 then laneOut = outLane[v] end
+                            break
+                        end
+                        if n ~= 1 then plain = false end
+                        st = from
+                    end
+                end
                 -- Leaving where no walked lane runs: followed on to the lane it reaches (jxDriveOn).
                 -- One that reaches none is still a join - onto a road the clear found no lane of -
                 -- and is said as that, not passed as the same lane going on.
@@ -22582,6 +22877,9 @@ local function jxCheckTouched(C)
         return now > was
     end
     local spurAt = {}
+    -- Every dead end a line below has already said, so the rule for a turn left leading nowhere
+    -- (further down) does not say the same end again.
+    local saidEnd = {}
     for _, w in ipairs(C.near) do
         local ends = {}
         if newWayOut(w) then ends = deadEnds(w, false) end
@@ -22590,6 +22888,7 @@ local function jxCheckTouched(C)
             if before[w] ~= nil then was = #deadEnds(w, true) end
             if was < #ends then
                 spurAt[w] = true
+                for _, t in ipairs(ends) do saidEnd[t] = true end
                 table.sort(ends, jxByPos)
                 local where = {}
                 for _, t in ipairs(ends) do where[#where + 1] = at(t.x, t.z) end
@@ -22668,9 +22967,234 @@ local function jxCheckTouched(C)
             if #pieces > 0 and #pieces < #first then
                 table.sort(pieces, function(p, q) return jxByPos(p.e, q.e) end)
                 for _, p in ipairs(pieces) do
+                    saidEnd[p.e] = true
                     issue("leftover", w.x, w.z, string.format(
                         "a lane now splits here into a dead end %.0f m long, ending at %s - the start of a turn the clear cut, left behind; before the clear that way led on",
                         p.run, at(p.e.x, p.e.z)))
+                end
+            end
+        end
+    end
+
+    -- A TURN LEFT LEADING NOWHERE, OR FED BY NOTHING. The rule above reads a dead end only 15 m out
+    -- from the fork it hangs off. In the missed-turn test (missed.lua), j39's own turn from the main
+    -- road onto the north road, kept on purpose, runs 18 m to where the north road's northbound lane
+    -- started before the clear. The clear now carries that lane on to the box, and the point the turn
+    -- led into went with the old start. The turn then led nowhere, nothing drove over it, and the
+    -- check said nothing at all; before, the lane still started there, and the drive over the turn
+    -- was said as missed. So every point near here that has no way out now, though it led on before
+    -- the clear, is walked back point by point (one way in and one way out, out to 60 m) to where its
+    -- piece leaves the rest, and said. And the mirror: every point with nothing leading into it now,
+    -- though something did before, is walked on to where its piece joins the rest, and said (at 39 a
+    -- turn of its own onto the north-west road, kept the same way, lost the point that fed it).
+    -- It only adds lines: it never changes or hides another line. Not said twice: an end the two
+    -- rules above said, or a piece whose first point a teal dot already says as the start of a cut
+    -- turn's end (jxTail). Not a lane that stops on purpose: a point on the lanes the check walked
+    -- (a lane in cut at the box ends there, a lane out cut at the box starts there), or a piece lying
+    -- all along one of the through roads read before the clear (C.lines, within 2.5 m: with through
+    -- roads off they are cut at the box on purpose). Nor a piece whose loose end lies on a road the
+    -- road-cut rule (below) already says is cut: at 67 the clear cuts a road that crossed it without
+    -- joining, and the rest of that road past where the check drove it, fed by nothing now, is that
+    -- same cut. A piece joined to nothing at either end is the scrap rule's, below.
+    -- AutoDrive.FLYOVER_JUNCTION_LOOSE_ENDS = false turns this off, for the harness only.
+    if AutoDrive.FLYOVER_JUNCTION_LOOSE_ENDS ~= false then
+        local function liveIns(v)
+            local list, seen = {}, {}
+            for _, id in ipairs(v.incoming or {}) do
+                local t = node(id)
+                if t ~= nil and t ~= v and not seen[t] then
+                    seen[t] = true
+                    list[#list + 1] = t
+                end
+            end
+            return list
+        end
+        local function step(a, b) return math.sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
+        local function onLane(v) return C.inLane[v] ~= nil or C.outLane[v] ~= nil end
+        -- WHETHER THE WAY LED SOMEWHERE BEFORE THE CLEAR: walked on (fwd) or back from v over the
+        -- network as it was, point by point, until it reaches a fork or a merge (it did) or stops
+        -- (it did not: it ended, or started, loose already). At 68 a turn the clear took started
+        -- at a point nothing led into, and what was left of it read as cut off at its start; it had
+        -- been fed by nothing before the clear too. Out to 60 m: further, it ran somewhere.
+        local function ledSomewhere(v, fwd)
+            local cur, run, seenB = v, 0, { [v] = true }
+            for _ = 1, 200 do
+                local b = before[cur]
+                if b == nil then return true end
+                local ways, nb = {}, nil
+                for _, t in ipairs(fwd and b.out or b.inn) do
+                    if t ~= cur and not ways[t] then
+                        ways[t] = true
+                        if nb == nil then nb = t elseif nb ~= t then return true end
+                    end
+                end
+                if nb == nil then return false end
+                if seenB[nb] then return true end
+                local bn = before[nb]
+                if bn == nil then return true end
+                local back = {}
+                local nBack = 0
+                for _, t in ipairs(fwd and bn.inn or bn.out) do
+                    if t ~= nb and not back[t] then
+                        back[t] = true
+                        nBack = nBack + 1
+                    end
+                end
+                if nBack > 1 then return true end
+                run = run + math.sqrt((bn.x - b.x) ^ 2 + (bn.z - b.z) ^ 2)
+                if run > 60 then return true end
+                seenB[nb] = true
+                cur = nb
+            end
+            return true
+        end
+        local function alongRoad(piece)
+            for _, Lr in ipairs(C.lines or {}) do
+                local all = true
+                for _, v in ipairs(piece) do
+                    if jxOnLine(Lr.pts, v.x, v.z) > 2.5 then all = false break end
+                end
+                if all then return true end
+            end
+            return false
+        end
+        -- The loose end of a piece lies on a road the road-cut rule says is cut.
+        local function onCutRoad(v)
+            for _, b in ipairs(C.broken or {}) do
+                if jxOnLine(b.item.pts, v.x, v.z) <= 2.5 then return true end
+            end
+            return false
+        end
+        local tailFrom = {}
+        for _, dt in ipairs(C.dots or {}) do
+            if dt.fx ~= nil then tailFrom[#tailFrom + 1] = dt end
+        end
+        local function saidAsTail(v)
+            for _, dt in ipairs(tailFrom) do
+                if math.abs(dt.fx - v.x) < 0.01 and math.abs(dt.fz - v.z) < 0.01 then return true end
+            end
+            return false
+        end
+        -- Leading nowhere: from the dead end back to where its piece leaves a fork or a merge.
+        for _, d in ipairs(C.near) do
+            local b0 = before[d]
+            if b0 ~= nil and not saidEnd[d] and not onLane(d) and #liveOuts(d, nil) == 0 and #liveIns(d) == 1
+                and ledSomewhere(d, true) then
+                local piece, cur, run, from = { d }, d, 0, nil
+                local seenN = { [d] = true }
+                for _ = 1, 200 do
+                    local q = liveIns(cur)[1]
+                    if q == nil or seenN[q] then break end
+                    run = run + step(q, cur)
+                    if run > 60 then break end
+                    local qi, qo = #liveIns(q), #liveOuts(q, nil)
+                    if qo > 1 or qi > 1 then from = q break end
+                    if qi == 0 then break end
+                    seenN[q] = true
+                    piece[#piece + 1] = q
+                    cur = q
+                end
+                if from ~= nil and not alongRoad(piece) and not onCutRoad(d) then
+                    issue("leftover", from.x, from.z, string.format(
+                        "a way off the lane here now leads nowhere: it stops %.0f m on, at %s, where before the clear it led on - a turn left in place, cut off at its far end",
+                        run, at(d.x, d.z)))
+                end
+            end
+        end
+        -- Fed by nothing: from the loose start on to where its piece joins a merge or a fork.
+        for _, s in ipairs(C.near) do
+            local b0 = before[s]
+            if b0 ~= nil and not onLane(s) and #liveIns(s) == 0 and #liveOuts(s, nil) == 1
+                and ledSomewhere(s, false) and not saidAsTail(s) then
+                local piece, cur, run, into = { s }, s, 0, nil
+                local seenN = { [s] = true }
+                for _ = 1, 200 do
+                    local t = liveOuts(cur, nil)[1]
+                    if t == nil or seenN[t] then break end
+                    run = run + step(cur, t)
+                    if run > 60 then break end
+                    local ti, to = #liveIns(t), #liveOuts(t, nil)
+                    if ti > 1 or to > 1 then into = t break end
+                    if to == 0 then break end
+                    seenN[t] = true
+                    piece[#piece + 1] = t
+                    cur = t
+                end
+                if into ~= nil and not alongRoad(piece) and not onCutRoad(s) then
+                    issue("leftover", s.x, s.z, string.format(
+                        "a way that starts here is now fed by nothing: %.0f m of it still joins at %s, where before the clear something led into it - a turn left in place, cut off at its start",
+                        run, at(into.x, into.z)))
+                end
+            end
+        end
+    end
+
+    -- A SCRAP CUT LOOSE FROM EVERYTHING. Clearing 39 and then 39se, both with through roads off, left
+    -- two points of 39se's turn with nothing leading in and nothing leading out, and the card said
+    -- "middle empty, nothing else touched": no rule here read a piece that joins nothing. So every
+    -- piece of wiring near here that is joined to nothing else - at most 8 points, under 15 m end to
+    -- end - and had a link before the clear that it has not now, is said. A piece that was already
+    -- loose before, and is as it was, is not this clear's.
+    do
+        local seenI = {}
+        for _, s in ipairs(C.near) do
+            if not seenI[s] then
+                local comp, stack, big = {}, { s }, false
+                seenI[s] = true
+                while #stack > 0 do
+                    local v = table.remove(stack)
+                    comp[#comp + 1] = v
+                    if #comp > 8 then big = true end
+                    for _, lst in ipairs({ v.out or {}, v.incoming or {} }) do
+                        for _, id in ipairs(lst) do
+                            local t = node(id)
+                            if t ~= nil and t ~= v and not seenI[t] then
+                                seenI[t] = true
+                                stack[#stack + 1] = t
+                            end
+                        end
+                    end
+                end
+                if not big and #comp >= 2 then
+                    local inComp = {}
+                    for _, v in ipairs(comp) do inComp[v] = true end
+                    local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+                    local lost = false
+                    for _, v in ipairs(comp) do
+                        x0, x1, z0, z1 = math.min(x0, v.x), math.max(x1, v.x), math.min(z0, v.z), math.max(z1, v.z)
+                        local b0 = before[v]
+                        if b0 ~= nil then
+                            for _, lst in ipairs({ b0.out, b0.inn }) do
+                                for _, t in ipairs(lst) do
+                                    if t ~= v and not inComp[t] then lost = true end
+                                end
+                            end
+                        else
+                            -- laid by this clear, and joined to nothing else: this clear's too
+                            lost = true
+                        end
+                    end
+                    local span = math.sqrt((x1 - x0) ^ 2 + (z1 - z0) ^ 2)
+                    -- Not road: a lane cut at two boxes - between two parts of a split junction, or
+                    -- two junctions, both cleared with through roads off - is the road the next
+                    -- build joins up to, however short, and is left on purpose. Road is a piece lying
+                    -- all along one of the through roads read before the clear (C.lines, within 2.5 m,
+                    -- as jxTail reads a leg). Not by passages: a turn's loose piece is driven like a
+                    -- lane from its first point, and read so, 39se's 2-point scrap was "road".
+                    local road = false
+                    for _, Lr in ipairs(C.lines or {}) do
+                        local all = true
+                        for _, v in ipairs(comp) do
+                            if jxOnLine(Lr.pts, v.x, v.z) > 2.5 then all = false break end
+                        end
+                        if all then road = true break end
+                    end
+                    if lost and span < 15 and not road then
+                        table.sort(comp, jxByPos)
+                        issue("leftover", comp[1].x, comp[1].z, string.format(
+                            "a scrap of %d points, %.0f m end to end, is left joined to nothing - the clear cut it loose from what it was on",
+                            #comp, span))
+                    end
                 end
             end
         end
@@ -22976,13 +23500,36 @@ local function jxCheckReport(C)
     -- the worst kind of problem, not a bare count: "1 other change" read like damage where the only
     -- thing found was the respacing going 1 m too far.
     local card = {}
+    -- THE OTHER PARTS BY NAME ON THE CARD. "next part's wiring" named nobody: after clearing 39se the
+    -- user was asked to find the check naming 39's wiring as 39's, and the card is the check they
+    -- read - the names were in the log alone. So where every part the check names has a name
+    -- ("j39", "j39nw"), the card says them; a part known only by where it lies ("the part 20 m
+    -- north-west") is too long for the card's one line, which then keeps the short words.
+    local function cardWhy(g)
+        if g.R.key ~= "part" then return g.R.card end
+        local names, seen = {}, {}
+        for _, list in ipairs({ joins, dots }) do
+            for _, it in ipairs(list) do
+                if it.why == "part" then
+                    if it.part == nil or it.part.name == nil then return g.R.card end
+                    if not seen[it.part.name] then
+                        seen[it.part.name] = true
+                        names[#names + 1] = it.part.name
+                    end
+                end
+            end
+        end
+        if #names == 0 then return g.R.card end
+        table.sort(names)
+        return table.concat(names, "'s and ") .. "'s own wiring"
+    end
     local first
     if nJoin + nDot == 0 then
         first = "Check: middle empty"
     elseif #groups == 1 then
-        first = string.format("Check: %s - %s", both(nJoin, nDot, ", "), groups[1].R.card)
+        first = string.format("Check: %s - %s", both(nJoin, nDot, ", "), cardWhy(groups[1]))
     else
-        first = string.format("Check: %s - worst: %s", both(nJoin, nDot, ", "), groups[1].R.card)
+        first = string.format("Check: %s - worst: %s", both(nJoin, nDot, ", "), cardWhy(groups[1]))
     end
     local noted = ""
     if #notes > 0 then noted = string.format(" (%s)", count(#notes, "note", "notes")) end
@@ -23117,6 +23664,11 @@ end
 --- itself, not to an undo step: an undo step is a new table after a redo, falls off the 25-step stack
 --- after 25 more edits, and a clear with nothing to cut takes none. The card draws this every frame,
 --- so an error comparing hides the line rather than taking the card down.
+--- WHEN IT GOES FOR ANY OTHER REASON THAN AN UNDO OR A REDO, THE LOG SAYS SO, once. After clearing
+--- 39se the user did not find the line on the card, and nothing could tell afterwards whether it
+--- had been hidden, or why: a hide left no trace, and one caused by the comparison failing was
+--- silent too. An undo or a redo swaps the whole list, and hiding then is what the line is for, so
+--- that stays quiet; a change in place (an edit within 60 m) or a failed comparison is said.
 function ADFlyoverEditor:junctionLastCheckShown()
     local r = self.junctionLastCheck
     if r == nil or r.sig == nil or r.seen == nil then return r end
@@ -23124,9 +23676,21 @@ function ADFlyoverEditor:junctionLastCheckShown()
     local n = #(list or {})
     local now = self:nowMs()
     if r.seen.list ~= list or r.seenCount ~= n or now - (r.askedAt or 0) >= 500 or now < (r.askedAt or 0) then
+        local swapped = (r.seen.list ~= list)
+        local wasShown = r.shown
         r.seen.list, r.seenCount, r.askedAt = list, n, now
         local ok, sig = pcall(jxCheckSignature, r.x, r.z)
         r.shown = ok and sig == r.sig
+        if wasShown and not r.shown and (not swapped or not ok) then
+            local who = r.name
+            if who == nil and r.number ~= nil then who = string.format("j%02d", r.number) end
+            who = who or "the last clear"
+            if ok then
+                Logging.info("[FlyoverEditor]: junction - the card stops showing the check on %s: the network within 60 m of it is no longer what the clear left (an edit there since).", who)
+            else
+                Logging.info("[FlyoverEditor]: junction - the card stops showing the check on %s: comparing it with the network failed: %s", who, tostring(sig))
+            end
+        end
     end
     if r.shown then return r end
     return nil

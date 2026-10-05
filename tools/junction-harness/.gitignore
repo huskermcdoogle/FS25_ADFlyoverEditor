@@ -11,3 +11,7 @@ captures*/
 *.zip
 terrain_data/
 regnames_out/
+regmissed*.txt
+regmissed_out/
+regnames_*/
+regmissed_*/

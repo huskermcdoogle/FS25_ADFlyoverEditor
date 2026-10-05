@@ -55,8 +55,10 @@ both runs must be byte-identical. The line reads:
   end of a turn it cut), `missed`, `nobox`, `through`, `part` (the other part of a split
   junction - its own wiring, left alone on purpose), `oneroad`, `selfjoin`, `crossing`.
 - other problems by kind: `through` (a road cut), `stub`, `flip`, `spur` (a lane split into
-  dead ends), `leftover` (the start of a turn it cut, left hanging off a lane), `reach`
-  (an edit outside the junction), and `link`, `moved`, `gone`, `new`, `vanished`,
+  dead ends), `leftover` (the start of a turn it cut, left hanging off a lane; a way it left
+  leading nowhere, or fed by nothing, that led on before the clear; or a scrap of wiring, at
+  most 8 points and under 15 m end to end, cut loose and joined to nothing),
+  `reach` (an edit outside the junction), and `link`, `moved`, `gone`, `new`, `vanished`,
   `stayed` for changes no part of the clear recorded.
 - notes are not problems: the respacing re-laid road wholly outside the junction but
   within its own reach, which is measured along the lane from the lane's end. Whether it
@@ -90,6 +92,66 @@ Reading a join line:
   junction. At 40 it is the south-east road - the main road, by the user's reading - which
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
+- Known false `missed`: a turn of another part's that the clear now leaves working inside this
+  part's area. At j39 with the user's split saved and through roads kept, 39se's right turn off the
+  main road at (9.9, -7.4) and its teal dot at (12.1, 6.3); at 20n (turn radius 2, either setting)
+  20s's left turn. The clear is right to leave them (39se's and 20s's own clears take them); the check
+  reads whose a turn is by where it turns, and cannot tell yet. How the check should judge another
+  part's turn is part of split-part clearing, decided 2026-10-03 and not built.
+
+## Missed turns at split junctions: missed.lua, regmissed.sh
+
+The check names a join "another part's own wiring" when the turn it runs over is nearer another
+part's meeting point - which, read wrongly, hides a turn this clear missed. So every turn of every
+part is missed on purpose, one at a time, and the check's verdict on each is listed:
+
+    LEAVE=1 K=3 lua missed.lua X Z         # keep piece 3 of the clear's own turn wiring at X Z
+    bash regmissed.sh TAG                  # every part in split_decisions.txt, both modes, every piece
+
+`missed.lua` groups the clear's turn wiring into connected pieces (in a fixed order, by place), and
+the clear refuses the kept piece's points at its one remover, jxRemove, as the bound refuses a point
+outside the junction. It prints the check's verdict on every join that runs over the piece
+(`PIECES=1` counts the pieces, `PATH_OUT=1` prints each join's drive), and where no join runs over
+it, what the check said of it instead ("said as leftover at ...": a leftover or spur line at one of
+the piece's points, or naming one; "said as dot:<reason> at ...": a teal dot on one of its points, on
+a point linked to one, or naming one as where a cut turn's end starts). `regmissed.sh` makes the
+user's decisions into a junction file as regnames.sh does (`OUT=`, default `regmissed_out/`) and writes `regmissed<TAG>.txt`: a line per part,
+setting and piece, then the totals. A join read as `part=jNNx` is a missed turn the check passed as
+another part's - unless the kept piece is not the turn the join turns on (a join that only touches
+the piece's end, or a kept piece that is really a stretch of main road the clear counts as wiring);
+read such a line before calling it a fault.
+
+On the network the regressions run on (2026-10-03): 92 pieces, 64 with no join over them (43 of
+those said as a leftover, a spur or a teal dot, and 1 only by a dot read as another part's), joins
+over them 16 missed and 11 read as another part's - at 20s, 39se, 40w and 40e. At HEAD 2a81bef: 91
+pieces, 57 with no join (32 said), 18 missed, 14 another part's. 21 pieces are still passed in
+silence (25 at HEAD), all but one with through roads off; none of them was said at HEAD, and every
+turn HEAD said as missed is still said. The check reads whose a turn is by where it turns, and that
+is not settled yet (split-part clearing, decided 2026-10-03, not built); this is the measure for
+it. The hook is held in a global: Lua 5.1's debug.setupvalue keeps no hold on what it sets, and
+without one a run segfaulted part-way through the clear.
+
+Four switches put back what the clear and its check did before the j39 fixes of 2026-10-02 and
+2026-10-03 (all default on; `=0` turns one off, for the harness only):
+
+- `PART_CONNECTORS=0`: a lane from one part's side road across the main road to another part's is
+  kept as a through road. At j39 (the session network of 2026-10-02, the user's decisions, through
+  roads kept) the north road's southbound lane then stays, and 39se's right turn off the main road at
+  (9.9, -7.4) no longer drives.
+- `SIDE_DUPES=0`: the tidy carries a "side road" to the box even where its whole lane in, from its far
+  end to where it is cut, is a through road's own lane. Clearing 39 and then 39se (session network,
+  both with through roads kept) then lays a 4 m dead end beside the main road from (12.5, -5.6), and
+  the check says nothing of it. At 3 (session network, turn radius 2, through roads kept) it laid a
+  19 m copy of the main road's lane, ending in a dead end.
+- `RUN_STRAIGHT=0`: the "same lane twice" test walks a lane on past its anchor by the nearest point
+  further out, not straight on at a fork. At 39 that took the north road's northbound lane round a
+  turn at its anchor, called it a stub, and left it out of the side roads: cleared, it started 10.9 m
+  from the main road while its twin ended 2.7 m from it.
+- `LOOSE_ENDS=0`: the check no longer says a way the clear left leading nowhere, or fed by nothing,
+  that led on before the clear. With the north road's lane now carried to the box (above), j39's own
+  turn from the main road onto the north road, kept on purpose by missed.lua, leads nowhere: the
+  point it led into went with the lane's old start. Nothing then drives over it, and without this
+  line the check said nothing of it at all.
 
 ## Loop order: SHUFFLE and one junction after another
 
