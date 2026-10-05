@@ -154,6 +154,10 @@ leftover lane end is taken away.
     every bend is under 80 degrees: j66 (a Y about 60 degrees off square) would double back, so its
     arms stay loose.
   - The frame line is logged only when placing.
+- **Fourth in-game look** (build 448, 2026-10-05): all 7 passed, no errors. Nothing drawn off a
+  junction, no lag; j3 placed the same leaning T locked from either edge; j11 the same X locked from a
+  corner; j66 refused for its two-way road. j2 was refused too, which is wrong for it (see the j2 test
+  case under two-way roads).
   - All 75 (identical on repeat, both shapes): 49 fitted, 20 plain, 6 refused, 0 errors, 54 loose ends
     at 18 junctions. Not yet: a two-way MAIN road (j24).
 - **Two-way roads: TABLED** (decided 2026-10-05). How two-way roads should join a placed piece needs its
@@ -169,6 +173,13 @@ leftover lane end is taken away.
   - Open questions for the research: one two-way road splitting into a piece's two lanes, a two-way
     MAIN road (j24), a Y far off square (j66), and AutoDrive's two-way rule (on a two-way link it
     stops checking for traffic, doc 05).
+  - **Test case for advanced behaviour: j2** (user, in-game test of build 448, 2026-10-05). j2 is a T;
+    the two-way road beside it is a SEPARATE junction. Place should still lay j2's T and ignore the
+    two-way street entirely, not refuse. The refusal today is wrong for j2. Distance can't tell them
+    apart: j2's two-way road comes within 4.1 m of its centre, as close as the real two-way side roads
+    at j4 (3.8 m) and j65 (3.5 m). Telling "a separate junction next door" from "this junction's own
+    side road" needs a junction's roads to be known by what they join, not by how near they are.
+    Ties in with the clear's own separate-junction work (junction-rework).
   - All 75 with two-way refused: 46 fitted, 13 plain, 16 refused (10 two-way, 6 wiring left by the
     clear), 0 errors, 32 loose ends at 11 junctions.
 - **j2's other branch, decided** (2026-10-05): it is a separate junction and must not affect the main
