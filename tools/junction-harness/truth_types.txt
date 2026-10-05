@@ -55,7 +55,7 @@
 47  T square  main=SW-NE
 48  T square  main=S-N
 49  T square  main=NW-SE
-50  T skew  main=NE-S
+50  Y merge  main=NE-S   # 2026-10-05 user: "50 is clearly a y merge" (was T skew); shown by the shape of its wired connectors
 51  T skew  main=E-W   # main is rotated slightly clockwise
 52  T skew  main=NW-SE
 53  Y merge  main=NW-SE
