@@ -880,8 +880,11 @@ function ADFlyoverHud:buildRows(editor)
             local last = editor.junctionLastPlace
             if last ~= nil then
                 if last.ok then
-                    add("toggle", "last placed", string.format("%s %s", last.shape == "smooth" and "smooth" or "mod",
+                    add("toggle", "last placed", string.format("%s %s", last.shape == "exact" and "mod" or tostring(last.shape),
                         tostring(last.kind)))
+                    if (last.loose or 0) > 0 then
+                        add("toggle", "loose ends", string.format("%d - join by hand", last.loose))
+                    end
                 else
                     add("toggle", "last place failed", "")
                     notes(last.why)
@@ -890,10 +893,13 @@ function ADFlyoverHud:buildRows(editor)
             local jp = editor.junctionPreview
             if jp ~= nil and jp.placeMode then
                 if jp.ok and jp.plan ~= nil then
-                    add("toggle", "will place", string.format("%s %s", jp.plan.shape == "smooth" and "smooth" or "mod",
+                    add("toggle", "will place", string.format("%s %s", jp.plan.shape == "exact" and "mod" or tostring(jp.plan.shape),
                         tostring(jp.plan.kind)))
                     add("toggle", "lane gap", string.format("%.1f m", jp.plan.L or 0))
-                    if jp.plan.shape ~= jp.shape then
+                    if jp.plan.shape == "plain" then
+                        notes("doesn't fit: " .. tostring(jp.plan.fitWhy))
+                        add("toggle", "loose ends", tostring(#(jp.plan.loose or {})))
+                    elseif jp.plan.shape ~= jp.shape then
                         notes("the smooth shape does not fit here - the mod shape instead")
                     end
                     add("note", editor.junctionArmed ~= nil and "right-click places it" or "click to lock")

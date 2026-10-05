@@ -79,6 +79,16 @@ leftover lane end is taken away.
 
   The j3 case is what step 2's plain-piece fallback is for. The route check isn't run after placing
   yet (step 4).
+- **Step 2 done offline** (2026-10-05). Where the crossing doesn't fit, the mod's square X or T goes in
+  lined up with the main road at the cursor:
+  - a T when lane ends lie on one side of the main road, an X when they lie on both sides or there are none;
+  - each of its points that lands on a lane running its way joins that lane, and the rest are laid free;
+  - free arm ends are the loose ends: counted on the card and listed in the log.
+
+  "Turn wiring still here" is now the clear's own judgement: place refuses exactly where the clear would
+  find something to take out. A road splitting into its two lanes is no longer mistaken for wiring.
+  All 75, cleared first (`regplace.sh`, identical on repeat): 32 fitted, 37 plain, 6 refused (j14, j20,
+  j26, j39, j40, j68: the clear leaves wiring there), 0 Lua errors, 74 loose ends at 27 junctions.
 
 ## Not in this plan
 

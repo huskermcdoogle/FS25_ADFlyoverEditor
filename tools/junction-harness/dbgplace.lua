@@ -34,11 +34,12 @@ local p0, l0 = count()
 local jp = H.lock(CX, CZ, { mode = "place" })
 if jp == nil or not jp.placeMode then
     print("no place preview")
-    print(string.format("PLACE %.1f %.1f ok=0 kind=- shape=- turns=0 shared=0 points=0 links=0 why=no_preview", CX, CZ))
+    print(string.format("PLACE %.1f %.1f ok=0 kind=- shape=- turns=0 shared=0 points=0 links=0 loose=0 why=no_preview", CX, CZ))
     return
 end
 if jp.ok then
-    print(string.format("card: will place %s %s, lane gap %.1f m", jp.plan.shape, jp.plan.kind, jp.plan.L))
+    print(string.format("card: will place %s %s, lane gap %.1f m, %d loose end(s)%s", jp.plan.shape, jp.plan.kind, jp.plan.L,
+        #(jp.plan.loose or {}), jp.plan.fitWhy and (" - does not fit: " .. jp.plan.fitWhy) or ""))
 else
     print("card: cannot place here - " .. tostring(jp.why))
 end
@@ -47,7 +48,7 @@ if jp.ok then E:applyJunction() end
 if os.getenv("ALL") == "1" then for _, l in ipairs(LOG) do print("  " .. l) end end
 local p1, l1 = count()
 local last = E.junctionLastPlace or {}
-print(string.format("PLACE %.1f %.1f ok=%d kind=%s shape=%s turns=%d shared=%d points=%d links=%d why=%s",
+print(string.format("PLACE %.1f %.1f ok=%d kind=%s shape=%s turns=%d shared=%d points=%d links=%d loose=%d why=%s",
     CX, CZ, (jp.ok and last.ok) and 1 or 0, tostring(last.kind or (jp.plan and jp.plan.kind) or "-"),
-    tostring(last.shape or "-"), last.turns or 0, last.shared or 0, p1 - p0, l1 - l0,
+    tostring(last.shape or "-"), last.turns or 0, last.shared or 0, p1 - p0, l1 - l0, last.loose or 0,
     (tostring(jp.ok and (last.why or "-") or jp.why)):gsub(" ", "_")))

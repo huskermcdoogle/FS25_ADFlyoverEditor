@@ -36,8 +36,14 @@ for _, L in ipairs(links()) do
     before[L.a][L.b] = true
     f:write(string.format("C %.2f %.2f %.2f %.2f %d\n", L.a.x, L.a.z, L.b.x, L.b.z, L.dual and 1 or 0))
 end
-local jp = H.lock(CX, CZ, { mode = "build", radius = 15, turnRadius = 12 })
-if jp ~= nil then H.build() end
+-- MODE=place runs place mode (doc 08) instead of the build.
+if os.getenv("MODE") == "place" then
+    local jp = H.lock(CX, CZ, { mode = "place" })
+    if jp ~= nil and jp.ok then ADFlyoverEditor:applyJunction() end
+else
+    local jp = H.lock(CX, CZ, { mode = "build", radius = 15, turnRadius = 12 })
+    if jp ~= nil then H.build() end
+end
 for _, L in ipairs(links()) do
     if not (before[L.a] and before[L.a][L.b]) then
         f:write(string.format("B %.2f %.2f %.2f %.2f %d\n", L.a.x, L.a.z, L.b.x, L.b.z, L.dual and 1 or 0))
