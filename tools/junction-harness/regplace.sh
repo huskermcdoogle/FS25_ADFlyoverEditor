@@ -19,6 +19,6 @@ awk -F'|' '
   { s = $2
     if (s ~ /ok=1/) { if (s ~ /shape=plain/) pl++; else fi++ } else rf++
     match(s, /loose=([0-9]+)/, A); lo += A[1]; if (A[1] + 0 > 0) lj++
-    if ($3 !~ /err=0/) e++ }
+    if ($3 !~ /err=0/ || s ~ /it_failed/) e++ }
   END { printf "%d fitted, %d plain, %d refused, %d Lua errors | loose ends %d at %d junctions\n", fi + 0, pl + 0, rf + 0, e + 0, lo + 0, lj + 0 }' "$OUT"
 grep -o "why=[^ |]*" "$OUT" | grep -v "why=-" | sort | uniq -c | sort -rn

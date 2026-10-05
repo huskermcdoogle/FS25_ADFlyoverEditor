@@ -109,6 +109,20 @@ leftover lane end is taken away.
     offline, but either way the square piece can't reach a road 30 degrees off.
   - **Locked vs following:** the brightness change isn't noticeable.
   - **j2:** another road leading into the area near the junction gave trouble.
+- **Skew, offline** (2026-10-05). The piece leans to the side or cross road's real angle, up to 45
+  degrees off square, for the fitted pattern (both shapes) and the plain piece alike:
+  - The frame has two directions of its own, one along each road. Straight paths stay straight and
+    curves stay tangent to the lanes they join.
+  - Each corner cut starts and ends a quarter lane gap from the corner in metres along each lane, so its
+    two bends stay equal. At 45 degrees the worst bend on any turn is 68, under AutoDrive's 80; with the
+    mod's fixed positions it would have been 90.
+  - The plain piece takes the main road from a lane that runs on past the cursor (a side lane can't be
+    the main road), and its lane gap from the opposite lane nearest in a straight line (a curving road
+    read short before).
+  - The lock now shows: following the cursor is thin and faint, locked is full width and bright.
+  - j9 leans 14 degrees, j3 29 degrees: both fit now, every end joined. All 75 (identical on repeat):
+    43 fitted, 26 plain, 6 refused (the same where the clear leaves wiring), 0 errors, 66 loose ends at
+    23 junctions. Before the lean: 32, 37, 6, and 74 at 27.
 
 ## Not in this plan
 

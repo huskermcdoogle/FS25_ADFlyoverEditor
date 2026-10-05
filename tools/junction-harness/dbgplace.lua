@@ -13,6 +13,8 @@ if CX == nil or CZ == nil then
     os.exit(1)
 end
 local E = ADFlyoverEditor
+-- FORCEPLAIN=1: always the plain piece, to test it where the pattern would fit.
+if os.getenv("FORCEPLAIN") == "1" then AutoDrive.FLYOVER_JUNCTION_PLACE_FORCE_PLAIN = true end
 
 local function count()
     local p, l = 0, 0

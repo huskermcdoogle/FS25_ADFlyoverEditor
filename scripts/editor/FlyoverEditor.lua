@@ -3373,7 +3373,10 @@ function ADFlyoverEditor:drawNetwork()
     -- place at all, one red sphere at the cursor (the card says why).
     if self.tool == self.TOOL.JUNCTION and self.junctionPreview ~= nil and self.junctionPreview.placeMode then
         local jp = self.junctionPreview
-        local k = (self.junctionArmed ~= nil) and 1 or 0.55
+        -- Following the cursor: thin and faint. Locked: full width and brightness, so the lock shows.
+        local locked = self.junctionArmed ~= nil
+        local k = locked and 1 or 0.35
+        local plw = locked and lw or lw * 0.5
         if jp.ok and jp.plan ~= nil then
             local r, g, b = 1, 1, 1
             if jp.plan.shape == "plain" then r, g, b = 1, 0.72, 0.18 end
@@ -3381,7 +3384,7 @@ function ADFlyoverEditor:drawNetwork()
                 local pts = line.pts
                 for i = 2, #pts do
                     local q, p = pts[i - 1], pts[i]
-                    ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.5, q.z, p.x, (p.y or 0) + 0.5, p.z, lw,
+                    ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.5, q.z, p.x, (p.y or 0) + 0.5, p.z, plw,
                         r * k, g * k, b * k)
                 end
             end
@@ -11114,7 +11117,12 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     end
     -- 2. THE FRAME. An X: from its four inner corners. A T: from where the side road's two lanes end,
     -- and the main road's two lanes, which run straight past.
+    -- SKEW (doc 08, 2026-10-05): the frame has two directions of its own, E1 along the main road and E2
+    -- along the cross or side road, so a road meeting off square gets the pattern leant to its real angle.
+    -- Straight paths stay straight and curves stay tangent to the lanes they join. Up to 45 degrees off
+    -- square: the sharp corner's right turn is two bends, each under AutoDrive's 80 there.
     local kind, ox, oz, ux, uz, vx, vz, L = nil, 0, 0, nil, nil, nil, nil, 0
+    local e1x, e1z, e2x, e2z = nil, nil, nil, nil
     local sideIn, sideOut = nil, nil
     if #corners == 4 then
         kind = "X"
@@ -11130,21 +11138,37 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         if ex == nil then return nil, "could not tell the lane directions apart" end
         ux, uz = ex[1], ex[2]
         vx, vz = -uz, ux
+        -- The corners by quarter, in the first guess at the frame: (+x, +z), (+x, -z), (-x, +z), (-x, -z).
+        local q = {}
         for _, c in ipairs(corners) do
             local lx, lz = (c.x - ox) * ux + (c.z - oz) * uz, (c.x - ox) * vx + (c.z - oz) * vz
-            L = L + (math.abs(lx) + math.abs(lz)) / 4
-            c.lx, c.lz = lx, lz
+            local key = (lx > 0 and "+" or "-") .. (lz > 0 and "+" or "-")
+            if q[key] ~= nil then return nil, "the lanes do not cross in a four-cornered box" end
+            q[key] = c
         end
-        for _, c in ipairs(corners) do
-            if math.abs(math.abs(c.lx) - L / 2) > 0.25 * L or math.abs(math.abs(c.lz) - L / 2) > 0.25 * L then
-                return nil, string.format("the lanes do not cross in a square (lane gap %.1f m)", L)
-            end
-            for _, d in ipairs(c.dirs) do
-                local along = math.max(math.abs(d[1] * ux + d[2] * uz), math.abs(d[1] * vx + d[2] * vz))
-                if along < 0.966 then return nil, "the roads do not cross square (more than 15 degrees off)" end
-            end
+        if not (q["++"] and q["+-"] and q["-+"] and q["--"]) then
+            return nil, "the lanes do not cross in a four-cornered box"
         end
-    else
+        e1x = (q["++"].x + q["+-"].x - q["-+"].x - q["--"].x) / 2
+        e1z = (q["++"].z + q["+-"].z - q["-+"].z - q["--"].z) / 2
+        e2x = (q["++"].x + q["-+"].x - q["+-"].x - q["--"].x) / 2
+        e2z = (q["++"].z + q["-+"].z - q["+-"].z - q["--"].z) / 2
+        local n1, n2 = math.sqrt(e1x * e1x + e1z * e1z), math.sqrt(e2x * e2x + e2z * e2z)
+        if n1 < 1e-3 or n2 < 1e-3 then return nil, "the lanes do not cross in a four-cornered box" end
+        ux, uz = e1x / n1, e1z / n1
+        vx, vz = -uz, ux
+        L = math.abs(e2x * vx + e2z * vz)      -- the main road's lane gap, square across it
+        if math.abs((e1x * e2x + e1z * e2z) / (n1 * n2)) > 0.707 then
+            return nil, "the roads cross more than 45 degrees off square"
+        end
+        for key, c in pairs(q) do
+            local sx = key:sub(1, 1) == "+" and 0.5 or -0.5
+            local sz = key:sub(2, 2) == "+" and 0.5 or -0.5
+            local px, pz = ox + sx * e1x + sz * e2x, oz + sx * e1z + sz * e2z
+            if math.sqrt((px - c.x) ^ 2 + (pz - c.z) ^ 2) > 0.25 * math.min(n1, n2) then
+                return nil, "the lanes do not cross in an even box (a lane bends between the corners)"
+            end
+        end    else
         kind = "T"
         -- The side road: one lane in that stops near the main road, one lane out that starts there.
         local ends, starts = {}, {}
@@ -11167,7 +11191,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         local dox, doz = unit(q.x - sideOut.x, q.z - sideOut.z)    -- heading out, away from it
         if dix * dox + diz * doz > -0.94 then return nil, "the side road's two lanes do not run opposite ways" end
         -- First guess: square to the side road. Then the main road's own lanes at the mouth set +x, and
-        -- the side road may sit up to 15 degrees off square to them.
+        -- the side road may sit up to 45 degrees off square to them.
         vx, vz = -dix, -diz      -- +z runs down the side road
         ux, uz = vz, -vx         -- +x is +z turned a quarter back to the left
         local xOut, xm, east, west
@@ -11204,24 +11228,51 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         if e == nil then return nil, w end
         ux, uz = unit(e.dx - w.dx, e.dz - w.dz)
         vx, vz = -uz, ux
-        if -(dix * vx + diz * vz) < 0.966 then
-            return nil, "the side road meets the main road more than 15 degrees off square"
+        -- The side road's own direction, away from the main road: the average of its two lanes.
+        local sdx, sdz = unit(dox - dix, doz - diz)
+        local cosS = sdx * vx + sdz * vz
+        if cosS < 0.707 then
+            return nil, "the side road meets the main road more than 45 degrees off square"
         end
         e, w = pickMain(0.966)
         if e == nil then return nil, w end
         east, west = e.zl, w.zl
         L = east - west
-        if xOut > -0.6 * L or xOut < -1.6 * L then
-            return nil, string.format("the side road's lanes are %.1f m apart, not like the main road's %.1f m", -xOut, L)
-        end        local zm = (east + west) / 2
-        ox = sideIn.x + xm * ux + zm * vx
-        oz = sideIn.z + xm * uz + zm * vz
+        -- Each side lane, followed along the side road to the main road's centre line (zm, measured
+        -- along +z from sideIn): the lane in crosses it at x = +0.5, the lane out at x = -0.5.
+        local zm = (east + west) / 2
+        local zOut = (sideOut.x - sideIn.x) * vx + (sideOut.z - sideIn.z) * vz
+        local tIn, tOut = zm / cosS, (zm - zOut) / cosS
+        local pix, piz = sideIn.x + tIn * sdx, sideIn.z + tIn * sdz
+        local pox, poz = sideOut.x + tOut * sdx, sideOut.z + tOut * sdz
+        ox, oz = (pix + pox) / 2, (piz + poz) / 2
+        e1x, e1z = pix - pox, piz - poz
+        local n1 = math.sqrt(e1x * e1x + e1z * e1z)
+        if n1 < 0.6 * L or n1 > 1.6 * L then
+            return nil, string.format("the side road's lanes are %.1f m apart, not like the main road's %.1f m", n1, L)
+        end
+        e2x, e2z = L * sdx / cosS, L * sdz / cosS
+    end    if L < 2 or L > 12 then return nil, string.format("lane gap %.1f m is outside 2-12 m", L) end
+    local skew = math.deg(math.acos(math.max(-1, math.min(1, math.abs(e2x * vx + e2z * vz)
+        / math.max(1e-6, math.sqrt(e2x * e2x + e2z * e2z))))))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - frame: %s, centre %.1f, %.1f, lane gap %.1f m, +x heading %.2f, %.2f, %.0f deg off square.",
+        kind, ox, oz, L, ux, uz, skew)
+    local function W(mx, mz) return ox + mx * e1x + mz * e2x, oz + mx * e1z + mz * e2z end
+    local function D(mx, mz) return unit(mx * e1x + mz * e2x, mx * e1z + mz * e2z) end
+    -- Curves are sampled by the longer of the two directions.
+    local Lscale = math.max(math.sqrt(e1x * e1x + e1z * e1z), math.sqrt(e2x * e2x + e2z * e2z))
+    -- The mod's corner cut starts and ends a quarter lane gap from the corner. Measured in METRES along
+    -- each lane, not in the frame's units, so on a leaning piece the cut still splits the turn into two
+    -- equal bends (two of 67 degrees at 45 off square, where frame units would give 45 and 90).
+    local f1 = 0.25 * L / math.max(1e-6, math.sqrt(e1x * e1x + e1z * e1z))
+    local f2 = 0.25 * L / math.max(1e-6, math.sqrt(e2x * e2x + e2z * e2z))
+    local function cutAt(k)   -- the corner cut of approach k: start on its lane in, end on the lane out
+        local fa, fb = f1, f2
+        if k % 2 == 1 then fa, fb = f2, f1 end
+        local ax, az, bx, bz = -0.5 - fa, 0.5, -0.5, 0.5 + fb
+        for _ = 1, k do ax, az = -az, ax bx, bz = -bz, bx end   -- turned k quarters (as rot, defined below)
+        return ax, az, bx, bz
     end
-    if L < 2 or L > 12 then return nil, string.format("lane gap %.1f m is outside 2-12 m", L) end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - frame: %s, centre %.1f, %.1f, lane gap %.1f m, +x heading %.2f, %.2f.",
-        kind, ox, oz, L, ux, uz)
-    local function W(mx, mz) return ox + L * (mx * ux + mz * vx), oz + L * (mx * uz + mz * vz) end
-    local function D(mx, mz) return mx * ux + mz * vx, mx * uz + mz * vz end
     local function rot(x, z, k)
         for _ = 1, k do x, z = -z, x end
         return x, z
@@ -11285,10 +11336,10 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     -- The mod's T: points on the +x lane 3 (-0.75), 2 (-0.5), 9 (0.5), 10 (0.75); on the -x lane 12 (1.5)
     -- and 13 (-1.5); the side road's out lane at 5 (-0.5, 0.75), its in lane at 8 (0.5, 0.75).
     local T_EXACT = {
-        n3 = { -0.75, 0.5, 1, 0, "right turn start" }, n2 = { -0.5, 0.5, 1, 0, "inner corner" },
-        n9 = { 0.5, 0.5, 1, 0, "inner corner" }, n10 = { 0.75, 0.5, 1, 0, "right turn end" },
+        n3 = { -0.5 - f1, 0.5, 1, 0, "right turn start" }, n2 = { -0.5, 0.5, 1, 0, "inner corner" },
+        n9 = { 0.5, 0.5, 1, 0, "inner corner" }, n10 = { 0.5 + f1, 0.5, 1, 0, "right turn end" },
         n12 = { 1.5, -0.5, -1, 0, "left turn start" }, n13 = { -1.5, -0.5, -1, 0, "left turn end" },
-        n5 = { -0.5, 0.75, 0, 1, "side road's lane out" }, n8 = { 0.5, 0.75, 0, -1, "side road's lane in" },
+        n5 = { -0.5, 0.5 + f2, 0, 1, "side road's lane out" }, n8 = { 0.5, 0.5 + f2, 0, -1, "side road's lane in" },
     }
     local T_ORDER = { "n3", "n2", "n9", "n10", "n12", "n13", "n5", "n8" }
 
@@ -11306,8 +11357,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
                 t[#t + 1] = { cx1, cz1, d1x, d1z, "inner corner" }
                 t[#t + 1] = { cx1, cz1, d2x, d2z, "inner corner" }
                 if sh == "exact" then
-                    local ax, az = rot(-0.75, 0.5, k)
-                    local bx, bz = rot(-0.5, 0.75, k)
+                    local ax, az, bx, bz = cutAt(k)
                     t[#t + 1] = { ax, az, d1x, d1z, "right turn start" }
                     t[#t + 1] = { bx, bz, d2x, d2z, "right turn end" }
                 end
@@ -11342,17 +11392,29 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         local lines, marks = {}, {}
         local function P(mx, mz) local x, z = W(mx, mz) return { x = x, z = z } end
         local piece = JX_PLAIN[kind]
+        -- The corner cuts where they are really laid (see cutAt).
+        local pos = {}
+        for n, p in pairs(piece.nodes) do pos[n] = p end
+        if kind == "X" then
+            for k, pair in pairs({ [0] = { 3, 5 }, [1] = { 18, 20 }, [2] = { 13, 15 }, [3] = { 8, 10 } }) do
+                local ax, az, bx, bz = cutAt(k)
+                pos[pair[1]], pos[pair[2]] = { ax, az }, { bx, bz }
+            end
+        else
+            pos[3], pos[5] = { T_EXACT.n3[1], T_EXACT.n3[2] }, { T_EXACT.n5[1], T_EXACT.n5[2] }
+            pos[8], pos[10] = { T_EXACT.n8[1], T_EXACT.n8[2] }, { T_EXACT.n10[1], T_EXACT.n10[2] }
+        end
         if shape == "exact" then
             local new = (kind == "X")
                 and { { 1, 2, true }, { 1, 9, true }, { 1, 14, true }, { 1, 19, true },
                       { 3, 5 }, { 8, 10 }, { 13, 15 }, { 18, 20 } }
                 or { { 3, 5 }, { 8, 10 }, { 12, 1 }, { 1, 2 }, { 2, 5 }, { 8, 9 }, { 9, 1 }, { 1, 13 } }
             for _, l in ipairs(new) do
-                local a, b = piece.nodes[l[1]], piece.nodes[l[2]]
+                local a, b = pos[l[1]], pos[l[2]]
                 lines[#lines + 1] = { pts = { P(a[1], a[2]), P(b[1], b[2]) }, dual = l[3] == true }
             end
             local shared = (kind == "X") and { 1, 2, 9, 14, 19, 5, 10, 15, 20 } or { 1, 2, 9, 5, 10, 13 }
-            for _, n in ipairs(shared) do marks[#marks + 1] = P(piece.nodes[n][1], piece.nodes[n][2]) end
+            for _, n in ipairs(shared) do marks[#marks + 1] = P(pos[n][1], pos[n][2]) end
         else
             for _, turn in ipairs(smoothTurns()) do
                 local c = turn.arc
@@ -11389,7 +11451,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     -- Interior points of an arc in mod units, about every 2 m, as world points; with centreMid the
     -- middle sample is the junction's centre (the lefts' shared point).
     local function arcPoints(acx, acz, r, a0, a1, k, centreMid, y0, y1)
-        local len = math.abs(a1 - a0) * r * L
+        local len = math.abs(a1 - a0) * r * Lscale
         local n = math.max(2, math.floor(len / 2 + 0.5))
         if centreMid and n % 2 == 1 then n = n + 1 end
         local pts = {}
@@ -11439,8 +11501,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         jxLayLabel = nil
         turns = turns + 4
         for k = 0, 3 do
-            local ax, az = rot(-0.75, 0.5, k)
-            local bx, bz = rot(-0.5, 0.75, k)
+            local ax, az, bx, bz = cutAt(k)
             local d1x, d1z = rot(1, 0, k)
             local d2x, d2z = rot(0, 1, k)
             lay(lanePoint(ax, az, d1x, d1z), {}, lanePoint(bx, bz, d2x, d2z), "R45")
@@ -11503,39 +11564,76 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         tidy(sideIn, true)
         tidy(sideOut, false)
     end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: square %s, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: %s, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
         shape, kind, L, ox, oz, turns)
     return { shape = shape, kind = kind, turns = turns, L = L }
 end
 
 local function junctionPlacePlain(cx, cz, dry)
     local unit = jxpUnit
-    -- THE MAIN ROAD: the lane nearest the cursor, and its partner running the other way beside it.
+    -- THE MAIN ROAD: the lane nearest the cursor that runs on past it, and its partner running the other
+    -- way beside it. A lane that ends within 20 m of the cursor is a side road or a stub, never the main road.
+    local function endsNear(l)
+        for _, dir in ipairs({ "out", "incoming" }) do
+            local prev, cur = (dir == "out") and l.a or l.b, (dir == "out") and l.b or l.a
+            for _ = 1, 40 do
+                if (cur.x - cx) ^ 2 + (cur.z - cz) ^ 2 > 20 * 20 then break end
+                local nextW = nil
+                for _, id in ipairs(cur[dir] or {}) do
+                    local w = ADGraphManager:getWayPointById(id)
+                    if w ~= nil and w ~= prev and nextW == nil then nextW = w end
+                end
+                if nextW == nil then return true end
+                prev, cur = cur, nextW
+            end
+        end
+        return false
+    end
+    -- Lanes that end near the cursor are a last resort: never refused (doc 08), so with nothing else
+    -- the nearest lane serves.
     local best, bd = nil, 15
+    for pass = 1, 2 do
+    if best == nil then
+    bd = 15
     for _, l in ipairs(jxpLinksNear(cx, cz, 30)) do
         local sx, sz = l.b.x - l.a.x, l.b.z - l.a.z
         local len2 = sx * sx + sz * sz
-        if len2 > 1e-6 then
+        if len2 > 1e-6 and (pass == 2 or not endsNear(l)) then
             local t = math.max(0, math.min(1, ((cx - l.a.x) * sx + (cz - l.a.z) * sz) / len2))
             local px, pz = l.a.x + t * sx, l.a.z + t * sz
             local d = math.sqrt((cx - px) ^ 2 + (cz - pz) ^ 2)
             if d < bd then best, bd = { l = l, px = px, pz = pz, y = (l.a.y or 0) + t * ((l.b.y or 0) - (l.a.y or 0)) }, d end
         end
     end
+    end
+    end
     if best == nil then return nil, "no road here to line a junction up with" end
     local dx, dz = unit(best.l.b.x - best.l.a.x, best.l.b.z - best.l.a.z)
     local rx, rz = -dz, dx                          -- right of the nearest lane
-    local L, partner = nil, false
+    local L, partner, pd = nil, false, nil
     for _, l in ipairs(jxpLinksNear(best.px, best.pz, 25)) do
         local lx, lz = unit(l.b.x - l.a.x, l.b.z - l.a.z)
         if lx * dx + lz * dz < -0.94 then
-            local off = (l.a.x - best.px) * rx + (l.a.z - best.pz) * rz
-            local along = (l.a.x - best.px) * dx + (l.a.z - best.pz) * dz
+            -- Measured to the nearest point of that link, not its start: on a bending road the start can sit
+            -- well round the bend and read short.
+            local sx2, sz2 = l.b.x - l.a.x, l.b.z - l.a.z
+            local len2 = math.max(1e-6, sx2 * sx2 + sz2 * sz2)
+            local tt = math.max(0, math.min(1, ((best.px - l.a.x) * sx2 + (best.pz - l.a.z) * sz2) / len2))
+            local qx, qz = l.a.x + tt * sx2, l.a.z + tt * sz2
+            local off = (qx - best.px) * rx + (qz - best.pz) * rz
+            local along = (qx - best.px) * dx + (qz - best.pz) * dz
             -- With right-hand traffic the lane the other way runs on the left (negative offset).
-            if off < -1.5 and off > -12 and math.abs(along) < 25 and (L == nil or -off < L) then L, partner = -off, true end
+            -- The partner is the opposite lane NEAREST in a straight line: on a bending road a stretch further
+            -- along can sit closer across but is not the lane beside this point.
+            local dist = math.sqrt((qx - best.px) ^ 2 + (qz - best.pz) ^ 2)
+            if off < -1.5 and off > -12 and math.abs(along) < 25 and (pd == nil or dist < pd) then
+                L, partner, pd = -off, true, dist
+            end
         end
     end
     L = L or 4
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction plain - main lane %.1f, %.1f -> %.1f, %.1f (cursor %.1f m off), lane gap %.1f m%s.",
+        best.l.a.x, best.l.a.z, best.l.b.x, best.l.b.z, bd, L, partner and "" or " (no partner)")
 
     -- WHICH PIECE, and which way round: side-road lanes stopping near the cursor make it a T with its side
     -- road towards them; lanes crossing near it make an X; nothing else to go by, an X.
@@ -11578,8 +11676,50 @@ local function junctionPlacePlain(cx, cz, dry)
     if sx ~= nil then tx, tz = sx, sz end
     local along = (tx - ox) * ux + (tz - oz) * uz
     ox, oz = ox + along * ux, oz + along * uz
-    local function W(mx, mz) return ox + L * (mx * ux + mz * vx), oz + L * (mx * uz + mz * vz) end
-    local function D(mx, mz) return mx * ux + mz * vx, mx * uz + mz * vz end
+    -- SKEW: the side (or cross) road's own direction, from how its lanes run away from their ends. The
+    -- piece's side arm leans to it, up to 45 degrees off square; past that it stays square.
+    local s2x, s2z = vx, vz
+    if sx ~= nil then
+        local ax, az, n = 0, 0, 0
+        for _, w in ipairs(ends) do
+            local nbId = (w.out ~= nil and w.out[1]) or (w.incoming ~= nil and w.incoming[1]) or nil
+            local nb = nbId ~= nil and ADGraphManager:getWayPointById(nbId) or nil
+            if nb ~= nil then
+                local ex, ez = unit(nb.x - w.x, nb.z - w.z)      -- away from the main road
+                -- Ends across the road (an X cut in two) run the other way: fold them onto +z.
+                if ex * vx + ez * vz < 0 then ex, ez = -ex, -ez end
+                ax, az, n = ax + ex, az + ez, n + 1
+            end
+        end
+        if n > 0 then
+            local mx2, mz2 = unit(ax, az)
+            if mx2 * vx + mz2 * vz >= 0.707 then s2x, s2z = mx2, mz2 end
+        end
+        -- The centre: where the side road's middle line meets the main road's.
+        local c = s2x * vx + s2z * vz
+        local t = ((ox - sx) * vx + (oz - sz) * vz) / c
+        ox, oz = sx + t * s2x, sz + t * s2z
+    end
+    local cosS = s2x * vx + s2z * vz
+    local e1x, e1z = L * ux, L * uz
+    local e2x, e2z = L * s2x / cosS, L * s2z / cosS
+    local function W(mx, mz) return ox + mx * e1x + mz * e2x, oz + mx * e1z + mz * e2z end
+    local function D(mx, mz) return unit(mx * e1x + mz * e2x, mx * e1z + mz * e2z) end
+    -- The corner cuts a quarter lane gap from each corner in METRES along each lane, so on a leaning
+    -- piece the two bends of a cut stay equal (as in the fitted pattern's cutAt).
+    local f1 = 0.25 * L / math.sqrt(e1x * e1x + e1z * e1z)
+    local f2 = 0.25 * L / math.sqrt(e2x * e2x + e2z * e2z)
+    local nodePos = {}
+    for n, p in pairs(JX_PLAIN[kind].nodes) do nodePos[n] = p end
+    local cuts = (kind == "X") and { [0] = { 3, 5 }, [1] = { 18, 20 }, [2] = { 13, 15 }, [3] = { 8, 10 } }
+        or { [0] = { 3, 5 }, [3] = { 8, 10 } }
+    for k, pair in pairs(cuts) do
+        local fa, fb = f1, f2
+        if k % 2 == 1 then fa, fb = f2, f1 end
+        local ax, az, bx, bz = -0.5 - fa, 0.5, -0.5, 0.5 + fb
+        for _ = 1, k do ax, az = -az, ax bx, bz = -bz, bx end
+        nodePos[pair[1]], nodePos[pair[2]] = { ax, az }, { bx, bz }
+    end
     local function roles(p)
         local r = {}
         if math.abs(p[2] - 0.5) < 1e-6 then r[#r + 1] = { 1, 0 } end
@@ -11598,7 +11738,7 @@ local function junctionPlacePlain(cx, cz, dry)
     local function isArmEnd(p) return math.abs(p[1]) > 1.4 or math.abs(p[2]) > 1.4 end
     if dry then
         for _, n in ipairs(ids) do
-            local p = piece.nodes[n]
+            local p = nodePos[n]
             local joined = false
             for _, r in ipairs(roles(p)) do
                 local px, pz = W(p[1], p[2])
@@ -11616,7 +11756,7 @@ local function junctionPlacePlain(cx, cz, dry)
         for _, l in ipairs(piece.links) do
             local dual = set[l[2] .. ">" .. l[1]] == true
             if not (dual and l[1] > l[2]) then
-                local a, b = piece.nodes[l[1]], piece.nodes[l[2]]
+                local a, b = nodePos[l[1]], nodePos[l[2]]
                 local ax, az = W(a[1], a[2])
                 local bx, bz = W(b[1], b[2])
                 lines[#lines + 1] = { pts = { { x = ax, z = az }, { x = bx, z = bz } }, dual = dual }
@@ -11628,7 +11768,7 @@ local function junctionPlacePlain(cx, cz, dry)
 
     local node, onRole = {}, {}
     for _, n in ipairs(ids) do
-        local p = piece.nodes[n]
+        local p = nodePos[n]
         local px, pz = W(p[1], p[2])
         onRole[n] = {}
         for _, r in ipairs(roles(p)) do
@@ -11680,7 +11820,11 @@ end
 -- PLACE (doc 08): the pattern fitted to the crossing where it fits, the plain piece everywhere else.
 -- Only turn wiring still there, or no road at all, stops it.
 local function junctionPlacePattern(cx, cz, reach, shape, dry)
-    local res, why, wired = junctionPlaceFitted(cx, cz, reach, shape, dry)
+    local res, why, wired = nil, "forced plain (test switch)", nil
+    -- Test switch (harness): always the plain piece, without trying the fit at all.
+    if AutoDrive.FLYOVER_JUNCTION_PLACE_FORCE_PLAIN ~= true then
+        res, why, wired = junctionPlaceFitted(cx, cz, reach, shape, dry)
+    end
     if res ~= nil or wired then return res, why, wired end
     local p, pwhy = junctionPlacePlain(cx, cz, dry)
     if p == nil then return nil, pwhy end
