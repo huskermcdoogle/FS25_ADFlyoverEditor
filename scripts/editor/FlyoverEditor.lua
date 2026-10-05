@@ -240,9 +240,8 @@ ADFlyoverEditor = {
     -- Connector curve engine: Dubins (default - radius-bounded pose-to-pose via AutoDrive's own
     -- ADDubins) or the tangent biarc (also the automatic fallback when Dubins declines).
     junctionUseDubins = true,
-    -- Build layout (doc 07): "exact" = the mod's X fitted to the junction, "smooth" = the same pattern
-    -- with curves, "off" = one curve per turn as before. The pattern needs a square X; elsewhere the
-    -- build lays turn by turn whatever this says.
+    -- Place mode's shape (doc 07/08): "exact" = the mod's X or T fitted to the crossing, "smooth" = the
+    -- same pattern with curves.
     junctionPattern = "exact",
     -- Static-obstacle check (trees, buildings, fences/poles/signs), on by default: a corridor that
     -- overlaps one shrinks its radius to swing clear, and refuses (red, "blocked") if nothing fits.
@@ -4352,7 +4351,9 @@ function ADFlyoverEditor:stopCurrentAction()
             -- movements (the solve is skipped entirely) - its own work is a non-empty debris/stale-
             -- link set, filtered the same way applyJunctionClear will filter it.
             local hasWork
-            if jp ~= nil and jp.clearMode then
+            if jp ~= nil and jp.placeMode then
+                hasWork = jp.ok == true
+            elseif jp ~= nil and jp.clearMode then
                 local leave = self.junctionLeaveThrough ~= false
                 local nodes = leave and jp.turnDebris or jp.debris
                 local anySeverableLink = false
@@ -6627,8 +6628,7 @@ end
 
 --- Toggle the connector curve engine between Dubins (radius-bounded pose-to-pose) and the biarc.
 function ADFlyoverEditor:toggleJunctionPattern()
-    local nextOf = { exact = "smooth", smooth = "off", off = "exact" }
-    self.junctionPattern = nextOf[self.junctionPattern or "exact"] or "exact"
+    self.junctionPattern = (self.junctionPattern == "smooth") and "exact" or "smooth"
     self.junctionPreviewKey = nil
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction build layout: %s.", self.junctionPattern)
 end
@@ -6673,10 +6673,14 @@ function ADFlyoverEditor:setJunctionTurnRadius(v)
 end
 
 function ADFlyoverEditor:toggleJunctionMode()
-    self.junctionMode = (self.junctionMode == "clear") and "build" or "clear"
+    -- build -> clear -> place (doc 08: place a whole X or T in one click) -> build.
+    local nextMode = { build = "clear", clear = "place", place = "build" }
+    self.junctionMode = nextMode[self.junctionMode or "build"] or "build"
     self.junctionPreviewKey = nil
-    Logging.info("[FlyoverEditor]: junction tool set to %s.",
-        self.junctionMode == "clear" and "clear (removes old wiring, leaves the roads)" or "build (lays new turns)")
+    self.junctionPreview = nil
+    local said = { build = "build (lays new turns)", clear = "clear (removes old wiring, leaves the roads)",
+        place = "place (lays a whole X or T where roads cross)" }
+    Logging.info("[FlyoverEditor]: junction tool set to %s.", said[self.junctionMode])
 end
 
 --- Clear mode only: at a T or a 4-way, the wiring that carries a road STRAIGHT THROUGH the crossing
@@ -10897,9 +10901,10 @@ end
 -- Sizes come from the lane gap for now (decided 2026-10-02). Version 1 is a square X on one-way lanes;
 -- anything else returns nil with the reason, and the caller builds turn by turn as before.
 -- Mod frame: +x along one through lane; +z is +x turned a quarter to the right (FS25 x east, z south), so
--- with right-hand traffic the +x lane runs at z = +0.5 L. Returns { shape, turns, L } or nil, why.
+-- with right-hand traffic the +x lane runs at z = +0.5 L. Returns { shape, kind, turns, L } or nil, why,
+-- wired. dry (place mode's preview) only works out what would be placed and changes nothing.
 local JX_PATTERN_RIGHT, JX_PATTERN_LEFT = 1.5, 1.71
-local function junctionPlacePattern(cx, cz, reach, shape)
+local function junctionPlacePattern(cx, cz, reach, shape, dry)
     local R = math.max(reach or 15, 15)
     local function near(w, r) return (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= r * r end
     local function linksNear(px, pz, r)
@@ -10922,6 +10927,34 @@ local function junctionPlacePattern(cx, cz, reach, shape)
         local n = math.sqrt(x * x + z * z)
         if n < 1e-9 then return 0, 0 end
         return x / n, z / n
+    end
+
+    -- 0. TURN WIRING ALREADY HERE: place never deletes anything (doc 08), so a crossing that still has its
+    -- turns is refused - clear it first. Wiring shows as a fork: a point joined to three or more others,
+    -- other than two lanes running straight through one shared point.
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil and near(w, 12) then
+            local nb, n = {}, 0
+            for _, id in ipairs(w.out or {}) do if not nb[id] then nb[id] = true n = n + 1 end end
+            for _, id in ipairs(w.incoming or {}) do if not nb[id] then nb[id] = true n = n + 1 end end
+            if n >= 3 then
+                local straight = 0
+                for _, iid in ipairs(w.incoming or {}) do
+                    local i = ADGraphManager:getWayPointById(iid)
+                    for _, oid in ipairs(w.out or {}) do
+                        local o = ADGraphManager:getWayPointById(oid)
+                        if i ~= nil and o ~= nil and i ~= o then
+                            local ax, az = unit(w.x - i.x, w.z - i.z)
+                            local bx, bz = unit(o.x - w.x, o.z - w.z)
+                            if ax * bx + az * bz > 0.94 then straight = straight + 1 end
+                        end
+                    end
+                end
+                if not (n == 4 and straight == 2 and #(w.out or {}) == 2 and #(w.incoming or {}) == 2) then
+                    return nil, "turn wiring is still here - clear the junction first", true
+                end
+            end
+        end
     end
 
     -- 1. INNER CORNERS: two lanes crossing at a real angle near the site, either in open space or at a
@@ -11260,6 +11293,9 @@ local function junctionPlacePattern(cx, cz, reach, shape)
         shape = "exact"
     elseif not okFit then
         return nil, whyNot
+    end
+    if dry then
+        return { shape = shape, kind = kind, L = L, ox = ox, oz = oz, ux = ux, uz = uz, turns = 0 }
     end
 
     -- 4. LAYING.
@@ -12617,8 +12653,71 @@ end
 --- Recompute the junction preview around the cursor: the scope circle, the approaches it cuts, and
 --- which entry->exit movements are new versus already connected. Stored on self.junctionPreview; nil
 --- when there is nothing to show. Pure inspection - it changes no waypoints.
-function ADFlyoverEditor:updateJunctionPreview()
-    -- Armed: the site is locked where it was clicked and the preview stops following the cursor (the
+--- PLACE MODE (docs/junction-tool/08-place-junction.md): point at roads that cross and the card says what
+--- would go there. The pattern is worked out dry - nothing changes until the right-click.
+function ADFlyoverEditor:updatePlacePreview()
+    local cx, cz
+    if self.junctionArmed ~= nil then
+        cx, cz = self.junctionArmed.cx, self.junctionArmed.cz
+    elseif self.cursorX ~= nil then
+        cx, cz = self.cursorX, self.cursorZ
+    else
+        self.junctionPreview, self.junctionPreviewKey = nil, nil
+        return
+    end
+    local shape = self.junctionPattern or "exact"
+    local key = string.format("place_%d_%d_%s_%s_%d", math.floor(cx * 2), math.floor(cz * 2), shape,
+        tostring(self.junctionArmed ~= nil), ADGraphManager:getWayPointsCount())
+    if key == self.junctionPreviewKey and self.junctionPreview ~= nil then return end
+    self.junctionPreviewKey = key
+    local okCall, res, why, wired = tryCall("junction place preview", function()
+        return junctionPlacePattern(cx, cz, 15, shape, true)
+    end)
+    self.junctionPreview = {
+        placeMode = true, cx = cx, cz = cz, shape = shape,
+        ok = okCall and res ~= nil, plan = res,
+        why = okCall and why or "it failed - see the log", wired = wired == true,
+    }
+end
+
+--- Place mode's right-click: lay the X or T the preview worked out, under one undo.
+function ADFlyoverEditor:applyJunctionPlace()
+    local jp = self.junctionPreview
+    if jp == nil or not jp.ok then return end
+    local cap = self:debugCaptureBegin("place", { x = jp.cx, z = jp.cz }, {
+        string.format("shape                %s", tostring(jp.shape)),
+    })
+    ADEditorHistory:snapshot("place junction")
+    jxBuildBegin()
+    local okCall, res, why = tryCall("junction place", function()
+        return junctionPlacePattern(jp.cx, jp.cz, 15, jp.shape)
+    end)
+    local placed = okCall and res ~= nil
+    -- Smooth curves cross the lanes and each other between the pattern's own points: each crossing gets
+    -- its shared point, as everywhere else.
+    local shared = 0
+    if placed and AutoDrive.FLYOVER_JUNCTION_SHARE_CROSSINGS ~= false then
+        tryCall("junction share crossings", function() shared = junctionShareCrossings(jp.cx, jp.cz, 15) end)
+    end
+    if placed then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction placed: %s %s, lane gap %.1f m, %d turn piece(s), %d shared crossing point(s).",
+            res.shape == "smooth" and "smooth" or "mod", res.kind, res.L, res.turns, shared)
+    else
+        Logging.warning("[FlyoverEditor]: junction place failed: %s", tostring(why or "see above"))
+    end
+    self.junctionLastPlace = { ok = placed, kind = placed and res.kind or nil, shape = placed and res.shape or nil,
+        turns = placed and res.turns or 0, shared = shared, why = (not placed) and tostring(why) or nil,
+        x = jp.cx, z = jp.cz }
+    self.junctionLastLinkLabels = jxLinkLabel
+    self.junctionLastNodeLabels = jxNodeLabel
+    jxBuildEnd()
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+    self:debugCaptureEnd(cap)
+    self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+end
+
+function ADFlyoverEditor:updateJunctionPreview()    -- Armed: the site is locked where it was clicked and the preview stops following the cursor (the
     -- wheel and the turn radius still reshape it). Unarmed: it follows the cursor as a live scout.
     local cx, cz, cy
     if self.junctionArmed ~= nil then
@@ -12629,6 +12728,10 @@ function ADFlyoverEditor:updateJunctionPreview()
             return
         end
         cx, cz, cy = self.cursorX, self.cursorZ, self.cursorY
+    end
+    if self.junctionMode == "place" then
+        self:updatePlacePreview()
+        return
     end
     local clearMode0 = (self.junctionMode == "clear")
     local R = self:junctionRadiusValue()
@@ -16342,6 +16445,9 @@ function ADFlyoverEditor:junctionClick()
             or string.format("search radius %.0f m, wheel = scope", self:junctionRadiusValue()),
         self.junctionTurnRadius or 12,
         self.junctionMode or "build", (self.junctionMode == "clear") and "clears" or "places")
+    if self.junctionMode == "place" then
+        self.junctionPreview = nil
+    end
 end
 
 --- Place every NEW turn in the preview (behaviour A): tie in at each track's tangent point (insert on a
@@ -24354,6 +24460,10 @@ end
 function ADFlyoverEditor:applyJunction()
     local jp = self.junctionPreview
     if jp == nil then return end
+    if jp.placeMode then
+        self:applyJunctionPlace()
+        return
+    end
     if jp.clearMode then
         self:applyJunctionClear()
         return
@@ -24463,24 +24573,7 @@ function ADFlyoverEditor:applyJunction()
     local allowDual = (jp.siteHasTwoWay == true) and AutoDrive.FLYOVER_JUNCTION_DUAL_TURNS == true
     local baseCount = ADGraphManager:getWayPointsCount()
     local placedSet = {}   -- movements laid by this build, for the route check
-    -- THE PATTERN first (doc 07): on a square X it places the studied X fitted to the junction and lays
-    -- every turn at once. Anywhere else it says why and the turns are laid one by one as before.
-    local pattern = nil
-    local shape = self.junctionPattern or "exact"
-    if shape ~= "off" then
-        local okP, res, why = tryCall("junction pattern", function() return junctionPlacePattern(cx, cz, radius, shape) end)
-        if okP and res ~= nil then
-            pattern = res
-            placed = res.turns
-            for _, m in ipairs(newMoves) do placedSet[m] = true end
-        else
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) not placed: %s - laying the turns one by one.",
-                shape, tostring(why or "it failed, see above"))
-            self.junctionLastPatternWhy = tostring(why or "it failed")
-        end
-    end
-    self.junctionLastPattern = pattern
-    for _, m in ipairs(pattern == nil and newMoves or {}) do
+    for _, m in ipairs(newMoves) do
         local key = pairKey(m.from.wp.id, m.to.wp.id)
         if dualPairPlaced[key] then
             mirrorsSkipped = mirrorsSkipped + 1
@@ -24529,8 +24622,7 @@ function ADFlyoverEditor:applyJunction()
     -- Keyed to the SITE, not to allowDual: since two-way turns stopped (2026-10-02) allowDual is false on
     -- every site, and a tie-in spliced into a two-way road rightly keeps that road two-way. Keyed to
     -- allowDual, this "repaired" those road links into one-way ones.
-    -- The exact pattern's spokes run both ways by design (doc 07, choice A).
-    if jp.siteHasTwoWay ~= true and not (pattern ~= nil and pattern.shape == "exact") then
+    if jp.siteHasTwoWay ~= true then
         local total = ADGraphManager:getWayPointsCount()
         for id = baseCount + 1, total do
             local n = ADGraphManager:getWayPointById(id)

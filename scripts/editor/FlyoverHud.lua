@@ -758,7 +758,7 @@ function ADFlyoverHud:buildRows(editor)
         -- First row always: which job the tool is doing. "clear" reuses everything build does to
         -- find a site's own runs and old wiring, but shows a much shorter card - none of the turn-
         -- solving settings below apply when nothing is being laid.
-        add("toggle", "action", (editor.junctionMode == "clear") and "clear" or "build", false,
+        add("toggle", "action", editor.junctionMode or "build", false,
             function() editor:toggleJunctionMode() end)
         if editor.junctionMode == "clear" then
             -- No scope row, and the wheel does nothing here. What belongs to a junction is a
@@ -859,7 +859,51 @@ function ADFlyoverHud:buildRows(editor)
             else
                 add("note", "point at a junction")
             end
-        else
+        elseif editor.junctionMode == "place" then
+            -- PLACE (docs/junction-tool/08-place-junction.md): a whole X or T where roads cross, in
+            -- one click. Only the shape to choose; everything else comes from the roads.
+            add("toggle", "shape", (editor.junctionPattern == "smooth") and "smooth" or "mod", false,
+                function() editor:toggleJunctionPattern() end)
+            -- A note row is one line: long reasons go over several.
+            local function notes(text)
+                local line = ""
+                for word in tostring(text):gmatch("%S+") do
+                    if #line + #word + 1 > 42 and #line > 0 then
+                        add("note", line)
+                        line = word
+                    else
+                        line = (#line > 0) and (line .. " " .. word) or word
+                    end
+                end
+                if #line > 0 then add("note", line) end
+            end
+            local last = editor.junctionLastPlace
+            if last ~= nil then
+                if last.ok then
+                    add("toggle", "last placed", string.format("%s %s", last.shape == "smooth" and "smooth" or "mod",
+                        tostring(last.kind)))
+                else
+                    add("toggle", "last place failed", "")
+                    notes(last.why)
+                end
+            end
+            local jp = editor.junctionPreview
+            if jp ~= nil and jp.placeMode then
+                if jp.ok and jp.plan ~= nil then
+                    add("toggle", "will place", string.format("%s %s", jp.plan.shape == "smooth" and "smooth" or "mod",
+                        tostring(jp.plan.kind)))
+                    add("toggle", "lane gap", string.format("%.1f m", jp.plan.L or 0))
+                    if jp.plan.shape ~= jp.shape then
+                        notes("the smooth shape does not fit here - the mod shape instead")
+                    end
+                    add("note", editor.junctionArmed ~= nil and "right-click places it" or "click to lock")
+                else
+                    add("toggle", "cannot place here", "")
+                    notes(jp.why)
+                end
+            else
+                add("note", "point where roads cross")
+            end        else
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
         addWheelNumber("search radius", string.format("%.0f m", editor:junctionRadiusValue()))
         add("number", "turn radius", string.format("%.0f m", editor.junctionTurnRadius or 12))
@@ -872,9 +916,6 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleJunctionExtendTrim() end)
         add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
             function() editor:toggleJunctionRebuild() end)
-        local layoutName = { exact = "mod X", smooth = "smooth X", off = "turn by turn" }
-        add("toggle", "layout", layoutName[editor.junctionPattern or "exact"] or "mod X", false,
-            function() editor:toggleJunctionPattern() end)
         add("toggle", "curve", (editor.junctionUseDubins ~= false) and "dubins" or "biarc", false,
             function() editor:toggleJunctionCurveEngine() end)
         add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
