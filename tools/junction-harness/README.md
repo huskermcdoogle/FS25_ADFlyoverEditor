@@ -74,9 +74,18 @@ both runs must be byte-identical. The line reads:
 - joins and dots are split by the reason each was left for, worst first: `made` (the
   clear made it - a new link, or two points folded into one), `crossmade` (it joined the
   two kept through roads), `new` (a teal dot that was not there), `selfmade`, `tail` (the
-  end of a turn it cut), `missed`, `nobox`, `through`, `part` (the other part of a split
-  junction - its own wiring, left alone on purpose), `oneroad`, `selfjoin`, `crossing`.
-- other problems by kind: `through` (a road cut), `stub`, `flip`, `spur` (a lane split into
+  end of a turn it cut), `twinstuck` (a turn of the other part's that the clear recorded before
+  it cut anything and left, but that is broken - its start gone, cut part-way, or with no way in
+  or out: "j39se's turn, left for j39se, but it does not drive now"), `missed`, `nobox`,
+  `through`, `part` (the other part of a split junction - its own wiring, left alone on purpose),
+  `twinwait` (such a turn, whole, whose only way on or off is this clear's cut lane, with through
+  roads off: "j39se's turn, left for j39se: it waits for the build"), `twin` (such a turn that the
+  check followed end to end and that drives now: "j39se's turn, left working"), `oneroad`,
+  `selfjoin`, `crossing`.
+- other problems by kind: `twin` (a turn of another part's, recorded by the clear, that does not
+  drive now: its start gone, cut part-way, nothing leading onto it, leading nowhere, or reached
+  only over this clear's cut lane, or leading only into it - with through roads off),
+  `through` (a road cut), `stub`, `flip`, `spur` (a lane split into
   dead ends), `leftover` (the start of a turn it cut, left hanging off a lane; a way it left
   leading nowhere, or fed by nothing, that led on before the clear; or a scrap of wiring, at
   most 8 points and under 15 m end to end, cut loose and joined to nothing),
@@ -84,7 +93,11 @@ both runs must be byte-identical. The line reads:
   `stayed` for changes no part of the clear recorded.
 - notes are not problems: the respacing re-laid road wholly outside the junction but
   within its own reach, which is measured along the lane from the lane's end. Whether it
-  should do that is the user's call, so it is said and not counted.
+  should do that is the user's call, so it is said and not counted. Also, with a split saved
+  and through roads off, "the road between j20s and j20n ... is left as a piece of main road for
+  the builder to join to - on purpose": a plain run from a lane start to a lane end lying
+  between this part and another, which is what is left of the road between once both parts
+  are cleared (the user's rule 2).
 - `err` counts Lua errors, including a step of the check that failed; such a junction
   shows `NO CHECK` and the card says the check could not run.
 
@@ -114,12 +127,22 @@ Reading a join line:
   junction. At 40 it is the south-east road - the main road, by the user's reading - which
   the clear found no lane of, because it reads the main road as running west to north-east.
 - `still` means the join drove before the clear too; `now` means it did not.
-- Known false `missed`: a turn of another part's that the clear now leaves working inside this
-  part's area. At j39 with the user's split saved and through roads kept, 39se's right turn off the
-  main road at (9.9, -7.4) and its teal dot at (12.1, 6.3); at 20n (turn radius 2, either setting)
-  20s's left turn. The clear is right to leave them (39se's and 20s's own clears take them); the check
-  reads whose a turn is by where it turns, and cannot tell yet. How the check should judge another
-  part's turn is part of split-part clearing, decided 2026-10-03 and not built.
+- A turn of another part's that the clear leaves working inside this part's area (39se's right
+  turn off the main road at (9.9, -7.4) and its teal dot at (12.1, 6.3), when j39 is cleared with
+  the user's split saved) used to read as `missed`. It now reads "j39se's turn, left working"
+  (`twin`) - but only for a turn the clear listed as that part's before it cut anything
+  (junctionTwinTurns: the selection's foreignWiring, or a run of plain points from this part's
+  through road to a fork on a road that is none of its lanes), only where the check followed it
+  end to end (jxCheckTwin), and only where the join's own turning is that turn, the rest of the
+  drive being road (the drive may stop on the turn where a lane out's walk reaches it: 20n on
+  live.lua). A turn this part's clear takes as its own is never on that list. "Left working"
+  means it drives now. With through roads off such a turn is reached only over this part's cut
+  lane (or leads only into it), so it reads `twinwait` ("... it waits for the build - the only
+  way onto it is this clear's cut lane, 4.9 m long - it can drive again once j39 is built"), and
+  the same turn is also a note of kind `twinwait` - not a problem (the user's call of 2026-10-05,
+  option b; round 1 called these "left working", round 2 a problem). A turn that is broken reads
+  `twinstuck` and is a problem line of kind `twin`. See "Split junctions: one part, then its
+  twin" below.
 
 ## Missed turns at split junctions: missed.lua, regmissed.sh
 
@@ -138,8 +161,8 @@ it, what the check said of it instead ("said as leftover at ...": a leftover or 
 the piece's points, or naming one; "said as dot:<reason> at ...": a teal dot on one of its points, on
 a point linked to one, or naming one as where a cut turn's end starts). `regmissed.sh` makes the
 user's decisions into a junction file as regnames.sh does (`OUT=`, default `regmissed_out/`) and writes `regmissed<TAG>.txt`: a line per part,
-setting and piece, then the totals. A join read as `part=jNNx` is a missed turn the check passed as
-another part's - unless the kept piece is not the turn the join turns on (a join that only touches
+setting and piece, then the totals. A join read as `part=jNNx` (or `twin=jNNx` / `twinstuck=jNNx`,
+another part's turn left by the clear) is a missed turn the check passed as another part's - unless the kept piece is not the turn the join turns on (a join that only touches
 the piece's end, or a kept piece that is really a stretch of main road the clear counts as wiring);
 read such a line before calling it a fault.
 
@@ -150,7 +173,17 @@ pieces, 57 with no join (32 said), 18 missed, 14 another part's. 21 pieces are s
 silence (25 at HEAD), all but one with through roads off; none of them was said at HEAD, and every
 turn HEAD said as missed is still said. The check reads whose a turn is by where it turns, and that
 is not settled yet (split-part clearing, decided 2026-10-03, not built); this is the measure for
-it. The hook is held in a global: Lua 5.1's debug.setupvalue keeps no hold on what it sets, and
+it. With split-part clearing built (2026-10-05 round 2, live.lua; a dot read as another part's turn,
+`dot:twin` / `dot:twinstuck`, now counts with `dot:part` as no report, and a join read as
+`twin=` / `twinstuck=` with `part=`): 61 with no join (43 said, 2 only by another part's turn's dot),
+17 missed, 14 another part's (HEAD + the angle experiment, counted the same way: 64, 43, 1, 16, 11).
+Nothing HEAD said goes silent. Where a line moved to another part's turn, the join's turning is
+that turn and the kept piece is main road the clear counts as wiring, or is touched only at its end:
+20n (through roads off) piece 1, the south lane's last 3 points, was the false "missed" of round 1;
+40e piece 1 (through roads off) touches 40w's turn only at its first point, and HEAD's "made" there
+was the check misreading the pre-clear clean-up's fold (fixed in jxJoinWas); 39 piece 3 (through
+roads off) is the south-east lane, touched at the point 39se's turn is fed from; 39se piece 5 and
+40e piece 1 (through roads kept) were "part=" at HEAD. The hook is held in a global: Lua 5.1's debug.setupvalue keeps no hold on what it sets, and
 without one a run segfaulted part-way through the clear.
 
 Four switches put back what the clear and its check did before the j39 fixes of 2026-10-02 and
@@ -174,6 +207,59 @@ Four switches put back what the clear and its check did before the j39 fixes of 
   turn from the main road onto the north road, kept on purpose by missed.lua, leads nowhere: the
   point it led into went with the lane's old start. Nothing then drives over it, and without this
   line the check said nothing of it at all.
+
+## Split junctions: one part, then its twin (dbgtwin.lua, regtwin.sh)
+
+The user's rules for clearing one part of a split junction (2026-10-03, doc 04, "Split junctions:
+clearing one part"), built 2026-10-05:
+
+1. The twin's turn inside this part's area is left working. Before it cuts anything the clear lists
+   the twin's turns in its area (junctionTwinTurns) and nothing in the clear may remove them
+   (jxRemove refuses them). With through roads off, where such a turn leaves or joins a through lane
+   inside the box, or within `JX_TWIN_LEAD` (5 m) of it, the lane is kept from that point on away from
+   this part's middle and for 5 m towards it, and is cut there instead: this part's stub on that side
+   is longer. At 39 the main road's lane out to the south-east now starts 4.9 m before 39se's right
+   turn instead of the turn's own first point being cut away.
+2. With through roads off, the road is cut and the box swept only on this part's side of the half-way
+   line to each other part, so once both are cleared the road between them stays; the check says it
+   as a note. Since the twin now stays wired, a click on a cleared part whose usual answer would be
+   its twin (26: clear 26s, click 26s again - its lane ends lie within 15 m of 26n's forks) locks
+   that part's own cleared site instead (junctionSelect; regnames.sh `clear26`).
+3. One part at a time: there is no "clear all parts" on the card.
+4. The check follows each listed turn end to end (jxCheckTwin) and calls it fine - `twin`, "left
+   working" - only if it drives now: a way onto it and a way off it, each 60 m or as far as before
+   the clear. With through roads off a turn of the twin's that runs through this part (fed from,
+   or leading into, this part's middle) cannot drive until this part is built, whatever the clear
+   keeps: it WAITS FOR THE BUILD - a note of kind `twinwait`, and a join or dot over it reads
+   `twinwait` (the user's call of 2026-10-05, option b of doc 04). Any other turn that does not
+   drive - broken, or with no way in or out at all - is a problem of kind `twin`, and a join or dot
+   over it reads `twinstuck`.
+
+`dbgtwin.lua` clears part A, then part B, and follows B's turns - as B's own preview reads them, so
+independently of the clear's list - after each clear; `regtwin.sh` runs every ordered pair of parts
+in split_decisions.txt, both settings:
+
+    REGDIR=<folder> LEAVE=0 A=6.9,-13.6 B=22.5,0.1 lua dbgtwin.lua   # 39, then 39se
+    REGDIR=<folder> GRAPH=<network .lua> bash regtwin.sh TAG          # every pair -> regtwinTAG.txt
+
+A turn reads `drives`, `fromcut` / `tocut` (whole, and its way in starts - or its way on ends - at a
+stub within 60 m: through roads off), `broken`, `nowayin` or `nowayout`. After A's clear dbgtwin
+also says what A's check said of each (`AFTER_A SAID`): `MISMATCH` where a turn that drives is said
+as a fault (a false "missed" or "made") or has a problem line, or one that does not drive is called
+"left working", or a "waits for the build" note (`wait=yes`) is on a turn that drives or one that is
+broken; `UNSAID` where one that does not drive gets no word at all (with how far it lies from A). A
+`fromcut` / `tocut` turn is said by its waiting note and its `twinwait` join or dot (2026-10-05,
+option b: same totals as round 2 on all three networks). On the session network, live.lua and graph_data.lua (2026-10-05 round 2, turn radius 12,
+the user's decisions): 36 runs each, 8 refused as already clear (72 and 73); after the first clear
+no turn `broken`, `nowayin` or `nowayout`; with through roads kept every turn drives (as at HEAD);
+with through roads off 22-23 per network are `fromcut` / `tocut` (as many as at HEAD, where 5 of
+them were broken or had no way in); MISMATCH 0 (HEAD + the angle experiment: 5-6; round 1: 14-15);
+UNSAID 7-9, all through roads off and 7.6-19.4 m from A - turns of the twin hanging off the road
+between (14, 39 to 39nw, 39se's main lane into 39, and two at 40, where the parts disagree about the
+main road), outside A's area and so outside rule 1. HEAD: 26's second part refused too.
+
+Two more switches (default on; `=0` turns one off, for the harness only): `TWIN_TURNS=0` drops
+rules 1 and 4, `PART_ROAD=0` rule 2.
 
 ## Loop order: SHUFFLE and one junction after another
 

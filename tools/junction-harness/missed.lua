@@ -84,14 +84,18 @@ for _, j in ipairs((r and r.joins) or {}) do
   local on = false
   for _, p in ipairs(j.path or {}) do if kept(p) then on = true break end end
   if on then
-    said[#said + 1] = string.format("join %s->%s at (%.1f,%.1f) %s%s", tostring(j.from), tostring(j.to), j.x, j.z, j.why, j.part and ("=" .. tostring(j.part.name)) or "")
+    local whose = ""
+    if j.part ~= nil then whose = "=" .. tostring(j.part.name) end
+    if j.twin ~= nil then whose = "=" .. tostring(j.twin.name) end
+    said[#said + 1] = string.format("join %s->%s at (%.1f,%.1f) %s%s", tostring(j.from), tostring(j.to), j.x, j.z, j.why, whose)
     if os.getenv("PATH_OUT") == "1" then local t = {} for _, p in ipairs(j.path) do t[#t+1] = string.format("(%.2f,%.2f)%s", p.x, p.z, kept(p) and "K" or "") end print("PATH " .. table.concat(t, " ")) end
   end
 end
 -- Where no join runs over the kept piece (it no longer leads anywhere, or nothing leads into it), what
 -- the check said of it instead: a leftover or spur line at one of its points, or naming one; or a teal
 -- dot on one of its points, on a point linked to one, or naming one as where a cut turn's end starts
--- ("said as dot:<reason>" - a dot read as another part's says dot:part, and is not a report of a miss).
+-- ("said as dot:<reason>" - a dot read as another part's says dot:part, and is not a report of a miss;
+-- nor is one read as another part's turn, left by the clear: dot:twin, dot:twinwait, dot:twinstuck).
 local other = {}
 if #said == 0 then
   for _, it in ipairs((r and r.issues) or {}) do

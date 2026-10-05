@@ -215,6 +215,14 @@ if os.getenv("RUN_STRAIGHT") == "0" then AutoDrive.FLYOVER_JUNCTION_RUN_STRAIGHT
 -- before 2026-10-03): in the missed-turn test (regmissed.sh) j39's own turn onto the north road, kept on
 -- purpose, is then said by nothing at all.
 if os.getenv("LOOSE_ENDS") == "0" then AutoDrive.FLYOVER_JUNCTION_LOOSE_ENDS = false end
+-- TWIN_TURNS=0: the clear of one part of a split no longer leaves another part's turn in its area
+-- working (rule 1 of 2026-10-03), and the check no longer follows those turns (rule 4): at j39 with
+-- through roads off, 39se's right turn then loses the point it leaves the main road at.
+if os.getenv("TWIN_TURNS") == "0" then AutoDrive.FLYOVER_JUNCTION_TWIN_TURNS = false end
+-- PART_ROAD=0: with through roads off, a part's clear cuts the road and sweeps its box past the
+-- half-way line to the other part again (rule 2 of 2026-10-03): clearing 20n and then 20s then takes
+-- the whole road between the two.
+if os.getenv("PART_ROAD") == "0" then AutoDrive.FLYOVER_JUNCTION_PART_ROAD = false end
 
 function M.lock(cx, cz, opts)
     opts = opts or {}

@@ -15,9 +15,9 @@
 --   lua regnames.lua near D        clear 20s without through roads (20n stays wired), move 20n's SAVED
 --                                  part D metres south - towards the cleared 20s - and lock 20s again.
 --                                  Prints NAME and DIST, how far the moved part is from the lock
---   lua regnames.lua clear26 D     clear 26s without through roads (which takes 26n's wiring with it:
---                                  a click on 26n then locks the cleared site), move 26n's SAVED part
---                                  D metres south and lock 26s again. Prints NAME and DIST
+--   lua regnames.lua clear26 D     clear 26s without through roads (26n's turns are left working, so
+--                                  26n stays wired), move 26n's SAVED part D metres south and lock 26s
+--                                  again. Prints NAME and DIST
 --   lua regnames.lua hover         the card at 20s, first only pointed at (no click), then locked.
 --                                  Prints ROW lines: whether the decision buttons are on the card
 --   lua regnames.lua firstsave DIR a decision made before the career was ever saved - its folder
@@ -273,7 +273,9 @@ elseif mode == "gonecheck" then
         for _, l in ipairs(log) do
             summary = l:match("check after the clear %(([^)]+)%)") or summary
             if l:find("junction %- check: ") then
-                local nm = l:match(" %- ([^-]-)'s own wiring")
+                -- "j39's own wiring", or - since 2026-10-05, where the check followed that part's
+                -- turn end to end - "j39's turn, left working"
+                local nm = l:match(" %- ([^-]-)'s own wiring") or l:match(" %- ([^-]-)'s turn, left working")
                 if nm ~= nil then names[#names + 1] = nm end
             end
         end

@@ -103,10 +103,15 @@ o=$("$L" regnames.lua near 0 </dev/null 2>&1)
 check "cleared 20s, 20n wired" "j20s 16.79" "$(echo "$o" | grep '^NAME' | sed 's/^NAME //') $(echo "$o" | grep '^DIST' | sed 's/^DIST //')"
 o=$("$L" regnames.lua near 3 </dev/null 2>&1)
 check "cleared 20s, wired 20n inside 15 m" "j20s 13.79" "$(echo "$o" | grep '^NAME' | sed 's/^NAME //') $(echo "$o" | grep '^DIST' | sed 's/^DIST //')"
+# Since 2026-10-05 (the user's split rules) 26s's clear leaves 26n's turns working, so 26n stays wired
+# and is never covered by cleared 26s, however near; a click on 26s locks cleared 26s's own site (its
+# lane ends within 15 m of its saved point), not 26n. Before, 26s's clear took 26n's wiring with it and
+# a click on 26s locked their shared cleared middle: "j26s 15.06", and "j26 | covers j26n and j26s
+# 14.86" with 26n's point moved 0.2 m closer.
 o=$("$L" regnames.lua clear26 0 </dev/null 2>&1)
-check "cleared 26s, 26n just outside 15 m" "j26s 15.06" "$(echo "$o" | grep '^NAME' | sed 's/^NAME //') $(echo "$o" | grep '^DIST' | sed 's/^DIST //')"
+check "cleared 26s, 26n wired" "j26s 12.71" "$(echo "$o" | grep '^NAME' | sed 's/^NAME //') $(echo "$o" | grep '^DIST' | sed 's/^DIST //')"
 o=$("$L" regnames.lua clear26 0.2 </dev/null 2>&1)
-check "cleared 26s, 26n inside 15 m" "j26 | covers j26n and j26s 14.86" "$(echo "$o" | grep '^NAME' | sed 's/^NAME //') $(echo "$o" | grep '^DIST' | sed 's/^DIST //')"
+check "cleared 26s, wired 26n moved closer" "j26s 12.51" "$(echo "$o" | grep '^NAME' | sed 's/^NAME //') $(echo "$o" | grep '^DIST' | sed 's/^DIST //')"
 
 # The decision buttons, pointed at and then locked.
 o=$("$L" regnames.lua hover </dev/null 2>&1)

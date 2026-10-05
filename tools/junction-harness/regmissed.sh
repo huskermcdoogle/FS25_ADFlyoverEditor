@@ -8,7 +8,8 @@
 # Writes regmissed<TAG>.txt: one line per part, setting and piece, then the totals. Where no join runs
 # over a kept piece, the line says what the check said of it instead (missed.lua): a leftover or spur
 # line, or a teal dot on it or beside it ("said as dot:<reason>"). A join over a kept
-# piece read as "part=jNNx" is a missed turn the check passed as another part's - unless the kept piece
+# piece read as "part=jNNx" (or "twin=jNNx" / "twinwait=jNNx" / "twinstuck=jNNx", another part's turn left by the clear)
+# is a missed turn the check passed as another part's - unless the kept piece
 # is not the turn the join turns on (a join that only touches the piece's end, or a kept piece that is
 # really a stretch of main road the clear counts as wiring); read such a line before calling it a fault.
 export RIG_TRAILER="${RIG_TRAILER:-11}"
@@ -40,12 +41,13 @@ awk '/^[0-9]+[a-z]* LEAVE=/ {
   n++
   if ($0 ~ /no join over it/) {
     none++
-    # A dot read as another part'"'"'s (dot:part) is not a report of a miss: counted apart.
-    s = $0; gsub(/said as dot:part at \([^)]*\)/, "", s)
-    if (s ~ /said as/) said++; else if ($0 ~ /said as dot:part/) partdot++
+    # A dot read as another part'"'"'s (dot:part), or as another part'"'"'s turn left by the clear
+    # (dot:twin, dot:twinwait, dot:twinstuck), is not a report of a miss: counted apart.
+    s = $0; gsub(/said as dot:(part|twin|twinwait|twinstuck) at \([^)]*\)/, "", s)
+    if (s ~ /said as/) said++; else if ($0 ~ /said as dot:(part|twin|twinwait|twinstuck)/) partdot++
   }
-  m = gsub(/ missed/, "&"); p = gsub(/ part=/, "&"); missed += m; part += p
+  m = gsub(/ missed/, "&"); p = gsub(/ (part|twin|twinwait|twinstuck)=/, "&"); missed += m; part += p
   if ($0 !~ /err=0/) errs++
 }
-END { printf "\n== totals ==\n%d pieces kept, %d with no join over them (%d of those said as a leftover, a spur or a teal dot; %d only by a dot read as another part'"'"'s) | joins over them: %d missed, %d another part'"'"'s | %d Lua errors\n", n, none + 0, said + 0, partdot + 0, missed + 0, part + 0, errs + 0 }' "$out" >> "$out"
+END { printf "\n== totals ==\n%d pieces kept, %d with no join over them (%d of those said as a leftover, a spur or a teal dot; %d only by a dot read as another part'"'"'s, or its turn) | joins over them: %d missed, %d another part'"'"'s (its wiring or its turn) | %d Lua errors\n", n, none + 0, said + 0, partdot + 0, missed + 0, part + 0, errs + 0 }' "$out" >> "$out"
 tail -2 "$out"

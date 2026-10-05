@@ -351,7 +351,7 @@ Each is one choice. We'll ask them one at a time.
   through roads kept. 39 should keep its road from the south: all three through roads, as on a
   fresh 39. (Done in game 2026-10-02, build 422: it matched a fresh 39.)
 
-## Split junctions: clearing one part (decided 2026-10-03, not built)
+## Split junctions: clearing one part (decided 2026-10-03, built 2026-10-05)
 
 Two parts share one main road, for example 39 / 39se / 39nw or 26n / 26s. Part A is the one you clear;
 part B is its twin. Three patch rounds on the build-422 findings only moved the problem around, so these
@@ -367,6 +367,19 @@ are your decisions to build from:
 
 Already decided before: a lane from one part's side road across the main road into another part's side
 road is a turn, cleared even with through roads kept (the green lane at 39).
+
+Built 2026-10-05 (not yet tried in game): all four, as written. Rule 3 needed nothing: the
+card has no "clear all parts". Rule 4 is read literally: "still drives" means a vehicle can get onto
+it and off it now. With through roads kept every twin turn still drives, as it did before. With through
+roads off, a twin turn that runs through this part hangs off this part's cut lane (about 5 m of it), so
+nothing reaches it until this part is built. No clear can avoid it while it removes this part's lanes.
+The options were (a) keep it a problem, (b) call it "waits for the build", not a problem, or (c) keep
+that one lane through this part. Pictures: the split-rules page.
+
+Decided 2026-10-05: **(b)**. With through roads off, a twin turn that is whole but whose only way on or
+off is this part's cut lane is a note, "j39se's turn, waits for the build", not a problem. A twin turn
+that is actually broken (its start gone, cut part-way, or with no way in or out at all) stays a
+problem.
 
 ## Sources
 
