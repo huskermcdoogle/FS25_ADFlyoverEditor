@@ -50,7 +50,8 @@ if jp.ok then E:applyJunction() end
 if os.getenv("ALL") == "1" then for _, l in ipairs(LOG) do print("  " .. l) end end
 local p1, l1 = count()
 local last = E.junctionLastPlace or {}
-print(string.format("PLACE %.1f %.1f ok=%d kind=%s shape=%s turns=%d shared=%d points=%d links=%d loose=%d why=%s",
+for _, l in ipairs(last.routeCard or {}) do print("card: " .. l) end
+print(string.format("PLACE %.1f %.1f ok=%d kind=%s shape=%s turns=%d shared=%d points=%d links=%d loose=%d extra=%d missing=%d unjoined=%d routes=%d why=%s",
     CX, CZ, (jp.ok and last.ok) and 1 or 0, tostring(last.kind or (jp.plan and jp.plan.kind) or "-"),
-    tostring(last.shape or "-"), last.turns or 0, last.shared or 0, p1 - p0, l1 - l0, last.loose or 0,
+    tostring(last.shape or "-"), last.turns or 0, last.shared or 0, p1 - p0, l1 - l0, last.loose or 0, last.extra or 0, last.missing or 0, last.unjoined or 0, last.routes or 0,
     (tostring(jp.ok and (last.why or "-") or jp.why)):gsub(" ", "_")))

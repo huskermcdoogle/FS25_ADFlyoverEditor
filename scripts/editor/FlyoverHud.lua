@@ -949,6 +949,7 @@ function ADFlyoverHud:buildRows(editor)
                     if (last.loose or 0) > 0 then
                         add("toggle", "loose ends", string.format("%d - join by hand", last.loose))
                     end
+                    for _, line in ipairs(last.routeCard or {}) do add("note", line) end
                 else
                     add("toggle", "last place failed", "")
                     notes(last.why)
