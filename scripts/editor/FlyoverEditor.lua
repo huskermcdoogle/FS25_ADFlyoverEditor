@@ -19724,6 +19724,139 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
     return rep
 end
 
+--- THE SHAPE OF THE WIRED TURNS, a second say on Y merge or T. A Y merge's turns join the main road
+--- almost in line, long and gentle, where a T's turns bend hard - the user's call on 50 (2026-10-05:
+--- "clearly a y merge", shown by the shape of its connectors). A turn is measured the way a driver
+--- makes it: from the lane's own direction arriving where the connector leaves to the lane's
+--- direction past where it joins, the corners at both ends included (67's connectors leave the main
+--- lane at a right angle and then run straight: 4 degrees of bend inside them, over 100 in all). Over
+--- the 51 junctions the user labelled, the gentlest such turn is 25 degrees or less at every Y merge
+--- and 42 or more at every T. It does not tell a T skew from a T square (they overlap from 53 to 65
+--- degrees), so the angle keeps that call.
+--- Only turns linking two different roads count: a piece that leaves a road and rejoins the same road
+--- (40's duplicate beside its eastbound lane, 4 degrees) says nothing about how the two roads meet.
+--- Which road an end is on: walk out along its own lane until 12 m from the centre, the way the
+--- classifier reads an arm, and take the nearest arm there - at a tight Y the side road runs within
+--- 20 degrees of the main road, and a fixed tolerance around the main arms swallowed it (53).
+--- Reads what junctionClassify left on jp (_branchCentre, _mainArms, _sideRead), so it runs from
+--- there. Returns the gentlest such turn in degrees, or nil when there is no wiring to read (a
+--- cleared junction).
+function ADFlyoverEditor:junctionGentlestTurn(jp)
+    local c = jp._branchCentre
+    if c == nil or jp.turnDebris == nil or #jp.turnDebris == 0 then return nil end
+    local function wp(id) return ADGraphManager:getWayPointById(id) end
+    local wire = {}
+    for _, w in ipairs(jp.turnDebris) do
+        if w.id ~= nil then wire[w.id] = true end
+    end
+    local function sep(a, b)
+        local d = math.abs(a - b) % 360
+        if d > 180 then d = 360 - d end
+        return d
+    end
+    local function sortedIds(list)
+        local r = {}
+        for _, id in ipairs(list or {}) do r[#r + 1] = id end
+        table.sort(r)
+        return r
+    end
+    local arms = {}
+    for _, m in ipairs(jp._mainArms or {}) do arms[#arms + 1] = { b = m, main = true } end
+    local sideKeys = {}
+    for k in pairs(jp._sideRead or {}) do sideKeys[#sideKeys + 1] = k end
+    table.sort(sideKeys)
+    for _, k in ipairs(sideKeys) do
+        local s = jp._sideRead[k]
+        if s.bearing ~= nil then arms[#arms + 1] = { b = s.bearing, main = false } end
+    end
+    if #arms == 0 then return nil end
+    local function onMain(p, upstream)
+        local cur, seen = p, { [p.id] = true }
+        for _ = 1, 60 do
+            if (cur.x - c.x) ^ 2 + (cur.z - c.z) ^ 2 >= 12 * 12 then break end
+            local nxt = nil
+            for _, id in ipairs(sortedIds(upstream and cur.incoming or cur.out)) do
+                if not wire[id] and not seen[id] then
+                    nxt = wp(id)
+                    if nxt ~= nil then break end
+                end
+            end
+            if nxt == nil then break end
+            seen[nxt.id] = true
+            cur = nxt
+        end
+        local b = math.deg(math.atan2(cur.x - c.x, cur.z - c.z)) % 360
+        local best, isMain = math.huge, true
+        for _, a in ipairs(arms) do
+            local d = sep(b, a.b)
+            if d < best then best, isMain = d, a.main end
+        end
+        return isMain
+    end
+    local function heading(a, b) return math.atan2(b.x - a.x, b.z - a.z) end
+    local function wrap(d)
+        while d > math.pi do d = d - 2 * math.pi end
+        while d < -math.pi do d = d + 2 * math.pi end
+        return d
+    end
+    -- each connector as a chain: from the lane point that feeds it, through the wiring, to the lane
+    -- point it joins
+    local wireIds = {}
+    for id in pairs(wire) do wireIds[#wireIds + 1] = id end
+    table.sort(wireIds)
+    local gentlest = nil
+    for _, first in ipairs(wireIds) do
+        local fw = wp(first)
+        for _, from in ipairs(fw ~= nil and sortedIds(fw.incoming) or {}) do
+            local start = (not wire[from]) and wp(from) or nil
+            if start ~= nil then
+                local path, seen, cur, ended = { start, fw }, { [first] = true }, fw, false
+                for _ = 1, 200 do
+                    local outs, nxt = sortedIds(cur.out), nil
+                    for _, oid in ipairs(outs) do
+                        if wire[oid] and not seen[oid] then nxt = oid break end
+                    end
+                    if nxt == nil then
+                        for _, oid in ipairs(outs) do
+                            local w = (not wire[oid]) and wp(oid) or nil
+                            if w ~= nil then path[#path + 1] = w ended = true break end
+                        end
+                        break
+                    end
+                    seen[nxt] = true
+                    cur = wp(nxt)
+                    if cur == nil then break end
+                    path[#path + 1] = cur
+                end
+                if ended and #path >= 3 and onMain(path[1], true) ~= onMain(path[#path], false) then
+                    -- the lane's own points either side, for the corners at both ends
+                    local function laneStep(w, upstream)
+                        for _, id in ipairs(sortedIds(upstream and w.incoming or w.out)) do
+                            if not wire[id] then
+                                local n = wp(id)
+                                if n ~= nil then return n end
+                            end
+                        end
+                        return nil
+                    end
+                    local ext = {}
+                    local before, after = laneStep(path[1], true), laneStep(path[#path], false)
+                    if before ~= nil then ext[#ext + 1] = before end
+                    for _, w in ipairs(path) do ext[#ext + 1] = w end
+                    if after ~= nil then ext[#ext + 1] = after end
+                    local turn = 0
+                    for i = 2, #ext - 1 do
+                        turn = turn + wrap(heading(ext[i], ext[i + 1]) - heading(ext[i - 1], ext[i]))
+                    end
+                    local deg = math.abs(math.deg(turn))
+                    if gentlest == nil or deg < gentlest then gentlest = deg end
+                end
+            end
+        end
+    end
+    return gentlest
+end
+
 --- WHAT KIND OF JUNCTION THIS IS. Read off the tool's OWN pairing - which lanes it found carrying a
 --- route straight across, and which stop here - not off the arm angles alone. Angles alone misread a
 --- T whose through road bends through the junction (its two through arms 141 degrees apart) as a Y,
@@ -19735,6 +19868,7 @@ end
 function ADFlyoverEditor:junctionClassify(jp)
     if jp == nil then return "?" end
     jp._branch = nil
+    jp._turnVote = nil
     -- What the reading was made from, kept for junctionParts: one record per side route read (at
     -- its index in sB below, each naming its route; none on a cleared site, whose side roads are
     -- lane-end groups instead), the main road's arms, and on a cleared site those lane-end groups,
@@ -20699,7 +20833,27 @@ function ADFlyoverEditor:junctionClassify(jp)
                 end
             end
         end
-        return (branch <= 38) and "Y merge" or ((branch <= 62) and "T skew" or "T square")
+        local kind = (branch <= 38) and "Y merge" or ((branch <= 62) and "T skew" or "T square")
+        -- A SECOND SAY ON Y MERGE OR T: the shape of the wired turns (junctionGentlestTurn). Over the
+        -- user's labels it splits the two cleanly where the angle once did not (50), so where it is
+        -- clear - 30 degrees or less a Y merge, 37 or more a T - it decides Y merge or T. Between the
+        -- two it has no say (35, which the user marked "Y?", turns 33) and the angle stands. The
+        -- angle always decides T skew or T square.
+        local gentlest = self:junctionGentlestTurn(jp)
+        if gentlest ~= nil then
+            local byAngle = kind
+            if gentlest <= 30 and kind ~= "Y merge" then
+                kind = "Y merge"
+            elseif gentlest >= 37 and kind == "Y merge" then
+                kind = "T skew"
+            end
+            jp._turnVote = { deg = gentlest, byAngle = byAngle, kind = kind }
+            if kind ~= byAngle then
+                Logging.info("[FlyoverEditor]: junction kind - the angle (%.0f degrees) reads %s, but the gentlest wired turn bends %.0f degrees: %s",
+                    branch, byAngle, gentlest, kind)
+            end
+        end
+        return kind
     elseif nT == 0 then
         -- Nothing runs straight through and nothing lines up across the gap. This used to read "Y".
         return "no main road found"

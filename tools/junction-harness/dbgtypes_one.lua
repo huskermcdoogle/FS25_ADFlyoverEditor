@@ -1,8 +1,9 @@
 -- One junction for dbgtypes.lua: lock it (through paths off) and print its type, route counts and
 -- the main road - each through route's two ends as compass degrees (0 = north), read where the route is
 -- 25 m from the centre (so a road that loops back is read by the way it leaves, not where it ends).
+-- LEAVE=1 locks it with through paths kept.
 local H = dofile("harness.lua")
-local jp = H.lock(tonumber(arg[1]), tonumber(arg[2]), { mode = "clear", radius = 12, leaveThrough = false })
+local jp = H.lock(tonumber(arg[1]), tonumber(arg[2]), { mode = "clear", radius = 12, leaveThrough = os.getenv("LEAVE") == "1" })
 -- An already-cleared junction is refused by the clear; read it the way build sees it instead.
 local cleared = false
 if jp == nil and tostring(ADFlyoverEditor.junctionRefused):find("already clear") then
@@ -50,6 +51,11 @@ end
 local g = jp and jp._branch and jp._branch.meet
 if g ~= nil then
     print(string.format("MEET %.2f %.2f main %.1f side %.1f angle %.1f", g.x, g.z, (180 - g.main) % 360, (180 - g.side) % 360, jp._branch.angle))
+end
+-- the second say on Y merge or T (junctionGentlestTurn): the gentlest wired turn and what the
+-- angle alone read
+if jp ~= nil and jp._turnVote ~= nil then
+    print(string.format("TURNS %.1f byAngle %s", jp._turnVote.deg, jp._turnVote.byAngle))
 end
 print(string.format("TYPE %s%s | %d through, %d side | branch %s | main %s", kind, cleared and " (cleared)" or "",
     #(r.through or {}), #(r.side or {}), (jp and jp._branch) and string.format("%.0f", jp._branch.angle) or "-",
