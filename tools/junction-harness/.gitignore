@@ -2,6 +2,7 @@
 graph_data.lua
 graph_*.lua
 reg*_*.txt
+regbuild*.txt
 sweptreg*.txt
 seq*_*.txt
 seq*/
@@ -15,3 +16,4 @@ regmissed*.txt
 regmissed_out/
 regnames_*/
 regmissed_*/
+regplace*.txt

@@ -826,7 +826,7 @@ function ADFlyoverHud:buildRows(editor)
         -- First row always: which job the tool is doing. "clear" reuses everything build does to
         -- find a site's own runs and old wiring, but shows a much shorter card - none of the turn-
         -- solving settings below apply when nothing is being laid.
-        add("toggle", "action", (editor.junctionMode == "clear") and "clear" or "build", false,
+        add("toggle", "action", editor.junctionMode or "build", false,
             function() editor:toggleJunctionMode() end)
         if editor.junctionMode == "clear" then
             -- No scope row, and the wheel does nothing here. What belongs to a junction is a
@@ -923,7 +923,57 @@ function ADFlyoverHud:buildRows(editor)
             else
                 add("note", "point at a junction")
             end
-        else
+        elseif editor.junctionMode == "place" then
+            -- PLACE (docs/junction-tool/08-place-junction.md): a whole X or T where roads cross, in
+            -- one click. Only the shape to choose; everything else comes from the roads.
+            add("toggle", "shape", (editor.junctionPattern == "smooth") and "smooth" or "mod", false,
+                function() editor:toggleJunctionPattern() end)
+            -- A note row is one line: long reasons go over several.
+            local function notes(text)
+                local line = ""
+                for word in tostring(text):gmatch("%S+") do
+                    if #line + #word + 1 > 42 and #line > 0 then
+                        add("note", line)
+                        line = word
+                    else
+                        line = (#line > 0) and (line .. " " .. word) or word
+                    end
+                end
+                if #line > 0 then add("note", line) end
+            end
+            local last = editor.junctionLastPlace
+            if last ~= nil then
+                if last.ok then
+                    add("toggle", "last placed", string.format("%s %s", last.shape == "exact" and "mod" or tostring(last.shape),
+                        tostring(last.kind)))
+                    if (last.loose or 0) > 0 then
+                        add("toggle", "loose ends", string.format("%d - join by hand", last.loose))
+                    end
+                else
+                    add("toggle", "last place failed", "")
+                    notes(last.why)
+                end
+            end
+            local jp = editor.junctionPreview
+            if jp ~= nil and jp.placeMode then
+                if jp.ok and jp.plan ~= nil then
+                    add("toggle", "will place", string.format("%s %s", jp.plan.shape == "exact" and "mod" or tostring(jp.plan.shape),
+                        tostring(jp.plan.kind)))
+                    add("toggle", "lane gap", string.format("%.1f m", jp.plan.L or 0))
+                    if jp.plan.shape == "plain" then
+                        notes("doesn't fit: " .. tostring(jp.plan.fitWhy))
+                        add("toggle", "loose ends", tostring(#(jp.plan.loose or {})))
+                    elseif jp.plan.shape ~= jp.shape then
+                        notes("the smooth shape does not fit here - the mod shape instead")
+                    end
+                    add("note", editor.junctionArmed ~= nil and "right-click places it" or "click to lock")
+                else
+                    add("toggle", "cannot place here", "")
+                    notes(jp.why)
+                end
+            else
+                add("note", "point where roads cross")
+            end        else
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
         addWheelNumber("search radius", string.format("%.0f m", editor:junctionRadiusValue()))
         add("number", "turn radius", string.format("%.0f m", editor.junctionTurnRadius or 12))
@@ -955,6 +1005,21 @@ function ADFlyoverHud:buildRows(editor)
                 math.min(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MAX,
                     (editor.junctionClearance or 5) + dir * AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP))
             editor.junctionPreviewKey = nil
+        end
+        -- WHAT THE ROUTE CHECK SAID ABOUT THE LAST BUILD, as the clear card shows its own check:
+        -- display only, named by number, hidden once the network round it is no longer what the build
+        -- left (an undo), back after a redo. A build with an extra route is built anyway and marked
+        -- here (decided 2026-10-02).
+        local lastBuild = editor.junctionLastBuildShown and editor:junctionLastBuildShown()
+        if lastBuild ~= nil and lastBuild.card ~= nil then
+            if lastBuild.number ~= nil then
+                add("toggle", "last build", string.format("j%02d", lastBuild.number))
+            else
+                add("toggle", "last build", string.format("%.0f, %.0f", lastBuild.x or 0, lastBuild.z or 0))
+            end
+            for _, line in ipairs(lastBuild.card) do
+                add("note", line)
+            end
         end
         local jp = editor.junctionPreview
         if jp ~= nil then

@@ -54,6 +54,152 @@ measurement is noise, not signal.
 
     LEAVE=1 lua dbgstages.lua X Z          # the stage-by-stage account of one clear
 
+## One build
+
+    lua dbgbuild.lua X Z [turnRadius]            # today's builder, on the junction as it stands
+    CLEARFIRST=1 lua dbgbuild.lua X Z            # clear it first (through roads kept), then build
+
+Runs the real `applyJunction` through `harness.lua`'s `M.build()` (lock with `mode = "build"`
+first). It reports points, links, two-way links and teal dots within 40 m before and after, plus the
+turns laid and refused, and ends with a `COUNTS` line for a regression to collect. On a wired
+junction today's builder usually has nothing new to lay, so `CLEARFIRST=1` is the useful case.
+
+It also checks the build against doc 06's rules, counting only what the build added:
+
+- **new two-way links;**
+- **crossings without a shared point:** two links crossing away from their ends;
+- **U-turn routes:** a route AutoDrive could take into the junction and out the way it came, under its
+  80-degree rule.
+
+A build that follows doc 06 scores 0 on all three.
+
+## The build regression - run it TWICE
+
+    bash regbuild.sh TAG
+
+Clears and then builds every registry junction (the same list as reg75.sh), and writes one line per
+junction to `regbuildTAG.txt` plus a summary: built, refused, Lua errors, turns laid and refused, and
+the three rule counts. Run it twice and diff, as for the clear.
+
+Baseline, today's builder on this branch (2026-10-02), identical on two runs, with the map export of
+2026-09-27 12:47:
+
+    67 built, 8 refused, 0 Lua errors | 283 turns laid, 17 refused
+    rules: new two-way links 4 at 4 junctions | crossings without a shared point 282 at 61 | U-turn routes 7 at 7
+
+A junction the clear calls "already clear" is built as it stands. `bash whyrefused.sh TAG` gives the
+reason for each refusal.
+
+**Use the same network the registry was made from.** All 8 refusals above are a map mismatch, not the
+picker:
+
+- That export (12,524 points) is an older network than savegame6's `AutoDrive_config.xml` (12,873
+  points, 2026-09-27 12:46), which the registry numbers.
+- On the older export, the 6 sites j4, j24, j25, j31, j65 and j66 are plain road, with no fork within
+  30 m. The placeable T and X (j67, j68) are not there at all.
+- Exported fresh from the save, the picker finds all 8 within 2.4 m of their registry positions.
+
+Baseline on the save's own network (export it with `export_graph.py` and point `GRAPH=` at it),
+identical on two runs.
+
+The checker was corrected 2026-10-02 in three ways:
+- links are keyed by their point tables, not ids (removing a point renumbers the rest, which made old
+  links look new);
+- a two-way road split where a turn crosses it no longer counts as a two-way turn;
+- crossings more than 2 m apart in height are bridges, not crossings.
+
+So earlier figures are not comparable. With the corrected checker:
+
+    today's builder (1caa96e):
+    75 built, 0 refused, 0 Lua errors | 310 turns laid, 17 refused
+    rules: two-way turn links 13 at 10 junctions | crossings without a shared point 284 at 66 | U-turn routes 10 at 7
+
+    with shared crossings (step 1 of the new builder):
+    75 built, 0 refused, 0 Lua errors | 310 turns laid, 17 refused
+    rules: two-way turn links 17 at 12 junctions | crossings without a shared point 1 at 1 | U-turn routes 15 at 11
+
+    after merging junction-rework a008a46 (corrected twin, wider road gate) into the new builder:
+    75 built, 0 refused, 0 Lua errors | 319 turns laid, 19 refused
+    rules: two-way turn links 10 at 9 junctions | crossings without a shared point 1 at 1 | U-turn routes 13 at 8
+
+The U-turn figures above came from a guess in dbgbuild.lua: a route that left the 30 m circle heading
+back the way it came in. Roads that bend or loop just past the junction fooled it. Since 2026-10-02 the
+regression reads the **builder's own route check** instead (`junctionRouteCheck`, the `extra=` and
+`routes=` columns). It counts lane-in/lane-out pairs AutoDrive could drive that were not meant, over
+links the build laid. With step 1, after the merge:
+
+    75 built, 0 refused, 0 Lua errors | 319 turns laid, 19 refused
+    rules: two-way turn links 10 at 9 junctions | crossings without a shared point 1 at 1 | extra routes 27 at 14 (of 432 routes; 4 junctions with no route check)
+
+`NOSHARE=1` builds without the shared crossings: 17 extra routes at 8 junctions.
+
+After two-way roads to the mouth (2026-10-02), identical on repeat:
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 1 at 1 | extra routes 26 at 14 (of 439 routes; 4 junctions with no route check)
+
+After the shared point SLIDES instead of snapping (2026-10-02), identical on repeat:
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 0 at 0 | extra routes 18 at 10 (of 447 routes; 4 junctions with no route check)
+    speed: sharp bends on our turns: 0 at 30-50 deg (12 km/h), 0 at 50+ (3 km/h) | links under 0.3 m: 50
+
+The old snap (run a path through any point within 0.75 m) gave 194 sharp bends on our turns, 124 of them
+past 50 degrees, where AutoDrive crawls at 3 km/h. 14 of the 18 extra routes left have no sharp switch:
+they go round the block on existing roads. The `speed:` line counts, on the build's own turns, points that
+bend 30 degrees or more (`SHOWKINK=1` lists them). `HOPS=1` traces where an extra route switches paths,
+`NODEAT=x,z` prints every in/out pair at one point. `SQUARE=1` turns on the S-bend (off by default),
+`SNAP=m` sets the snap distance, `TURNR=m` the turn radius.
+
+After the pattern builder (doc 07, 2026-10-03), `PATTERN=exact` (the default, as in game):
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 0 at 0 | extra routes 19 at 10 (of 448 routes; 4 junctions with no route check)
+    speed: sharp bends on our turns: 0 at 30-50 deg (12 km/h), 56 at 50+ (3 km/h) | links under 0.3 m: 38
+    pattern placed at 7 junctions (the rest laid turn by turn) | turns laid but not drivable: 46 at 33
+
+- The pattern places only at square X's (7 of 75); the rest are built turn by turn as before.
+- The 56 sharp bends are the mod X's spokes counted against each other (corner -> centre -> next
+  corner, 90 degrees), which AutoDrive never drives. Not a real speed cap.
+- "Turns laid but not drivable" is new: a turn the build laid that no route can drive under the
+  80-degree rule. 44 of the 46 are at junctions built turn by turn, and are there with or without
+  the shared points (j5). The other 2 are the mod X at j55 and j56.
+- `PATTERN=smooth` places the smooth X where it fits (the mod X where a lane bends away too soon);
+  `PATTERN=off` is the old builder. `SHOWMISSING=1` lists the turns that cannot be driven and the
+  bends that stop them. `dump_build.lua` + `../xt-study/drawbuilt.py` draw what a build laid.
+
+With the T pattern too (2026-10-03), identical on repeat:
+
+    75 built, 0 refused, 0 Lua errors | 318 turns laid, 20 refused
+    rules: two-way turn links 0 at 0 junctions | crossings without a shared point 0 at 0 | extra routes 21 at 10 (of 468 routes; 4 junctions with no route check)
+    speed: sharp bends on our turns: 48 at 30-50 deg (12 km/h), 58 at 50+ (3 km/h) | links under 0.3 m: 25
+    pattern placed at 32 junctions (the rest laid turn by turn) | turns laid but not drivable: 34 at 20
+
+- 7 X's and 25 T's take the pattern. Of the 34 undrivable turns, 5 are at pattern junctions (j2, j55,
+  j56) and 29 at junctions still built turn by turn.
+- The 48 bends at 30-50 degrees are the mod T's 45-degree corners (12 km/h, as in the mod).
+- Why the rest fall back is in the `why=` column. Skewed T's (more than 15 degrees off square), T's whose
+  side road is one two-way road or one-way, and X's where the clear kept only one through road.
+
+The two-way column now counts only links whose point has BOTH its links two-way, which a two-way turn
+has. A two-way road's new end, where a turn joins it, has one two-way link and one one-way, and is not
+counted. `SHOWDUAL=1` lists them. A junction with nothing
+new to lay stops before the route check, and shows as `extra=-1`. `SHOWPATH=1` prints each extra route's
+path, with the bend at every point.
+
+What is left, and why:
+- The one crossing left is j55, a tangle of points a metre apart. The build logs that its crossings did
+  not settle.
+- Two-way turn links rise only because a shared crossing splits a two-way turn in two. Those turns go in
+  a later step (two-way roads end at the mouth).
+- The U-turn routes rise because shared points give AutoDrive more places to switch paths. The route
+  check deals with them next.
+
+To compare against an older builder, point `FE_SRC=` at a saved copy of it.
+
+The crossings and U-turns are expected: today's builder ties each turn in on its own and adds no shared
+points. They are what the new builder must bring to 0.
+
 ## The check after a clear
 
 Every clear checks its own work and only reports: it never undoes or refuses anything.
