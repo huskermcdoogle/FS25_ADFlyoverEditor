@@ -107,6 +107,7 @@ P.EDITOR_FILES = {
     "scripts/editor/SweptSim.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
+    "scripts/editor/junction/JxCheckCard.lua",
     "scripts/editor/tools/Appearance.lua",
     "scripts/editor/tools/Convert.lua",
     "scripts/editor/tools/Merge.lua",
