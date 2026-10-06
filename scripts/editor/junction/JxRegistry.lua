@@ -1,7 +1,7 @@
 -- Part of the flyover editor, moved out of FlyoverEditor.lua (docs/editor-modules-spec.md). Prelude.lua
 -- loads it after FlyoverEditor.lua, in the old file's order.
 -- MODSPLIT: HELPERS FROM THE FILES LOADED BEFORE THIS ONE (tools/modsplit/split.py writes this block)
-for _, name in ipairs({ "JUNCTION_FORK_LINK", "JUNCTION_REGISTRY_FILE", "junctionCentroidClusters", "junctionPlacePattern", "junctionVirginSites", "jxHomeIsHere", "jxHomeNow", "jxNetworkMark", "jxSameNetwork", "tryCall" }) do
+for _, name in ipairs({ "JUNCTION_FORK_LINK", "JUNCTION_REGISTRY_FILE", "junctionCentroidClusters", "junctionPlacePattern", "junctionRegistryFolder", "junctionVirginSites", "jxHomeIsHere", "jxHomeNow", "jxNetworkMark", "jxSameNetwork", "tryCall" }) do
     if ADFlyoverEditor.shared == nil or ADFlyoverEditor.shared[name] == nil then
         Logging.error("[FlyoverEditor]: JxRegistry.lua needs %s, which no file loaded before it shares", name)
     end
@@ -10,6 +10,7 @@ local JUNCTION_FORK_LINK = ADFlyoverEditor.shared.JUNCTION_FORK_LINK
 local JUNCTION_REGISTRY_FILE = ADFlyoverEditor.shared.JUNCTION_REGISTRY_FILE
 local junctionCentroidClusters = ADFlyoverEditor.shared.junctionCentroidClusters
 local junctionPlacePattern = ADFlyoverEditor.shared.junctionPlacePattern
+local junctionRegistryFolder = ADFlyoverEditor.shared.junctionRegistryFolder
 local junctionVirginSites = ADFlyoverEditor.shared.junctionVirginSites
 local jxHomeIsHere = ADFlyoverEditor.shared.jxHomeIsHere
 local jxHomeNow = ADFlyoverEditor.shared.jxHomeNow
@@ -905,6 +906,75 @@ function ADFlyoverEditor:updatePlacePreview()
         ok = okCall and res ~= nil, plan = res,
         why = (not okCall) and "it failed - see the log" or why, wired = wired == true,
     }
+end
+
+--- KEPT THROUGH THE GAME'S OWN SAVE. FS25 saves by writing the savegame folder afresh: a file it did
+--- not write during that save is gone afterwards. The junction numbers and split decisions were such
+--- a file (2026-10-06: a save at 17:48 left savegame6 without ADFlyoverEditor_junctions.xml, the next
+--- numbering found no file, and the user's 16 decisions survived only in the game's own backup in
+--- savegameBackup). AutoDrive keeps its route file the way this does: written during the game's save
+--- (ItemSystem.save), into the folder the game is saving.
+---
+--- What is written then: the registry as built in this game, or - when the junction tool has not been
+--- used in this game - the file as it was when the game loaded, held here, so a game saved without
+--- ever opening the tool keeps them too. Read again whenever another game (or folder) is loaded.
+function ADFlyoverEditor:junctionRegistryKeepFile(dt)
+    if g_currentMission == nil then return end
+    self._jxRegFileMs = (self._jxRegFileMs or 1000) + (dt or 0)
+    if self._jxRegFileMs < 1000 then return end
+    self._jxRegFileMs = 0
+    if self._jxRegFileHome ~= nil and jxHomeIsHere(self._jxRegFileHome) then return end
+    local home = jxHomeNow()
+    if home.folder == nil then return end
+    local list = junctionRegistryLoad(home)
+    if list == nil then list = false end
+    self._jxRegFile, self._jxRegFileHome = list, home
+end
+
+function ADFlyoverEditor:junctionRegistryOnGameSave()
+    if g_currentMission == nil or g_server == nil then return end
+    self:junctionRegistryCheckHome()
+    local list, what = nil, nil
+    if self._jxReg ~= nil and self._jxRegHome ~= nil and self._jxRegHome.mission == g_currentMission then
+        list, what = self._jxReg, "as numbered in this game"
+    elseif self._jxRegFile and self._jxRegFileHome ~= nil and self._jxRegFileHome.mission == g_currentMission then
+        list, what = self._jxRegFile, "as read when the game loaded"
+    end
+    if list == nil then return end
+    -- The folder the game is saving now, worked out as AutoDrive works out its own (junctionRegistryFolder).
+    local folder = junctionRegistryFolder()
+    if folder == nil then return end
+    local path = folder .. JUNCTION_REGISTRY_FILE
+    local ok, err = ADFlyoverEditor.junctionRegistryWriteFile(path, list)
+    if not ok then
+        Logging.warning("[FlyoverEditor]: junction - could not write the numbers with the game's save (%s): %s",
+            path, tostring(err))
+        return
+    end
+    if list == self._jxReg then self._jxRegUnsaved = false end
+    local decided = 0
+    for _, f in ipairs(list) do
+        if f.decision ~= nil then decided = decided + 1 end
+    end
+    Logging.info("[FlyoverEditor]: junction - %d junction number(s) and %d split decision(s) written with the game's save (%s): %s",
+        #list, decided, what, path)
+end
+
+-- Into the game's save, once however often the editor files are sourced again; the editor table is
+-- looked up when the game saves, so a re-sourced editor's function is the one called. Never lets a
+-- failure here stop the game's own save.
+if ItemSystem ~= nil and type(ItemSystem.save) == "function" and not ItemSystem.__adFlyoverJunctionsHooked then
+    ItemSystem.__adFlyoverJunctionsHooked = true
+    local gameSave = ItemSystem.save
+    ItemSystem.save = function(...)
+        if ADFlyoverEditor ~= nil and ADFlyoverEditor.junctionRegistryOnGameSave ~= nil then
+            local ok, err = pcall(ADFlyoverEditor.junctionRegistryOnGameSave, ADFlyoverEditor)
+            if not ok then
+                Logging.warning("[FlyoverEditor]: junction - writing the numbers with the game's save failed: %s", tostring(err))
+            end
+        end
+        return gameSave(...)
+    end
 end
 
 -- MODSPLIT: SHARED WITH THE FILES LOADED AFTER THIS ONE (tools/modsplit/split.py writes this block)

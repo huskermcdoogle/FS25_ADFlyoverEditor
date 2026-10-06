@@ -1770,6 +1770,9 @@ function ADFlyoverEditor:update(dt)
     -- Also whether the editor is open or not: junction numbers and split decisions made before this
     -- career was first saved are written as soon as that first save makes the folder.
     self:junctionRegistrySaveWaiting(dt)
+    -- And the file as it was when this game loaded, held so the game's own save can write it back
+    -- (junctionRegistryOnGameSave): FS25 writes the savegame folder afresh, dropping files it did not.
+    self:junctionRegistryKeepFile(dt)
     if not self.active or self.camera == nil or self.cursor == nil then
         return
     end
