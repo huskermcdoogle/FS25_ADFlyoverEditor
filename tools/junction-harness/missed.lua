@@ -66,7 +66,30 @@ do
         if w ~= nil and kept(w) then return false end
         return fn(which, why, whole)
       end
-      debug.setupvalue(E.applyJunctionClear, i, MISSED_KEEP.hook)
+      -- Into every function that holds jxRemove, not only the clear's own: since the editor is split
+      -- into modules (docs/editor-modules-spec.md) each file has its own alias of it, so swapping one
+      -- function's upvalue no longer reaches the calls made from the other files (the tidy, the
+      -- rebuild). Followed from every editor method through the helpers each one holds. In one file
+      -- they all share one upvalue, and this sets it the same as before.
+      local seenFn = {}
+      local function hookAll(f)
+        if seenFn[f] or f == MISSED_KEEP.hook then return end
+        seenFn[f] = true
+        local k = 1
+        while true do
+          local n, v = debug.getupvalue(f, k)
+          if n == nil then break end
+          if n == "jxRemove" and v == fn then
+            debug.setupvalue(f, k, MISSED_KEEP.hook)
+          elseif type(v) == "function" then
+            hookAll(v)
+          end
+          k = k + 1
+        end
+      end
+      for _, f in pairs(E) do
+        if type(f) == "function" then hookAll(f) end
+      end
       break
     end
     i = i + 1

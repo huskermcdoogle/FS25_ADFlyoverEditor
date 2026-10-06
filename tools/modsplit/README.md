@@ -35,6 +35,10 @@ How the move stays safe:
   first.
 - **Today's `do ... end` blocks.** The five that kept the one file under Lua's 200-local limit are unwrapped
   when a cut goes through one, or when the module holding one moves out.
+- **Test tools that swap a helper.** A harness tool that swaps a local helper through `debug.setupvalue`
+  (missed.lua swaps `jxRemove`) reached every caller while they shared one file. After a split each file
+  has its own alias, so the tool must swap it in every function that holds it (missed.lua walks them all
+  since phase 3; caught by the full gate's regmissed, 2026-10-06).
 - **The gate.** It compiles every file and diffs the global names each file reads or writes against the
   base, since a helper that lost its local shows up as a new global. It then runs every offline test,
   base and working tree side by side, in three waves:
