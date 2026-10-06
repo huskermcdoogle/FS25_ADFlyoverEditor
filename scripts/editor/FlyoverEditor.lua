@@ -877,6 +877,12 @@ end
 --- says so itself.
 function ADFlyoverEditor:describeBuild()
     if ADBuildInfo == nil then
+        -- The stamp tools/build_zip.py writes into Prelude.lua (P.BUILD), the one the ARMED line shows.
+        -- ADBuildInfo was the old deploy script's, and nothing writes it now: a packaged build of
+        -- 058d9eb logged "build unknown" here while Prelude had just said which build it was.
+        if ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD ~= nil then
+            return "build " .. tostring(ADFlyoverPrelude.BUILD)
+        end
         return "build unknown (running from a working copy, not a packaged zip)"
     end
     return string.format("build %s%s, %s, \"%s\"",
