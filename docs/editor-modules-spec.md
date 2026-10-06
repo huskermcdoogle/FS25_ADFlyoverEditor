@@ -1,6 +1,6 @@
 # Splitting the editor into modules
 
-Status: draft for review, 2026-10-05. Nothing has moved yet.
+Status: **done**, 2026-10-06 (commits 67b4720 to 75d4594 on junction-rework). See "Result" at the end.
 
 ## In short
 
@@ -213,3 +213,29 @@ The tests are the backstop.
 | a behaviour change hidden by a test that doesn't reach it | the full gate set, twice; the in-game check per phase |
 | merge pain with active branches | the freeze, and porting by function name with the move map |
 | speed | aliases keep helpers local; one table lookup at load time only |
+
+## Result (2026-10-06)
+
+- **The editor is 30 files** (30,081 lines): `FlyoverEditor.lua` is the core alone, 1,985 lines (was
+  29,573), at 17 of 250 working slots (was 194) and far from the 200-name limit. The do ... end blocks are
+  gone. Loaded by Prelude in the old file's order:
+
+  | where | files |
+  |---|---|
+  | `scripts/editor/` | FlyoverEditor.lua (core), Mouse.lua, Draw.lua |
+  | `scripts/editor/tools/` | Menus, Selection, Move, ConnectDelete, TypedEntry, Smooth, Connections, Siding, Ground, Appearance, Convert, Merge, FieldLoop |
+  | `scripts/editor/junction/` | JxCore, JxBuild, JxFind, JxDebug, JxRegistry, JxPlaceCheck, JxPreview, JxSwept, JxTidy, JxRebuild, JxClassify, JxParts, JxCheck, JxCheckCard |
+
+- **Nothing changed in what it does:** the final full gate of 75d4594 against 67b4720 (the editor before
+  the split) passes - all 20 test outputs the same byte for byte, the clear and check stable, no new
+  global names, no load errors. In game: phase 2 (build 466.058d9eb) and phase 3 (build 482.13e65fb) were
+  tried with no errors in the log.
+- **Shared state:** 19 junction locals became fields of `jxState` (phase 1). Helpers cross files through
+  `ADFlyoverEditor.shared` (the MODSPLIT blocks at each file's end and top).
+- **Who did what:** the tools, phase 1, the gates and the checks in this session; the 29 moves of phases
+  2-4 by Fable sub-agents following tools/modsplit/README.md, each through the quick gate, with a full
+  gate here after each run (the last, Menus, was gated and committed here after the sub-agent's session
+  ended). One harness tool needed a fix along the way (missed.lua, a7e52e1).
+- **Adding code now:** put a new helper in the file that uses it. Where two files need it, declare it in
+  the earlier-loading file and add it to that file's MODSPLIT shared block, with an alias in the later
+  file. Never reassign a shared helper; use a table field (like `jxState`).

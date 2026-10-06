@@ -1,7 +1,9 @@
 # Editor split tools
 
 For splitting `scripts/editor/FlyoverEditor.lua` into modules without changing what it does. The plan is
-[docs/editor-modules-spec.md](../../docs/editor-modules-spec.md).
+[docs/editor-modules-spec.md](../../docs/editor-modules-spec.md). **Done 2026-10-06** (30 files; its "Result"
+section). `bundle.py` and `gate.sh` stay useful for any change that must not alter behaviour: a refactor
+gated against the commit before it.
 
 | tool | what it does |
 |---|---|
