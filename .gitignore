@@ -1,2 +1,5 @@
 *.zip
 *.gsp*
+
+# editor split gate runs (tools/modsplit/gate.sh)
+tools/modsplit/out/

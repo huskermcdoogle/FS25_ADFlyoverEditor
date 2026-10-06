@@ -36,8 +36,10 @@ Export the network from a savegame into `graph_data.lua` (git-ignored - it is yo
 
     python export_graph.py "<FS25 profile>/savegame6/AutoDrive_config.xml" graph_data.lua
 
-The harness loads `../../scripts/editor/FlyoverEditor.lua` by default, i.e. the code in
-this checkout. Point it elsewhere with `FE_SRC=...`, at another graph with `GRAPH=...`,
+The harness loads the editor the way the game does (`editor_load.lua`): FlyoverEditor.lua and every
+file Prelude's `P.EDITOR_FILES` lists after it (the modules, once it is split -
+docs/editor-modules-spec.md), from this checkout. Point it at one other file with `FE_SRC=...` (an old
+copy, or a bundle from `tools/modsplit/bundle.py`), at another graph with `GRAPH=...`,
 and at another Lua with `LUA=...` (reg.sh). `RIG_TRAILER=11` matches the design rig.
 `LEAVE=1` is "leave through paths" on - which is how it is usually played; test both.
 
@@ -76,6 +78,11 @@ A build that follows doc 06 scores 0 on all three.
 ## The build regression - run it TWICE
 
     bash regbuild.sh TAG
+
+regbuild.sh, regplace.sh and reg75undo.sh run their junctions side by side, like reg75.sh (`PAR`, one
+worker a junction: `regbuild_one.sh`, `regplace_one.sh`, `reg75undo_one.sh`). The output is in registry
+order, byte for byte what the one-at-a-time loop wrote (checked 2026-10-05); about 80 s instead of 4
+minutes.
 
 Clears and then builds every registry junction (the same list as reg75.sh), and writes one line per
 junction to `regbuildTAG.txt` plus a summary: built, refused, Lua errors, turns laid and refused, and

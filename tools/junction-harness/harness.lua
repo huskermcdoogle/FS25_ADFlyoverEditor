@@ -185,7 +185,7 @@ AutoDrive.FIELD_LOOP_ADAPTIVE_TOLERANCE = 0.01
 AutoDrive.FIELD_LOOP_ADAPTIVE_MIN_SPACING = 1.0
 dofile("../../scripts/editor/OffsetGeometry.lua")
 if os.getenv("RIG_TRAILER") then ADFlyoverSweptPath = { rig = { lookAhead = 8, trailerLength = tonumber(os.getenv("RIG_TRAILER")) } } end
-dofile(os.getenv("FE_SRC") or "../../scripts/editor/FlyoverEditor.lua")
+dofile("editor_load.lua")()
 -- ADOPT=<a debug capture's meta.txt>: run on the settings the game had (replay_session.py sets it), not
 -- the harness's defaults. TURNR=<m>: the card's turn radius, which the clear reads too (the game logs it
 -- on every "junction site locked" line).

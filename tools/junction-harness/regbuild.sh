@@ -11,14 +11,10 @@ L="${LUA:-/c/Program Files (x86)/Lua/5.1/lua.exe}"
 TAG=$1
 REG="${REG:-$HOME/OneDrive/Documents/My Games/FarmingSimulator2025/savegame6/ADFlyoverEditor_junctions.xml}"
 OUT=regbuild${TAG}.txt
-: > "$OUT"
-grep -oE 'n="[0-9]+" x="-?[0-9.]+" z="-?[0-9.]+"' "$REG" | sed -E 's/n="([0-9]+)" x="([^"]+)" z="([^"]+)"/\1 \2 \3/' |
-while read -r n x z; do
-  o=$("$L" dbgbuild.lua "$x" "$z" </dev/null 2>&1)
-  c=$(echo "$o" | grep "^COUNTS" | head -1 | cut -d' ' -f4-)
-  er=$(echo "$o" | grep -ciE "attempt to|stack traceback")
-  printf "j%s | %s | err=%s\n" "$n" "${c:-REFUSED}" "$er" >> "$OUT"
-done
+# one junction a worker (regbuild_one.sh), PAR at a time, written in registry order (par_sites.sh)
+export REG GRAPH FE_SRC REGDIR TERRAIN SHUFFLE LUA CLEARFIRST RIG_TRAILER
+. ./par_sites.sh
+par_sites 1 regbuild_one.sh "$OUT"
 awk -F'|' '
   { s = $2
     if (s ~ /REFUSED/) { r++; next }

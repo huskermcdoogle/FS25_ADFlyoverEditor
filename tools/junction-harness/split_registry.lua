@@ -42,7 +42,7 @@ Logging = {
     error = function(fmt, ...) io.stderr:write("error: " .. string.format(fmt, ...) .. "\n") end,
 }
 AutoDrive = AutoDrive or {}
-dofile(os.getenv("FE_SRC") or "../../scripts/editor/FlyoverEditor.lua")
+dofile("editor_load.lua")()
 local E = ADFlyoverEditor
 
 local list, err = E.junctionRegistryReadFile(inPath)

@@ -1,0 +1,36 @@
+# WHERE EACH MODULE STARTS IN FlyoverEditor.lua (docs/editor-modules-spec.md), in file order.
+# One line a module: a Lua pattern-free regex matched against whole lines of FlyoverEditor.lua, then the
+# file it moves to. A module runs from the comment block holding its first matching line up to the next
+# module's start; FlyoverEditor.lua keeps everything before the first. Each module is one unbroken
+# stretch of today's file, and the modules load in this order, so everything runs in the order it ran.
+# Modules move out from the LAST one backwards (tools/modsplit/move.py): what stays in FlyoverEditor.lua
+# is always the original top of the file.
+^-- Select mode \(TOOL\.NONE\)                              scripts/editor/tools/Menus.lua
+^function ADFlyoverEditor:setTool\(                         scripts/editor/tools/Selection.lua
+^function ADFlyoverEditor:drawNetworkFallback\(             scripts/editor/Draw.lua
+^function ADFlyoverEditor:mouseEvent\(                      scripts/editor/Mouse.lua
+^-- Move, with distance-weighted falloff                    scripts/editor/tools/Move.lua
+^-- Connect / disconnect two existing                       scripts/editor/tools/ConnectDelete.lua
+^-- Typed numeric entry                                     scripts/editor/tools/TypedEntry.lua
+^-- Smooth / normalise a span                               scripts/editor/tools/Smooth.lua
+^-- Name a waypoint \(map marker\)                          scripts/editor/tools/Connections.lua
+^-- Divide - respace a span                                 scripts/editor/tools/Siding.lua
+^-- GROUND$                                                 scripts/editor/tools/Ground.lua
+^-- Junction tool - V1                                      scripts/editor/junction/JxCore.lua
+^-- EVERY CROSSING IS A SHARED POINT                        scripts/editor/junction/JxBuild.lua
+^-- THE VIRGIN FORM OF A JUNCTION                           scripts/editor/junction/JxFind.lua
+^-- DEBUG CAPTURE: THE NETWORK EITHER SIDE                  scripts/editor/junction/JxDebug.lua
+^-- THE PARTS OF A SPLIT JUNCTION, AS THE USER NAMED THEM   scripts/editor/junction/JxRegistry.lua
+^-- THE ROUTE CHECK FOR A PLACED PIECE                      scripts/editor/junction/JxPlaceCheck.lua
+^function ADFlyoverEditor:updateJunctionPreview\(           scripts/editor/junction/JxPreview.lua
+^function ADFlyoverEditor:junctionSweptPredict\(            scripts/editor/junction/JxSwept.lua
+^function ADFlyoverEditor:junctionClick\(                   scripts/editor/junction/JxTidy.lua
+^--- THE SMOOTH TOOL'S REBUILD                              scripts/editor/junction/JxRebuild.lua
+^--- THE SHAPE OF THE WIRED TURNS                           scripts/editor/junction/JxClassify.lua
+^-- THE USER'S NAMES FOR THE PARTS OF A SPLIT JUNCTION      scripts/editor/junction/JxParts.lua
+^--- THE CLEAR CHECKS ITS OWN WORK                          scripts/editor/junction/JxCheck.lua
+^--- WHAT THE NETWORK LOOKS LIKE AROUND A CLEARED JUNCTION  scripts/editor/junction/JxCheckCard.lua
+^-- Appearance: the in-editor SETTINGS                      scripts/editor/tools/Appearance.lua
+^-- Convert a track: priority                               scripts/editor/tools/Convert.lua
+^-- Merge two tracks                                        scripts/editor/tools/Merge.lua
+^-- Field loop, generated at the cursor                     scripts/editor/tools/FieldLoop.lua

@@ -24,11 +24,14 @@ python - "$TMPW" <<'PY'
 import sys, zipfile, subprocess
 w = sys.argv[1]
 z = zipfile.ZipFile(w + "/FS25_ADFlyoverEditor.zip")
-a = z.read("scripts/editor/FlyoverEditor.lua").replace(b"\r\n", b"\n")
-b = subprocess.run(["git", "-C", w, "show", "HEAD:scripts/editor/FlyoverEditor.lua"], capture_output=True).stdout.replace(b"\r\n", b"\n")
-if a != b:
-    print("STOP: the zip's FlyoverEditor.lua is not the commit's"); sys.exit(1)
-print("zip checked: the editor file is the commit's, byte for byte")
+# every editor file (FlyoverEditor.lua and, once it is split, its modules - docs/editor-modules-spec.md)
+names = [n for n in z.namelist() if n.startswith("scripts/editor/") and n.endswith(".lua")]
+for n in names:
+    a = z.read(n).replace(b"\r\n", b"\n")
+    b = subprocess.run(["git", "-C", w, "show", "HEAD:" + n], capture_output=True).stdout.replace(b"\r\n", b"\n")
+    if a != b:
+        print("STOP: the zip's %s is not the commit's" % n); sys.exit(1)
+print("zip checked: all %d editor files are the commit's, byte for byte" % len(names))
 PY
 if [ $DRY = 1 ]; then echo "dry run: built and checked, nothing installed"; exit 0; fi
 if [ "$(running)" = "yes" ]; then echo "FS25 started meanwhile - not installing."; exit 1; fi

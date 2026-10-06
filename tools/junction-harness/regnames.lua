@@ -49,7 +49,7 @@ local function editorOnly()
         error = function(fmt, ...) WARNED[#WARNED + 1] = "ERR " .. string.format(fmt, ...) end,
     }
     AutoDrive = AutoDrive or {}
-    dofile(os.getenv("FE_SRC") or "../../scripts/editor/FlyoverEditor.lua")
+    dofile("editor_load.lua")()
     return ADFlyoverEditor
 end
 
