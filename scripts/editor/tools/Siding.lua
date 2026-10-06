@@ -323,7 +323,12 @@ function ADFlyoverEditor:insertOnSegment(aId, bId, position, dual, flags)
         return nil
     end
     local y = self:resolveHeightAt(position.x, position.z, position.y)
-    local wp = ADFlyoverRecordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false)
+    -- put into a link of AutoDrive's field loop, it is part of that loop: both ends the same field
+    local fieldID = ADFlyoverEditor.fieldOf(ADGraphManager:getWayPointById(aId))
+    if fieldID ~= ADFlyoverEditor.fieldOf(ADGraphManager:getWayPointById(bId)) then
+        fieldID = nil
+    end
+    local wp = ADFlyoverRecordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false, fieldID)
     local newId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
     local newNode = ADGraphManager:getWayPointById(newId)
     local bNode = ADGraphManager:getWayPointById(bId)

@@ -44,10 +44,13 @@ function ADFlyoverEditor:menuConvertSelection(op)
     ADEditorHistory:snapshot("convert selection " .. self.CONVERT_OP_NAMES[op])
     local OP, changed = self.CONVERT_OP, 0
     if op == OP.PRIMARY or op == OP.SECONDARY then
-        local flags = (op == OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        -- only the priority bit: AutoDrive's own marks (map road, field point) stay
         for id in pairs(self.selection) do
-            ADGraphManager:setWayPointFlags(id, flags, false)
-            changed = changed + 1
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                ADGraphManager:setWayPointFlags(id, ADFlyoverEditor.withPriority(wp.flags, op == OP.SECONDARY), false)
+                changed = changed + 1
+            end
         end
     else
         local done = {}
@@ -211,10 +214,13 @@ function ADFlyoverEditor:convertAtCursor()
     local changed = 0
 
     if op == self.CONVERT_OP.SECONDARY or op == self.CONVERT_OP.PRIMARY then
-        local flags = (op == self.CONVERT_OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        -- only the priority bit: AutoDrive's own marks (map road, field point) stay
         for _, id in ipairs(flagIds or ordered) do
-            ADGraphManager:setWayPointFlags(id, flags, false)
-            changed = changed + 1
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                ADGraphManager:setWayPointFlags(id, ADFlyoverEditor.withPriority(wp.flags, op == self.CONVERT_OP.SECONDARY), false)
+                changed = changed + 1
+            end
         end
     else
         if pointPairs == nil then

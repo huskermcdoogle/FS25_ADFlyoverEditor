@@ -272,9 +272,10 @@ function ADFlyoverEditor:menuConvertSpan(op)
     local changed = 0
     if op == self.CONVERT_OP.PRIMARY or op == self.CONVERT_OP.SECONDARY then
         ADEditorHistory:snapshot("convert span priority")
-        local flags = (op == self.CONVERT_OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        -- only the priority bit: AutoDrive's own marks (map road, field point) stay
         for _, id in ipairs(ordered) do
-            ADGraphManager:setWayPointFlags(id, flags, false)
+            local wp = ADGraphManager:getWayPointById(id)
+            ADGraphManager:setWayPointFlags(id, ADFlyoverEditor.withPriority(wp and wp.flags, op == self.CONVERT_OP.SECONDARY), false)
             changed = changed + 1
         end
         ADFlyoverSettings.debugLog("[FlyoverEditor]: span priority -> %s, %d point(s).",

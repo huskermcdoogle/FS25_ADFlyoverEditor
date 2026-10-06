@@ -592,6 +592,10 @@ local function severEnds(aId, bId)
 end
 
 function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
+    -- Every caller (smooth, divide, straighten) takes `flags` from the span's second point, so the
+    -- field number goes with them from the same point: a stretch of AutoDrive's field loop, rebuilt,
+    -- is still that field's loop. Read before anything is removed.
+    local fieldID = ADFlyoverEditor.fieldOf(ADGraphManager:getWayPointById(chainIds[2]))
     -- Rebuild in the direction the span actually ran, not the direction it happened to be walked
     -- in. Reversing both arrays together keeps newPoints aligned with chainIds.
     if not spanRunsForward(chainIds) then
@@ -640,7 +644,7 @@ function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
     for i = 2, #newPoints - 1 do
         local p = newPoints[i]
         local y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z)
-        local wp = ADFlyoverRecordWayPoint(p.x, y, p.z, true, dual, false, previousId, flags, false)
+        local wp = ADFlyoverRecordWayPoint(p.x, y, p.z, true, dual, false, previousId, flags, false, fieldID)
         -- New waypoints are appended, so their ids sit above everything already there and nothing
         -- shifts underneath us for the rest of this loop.
         previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()

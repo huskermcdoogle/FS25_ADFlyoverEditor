@@ -645,3 +645,15 @@ full, and check a fix by whether it moves the thing it was aimed at.
 - `islands.lua CX CZ [R]` - every separate piece of network near a site, with its size
 - `flood.lua SEED ID...` - which points a seed reaches, at several flood limits
 - `dbgisland.lua CX CZ` - shrinks nearby loose pieces to fake debris, then clears
+
+## AutoDrive's field point tags: fieldtags.lua
+
+    lua fieldtags.lua                      # prints one line per check, then "N ok, M failed"
+
+AutoDrive 3.0.1.4 lays a loop round a field from its own editor (Ctrl+Shift+F) and tags each point with a
+flag bit (FLAG_FIELD_POINT, 8) and the field's number (`wp.fieldID`); pressed again, it deletes the points
+carrying both and lays the loop anew. The test runs the real editor code on a few points laid far from the
+network and checks our tools keep those tags: a priority change (Convert, the span menu) keeps every other
+bit; a point that replaces or carries on a field point (smooth, divide, straighten, a point put into a
+link) takes its field number; any other new point (a copy) drops the bit. 16 checks; with the old Convert
+code put back, the two convert checks fail.
