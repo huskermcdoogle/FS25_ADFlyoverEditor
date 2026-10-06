@@ -10093,12 +10093,17 @@ end
 -- around the middle that is always allowed so the box itself is never gated.
 local jxBound, jxBlocked, jxTook, jxFarthest = nil, 0, 0, 0
 local jxWired = 0
-local jxWhy = {}   -- per reason: how many taken, and the farthest of them
+-- THE JUNCTION TOOL'S STATE THAT IS ASSIGNED AGAIN AFTER ITS DECLARATION (docs/editor-modules-spec.md,
+-- phase 1). These were file-level locals. Once the editor is split into modules, a file can't assign
+-- another file's local, and an alias would keep the old value, so each is a field of this one table,
+-- under its old name.
+local jxState = {}
+jxState.jxWhy = {}   -- per reason: how many taken, and the farthest of them
 -- WAS IT ALREADY LOOSE, AND DID WE CUT IT ON PURPOSE. Two things the clear knows exactly, and
 -- between them they say which loose ends are its business. No distance can answer this: a junction
 -- cleared earlier keeps no forks to be recognised by, and its branches sit well inside any radius
 -- wide enough to be useful.
-local jxWasLoose, jxCut, jxExisted = nil, nil, nil
+jxState.jxWasLoose, jxState.jxCut, jxState.jxExisted = nil, nil, nil
 local jxForeignForks   -- defined below, used by jxBegin
 -- WHICH KEPT THROUGH ROAD EACH POINT IS ON, while a clear with through roads kept is running (nil
 -- otherwise): point -> the number of its road in the preview's through routes. The integrity sweep
@@ -10106,7 +10111,7 @@ local jxForeignForks   -- defined below, used by jxBegin
 -- at 16 the crossing points of the two roads already lay 0.06-0.26 m apart, at 30 the respacing
 -- drew two of them to 0.28 m - and each fold let a lane in on one road drive out on the other.
 -- The user's default is that kept roads pass through each other without sharing a point.
-local jxKeptRoad = nil
+jxState.jxKeptRoad = nil
 -- HOW FAR PAST THE BOUND A TURN TAKEN WHOLE MAY REACH: every point of it outside the bound must lie
 -- within this many metres of one of its own points inside. A turn is taken whole so that its ends
 -- go with it (36: ends 13-15 m out, a few metres past the bound), but taking it whole skips the
@@ -10119,7 +10124,7 @@ local JX_WHOLE_PIECE_REACH = 8
 -- joins the road, and the stretch of that road kept for it (junctionTwinTurns, junctionTidyByPaths). The
 -- one remover, jxRemove, refuses them, as the bound refuses a point outside the junction; nil
 -- otherwise. jxTwinHeld counts what it refused.
-local jxTwinKeep, jxTwinHeld = nil, 0
+jxState.jxTwinKeep, jxState.jxTwinHeld = nil, 0
 -- How far before another part's turn the cut lane starts again (or after it, ends): enough road for
 -- a vehicle to be on the lane before it turns off. Metres; less where this part's middle is nearer.
 local JX_TWIN_LEAD = 5
@@ -10144,26 +10149,26 @@ end
 -- the other end of a link, stage = which part of the clear, x/y/z = where the point stood when the
 -- entry was made: where it was laid, where it was removed from, or - for a move - where it stands
 -- AFTER the move (the check replays the moves in order, so each one is measured from the last).
-local jxJournal, jxStage = nil, nil
+jxState.jxJournal, jxState.jxStage = nil, nil
 -- True while the respacing is rebuilding a run, whichever stage called it: the respacing has a reach
 -- of its own (FLYOVER_JUNCTION_RESPACE_LEN), and the tidy calls it too, to smooth a through road.
-local jxInRespace = false
+jxState.jxInRespace = false
 -- The stretch the respacing is rebuilding at the moment: where its points stood, and how far along
 -- its lane from the lane's end it starts. Lets the check tell a stretch running out of the junction
 -- (allowed: it ends on the first point past the edge) from one lying wholly outside it (not).
-local jxRespaceRun = nil
+jxState.jxRespaceRun = nil
 
 local function jxNote(op, a, b, why)
-    if jxJournal == nil or a == nil then return end
-    jxJournal[#jxJournal + 1] = { op = op, a = a, b = b, stage = jxStage or "?", why = why,
-        respace = jxInRespace, run = jxRespaceRun, x = a.x, y = a.y, z = a.z }
+    if jxState.jxJournal == nil or a == nil then return end
+    jxState.jxJournal[#jxState.jxJournal + 1] = { op = op, a = a, b = b, stage = jxState.jxStage or "?", why = why,
+        respace = jxState.jxInRespace, run = jxState.jxRespaceRun, x = a.x, y = a.y, z = a.z }
 end
 
 --- A point the clear has just laid. Nil-safe, so it can follow any creation call unguarded.
 --- The points the current BUILD has created, as a set of point tables (ids shift when stubs are
 --- removed, tables do not). Nil outside a build. Filled here so every way a build adds a point -
 --- laying a turn, splicing a tie-in, sharing a crossing - is counted without each having to remember.
-local jxBuildNew = nil
+jxState.jxBuildNew = nil
 --- Every link that existed when the current build started, as oldLinks[from][to] = true on point
 --- tables. A build can lay a turn straight between two existing points, so "has a new end" is not
 --- the same as "is new". Nil outside a build.
@@ -10171,21 +10176,21 @@ local jxBuildOldLinks = nil
 
 --- The one point every left turn of the current build runs through (see junctionTrackConnector's
 --- left turns through the centre). Made by the first left turn laid, reused by the rest.
-local jxCentreNode = nil
+jxState.jxCentreNode = nil
 --- What each point the current build laid is part of, for the harness's route study: "L90" / "R90"
 --- (a left or right turn of that many degrees), "tie" (a tie-in spliced into a lane), "x" (a shared
 --- crossing). jxLayLabel is the label of the turn being laid at the moment. Report only.
-local jxNodeLabel, jxLayLabel = nil, nil
+jxState.jxNodeLabel, jxState.jxLayLabel = nil, nil
 --- The same for each LINK the build laid, jxLinkLabel[from][to] = label: a link spliced at a crossing keeps
 --- the label of the link it was cut from, so the study can tell which turn a driver is on. Report only.
-local jxLinkLabel = nil
-local jxLaySeq = 0   -- numbers each turn of a build, so two turns of the same shape are told apart
+jxState.jxLinkLabel = nil
+jxState.jxLaySeq = 0   -- numbers each turn of a build, so two turns of the same shape are told apart
 
 local function jxBuildBegin()
-    jxBuildNew, jxBuildOldLinks = {}, {}
-    jxCentreNode = nil
-    jxNodeLabel, jxLayLabel, jxLinkLabel = {}, nil, {}
-    jxLaySeq = 0
+    jxState.jxBuildNew, jxBuildOldLinks = {}, {}
+    jxState.jxCentreNode = nil
+    jxState.jxNodeLabel, jxState.jxLayLabel, jxState.jxLinkLabel = {}, nil, {}
+    jxState.jxLaySeq = 0
     for _, a in pairs(ADGraphManager:getWayPoints()) do
         if a ~= nil and a.id ~= nil and #(a.out or {}) > 0 then
             local s = {}
@@ -10199,8 +10204,8 @@ local function jxBuildBegin()
 end
 
 local function jxBuildEnd()
-    jxBuildNew, jxBuildOldLinks, jxCentreNode = nil, nil, nil
-    jxNodeLabel, jxLayLabel, jxLinkLabel = nil, nil, nil
+    jxState.jxBuildNew, jxBuildOldLinks, jxState.jxCentreNode = nil, nil, nil
+    jxState.jxNodeLabel, jxState.jxLayLabel, jxState.jxLinkLabel = nil, nil, nil
 end
 
 --- "L90" / "R45" for a connector: which way it turns and by how much, from its first and last legs.
@@ -10224,8 +10229,8 @@ end
 
 local function jxNoteAdded(w)
     if w ~= nil then jxNote("add", w) end
-    if w ~= nil and jxBuildNew ~= nil then jxBuildNew[w] = true end
-    if w ~= nil and jxNodeLabel ~= nil and jxNodeLabel[w] == nil then jxNodeLabel[w] = jxLayLabel or "tie" end
+    if w ~= nil and jxState.jxBuildNew ~= nil then jxState.jxBuildNew[w] = true end
+    if w ~= nil and jxState.jxNodeLabel ~= nil and jxState.jxNodeLabel[w] == nil then jxState.jxNodeLabel[w] = jxState.jxLayLabel or "tie" end
 end
 
 --- A point the clear has just moved, recorded where it now stands.
@@ -10239,8 +10244,8 @@ end
 --- not piled into it until the next clear resets it. Memory only: nothing reads the record outside
 --- a clear's own check.
 function ADFlyoverEditor:junctionCheckRecordOff()
-    if jxJournal ~= nil then
-        jxJournal, jxStage, jxInRespace, jxRespaceRun = nil, nil, false, nil
+    if jxState.jxJournal ~= nil then
+        jxState.jxJournal, jxState.jxStage, jxState.jxInRespace, jxState.jxRespaceRun = nil, nil, false, nil
     end
 end
 
@@ -10309,23 +10314,23 @@ end
 
 --- Mark a point as having been cut FROM something on purpose. Rejoining it would undo the work.
 local function jxMarkCut(w)
-    if jxCut ~= nil and w ~= nil then jxCut[w] = true end
+    if jxState.jxCut ~= nil and w ~= nil then jxState.jxCut[w] = true end
 end
 
 --- Begin a clear: nothing may be deleted outside `site` until jxEnd.
 local function jxBegin(site)
     jxBound, jxBlocked, jxTook, jxFarthest, jxWired = site, 0, 0, 0, 0
-    jxTwinKeep, jxTwinHeld = nil, 0
-    jxWhy = {}
+    jxState.jxTwinKeep, jxState.jxTwinHeld = nil, 0
+    jxState.jxWhy = {}
     jxForeignForks(site)
     -- Everything already hanging loose before this clear touched anything. Whatever left these ends
     -- this way - a clear done an hour ago, a route half drawn by hand - it was not us, so it is not
     -- ours to put back.
-    jxWasLoose, jxCut, jxExisted = {}, {}, {}
+    jxState.jxWasLoose, jxState.jxCut, jxState.jxExisted = {}, {}, {}
     for _, w in pairs(ADGraphManager:getWayPoints()) do
         if w ~= nil then
-            jxExisted[w] = true
-            if jxLoose(w) then jxWasLoose[w] = true end
+            jxState.jxExisted[w] = true
+            if jxLoose(w) then jxState.jxWasLoose[w] = true end
         end
     end
 end
@@ -10342,7 +10347,7 @@ end
 local function jxEnd()
     local held, took, far = jxBlocked, jxTook, jxFarthest
     jxBound, jxBlocked, jxTook, jxFarthest = nil, 0, 0, 0
-    jxTwinKeep = nil
+    jxState.jxTwinKeep = nil
     return held, took, far
 end
 
@@ -10387,7 +10392,7 @@ local function jxInSite(x, z) return jxMayDelete(x, z) end
 --- Did THIS clear cut this point off from something? The gate marks every point it severs on
 --- purpose, so anything else lying loose nearby was already like that when the clear began.
 local function jxWasCutByUs(w)
-    return jxCut ~= nil and w ~= nil and jxCut[w] == true
+    return jxState.jxCut ~= nil and w ~= nil and jxState.jxCut[w] == true
 end
 
 --- The one way a clear removes a waypoint. Takes an id or the node itself; the node is safer, since
@@ -10403,18 +10408,18 @@ local function jxRemove(which, why, whole)
         return false
     end
     -- Another part's turn left working, and the road it needs (jxTwinKeep): never, whole or not.
-    if jxTwinKeep ~= nil and jxTwinKeep[w] then
-        jxTwinHeld = jxTwinHeld + 1
+    if jxState.jxTwinKeep ~= nil and jxState.jxTwinKeep[w] then
+        jxState.jxTwinHeld = jxState.jxTwinHeld + 1
         return false
     end
     local site = jxBound
     if site ~= nil then
         local d = math.sqrt((w.x - site.x) ^ 2 + (w.z - site.z) ^ 2)
         if d > jxFarthest then jxFarthest = d end
-        local e = jxWhy[why or "?"] or { n = 0, far = 0 }
+        local e = jxState.jxWhy[why or "?"] or { n = 0, far = 0 }
         e.n = e.n + 1
         if d > e.far then e.far = d end
-        jxWhy[why or "?"] = e
+        jxState.jxWhy[why or "?"] = e
     end
     jxTook = jxTook + 1
     -- Whatever this point was joined to is now an end, and on purpose.
@@ -10509,12 +10514,12 @@ local function junctionConnect(a, b, dual)
     if a == nil or b == nil or a.id == b.id then return end
     if not table.contains(a.out, b.id) then table.insert(a.out, b.id) jxNote("out+", a, b) end
     if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) jxNote("in+", b, a) end
-    if jxLinkLabel ~= nil and jxLayLabel ~= nil and jxLayLabel ~= "x" then
-        jxLinkLabel[a] = jxLinkLabel[a] or {}
-        jxLinkLabel[a][b] = jxLayLabel
+    if jxState.jxLinkLabel ~= nil and jxState.jxLayLabel ~= nil and jxState.jxLayLabel ~= "x" then
+        jxState.jxLinkLabel[a] = jxState.jxLinkLabel[a] or {}
+        jxState.jxLinkLabel[a][b] = jxState.jxLayLabel
         if dual then
-            jxLinkLabel[b] = jxLinkLabel[b] or {}
-            jxLinkLabel[b][a] = jxLayLabel
+            jxState.jxLinkLabel[b] = jxState.jxLinkLabel[b] or {}
+            jxState.jxLinkLabel[b][a] = jxState.jxLayLabel
         end
     end
     if dual then
@@ -10529,7 +10534,7 @@ local function junctionDisconnect(a, b)
     jxMarkCut(a)
     jxMarkCut(b)
     -- Recorded only where there was something to remove, so the record says what changed.
-    if jxJournal ~= nil then
+    if jxState.jxJournal ~= nil then
         if table.contains(a.out, b.id) then jxNote("out-", a, b) end
         if table.contains(b.incoming, a.id) then jxNote("in-", b, a) end
         if table.contains(b.out, a.id) then jxNote("out-", b, a) end
@@ -10539,9 +10544,9 @@ local function junctionDisconnect(a, b)
     table.removeValue(b.incoming, a.id)
     table.removeValue(b.out, a.id)
     table.removeValue(a.incoming, b.id)
-    if jxLinkLabel ~= nil then
-        if jxLinkLabel[a] ~= nil then jxLinkLabel[a][b] = nil end
-        if jxLinkLabel[b] ~= nil then jxLinkLabel[b][a] = nil end
+    if jxState.jxLinkLabel ~= nil then
+        if jxState.jxLinkLabel[a] ~= nil then jxState.jxLinkLabel[a][b] = nil end
+        if jxState.jxLinkLabel[b] ~= nil then jxState.jxLinkLabel[b][a] = nil end
     end
 end
 
@@ -10600,15 +10605,15 @@ local function junctionLayChain(NA, points, NB, dual, flags)
         -- A left turn's centre point is the SAME point for every left turn of this build: that one
         -- shared point is what makes AutoDrive take left turns one at a time, and the 90 degrees
         -- between their headings there is what stops it hopping from one to another.
-        if p.centre and jxCentreNode ~= nil and jxCentreNode.id ~= nil
-            and ADGraphManager:getWayPointById(jxCentreNode.id) == jxCentreNode then
-            wp = jxCentreNode
+        if p.centre and jxState.jxCentreNode ~= nil and jxState.jxCentreNode.id ~= nil
+            and ADGraphManager:getWayPointById(jxState.jxCentreNode.id) == jxState.jxCentreNode then
+            wp = jxState.jxCentreNode
         else
             wp = ADFlyoverRecordWayPoint(p.x, p.y, p.z, false, false, false, 0,
                 flags or AutoDrive.FLAG_NONE, false)
             jxNoteAdded(wp)
             if wp == nil then return false end
-            if p.centre and jxBuildNew ~= nil then jxCentreNode = wp end
+            if p.centre and jxState.jxBuildNew ~= nil then jxState.jxCentreNode = wp end
         end
         junctionConnect(prev, wp, dual)
         prev = wp
@@ -10629,7 +10634,7 @@ end
 --   * One crossing is resolved at a time and the search starts again, since every splice changes the
 --     links around it.
 -- Returns how many crossings it joined.
-local jxShallowJoins = 0
+jxState.jxShallowJoins = 0
 
 -- SQUARE UP A SHALLOW CROSSING. AutoDrive refuses to switch paths at a shared point only where the
 -- bend is over 80 degrees, so two paths crossing at 55 degrees let a driver hop from one to the other.
@@ -10638,7 +10643,7 @@ local jxShallowJoins = 0
 -- path counts both ways round, so it must sit near 90 from both sides). The line moves well under a
 -- metre; road lanes are never bent, since only a path this build laid comes here.
 -- sq = { p, N, q, dual = our path two-way, vx, vz = the crossed path's direction, otherDual }
-local jxSquaredJoins = 0
+jxState.jxSquaredJoins = 0
 -- Points the squaring made or moved this build. They never move (again): a moved point's other link can
 -- cross something new, and moving the next one along would walk a chain of moves across the junction.
 local jxSquareMade = {}
@@ -10649,7 +10654,7 @@ local jxSlid = {}
 --- a two-way link to each of the same two neighbours). Such a point can move without touching anything
 --- but its own path.
 local function jxPlainOurs(s)
-    if jxBuildNew == nil or not jxBuildNew[s] or s == jxCentreNode or jxSquareMade[s] or jxSlid[s] then return false end
+    if jxState.jxBuildNew == nil or not jxState.jxBuildNew[s] or s == jxState.jxCentreNode or jxSquareMade[s] or jxSlid[s] then return false end
     local nb = {}
     for _, id in ipairs(s.out or {}) do nb[id] = true end
     for _, id in ipairs(s.incoming or {}) do nb[id] = true end
@@ -10715,14 +10720,14 @@ local function junctionSquareUp(sq)
     local sx, sz = -vz, vx
     if sx * ux + sz * uz < 0 then sx, sz = -sx, -sz end
     local flags = N.flags or AutoDrive.FLAG_NONE
-    if jxBuildNew[p] then flags = p.flags elseif jxBuildNew[q] then flags = q.flags end
+    if jxState.jxBuildNew[p] then flags = p.flags elseif jxState.jxBuildNew[q] then flags = q.flags end
     local label = nil
-    if jxLinkLabel ~= nil then label = (jxLinkLabel[p] or {})[N] or (jxLinkLabel[N] or {})[q] end
+    if jxState.jxLinkLabel ~= nil then label = (jxState.jxLinkLabel[p] or {})[N] or (jxState.jxLinkLabel[N] or {})[q] end
     local bent = false
     -- A point of our own path with nothing else joined to it: one link each way (both to the same two
     -- neighbours when the path is two-way). Such a point can simply move.
     local function plain(s)
-        if not jxBuildNew[s] or s == jxCentreNode or jxSquareMade[s] or jxSquareMade[N] then return false end
+        if not jxState.jxBuildNew[s] or s == jxState.jxCentreNode or jxSquareMade[s] or jxSquareMade[N] then return false end
         local nb = {}
         for _, id in ipairs(s.out or {}) do nb[id] = true end
         for _, id in ipairs(s.incoming or {}) do nb[id] = true end
@@ -10745,9 +10750,9 @@ local function junctionSquareUp(sq)
         end
         local wp = ADFlyoverRecordWayPoint(N.x + sign * d * sx, N.y + (s.y - N.y) * (d / ds),
             N.z + sign * d * sz, false, false, false, 0, flags or AutoDrive.FLAG_NONE, false)
-        jxLayLabel = label
+        jxState.jxLayLabel = label
         jxNoteAdded(wp)
-        if wp == nil then jxLayLabel = nil return end
+        if wp == nil then jxState.jxLayLabel = nil return end
         jxSquareMade[wp] = true
         if sign < 0 then
             junctionDisconnect(s, N)
@@ -10758,7 +10763,7 @@ local function junctionSquareUp(sq)
             junctionConnect(N, wp, sq.dual)
             junctionConnect(wp, s, sq.dual)
         end
-        jxLayLabel = nil
+        jxState.jxLayLabel = nil
         bent = true
     end
     bendSide(p, -1)
@@ -10767,9 +10772,9 @@ local function junctionSquareUp(sq)
 end
 
 local function junctionShareCrossings(cx, cz, reach)
-    if jxBuildNew == nil then return 0 end
-    jxShallowJoins = 0
-    jxSquaredJoins = 0
+    if jxState.jxBuildNew == nil then return 0 end
+    jxState.jxShallowJoins = 0
+    jxState.jxSquaredJoins = 0
     jxSquareMade = {}
     jxSlid = {}
     -- EDGE only keeps out crossings AT a link's end (two links meeting at a point already share it);
@@ -10779,7 +10784,7 @@ local function junctionShareCrossings(cx, cz, reach)
     -- turn's tie-in can land well up a road), plus a margin for the links running on from there.
     local R2 = (reach + 15) ^ 2
     local minX, maxX, minZ, maxZ = cx, cx, cz, cz
-    for w in pairs(jxBuildNew) do
+    for w in pairs(jxState.jxBuildNew) do
         if w.x ~= nil then
             minX, maxX = math.min(minX, w.x), math.max(maxX, w.x)
             minZ, maxZ = math.min(minZ, w.z), math.max(maxZ, w.z)
@@ -10791,12 +10796,12 @@ local function junctionShareCrossings(cx, cz, reach)
             or (w.x >= minX and w.x <= maxX and w.z >= minZ and w.z <= maxZ)
     end
     local function splice(a, b, dual, N)
-        local was = jxLayLabel
-        jxLayLabel = jxLinkLabel ~= nil and ((jxLinkLabel[a] or {})[b] or (jxLinkLabel[b] or {})[a]) or nil
+        local was = jxState.jxLayLabel
+        jxState.jxLayLabel = jxState.jxLinkLabel ~= nil and ((jxState.jxLinkLabel[a] or {})[b] or (jxState.jxLinkLabel[b] or {})[a]) or nil
         junctionDisconnect(a, b)
         junctionConnect(a, N, dual)
         junctionConnect(N, b, dual)
-        jxLayLabel = was
+        jxState.jxLayLabel = was
     end
     local joined = 0
     -- A pair of links met before is not joined again: in a tangle of points a metre apart, running one
@@ -10876,7 +10881,7 @@ local function junctionShareCrossings(cx, cz, reach)
                 local ang = math.deg(math.acos(math.max(-1, math.min(1, (ux * vx + uz * vz) / (nu * nv)))))
                 -- A two-way link runs both ways, so either direction can make the shallow side.
                 if ang <= 80 or ((L1.dual or L2.dual) and ang >= 100) then
-                    jxShallowJoins = (jxShallowJoins or 0) + 1
+                    jxState.jxShallowJoins = (jxState.jxShallowJoins or 0) + 1
                 end
             end
         end
@@ -10940,9 +10945,9 @@ local function junctionShareCrossings(cx, cz, reach)
             local road = L2.new and L1 or L2
             N = ADFlyoverRecordWayPoint(found.x, found.y, found.z, false, false, false, 0,
                 road.a.flags or AutoDrive.FLAG_NONE, false)
-            jxLayLabel = "x"
+            jxState.jxLayLabel = "x"
             jxNoteAdded(N)
-            jxLayLabel = nil
+            jxState.jxLayLabel = nil
             if N == nil then break end
             splice(L1.a, L1.b, L1.dual, N)
             splice(L2.a, L2.b, L2.dual, N)
@@ -10952,7 +10957,7 @@ local function junctionShareCrossings(cx, cz, reach)
         -- OFF by default: once the shared point slides instead of snapping, it saved 1 extra route of 18 and
         -- put 20 sharp bends (12 or 3 km/h) into our turns (offline, 2026-10-02).
         if sq ~= nil and AutoDrive.FLYOVER_JUNCTION_SQUARE_CROSSINGS == true then
-            if junctionSquareUp(sq) then jxSquaredJoins = jxSquaredJoins + 1 end
+            if junctionSquareUp(sq) then jxState.jxSquaredJoins = jxState.jxSquaredJoins + 1 end
         end
         joined = joined + 1
     end
@@ -11515,8 +11520,8 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     -- 4. LAYING.
     local turns = 0
     local function label(k)
-        jxLaySeq = jxLaySeq + 1
-        jxLayLabel = k .. "#" .. jxLaySeq
+        jxState.jxLaySeq = jxState.jxLaySeq + 1
+        jxState.jxLayLabel = k .. "#" .. jxState.jxLaySeq
     end
     local function lay(A, pts, B, k)
         if A == nil or B == nil or A == B then return false end
@@ -11524,7 +11529,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         local ok, laid = tryCall("junction pattern lay", function()
             return junctionLayChain(A, pts, B, false, B.flags or AutoDrive.FLAG_NONE)
         end)
-        jxLayLabel = nil
+        jxState.jxLayLabel = nil
         if ok and laid == true then turns = turns + 1 return true end
         return false
     end
@@ -11548,9 +11553,9 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         local cxw, czw = W(0, 0)
         local O = ADFlyoverRecordWayPoint(cxw, groundY(cxw, czw, y), czw, false, false, false, 0,
             flags or AutoDrive.FLAG_NONE, false)
-        jxLayLabel = "centre"
+        jxState.jxLayLabel = "centre"
         jxNoteAdded(O)
-        jxLayLabel = nil
+        jxState.jxLayLabel = nil
         return O
     end
 
@@ -11578,7 +11583,7 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         -- The spokes: every left turn goes corner -> centre -> corner, so each spoke runs both ways.
         label("L-spokes")
         for k = 0, 3 do junctionConnect(O, cornerNode[k], true) end
-        jxLayLabel = nil
+        jxState.jxLayLabel = nil
         turns = turns + 4
         for k = 0, 3 do
             local ax, az, bx, bz = cutAt(k)
@@ -11604,12 +11609,12 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         junctionConnect(n.n12, O, false)
         junctionConnect(O, n.n2, false)
         junctionConnect(n.n2, n.n5, false)
-        jxLayLabel = nil
+        jxState.jxLayLabel = nil
         label("L-out")
         junctionConnect(n.n8, n.n9, false)
         junctionConnect(n.n9, O, false)
         junctionConnect(O, n.n13, false)
-        jxLayLabel = nil
+        jxState.jxLayLabel = nil
         turns = turns + 2
     else
         for _, turn in ipairs(smoothTurns()) do
@@ -11908,11 +11913,11 @@ local function junctionPlacePlain(cx, cz, dry)
             end
         end
         if node[n] == nil then
-            jxLayLabel = "plain"
+            jxState.jxLayLabel = "plain"
             local N = ADFlyoverRecordWayPoint(px, jxpGroundY(px, pz, best.y), pz, false, false, false, 0,
                 best.l.a.flags or AutoDrive.FLAG_NONE, false)
             jxNoteAdded(N)
-            jxLayLabel = nil
+            jxState.jxLayLabel = nil
             if N == nil then return nil, "could not add a point of the piece" end
             node[n] = N
             if isArmEnd(p) then loose[#loose + 1] = { x = px, z = pz, node = N, n = n } end
@@ -11927,10 +11932,10 @@ local function junctionPlacePlain(cx, cz, dry)
         local onSameLane = false
         for k in pairs(onRole[a]) do if onRole[b][k] then onSameLane = true end end
         if not onSameLane and not (dual and a > b) and node[a] ~= node[b] then
-            jxLaySeq = jxLaySeq + 1
-            jxLayLabel = "plain#" .. jxLaySeq
+            jxState.jxLaySeq = jxState.jxLaySeq + 1
+            jxState.jxLayLabel = "plain#" .. jxState.jxLaySeq
             junctionConnect(node[a], node[b], dual)
-            jxLayLabel = nil
+            jxState.jxLayLabel = nil
             laid = laid + 1
         end
     end
@@ -11938,11 +11943,11 @@ local function junctionPlacePlain(cx, cz, dry)
         local l6, l7 = nil, nil
         for i, e in ipairs(loose) do if e.n == 6 then l6 = i elseif e.n == 7 then l7 = i end end
         if twoWayEnd ~= nil and l6 ~= nil and l7 ~= nil then
-            jxLaySeq = jxLaySeq + 1
-            jxLayLabel = "plain#" .. jxLaySeq
+            jxState.jxLaySeq = jxState.jxLaySeq + 1
+            jxState.jxLayLabel = "plain#" .. jxState.jxLaySeq
             junctionConnect(node[6], twoWayEnd, false)
             junctionConnect(twoWayEnd, node[7], false)
-            jxLayLabel = nil
+            jxState.jxLayLabel = nil
             laid = laid + 2
             table.remove(loose, math.max(l6, l7))
             table.remove(loose, math.min(l6, l7))
@@ -14068,8 +14073,8 @@ function ADFlyoverEditor:applyJunctionPlace()
         turns = placed and res.turns or 0, shared = shared, why = (not placed) and tostring(why) or nil,
         loose = placed and #(res.loose or {}) or 0, fitWhy = placed and res.fitWhy or nil,
         x = jp.cx, z = jp.cz }
-    self.junctionLastLinkLabels = jxLinkLabel
-    self.junctionLastNodeLabels = jxNodeLabel
+    self.junctionLastLinkLabels = jxState.jxLinkLabel
+    self.junctionLastNodeLabels = jxState.jxNodeLabel
     jxBuildEnd()
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -19886,7 +19891,7 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
             for j = want + 1, #interior do
                 if live(interior[j]) and not jxMayDelete(interior[j].x, interior[j].z) then return end
                 -- nor a point kept for another part's turn (jxTwinKeep): jxRemove would refuse it too
-                if jxTwinKeep ~= nil and jxTwinKeep[interior[j]] then return end
+                if jxState.jxTwinKeep ~= nil and jxState.jxTwinKeep[interior[j]] then return end
             end
         end
 
@@ -19976,18 +19981,18 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
                             -- For the check after a clear, and nothing else: which stretch this
                             -- rebuild works on and how far along the lane from its end, so the check
                             -- can hold the respacing to its own reach. Read only by the check.
-                            if jxJournal ~= nil then
+                            if jxState.jxJournal ~= nil then
                                 local along = 0
                                 for i = a, n - 1 do along = along + gap(seq[i], seq[i + 1]) end
                                 local pts = {}
                                 for i, q in ipairs(nodes) do pts[i] = { x = q.x, z = q.z } end
-                                jxRespaceRun = { pts = pts, along = along, firstGap = gap(seq[a], seq[a + 1]),
+                                jxState.jxRespaceRun = { pts = pts, along = along, firstGap = gap(seq[a], seq[a + 1]),
                                                  cap = lane.len or LEN }
                             end
-                            jxInRespace = true
+                            jxState.jxInRespace = true
                             tryCall("junction respace run", respaceRun, nodes)
-                            jxInRespace = false
-                            jxRespaceRun = nil
+                            jxState.jxInRespace = false
+                            jxState.jxRespaceRun = nil
                         end
                     end
                     a = b
@@ -20436,8 +20441,8 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 Logging.info("[FlyoverEditor]: junction - another part's turn leaves or joins the lane at %.1f, %.1f, in or beside this box: the lane is kept from there on away from this part's middle, and for %.1f m towards it; it is cut there instead of at the box edge.",
                     F.x, F.z, acc)
             end
-            if jxTwinKeep ~= nil then
-                for n in pairs(spareSet) do jxTwinKeep[n] = true end
+            if jxState.jxTwinKeep ~= nil then
+                for n in pairs(spareSet) do jxState.jxTwinKeep[n] = true end
             end
         end
         -- Inside the box for the cut: not a point kept for another part's turn (spareSet).
@@ -21337,9 +21342,9 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                 -- adrift when something else went. Both were taken; at a close pair the second click
                 -- ate three points of the first junction's road, 31 m away. A scrap is this clear's
                 -- leftover only if this clear severed one of its points.
-                if small and jxWasLoose ~= nil then
+                if small and jxState.jxWasLoose ~= nil then
                     for _, w in ipairs(comp) do
-                        if jxWasLoose[w] then small = false break end
+                        if jxState.jxWasLoose[w] then small = false break end
                     end
                 end
                 if small then
@@ -21513,8 +21518,8 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
                 -- was folded into it, and the turn's link on into the other road was kept with it.
                 -- A true double of a lane point is wired to it or to its neighbours, and still folds.
                 local twoRoads = false
-                if jxKeptRoad ~= nil and (jxKeptRoad[a] ~= nil or jxKeptRoad[b] ~= nil)
-                    and jxKeptRoad[a] ~= jxKeptRoad[b] then
+                if jxState.jxKeptRoad ~= nil and (jxState.jxKeptRoad[a] ~= nil or jxState.jxKeptRoad[b] ~= nil)
+                    and jxState.jxKeptRoad[a] ~= jxState.jxKeptRoad[b] then
                     local nbA = {}
                     for _, id in ipairs(a.out or {}) do nbA[id] = true end
                     for _, id in ipairs(a.incoming or {}) do nbA[id] = true end
@@ -21647,14 +21652,14 @@ function ADFlyoverEditor:networkIntegritySweep(cx, cz, reach, dry)
                     -- The clear knows all three exactly. Distance never could: a cleared junction
                     -- keeps no forks to be recognised by, and its branches sit well inside any radius
                     -- wide enough to be worth having. Three goes at a radius, three failures.
-                    local wasLoose = (jxWasLoose ~= nil) and jxWasLoose[w] or false
-                    local cutOnPurpose = (jxCut ~= nil) and jxCut[w] or false
+                    local wasLoose = (jxState.jxWasLoose ~= nil) and jxState.jxWasLoose[w] or false
+                    local cutOnPurpose = (jxState.jxCut ~= nil) and jxState.jxCut[w] or false
                     -- A POINT THIS CLEAR LAID ITSELF is a lane end on purpose - the tidy ran the lane
                     -- out to the box edge and stopped it there. It was in neither set, being new, so
                     -- it read as accidental damage and was joined to the nearest road: a side lane
                     -- wired into the through lane inside the box, a connector left by the very pass
                     -- meant to catch them.
-                    local laidByUs = (jxExisted ~= nil) and not jxExisted[w] or false
+                    local laidByUs = (jxState.jxExisted ~= nil) and not jxState.jxExisted[w] or false
                     if laidByUs then cutOnPurpose = true end
                     if wasLoose or cutOnPurpose then
                         rep.unjoined = (rep.unjoined or 0) + 1
@@ -27280,7 +27285,7 @@ function ADFlyoverEditor:junctionTwinTurns(jp)
         if p.x ~= q.x then return p.x < q.x end
         return p.z < q.z
     end)
-    jxTwinKeep = keepSet
+    jxState.jxTwinKeep = keepSet
     for _, m in ipairs(moves) do
         local a, b = m.pts[1], m.pts[#m.pts]
         Logging.info("[FlyoverEditor]: junction - %s's turn from %.1f, %.1f to %.1f, %.1f runs in this part's area: left working, with the road it leaves and joins.",
@@ -27321,7 +27326,7 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     -- From here until jxEnd, nothing is deleted outside the junction that was selected. See jxRemove.
     jxBegin(self.junctionSite)
-    jxKeptRoad = jxKeptRoadsOf(jp, self.junctionLeaveThrough ~= false)
+    jxState.jxKeptRoad = jxKeptRoadsOf(jp, self.junctionLeaveThrough ~= false)
     -- THE NETWORK BEFORE, AND THE RECORD OF WHAT THIS CLEAR DOES TO IT, for the check at the end.
     -- Taken here, before the cleaning, because the cleaning changes the network too. Reading only:
     -- nothing below decides anything from either. Read under tryCall, like every other step of the
@@ -27340,7 +27345,7 @@ function ADFlyoverEditor:applyJunctionClear()
         chk.before, chk.failed = nil, "the network before the clear could not be read"
     end
     tryCall("junction check parts", function() chk.meetings = self:junctionCheckMeetings(jp, lockedAt) end)
-    jxJournal, jxStage = {}, "cleaning the site"
+    jxState.jxJournal, jxState.jxStage = {}, "cleaning the site"
 
     -- The network as it stands, before a single point moves, when capture is on. Nil otherwise, and
     -- every debugCapture call below is a no-op on nil.
@@ -27381,7 +27386,7 @@ function ADFlyoverEditor:applyJunctionClear()
             -- with nothing leading into it, so one pass is never enough. Three is, and anything that
             -- will not settle by then is left alone rather than chased.
             for _ = 1, 3 do
-                jxStage = "cleaning the site"
+                jxState.jxStage = "cleaning the site"
                 local ok, r = pcall(function()
                     return self:networkIntegritySweep(c0.x, c0.z, 45, false)
                 end)
@@ -27416,7 +27421,7 @@ function ADFlyoverEditor:applyJunctionClear()
             -- spec put the box first and the smoothing after; measuring unsmoothed lanes is exactly
             -- what has been moving the box, so it is done the other way round.
             local rsM, rsR, rsC = 0, 0, 0
-            jxStage = "smoothing the lanes first"
+            jxState.jxStage = "smoothing the lanes first"
             tryCall("junction smooth parent lanes", function()
                 rsM, rsR, rsC = self:junctionRespaceApproaches(jp)
             end)
@@ -27437,7 +27442,7 @@ function ADFlyoverEditor:applyJunctionClear()
                 -- to reconsider whether to work on it, so a refusal here keeps what we already had.
                 local keep = jp
                 self.junctionPreviewKey = nil
-                jxStage = "reading the site again"
+                jxState.jxStage = "reading the site again"
                 tryCall("junction preview after cleaning", function() self:updateJunctionPreview() end)
                 jp = self.junctionPreview
                 if jp == nil then
@@ -27466,13 +27471,13 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     -- The cleaning changed the site: that is a step to undo already, even if nothing is left to clear.
     -- Read off the clear's own record of its edits, which every change the cleaning makes goes into.
-    if jxJournal ~= nil and #jxJournal > 0 then keepUndo() end
+    if jxState.jxJournal ~= nil and #jxState.jxJournal > 0 then keepUndo() end
     -- The preview the rest of the clear works from, and its through roads as they lie now, before
     -- any of them is cut, smoothed or respaced - what the check holds the kept roads up against.
     -- Under tryCall for the same reason as the network before: without these lines the check would
     -- take every kept road for a join, so it says it could not run instead, and the clear goes on.
     chk.jp = jp
-    jxKeptRoad = jxKeptRoadsOf(jp, self.junctionLeaveThrough ~= false)
+    jxState.jxKeptRoad = jxKeptRoadsOf(jp, self.junctionLeaveThrough ~= false)
     -- ANOTHER PART'S TURNS IN THIS PART'S AREA, read now, before anything is cut: they are left
     -- working (junctionTwinTurns). Nil unless the lock is on a part of a split the user saved.
     jp._twin = nil
@@ -27525,10 +27530,10 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     if nodeCount == 0 and #linksToSever == 0 then
         Logging.info("[FlyoverEditor]: junction - nothing here for this site to clear.")
-        jxTwinKeep = nil
+        jxState.jxTwinKeep = nil
         -- The cleaning above may still have changed the site, so its work is checked all the same.
-        chk.journal = jxJournal
-        jxJournal, jxStage, jxKeptRoad = nil, nil, nil
+        chk.journal = jxState.jxJournal
+        jxState.jxJournal, jxState.jxStage, jxState.jxKeptRoad = nil, nil, nil
         if not tryCall("junction clear check", function() self:junctionClearCheck(chk) end) then
             self:junctionCheckFailed(chk)
         end
@@ -27536,7 +27541,7 @@ function ADFlyoverEditor:applyJunctionClear()
     end
 
     keepUndo()
-    jxStage = "cutting old links"
+    jxState.jxStage = "cutting old links"
     local staleCut = 0
     for _, pair in ipairs(linksToSever) do
         local a, b = pair[1], pair[2]
@@ -27576,7 +27581,7 @@ function ADFlyoverEditor:applyJunctionClear()
 
     -- Highest id first: removeWayPoint renumbers everything above the id it removes, so a pending
     -- lower id is still valid when its turn comes; a pending higher id would not be.
-    jxStage = "removing turn wiring"
+    jxState.jxStage = "removing turn wiring"
     -- A TURN GOES WHOLE OR NOT AT ALL. Each point used to be put to the bound on its own, and where
     -- the bound's arms are read off-line some ends of a turn fall outside it: at 36 two turns lost
     -- their middles but kept their ends 13-15 m out - one left as a 4 m dead end off its lane, the
@@ -27641,7 +27646,7 @@ function ADFlyoverEditor:applyJunctionClear()
     -- measuring. The cost of the move is that the tidy's own lane walks are not available yet, so
     -- the stub sweep falls back to its cruder walk - which is why this was the other way round.
     local stubs = 0
-    jxStage = "removing connector stubs"
+    jxState.jxStage = "removing connector stubs"
     tryCall("junction clear stubs", function() stubs = self:junctionClearStubs(jp) end)
     if stubs > 0 then
         Logging.info("[FlyoverEditor]: junction - removed %d point(s) of connector left hanging off the lanes.",
@@ -27650,7 +27655,7 @@ function ADFlyoverEditor:applyJunctionClear()
 
     -- Tidy AFTER the removals: the ends being measured are the ones the clear just created.
     local tidyTrim, tidyAdd, tidyLanes, boxSwept, boxSevered = 0, 0, 0, 0, 0
-    jxStage = "tidying lane ends"
+    jxState.jxStage = "tidying lane ends"
     tryCall("junction tidy lane ends", function()
         local nEnds, nMade, nRemoved, nCut = self:junctionTidyByPaths(jp)
         if nEnds ~= nil then
@@ -27730,7 +27735,7 @@ function ADFlyoverEditor:applyJunctionClear()
 
     -- Respace LAST: the ends are where they belong and the stubs are gone, so what is left is lane.
     local rsMoved, rsRemoved, rsCreated = 0, 0, 0
-    jxStage = "respacing"
+    jxState.jxStage = "respacing"
     tryCall("junction respace approaches", function()
         rsMoved, rsRemoved, rsCreated = self:junctionRespaceApproaches(jp)
     end)
@@ -27759,7 +27764,7 @@ function ADFlyoverEditor:applyJunctionClear()
     -- whose bound reaches this point, with through roads off, would fold them back into one point,
     -- as it folds any two points under 0.3 m apart.
     if leave and jp.pathRoutes ~= nil then
-        jxStage = "parting kept roads where they cross"
+        jxState.jxStage = "parting kept roads where they cross"
         tryCall("junction part crossing roads", function()
             local owner, partedAs = {}, {}
             for r, nodes in ipairs(jp.pathRoutes.through or {}) do
@@ -27791,7 +27796,7 @@ function ADFlyoverEditor:applyJunctionClear()
                                 junctionConnect(p, wp, pDual)
                                 junctionConnect(wp, q, qDual)
                                 nodes[k] = wp
-                                if jxKeptRoad ~= nil then jxKeptRoad[wp] = r end
+                                if jxState.jxKeptRoad ~= nil then jxState.jxKeptRoad[wp] = r end
                                 partedAs[n] = partedAs[n] or {}
                                 table.insert(partedAs[n], { p = p, q = q, wp = wp })
                             end
@@ -27820,7 +27825,7 @@ function ADFlyoverEditor:applyJunctionClear()
             -- kinds of loose end can be told apart: what was already loose when the clear began, what
             -- the clear cut on purpose, and what one of its own passes broke by accident. Only the
             -- last is put back.
-            jxStage = "final sweep"
+            jxState.jxStage = "final sweep"
             local ok, r = pcall(function()
                 return self:networkIntegritySweep(c0.x, c0.z, 45, false)
             end)
@@ -27855,7 +27860,7 @@ function ADFlyoverEditor:applyJunctionClear()
             end
         end
         table.sort(stranded, function(a, b) return a > b end)
-        jxStage = "removing stranded points"
+        jxState.jxStage = "removing stranded points"
         for _, id in ipairs(stranded) do
             jxRemove(id, "junction stranded point")
         end
@@ -27890,7 +27895,7 @@ function ADFlyoverEditor:applyJunctionClear()
     -- nothing in the log said which of fourteen removers had gone that far.
     do
         local parts = {}
-        for why, e in pairs(jxWhy) do
+        for why, e in pairs(jxState.jxWhy) do
             parts[#parts + 1] = string.format("%s %d (to %.0f m)", why:gsub("^junction ", ""), e.n, e.far)
         end
         table.sort(parts)
@@ -27899,13 +27904,13 @@ function ADFlyoverEditor:applyJunctionClear()
         end
     end
     local held, took, farOut = jxEnd()
-    chk.journal = jxJournal
-    jxJournal, jxStage, jxKeptRoad = nil, nil, nil
+    chk.journal = jxState.jxJournal
+    jxState.jxJournal, jxState.jxStage, jxState.jxKeptRoad = nil, nil, nil
     Logging.info("[FlyoverEditor]: junction - took %d point(s) in all, the farthest %.0f m out; %d left alone as belonging to a neighbouring junction rather than this one.",
         took, farOut, held)
-    if jxTwinHeld > 0 then
+    if jxState.jxTwinHeld > 0 then
         Logging.info("[FlyoverEditor]: junction - %d point(s) a step of the clear would have taken were kept: another part's turn, or the road it leaves or joins (left working).",
-            jxTwinHeld)
+            jxState.jxTwinHeld)
     end
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
@@ -28049,12 +28054,12 @@ function ADFlyoverEditor:applyJunction()
             -- Our own deterministic chain-layer - NOT createSplineConnection, whose links go through
             -- toggleConnectionBetween (a flip, not a set). Flags match the joined (exit) road and are
             -- set at creation.
-            jxLaySeq = jxLaySeq + 1
-            jxLayLabel = jxTurnLabel(c) .. "#" .. jxLaySeq
+            jxState.jxLaySeq = jxState.jxLaySeq + 1
+            jxState.jxLayLabel = jxTurnLabel(c) .. "#" .. jxState.jxLaySeq
             local ok, laid = tryCall("junction lay chain", function()
                 return junctionLayChain(NA, c.points, NB, dual, exitFlags)
             end)
-            jxLayLabel = nil
+            jxState.jxLayLabel = nil
             ok = ok and laid == true
             if ok and dual then
                 dualPlaced = dualPlaced + 1
@@ -28169,13 +28174,13 @@ function ADFlyoverEditor:applyJunction()
     end
     if shared > 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d crossing(s) joined at a shared point, so AutoDrive makes one driver wait there (%d of them at 80 deg or less, where it can also switch paths).",
-            shared, jxShallowJoins)
+            shared, jxState.jxShallowJoins)
     end
-    if jxSquaredJoins > 0 then
+    if jxState.jxSquaredJoins > 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d shallow crossing(s) squared up with a small S-bend in the new path, so AutoDrive cannot switch paths there.",
-            jxSquaredJoins)
+            jxState.jxSquaredJoins)
     end
-    self.junctionLastShared = { joined = shared, shallow = jxShallowJoins, squared = jxSquaredJoins }
+    self.junctionLastShared = { joined = shared, shallow = jxState.jxShallowJoins, squared = jxState.jxSquaredJoins }
     -- THE ROUTE CHECK, on the junction as built (report only, like the clear's own check).
     local rc = nil
     tryCall("junction route check", function() rc = junctionRouteCheck(jp, placedSet, cx, cz, radius) end)
@@ -28216,8 +28221,8 @@ function ADFlyoverEditor:applyJunction()
             end
         end
     end
-    self.junctionLastLinkLabels = jxLinkLabel
-    self.junctionLastNodeLabels = jxNodeLabel   -- for the harness's route study; nothing in game reads it
+    self.junctionLastLinkLabels = jxState.jxLinkLabel
+    self.junctionLastNodeLabels = jxState.jxNodeLabel   -- for the harness's route study; nothing in game reads it
     jxBuildEnd()
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
