@@ -399,7 +399,7 @@ function ADFlyoverEditor:junctionRegistry()
             elseif #grp >= 2 then
                 local sx, sz = 0, 0
                 for _, g in ipairs(grp) do sx, sz = sx + g.x, sz + g.z end
-                smallGroups[#smallGroups + 1] = { x = sx / #grp, z = sz / #grp }
+                smallGroups[#smallGroups + 1] = { x = sx / #grp, z = sz / #grp, forks = grp }
             end
         end
     end
@@ -408,13 +408,41 @@ function ADFlyoverEditor:junctionRegistry()
     -- no group reached four and it went unnumbered, while the clear locked it fine. Where a group of
     -- two or three forks lies clear of every junction found so far, the clear's own finder is asked,
     -- and a junction it finds there is numbered, once (2026-10-07: 19 such sites on the survey map).
+    -- ASKED AT THE JUNCTION'S MIDDLE, where the roads say which junction a group's forks are part of.
+    -- Asked at each group, the Y at (788, 891) answered three times - each pair of its forks is the
+    -- nearest thing to a click on it - and got three numbers. A group whose forks belong to a place
+    -- roads meet is asked about at that place, and only once for all the groups it has. The NEAREST
+    -- such place, where a fork is shared: a fork of the T at (-21, -78) is also an end of the runs
+    -- that make the bend point 25 m from 40e ("c is not a junction"), and asked there it came back
+    -- as a new number beside 40e. The far turn of 53, 22 m from its forks, was numbered by itself the
+    -- same way (j91); asked at 53's lanes crossing, it is 53.
+    local centresOf, askedAt = {}, {}
+    for _, c in ipairs(self:junctionCentres() or {}) do
+        for fk in pairs(c.forks or {}) do
+            centresOf[fk] = centresOf[fk] or {}
+            table.insert(centresOf[fk], c)
+        end
+    end
     for _, g in ipairs(smallGroups) do
         local clear = true
         for _, f in ipairs(found) do
             if (f.x - g.x) ^ 2 + (f.z - g.z) ^ 2 <= 15 * 15 then clear = false break end
         end
+        local qx, qz = g.x, g.z
         if clear then
-            local s = self:junctionSelect(g.x, g.z)
+            local best, bestD = nil, math.huge
+            for _, fk in ipairs(g.forks) do
+                for _, c in ipairs(centresOf[fk] or {}) do
+                    local d = (c.x - g.x) ^ 2 + (c.z - g.z) ^ 2
+                    if d < bestD then best, bestD = c, d end
+                end
+            end
+            if best ~= nil then
+                if askedAt[best] then clear = false else askedAt[best], qx, qz = true, best.x, best.z end
+            end
+        end
+        if clear then
+            local s = self:junctionSelect(qx, qz)
             if s ~= nil then
                 local dup = false
                 for _, f in ipairs(found) do

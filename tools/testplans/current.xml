@@ -3,7 +3,7 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="lane splice fix, new numbers, ground heights" build="@BUILD@">
+<testPlan title="lane splice fix, new numbers, one Y, ground heights" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="drivable" title="Builds come out drivable"
@@ -12,10 +12,12 @@
           hint="Build a few junctions. Ticks itself: pass on a clean route check, fail if any build says a turn cannot be driven."/>
     <test id="j7" title="Junction 7 looks right"
           hint="Clear 7 (through roads kept), build with a 9 m turn radius: the side road's lanes run in smoothly, no hump, nothing across the middle."/>
-    <test id="j92" title="West of j40w is now j92" passLog="%(j92%)"
-          hint="Lock the junction at (-158, -68): the card names it j92 (ticks itself)."/>
+    <test id="j89" title="West of j40w is now j89" passLog="%(j89%)"
+          hint="Lock the junction at (-158, -68): the card names it j89 (ticks itself)."/>
     <test id="newNumbers" title="The new numbers are junctions"
-          hint="The log lists j78 to j96 as new. Look at two or three; j93 to j96 are on dirt tracks."/>
+          hint="The log lists j78 to j93 as new. Look at two or three; j90 to j93 are on dirt tracks."/>
+    <test id="y82" title="The Y at (784, 892) is one junction, j82"
+          hint="Lock it at either end and in the middle: the card says j82 every time. Clear it: both sharp turns go."/>
     <test id="ground" title="Placed points sit on the ground"
           hint="Clear 28, place it, then pick the placed turns with Ground: nothing to fix, and the points sit on the road."/>
     <test id="saveSplit" title="A save keeps the split"

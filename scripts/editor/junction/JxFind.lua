@@ -138,6 +138,109 @@ function ADFlyoverEditor:junctionVirginCentres()
     return out
 end
 
+-- WHERE LANES CROSS, ROADS MEET - the meeting points a corner cannot show. A shallow Y has no corner
+-- to cut: its side road runs into the main road at 15-25 deg, its sharp turns double back past 150,
+-- and the tangents the corners below are found by never meet. The Y at (788, 891) on the survey map
+-- was three pairs of forks 18-20 m apart, numbered three times (j82, j83, j84 - "the same junction",
+-- the user), and a clear on the middle pair left the far pair's turn behind. What every such Y does
+-- have is lanes crossing: the side road's lane out crosses the main road's lane in, and the sharp
+-- turns cross both, all within a few metres of each other. So the runs between forks are tested for
+-- crossing one another, and where crossings gather with NO corner meeting point near them, they are
+-- a meeting point of their own; its forks are the ends of the crossing runs.
+-- Only where no corner is near (JX_CROSS_GAP): at a wired T or X the left turns cross each other
+-- too, and those junctions are already found where they were - a second point beside each would move
+-- every clear on the map. On the survey map that leaves three, all the same kind of Y (the user,
+-- 2026-10-07: one rule for all three): the Y above, 36 at (887, 765) and 53 at (214, -756), whose
+-- far turn 22 m out had been numbered by itself (j91). 36 and 53 were found before by their forks
+-- (four or more within 15 m) - only 3 m closer together than the Y's - and clear a little
+-- differently from this point.
+-- Crossings at different heights are a bridge, not a junction (JX_CROSS_DY).
+local JX_CROSS_GAP, JX_CROSS_LINK, JX_CROSS_DY = 25, 15, 2.5
+local function jxLaneCrossingCentres(runs, corners)
+    local boxes = {}
+    for i, ch in ipairs(runs) do
+        local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
+        for _, w in ipairs(ch) do
+            x0, z0, x1, z1 = math.min(x0, w.x), math.min(z0, w.z), math.max(x1, w.x), math.max(z1, w.z)
+        end
+        boxes[i] = { x0, z0, x1, z1 }
+    end
+    local pts = {}
+    for i = 1, #runs do
+        local A, ba = runs[i], boxes[i]
+        for j = i + 1, #runs do
+            local B, bb = runs[j], boxes[j]
+            if ba[1] <= bb[3] and bb[1] <= ba[3] and ba[2] <= bb[4] and bb[2] <= ba[4] then
+                for p = 1, #A - 1 do
+                    local p1, p2 = A[p], A[p + 1]
+                    for q = 1, #B - 1 do
+                        local p3, p4 = B[q], B[q + 1]
+                        if p1 ~= p3 and p1 ~= p4 and p2 ~= p3 and p2 ~= p4 then
+                            local d1x, d1z, d2x, d2z = p2.x - p1.x, p2.z - p1.z, p4.x - p3.x, p4.z - p3.z
+                            local den = d1x * d2z - d1z * d2x
+                            if math.abs(den) > 1e-9 then
+                                local t = ((p3.x - p1.x) * d2z - (p3.z - p1.z) * d2x) / den
+                                local u = ((p3.x - p1.x) * d1z - (p3.z - p1.z) * d1x) / den
+                                if t > 0.001 and t < 0.999 and u > 0.001 and u < 0.999 then
+                                    local ya = (p1.y or 0) + ((p2.y or 0) - (p1.y or 0)) * t
+                                    local yb = (p3.y or 0) + ((p4.y or 0) - (p3.y or 0)) * u
+                                    local x, z = p1.x + d1x * t, p1.z + d1z * t
+                                    local gap = true
+                                    for _, c in ipairs(corners) do
+                                        if (c.x - x) ^ 2 + (c.z - z) ^ 2 <= JX_CROSS_GAP * JX_CROSS_GAP then gap = false break end
+                                    end
+                                    if gap and math.abs(ya - yb) <= JX_CROSS_DY then
+                                        pts[#pts + 1] = { x = x, z = z, a = A, b = B }
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    -- By position, so the sums below come out the same whatever order the runs were found in.
+    table.sort(pts, function(a, b)
+        if a.x ~= b.x then return a.x < b.x end
+        return a.z < b.z
+    end)
+    local out, done = {}, {}
+    for i = 1, #pts do
+        if not done[i] then
+            done[i] = true
+            local grp, stack = {}, { i }
+            while #stack > 0 do
+                local k = table.remove(stack)
+                grp[#grp + 1] = k
+                for j = 1, #pts do
+                    if not done[j] and (pts[j].x - pts[k].x) ^ 2 + (pts[j].z - pts[k].z) ^ 2 <= JX_CROSS_LINK * JX_CROSS_LINK then
+                        done[j] = true
+                        stack[#stack + 1] = j
+                    end
+                end
+            end
+            -- Two crossings at least: one lane over another, alone, is not yet a place roads meet.
+            if #grp >= 2 then
+                table.sort(grp)
+                local c = { sx = 0, sz = 0, n = #grp, forks = {}, wiring = {}, crossed = true }
+                for _, k in ipairs(grp) do
+                    local p = pts[k]
+                    c.sx, c.sz = c.sx + p.x, c.sz + p.z
+                    for _, ch in ipairs({ p.a, p.b }) do
+                        c.forks[ch[1]] = true
+                        c.forks[ch[#ch]] = true
+                        for m = 2, #ch - 1 do c.wiring[ch[m]] = true end
+                    end
+                end
+                c.x, c.z = c.sx / c.n, c.sz / c.n
+                out[#out + 1] = c
+            end
+        end
+    end
+    return out
+end
+
 function ADFlyoverEditor:junctionCentres()
     local count = ADGraphManager:getWayPointsCount()
     local merge = AutoDrive.FLYOVER_JUNCTION_MERGE or 10
@@ -171,7 +274,7 @@ function ADFlyoverEditor:junctionCentres()
         if w ~= nil and deg[w] == 4 then passOn[w] = jxCrossingPairs(w) end
     end
     for w in pairs(passOn) do deg[w] = 2 end
-    local corners = {}
+    local corners, runs = {}, {}
     for _, f in pairs(wps) do
         if f ~= nil and (deg[f] or 0) >= 3 then
             for _, oid in ipairs(f.out or {}) do
@@ -192,6 +295,7 @@ function ADFlyoverEditor:junctionCentres()
                         chain[#chain + 1] = cur
                     end
                     local last = chain[#chain]
+                    if (deg[last] or 0) >= 3 and len <= 60 then runs[#runs + 1] = chain end
                     if #chain >= 3 and (deg[last] or 0) >= 3 and len <= 60 then
                         local a0 = math.atan2(chain[2].x - chain[1].x, chain[2].z - chain[1].z)
                         local a1 = math.atan2(last.x - chain[#chain - 1].x, last.z - chain[#chain - 1].z)
@@ -231,6 +335,9 @@ function ADFlyoverEditor:junctionCentres()
     local out = {}
     for _, g in ipairs(groups) do
         if g.n >= 2 then out[#out + 1] = g end
+    end
+    if AutoDrive.FLYOVER_JUNCTION_LANE_CROSSINGS ~= false then
+        for _, c in ipairs(jxLaneCrossingCentres(runs, out)) do out[#out + 1] = c end
     end
     self._jxCentres, self._jxCentresCount, self._jxCentresMerge = out, count, merge
     self._jxCentresNet = jxNetworkMark()

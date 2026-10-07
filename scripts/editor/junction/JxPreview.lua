@@ -840,10 +840,19 @@ function ADFlyoverEditor:updateJunctionPreview()
             end
         end
     end
+    -- A BUILD WITH NO SITE KEEPS TO ITS OWN CIRCLE. Where the selection found nothing (build carries
+    -- on from the cursor), the nearest crossing could be anywhere in the 70 m scan, and everything
+    -- below is measured from it: the build on cleared 36 - the two cut ends of its side road 14.9 m
+    -- apart, one more than makes a cleared site - took the junction 52 m up the road as its middle
+    -- and built that one's turns. Further out than the search circle, a crossing is not this site,
+    -- and the middle falls back to where the circle cut the tracks (tracksCentre, below). The SEARCH
+    -- circle (selectR): R is the 60-70 m work region by now.
     local lockedCrossing, bestLockD = nil, math.huge
+    local lockCap = math.huge
+    if not clearMode and self.junctionSite == nil then lockCap = selectR * selectR end
     for _, c in ipairs(crossings) do
         local d = (c.x - cx) ^ 2 + (c.z - cz) ^ 2
-        if d < bestLockD then bestLockD, lockedCrossing = d, c end
+        if d < bestLockD and d <= lockCap then bestLockD, lockedCrossing = d, c end
     end
 
     local apIndex = {}
