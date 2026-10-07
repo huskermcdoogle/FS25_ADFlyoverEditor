@@ -57,8 +57,9 @@ AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO = 0.5
 -- A vehicle that can only turn this tightly is already unusual; whatever the player's turning
 -- radius SETTING says, the corner-rounding math below never uses less than this. Reported live
 -- (2026-09-22): a 3m setting left an awkward kink at a field corner sharper than a 3m arc could
--- smoothly represent.
-AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 5
+-- smoothly represent. Lowered from 5 to 2 on request (small vehicles turn tighter); keep the
+-- fieldLoopTurningRadius setting's range floor in Settings.lua equal to this.
+AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 2
 
 -- ---------------------------------------------------------------------------------------------
 -- Live tilled-ground boundary tracer, no Courseplay involved. Confirmed live (2026-09-22):
