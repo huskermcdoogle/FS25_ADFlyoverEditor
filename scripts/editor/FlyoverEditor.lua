@@ -6196,7 +6196,9 @@ function ADFlyoverEditor:getEditableNumbers()
             -- value of the setting, the same steps typing snaps to.
             step = function(dir)
                 local setting = ADFlyoverSettings.settings[name]
-                if setting ~= nil and setting.values ~= nil then
+                if setting ~= nil and setting.range ~= nil then
+                    ADFlyoverSettings.setValue(name, setting.value + dir * setting.range.step)
+                elseif setting ~= nil and setting.values ~= nil then
                     local nextIndex = math.max(1, math.min(#setting.values, setting.current + dir))
                     if nextIndex ~= setting.current then
                         ADFlyoverSettings.setIndex(name, nextIndex)
@@ -6373,6 +6375,9 @@ end
 --- Snap a typed value onto the nearest step the setting actually allows, and store it there.
 function ADFlyoverEditor:applySettingValue(name, value)
     local setting = ADFlyoverSettings.settings[name]
+    if setting ~= nil and setting.range ~= nil then
+        return ADFlyoverSettings.setValue(name, value)
+    end
     if setting == nil or setting.values == nil then
         return nil
     end

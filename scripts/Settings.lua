@@ -62,7 +62,10 @@ S.settings.toolCardStatic = { values = { false, true }, default = 1, current = 1
 -- see findConnectedFieldRegions), so this is a real per-map tuning knob, not just a safety margin
 -- - the default sits close to a typical field lane's width; raise it if a wider lane on a
 -- particular map gets missed, lower it if it ever reaches across a real road.
-S.settings.fieldLoopMaxGap = { values = { 3, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50 }, default = 3, current = 3 }
+-- A plain number, not a list of steps: `range` + `value` instead of `values` + `current`. 0 means
+-- never leave the field you clicked. Saved as its own #value, so an old saved #current index is
+-- ignored rather than misread.
+S.settings.fieldLoopMaxGap = { range = { min = 0, max = 50, step = 1 }, value = 0 }
 -- Hidden - no tool-card row reads this, it exists purely so a determined user can hand-edit
 -- modSettings/FS25_ADFlyoverEditor/settings.xml (a stored index into the list below) without a
 -- rebuild. The floor ADOffsetGeometry.ensureMinimumEdgeLength applies to a finished field loop
@@ -112,12 +115,29 @@ end
 function S.get(name)
     local setting = S.settings[name]
     if setting ~= nil then
+        if setting.range ~= nil then
+            return setting.value
+        end
         return setting.values[setting.current]
     end
     if AutoDrive ~= nil and AutoDrive.getSetting ~= nil then
         return AutoDrive.getSetting(name)
     end
     return nil
+end
+
+--- Plain-number settings (those with a `range`): clamp to the range, round to the step, store.
+function S.setValue(name, value)
+    local setting = S.settings[name]
+    if setting == nil or setting.range == nil or tonumber(value) == nil then
+        return nil
+    end
+    local r = setting.range
+    value = math.max(r.min, math.min(r.max, tonumber(value)))
+    value = r.min + math.floor((value - r.min) / r.step + 0.5) * r.step
+    setting.value = value
+    S.save()
+    return value
 end
 
 --- Same contract as AutoDrive.setSettingState: takes an INDEX, not a value.
@@ -178,7 +198,11 @@ function S.save()
         createFolder(getUserProfileAppPath() .. S.FOLDER)
         local xml = createXMLFile("ADFlyoverSettings", path, "flyoverEditor")
         for name, setting in pairs(S.settings) do
-            setXMLInt(xml, "flyoverEditor.settings." .. name .. "#current", setting.current)
+            if setting.range ~= nil then
+                setXMLFloat(xml, "flyoverEditor.settings." .. name .. "#value", setting.value)
+            else
+                setXMLInt(xml, "flyoverEditor.settings." .. name .. "#current", setting.current)
+            end
         end
         saveXMLFile(xml)
         delete(xml)
@@ -198,12 +222,19 @@ function S.load()
     local ok, err = pcall(function()
         local xml = loadXMLFile("ADFlyoverSettings", path)
         for name, setting in pairs(S.settings) do
-            local stored = getXMLInt(xml, "flyoverEditor.settings." .. name .. "#current")
-            -- Ignore anything out of range rather than trusting the file: an index past the end of
-            -- `values` would make get() return nil, and a nil spacing has already been shown to
-            -- crash the geometry rather than merely misbehave.
-            if stored ~= nil and setting.values[stored] ~= nil then
-                setting.current = stored
+            if setting.range ~= nil then
+                local storedValue = getXMLFloat(xml, "flyoverEditor.settings." .. name .. "#value")
+                if storedValue ~= nil then
+                    setting.value = math.max(setting.range.min, math.min(setting.range.max, storedValue))
+                end
+            else
+                local stored = getXMLInt(xml, "flyoverEditor.settings." .. name .. "#current")
+                -- Ignore anything out of range rather than trusting the file: an index past the end of
+                -- `values` would make get() return nil, and a nil spacing has already been shown to
+                -- crash the geometry rather than merely misbehave.
+                if stored ~= nil and setting.values[stored] ~= nil then
+                    setting.current = stored
+                end
             end
         end
         delete(xml)
