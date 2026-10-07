@@ -3,21 +3,21 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="vehicle set + test card" build="@BUILD@">
+<testPlan title="lane splice fix, new numbers, ground heights" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="card" title="This card works"
-          hint="Click pass here, fold the card with its header, unfold it. The results file updates."/>
-    <test id="rigRows" title="Rig rows on the build card"
-          hint="Junction tool, build mode, under 'swept path': small rig and big rig say 'must fit', semi says 'not checked'."/>
-    <test id="rigToggle" title="Clicking a rig row toggles it" passLog="vehicle set %- semi must fit"
-          hint="Click 'semi': it changes to 'must fit' (ticks itself). Click again to set it back."/>
-    <test id="fitCounts" title="Locked site shows fit counts" passLog="fits %d+ of the %d+ turns this build lays"
-          hint="Lock a junction in build mode (try 52 or 7). Each rig row adds 'n/m fit' (ticks itself)."/>
-    <test id="skewBuild" title="Skew build: tight turn on asphalt"
-          hint="Clear 52 or 7 (through roads kept), then build. The sharp turn runs along the asphalt edge, only the trailer crosses the gravel shoulder, nothing refused."/>
+    <test id="drivable" title="Builds come out drivable"
+          passLog="AutoDrive can take through here, all of them turns we meant"
+          failLog="turn%(s%) we laid cannot be driven"
+          hint="Build a few junctions. Ticks itself: pass on a clean route check, fail if any build says a turn cannot be driven."/>
+    <test id="j7" title="Junction 7 looks right"
+          hint="Clear 7 (through roads kept), build with a 9 m turn radius: the side road's lanes run in smoothly, no hump, nothing across the middle."/>
+    <test id="j92" title="West of j40w is now j92" passLog="%(j92%)"
+          hint="Lock the junction at (-158, -68): the card names it j92 (ticks itself)."/>
+    <test id="newNumbers" title="The new numbers are junctions"
+          hint="The log lists j78 to j96 as new. Look at two or three; j93 to j96 are on dirt tracks."/>
+    <test id="ground" title="Placed points sit on the ground"
+          hint="Clear 28, place it, then pick the placed turns with Ground: nothing to fix, and the points sit on the road."/>
     <test id="saveSplit" title="A save keeps the split"
           hint="Change a split decision, save the game, reload: the decision is still there."/>
-    <test id="clear" title="Clear works as before"
-          hint="Clear a junction you know: same result as the last build."/>
 </testPlan>
