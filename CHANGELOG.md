@@ -1,11 +1,13 @@
 # Changelog
 
-## 1.0.2.1 — Keeps AutoDrive 3.0.1.4's field points intact (2026-10-06)
+## 1.0.2.1 — AutoDrive 3.0.1.4's field points kept intact, warnings you can read (2026-10-06)
 
 AutoDrive 3.0.1.4 (5 October 2026) can lay a loop of points round a field from its own editor
 (Ctrl+Shift+F). It marks each of those points with the field it belongs to, so that pressing it again
 finds the old loop, deletes it and lays a new one. Our tools used to strip or break those marks, and the
 points they touched were left behind as strays when AutoDrive laid the loop again.
+
+### AutoDrive's field points
 
 - **Convert** (the tool, the selection popup and the span menu) now changes only a point's priority.
   AutoDrive's own marks on the point stay: its field-point mark, and the marks it puts on the map's
@@ -15,7 +17,16 @@ points they touched were left behind as strays when AutoDrive laid the loop agai
 - **Copies and new tracks** (Move's copy, Parallel and Siding, the junction tool's new connectors) no
   longer carry a half field-point mark from the point they were made from.
 
-Also in this release (the tester build after 1.0.2.0):
+### Warnings you can read
+
+- **The editor's own warning box.** While the editor is open, a warning no longer blinks small in the
+  middle of the screen: it appears in bigger red text, attached under the tool card you are using (or
+  the Select menu, or the corner panel; above it if below would cover the minimap). It stays long
+  enough to read - at least 5 seconds, longer for a long message - and a click closes it. With the
+  editor closed, the game's own warning shows as before.
+- The warning about a destination name that already exists uses it.
+
+### Also in this release (the tester build after 1.0.2.0)
 
 - The whole-HUD hide now runs in the same order as the restore, for a tester whose mouse-wheel zoom in
   the vehicle stopped working after leaving the editor. `FlyoverHudOrder legacy` brings back the 1.0.2.0
