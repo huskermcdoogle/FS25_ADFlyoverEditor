@@ -1368,7 +1368,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                                         if not tryCall("junction tidy extend", function()
                                             made = ADFlyoverRecordWayPoint(pt.x, pt.y or last.y or 0,
                                                 pt.z, false, false, false, 0,
-                                                last.flags or AutoDrive.FLAG_NONE, false)
+                                                last.flags or AutoDrive.FLAG_NONE, false, ADFlyoverEditor.fieldOf(last))
                                             jxNoteAdded(made)
                                         end) or made == nil then break end
                                         if useOut then junctionConnect(seq[#seq], made, segDual)
@@ -1519,7 +1519,7 @@ function ADFlyoverEditor:junctionTidyLaneEnds(jp, dry)
                         local made
                         if not tryCall("junction tidy extend", function()
                             made = ADFlyoverRecordWayPoint(pt.x, pt.y or 0, pt.z, false, false,
-                                false, 0, last.flags or AutoDrive.FLAG_NONE, false)
+                                false, 0, last.flags or AutoDrive.FLAG_NONE, false, ADFlyoverEditor.fieldOf(last))
                             jxNoteAdded(made)
                         end) or made == nil then break end
                         if useOut then junctionConnect(seq[#seq], made, segDual)

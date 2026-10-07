@@ -288,11 +288,46 @@ ADFlyoverEditor.KEY_SLOTS = {
 --- flags from a neighbour - so by 2026 about 5,300 points laid later carried the map's mark and the
 --- flag could no longer tell a map road from ours. New points keep every other flag (a low-priority
 --- lane stays low-priority) and drop only those two. Global, so FieldLoopGenerator can use it too.
-function ADFlyoverRecordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, flags, sendEvent)
+---
+--- AUTODRIVE'S FIELD POINTS ARE THE EXCEPTION THAT IS KEPT (AutoDrive 3.0.1.4). Its editor lays a loop
+--- round a field (Ctrl+Shift+F) and tags each point twice: a flag bit (FLAG_FIELD_POINT, 8) and the
+--- field's number (wp.fieldID). Pressed again, it deletes the points carrying both and lays the loop
+--- anew. A point that replaces or carries on one of those points - a smoothed or divided stretch, a
+--- point put into a link - is still that field's loop, so `fieldID` (from ADFlyoverEditor.fieldOf) passes
+--- the number on and the bit stays. Any other new point drops the bit: without the number it is one
+--- AutoDrive can never find again, a stray when the loop is laid anew.
+function ADFlyoverRecordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, flags, sendEvent, fieldID)
     local f = flags or 0
     if math.floor(f / 2) % 2 == 1 then f = f - 2 end   -- AutoDrive.FLAG_TRAFFIC_SYSTEM
     if math.floor(f / 4) % 2 == 1 then f = f - 4 end   -- AutoDrive.FLAG_TRAFFIC_SYSTEM_CONNECTION
-    return ADGraphManager:recordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, f, sendEvent)
+    local fieldPoint = math.floor(f / 8) % 2 == 1       -- AutoDrive.FLAG_FIELD_POINT
+    if fieldPoint and fieldID == nil then f = f - 8 end
+    if fieldID ~= nil and not fieldPoint then f = f + 8 end
+    local wp = ADGraphManager:recordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, f, sendEvent)
+    if wp ~= nil and fieldID ~= nil then
+        wp.fieldID = fieldID
+    end
+    return wp
+end
+
+--- The field number of one of AutoDrive's field points, to pass to ADFlyoverRecordWayPoint when a new
+--- point replaces or carries on `wp`; nil for any other point (or a missing one).
+function ADFlyoverEditor.fieldOf(wp)
+    if wp ~= nil and wp.fieldID ~= nil and math.floor((wp.flags or 0) / 8) % 2 == 1 then
+        return wp.fieldID
+    end
+    return nil
+end
+
+--- `flags` with only its priority bit (FLAG_SUBPRIO, 1) set as asked: what a priority change means.
+--- Every other bit is AutoDrive's own mark and stays - the map's traffic system, a field point.
+function ADFlyoverEditor.withPriority(flags, secondary)
+    local f = flags or 0
+    f = f - f % 2
+    if secondary then
+        f = f + AutoDrive.FLAG_SUBPRIO
+    end
+    return f
 end
 
 function ADFlyoverEditor:toolKeyLabel(tool)

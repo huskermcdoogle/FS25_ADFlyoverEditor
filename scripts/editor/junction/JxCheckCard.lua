@@ -950,7 +950,7 @@ function ADFlyoverEditor:applyJunctionClear()
                             and p.id ~= nil and q.id ~= nil
                             and table.contains(p.out, n.id) and table.contains(n.out, q.id) then
                             local wp = ADFlyoverRecordWayPoint(n.x, n.y, n.z, false, false, false, 0,
-                                n.flags or AutoDrive.FLAG_NONE, false)
+                                n.flags or AutoDrive.FLAG_NONE, false, ADFlyoverEditor.fieldOf(n))
                             if wp ~= nil then
                                 local pDual = table.contains(n.out, p.id) and table.contains(p.incoming, n.id)
                                 local qDual = table.contains(q.out, n.id) and table.contains(n.incoming, q.id)

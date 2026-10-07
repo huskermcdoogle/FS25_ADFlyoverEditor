@@ -198,7 +198,8 @@ function ADFlyoverEditor:junctionRespaceApproaches(jp)
             local prev = last
             for j = keepN + 1, want do
                 local t = targets[j]
-                local made = ADFlyoverRecordWayPoint(t.x, t.y, t.z, false, false, false, 0, flags, false)
+                local made = ADFlyoverRecordWayPoint(t.x, t.y, t.z, false, false, false, 0, flags, false,
+                    ADFlyoverEditor.fieldOf(interior[1] or A))
                 jxNoteAdded(made)
                 if made == nil then break end
                 link(prev, made)
@@ -552,7 +553,8 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
     local function splitAt(a, b, x, z, fwdAB)
         local dual = dualOf(a, b)
         local y = (a.y or 0) + ((b.y or 0) - (a.y or 0)) * 0.5
-        local n = ADFlyoverRecordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false)
+        local n = ADFlyoverRecordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false,
+            ADFlyoverEditor.fieldOf(a))
         jxNoteAdded(n)
         if n == nil then return nil end
         junctionDisconnect(a, b)
@@ -1448,7 +1450,7 @@ function ADFlyoverEditor:junctionTidyByPaths(jp)
                     for k = 1, n do
                         local q = arc[math.min(#arc, math.floor((hit * k / n) / 0.25 + 0.5) + 1)]
                         local made1 = ADFlyoverRecordWayPoint(q.x, tip.y or 0, q.z,
-                            false, false, false, 0, tip.flags or AutoDrive.FLAG_NONE, false)
+                            false, false, false, 0, tip.flags or AutoDrive.FLAG_NONE, false, ADFlyoverEditor.fieldOf(tip))
                         jxNoteAdded(made1)
                         if made1 == nil then break end
                         if sl.useOut then junctionConnect(prev, made1, dual) else junctionConnect(made1, prev, dual) end
