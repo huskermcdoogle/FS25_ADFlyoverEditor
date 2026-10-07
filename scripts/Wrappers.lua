@@ -340,6 +340,13 @@ function W.install(AD)
                 end
                 log("name dialog field: %s, capturing input = %s", dialogSelf.edit and "rename (left unfocused)" or "new name (focused)",
                     tostring(input.isCapturingInput))
+                -- Watched for the first second (Dialog.update below): the user found the new-name
+                -- field not taking typing although it was capturing input at this moment.
+                if dialogSelf.edit then
+                    dialogSelf.flyoverFocusWatch = nil
+                else
+                    dialogSelf.flyoverFocusWatch = { ms = 0, given = false }
+                end
             end
             log("name dialog aimed at waypoint id=%s (%s)", tostring(overrideId),
                 dialogSelf.edit and "rename" or "new marker")
@@ -350,6 +357,39 @@ function W.install(AD)
             local result = originalOnOpen(dialogSelf, ...)
             Dialog.applyFlyoverOverride(dialogSelf)
             return result
+        end
+
+        -- THE NEW-NAME FIELD KEEPS ITS FOCUS (2026-10-06: the user could not just start typing a new
+        -- name, though the field was capturing input when the dialog opened). For its first second the
+        -- open dialog is watched: if the field stops capturing input, it is given the focus back once,
+        -- the way onOpen gives it (onFocusActivate, never the focus manager - see above), and the log
+        -- says when that happened. If typing still does not land, the log tells the next step whether
+        -- the field kept its focus all along.
+        local originalUpdate = Dialog.update
+        if type(originalUpdate) == "function" then
+            Dialog.update = function(dialogSelf, dt, ...)
+                local result = originalUpdate(dialogSelf, dt, ...)
+                local watch = dialogSelf.flyoverFocusWatch
+                local input = dialogSelf.textInputElement
+                if watch ~= nil and input ~= nil then
+                    watch.ms = watch.ms + (dt or 0)
+                    if not input.isCapturingInput and not watch.given then
+                        watch.given = true
+                        pcall(function()
+                            input.blockTime = 0
+                            input:onFocusActivate()
+                        end)
+                        log("name dialog field lost its focus %d ms after opening; given back, capturing input = %s",
+                            math.floor(watch.ms), tostring(input.isCapturingInput))
+                    end
+                    if watch.ms >= 1000 then
+                        dialogSelf.flyoverFocusWatch = nil
+                        log("name dialog field one second after opening: capturing input = %s%s",
+                            tostring(input.isCapturingInput), watch.given and " (focus given back once)" or "")
+                    end
+                end
+                return result
+            end
         end
 
         -- Duplicate names: two markers called "Hof" sit side by side in every destination list, a
