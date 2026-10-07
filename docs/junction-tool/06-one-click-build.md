@@ -59,6 +59,9 @@ From doc 05. Each one is there because of how AutoDrive drives:
   gore"). The widest hook that stays on the road and that every ticked vehicle can drive; if none
   fits, it is refused with the reason. Only tried where the two lanes meet side by side (6.5 m apart
   at most) and nearly opposite (150° or more), so two separate roads are never hooked together.
+- **Lanes the clear cut far out are still taken in.** A clear cuts a Y's side lanes 16-22 m out, past
+  the 15 m circle, so the build's circle grows (up to 30 m) to the lane ends that clear cut - only
+  those, and only when building the junction that was just cleared (added 2026-10-07).
 
 ## How each turn is shaped
 
