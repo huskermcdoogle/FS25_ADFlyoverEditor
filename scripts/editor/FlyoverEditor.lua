@@ -277,6 +277,49 @@ ADFlyoverEditor.KEY_SLOTS = {
 }
 
 --- The keycap ("1".."9", "0", or "" for none) for a tool, from its slot in KEY_SLOTS.
+--- AUTODRIVE'S FIELD POINTS KEEP THEIR TAGS (AutoDrive 3.0.1.4). Its editor lays a loop round a field
+--- (Ctrl+Shift+F) and tags each point twice: a flag bit (FLAG_FIELD_POINT, 8) and the field's number
+--- (wp.fieldID). Pressed again, it deletes the points carrying both and lays the loop anew - so a point
+--- that loses either is left behind as a stray. Our tools:
+---   a priority change (convert) changes only the priority bit (withPriority);
+---   a point that replaces or carries on a field point - a smoothed, divided or straightened stretch,
+---   a point put into a link - takes that point's field number (fieldOf) and keeps the bit;
+---   any other new point (a copy, a new road beside one) drops the bit (fieldFlags with no number).
+--- Plain arithmetic, not bit32: bit 1 is the priority, bit 8 the field point. Older AutoDrive never sets 8.
+function ADFlyoverEditor.fieldOf(wp)
+    if wp ~= nil and wp.fieldID ~= nil and math.floor((wp.flags or 0) / 8) % 2 == 1 then
+        return wp.fieldID
+    end
+    return nil
+end
+
+--- `flags` with only the priority bit (FLAG_SUBPRIO, 1) set as asked; every other bit is AutoDrive's own.
+function ADFlyoverEditor.withPriority(flags, secondary)
+    local f = flags or 0
+    f = f - f % 2
+    if secondary then
+        f = f + 1
+    end
+    return f
+end
+
+--- A new point's flags: the field point bit kept with a field number, dropped without one.
+function ADFlyoverEditor.fieldFlags(flags, fieldID)
+    local f = flags or 0
+    local isField = math.floor(f / 8) % 2 == 1
+    if isField and fieldID == nil then f = f - 8 end
+    if fieldID ~= nil and not isField then f = f + 8 end
+    return f
+end
+
+--- Give a new point the field number it carries on, if any.
+function ADFlyoverEditor.stampField(wp, fieldID)
+    if wp ~= nil and fieldID ~= nil then
+        wp.fieldID = fieldID
+    end
+    return wp
+end
+
 function ADFlyoverEditor:toolKeyLabel(tool)
     for slot, t in ipairs(self.KEY_SLOTS) do
         if t == tool then
@@ -2115,9 +2158,10 @@ function ADFlyoverEditor:menuConvertSpan(op)
     local changed = 0
     if op == self.CONVERT_OP.PRIMARY or op == self.CONVERT_OP.SECONDARY then
         ADEditorHistory:snapshot("convert span priority")
-        local flags = (op == self.CONVERT_OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        -- only the priority bit: AutoDrive's own marks (map road, field point) stay
         for _, id in ipairs(ordered) do
-            ADGraphManager:setWayPointFlags(id, flags, false)
+            local wp = ADGraphManager:getWayPointById(id)
+            ADGraphManager:setWayPointFlags(id, ADFlyoverEditor.withPriority(wp and wp.flags, op == self.CONVERT_OP.SECONDARY), false)
             changed = changed + 1
         end
         ADFlyoverSettings.debugLog("[FlyoverEditor]: span priority -> %s, %d point(s).",
@@ -5747,7 +5791,8 @@ function ADFlyoverEditor:applyMoveAsCopy(record)
                 self:moveTo(m.id, m.originalX, m.originalZ)
             end
 
-            local newWp = ADGraphManager:recordWayPoint(fx, fy, fz, false, false, false, nil, flags, false)
+            local newWp = ADGraphManager:recordWayPoint(fx, fy, fz, false, false, false, nil,
+                ADFlyoverEditor.fieldFlags(flags, nil), false)
             if newWp ~= nil then
                 newIds[m.id] = newWp.id
             end
@@ -7269,6 +7314,10 @@ local function severEnds(aId, bId)
 end
 
 function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
+    -- Every caller (smooth, divide, straighten) takes `flags` from the span's second point, so the
+    -- field number comes from the same point: a stretch of AutoDrive's field loop, rebuilt, is still
+    -- that field's loop. Read before anything is removed.
+    local fieldID = ADFlyoverEditor.fieldOf(ADGraphManager:getWayPointById(chainIds[2]))
     -- Rebuild in the direction the span actually ran, not the direction it happened to be walked
     -- in. Reversing both arrays together keeps newPoints aligned with chainIds.
     if not spanRunsForward(chainIds) then
@@ -7317,7 +7366,8 @@ function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
     for i = 2, #newPoints - 1 do
         local p = newPoints[i]
         local y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z)
-        local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, true, dual, false, previousId, flags, false)
+        local wp = ADFlyoverEditor.stampField(ADGraphManager:recordWayPoint(p.x, y, p.z, true, dual, false, previousId,
+            ADFlyoverEditor.fieldFlags(flags, fieldID), false), fieldID)
         -- New waypoints are appended, so their ids sit above everything already there and nothing
         -- shifts underneath us for the rest of this loop.
         previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
@@ -8167,7 +8217,12 @@ function ADFlyoverEditor:insertOnSegment(aId, bId, position, dual, flags)
         return nil
     end
     local y = self:resolveHeightAt(position.x, position.z, position.y)
-    local wp = ADGraphManager:recordWayPoint(position.x, y, position.z, true, dual, false, aId, flags, false)
+    local fieldID = ADFlyoverEditor.fieldOf(a)
+    if fieldID ~= ADFlyoverEditor.fieldOf(b) then
+        fieldID = nil
+    end
+    local wp = ADFlyoverEditor.stampField(ADGraphManager:recordWayPoint(position.x, y, position.z, true, dual, false, aId,
+        ADFlyoverEditor.fieldFlags(flags, fieldID), false), fieldID)
     local newId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
     local newNode = ADGraphManager:getWayPointById(newId)
     local bNode = ADGraphManager:getWayPointById(bId)
@@ -8634,7 +8689,7 @@ function ADFlyoverEditor:createRunFrom(points, dual, flags)
             or self:resolveHeightAt(p.x, p.z, p.y)
         local segmentDual = perSegment and dual(index) or dual
         local wp = ADGraphManager:recordWayPoint(p.x, y, p.z, previousId ~= nil, segmentDual, false,
-            previousId or 0, flags, false)
+            previousId or 0, ADFlyoverEditor.fieldFlags(flags, nil), false)
         previousId = (wp ~= nil and wp.id) or ADGraphManager:getWayPointsCount()
         firstId = firstId or previousId
     end
@@ -9572,7 +9627,7 @@ local function junctionLayChain(NA, points, NB, dual, flags)
     local prev = NA
     for _, p in ipairs(points) do
         local wp = ADGraphManager:recordWayPoint(p.x, p.y, p.z, false, false, false, 0,
-            flags or AutoDrive.FLAG_NONE, false)
+            ADFlyoverEditor.fieldFlags(flags or AutoDrive.FLAG_NONE, nil), false)
         if wp == nil then return false end
         junctionConnect(prev, wp, dual)
         prev = wp
@@ -10391,7 +10446,12 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
     end
 
     local ny = (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac
-    local N = ADGraphManager:recordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false)
+    local tieField = ADFlyoverEditor.fieldOf(outer)
+    if tieField ~= ADFlyoverEditor.fieldOf(inner) then
+        tieField = nil
+    end
+    local N = ADFlyoverEditor.stampField(ADGraphManager:recordWayPoint(Tx, ny, Tz, false, false, false, 0,
+        ADFlyoverEditor.fieldFlags(trackFlags, tieField), false), tieField)
     if N == nil then return ap.wp, trackFlags, {}, segDual end
 
     if ap.dir == "in" then
@@ -11096,9 +11156,10 @@ function ADFlyoverEditor:menuConvertSelection(op)
     ADEditorHistory:snapshot("convert selection " .. self.CONVERT_OP_NAMES[op])
     local OP, changed = self.CONVERT_OP, 0
     if op == OP.PRIMARY or op == OP.SECONDARY then
-        local flags = (op == OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        -- only the priority bit: AutoDrive's own marks (map road, field point) stay
         for id in pairs(self.selection) do
-            ADGraphManager:setWayPointFlags(id, flags, false)
+            local wp = ADGraphManager:getWayPointById(id)
+            ADGraphManager:setWayPointFlags(id, ADFlyoverEditor.withPriority(wp and wp.flags, op == OP.SECONDARY), false)
             changed = changed + 1
         end
     else
@@ -11263,9 +11324,10 @@ function ADFlyoverEditor:convertAtCursor()
     local changed = 0
 
     if op == self.CONVERT_OP.SECONDARY or op == self.CONVERT_OP.PRIMARY then
-        local flags = (op == self.CONVERT_OP.SECONDARY) and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
+        -- only the priority bit: AutoDrive's own marks (map road, field point) stay
         for _, id in ipairs(flagIds or ordered) do
-            ADGraphManager:setWayPointFlags(id, flags, false)
+            local wp = ADGraphManager:getWayPointById(id)
+            ADGraphManager:setWayPointFlags(id, ADFlyoverEditor.withPriority(wp and wp.flags, op == self.CONVERT_OP.SECONDARY), false)
             changed = changed + 1
         end
     else
