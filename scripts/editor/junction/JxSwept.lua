@@ -1220,7 +1220,13 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
     end
 
     local ny = (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac
-    local N = ADFlyoverRecordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false)
+    -- A tie point put into a field loop's link is still that field's loop (as main's 1.0.2.1 has it):
+    -- it takes the field number when both points it sits between carry the same one.
+    local tieField = ADFlyoverEditor.fieldOf(outer)
+    if tieField ~= ADFlyoverEditor.fieldOf(inner) then
+        tieField = nil
+    end
+    local N = ADFlyoverRecordWayPoint(Tx, ny, Tz, false, false, false, 0, trackFlags, false, tieField)
     jxNoteAdded(N)
     if N == nil then return ap.wp, trackFlags, {}, segDual end
 
