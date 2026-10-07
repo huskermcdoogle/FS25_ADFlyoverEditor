@@ -933,7 +933,10 @@ end
 
 function ADFlyoverEditor:junctionRegistryOnGameSave()
     if g_currentMission == nil or g_server == nil then return end
-    self:junctionRegistryCheckHome()
+    -- The same game is enough here; the folder is not compared (junctionRegistryCheckHome would). In
+    -- game the folder read during the save is not the one the numbers were read from: the first save
+    -- with this hook (2026-10-06 23:11) dropped the numbers built in that session and wrote the file as
+    -- read at load - right only because no decision had changed.
     local list, what = nil, nil
     if self._jxReg ~= nil and self._jxRegHome ~= nil and self._jxRegHome.mission == g_currentMission then
         list, what = self._jxReg, "as numbered in this game"

@@ -59,6 +59,27 @@ if n ~= nil then
     check("after a decision: the new decision is in it", line:find('decision="whole"') ~= nil, line)
 end
 
+-- 2b. The folder the game reads during its save is not the one the numbers were read from (as in game
+-- on 2026-10-06: the first hooked save wrote the file "as read when the game loaded", dropping what that
+-- session had built). The numbers as built - with the decision just changed - must still be written,
+-- into the folder of the save, and still be in memory afterwards.
+if n ~= nil then
+    local during = dir .. "/during_save"
+    os.execute('mkdir "' .. during:gsub("/", "\\") .. '" 2>nul')
+    local info = g_currentMission.missionInfo
+    local home = info.savegameDirectory
+    info.savegameDirectory = during
+    ItemSystem.save()
+    info.savegameDirectory = home
+    local s = read(during .. "/ADFlyoverEditor_junctions.xml")
+    check("folder changed during the save: the file is written there", s ~= nil)
+    local line = s and s:match('<junction n="' .. n .. '"[^>]*>') or ""
+    check("folder changed during the save: the decision made this game is in it", line:find('decision="whole"') ~= nil, line)
+    check("folder changed during the save: the numbers are still in memory", E._jxReg ~= nil)
+    os.remove(during .. "/ADFlyoverEditor_junctions.xml")
+    os.execute('rmdir "' .. during:gsub("/", "\\") .. '" 2>nul')
+end
+
 -- 3. Another game loaded since: nothing of this game's is written into it.
 local other = g_currentMission
 g_currentMission = { terrainRootNode = 1, missionInfo = { savegameDirectory = dir .. "/elsewhere" } }
