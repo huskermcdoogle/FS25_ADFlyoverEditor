@@ -371,7 +371,7 @@ function ADFlyoverEditor:junctionRegistry()
         end
     end
 
-    local used, found = {}, {}
+    local used, found, smallGroups = {}, {}, {}
     for i = 1, #forks do
         if not used[i] then
             used[i] = true
@@ -396,6 +396,31 @@ function ADFlyoverEditor:junctionRegistry()
                     if (f.x - mx) ^ 2 + (f.z - mz) ^ 2 <= 15 * 15 then dup = true break end
                 end
                 if not dup then found[#found + 1] = { x = mx, z = mz, forks = #grp } end
+            elseif #grp >= 2 then
+                local sx, sz = 0, 0
+                for _, g in ipairs(grp) do sx, sz = sx + g.x, sz + g.z end
+                smallGroups[#smallGroups + 1] = { x = sx / #grp, z = sz / #grp }
+            end
+        end
+    end
+    -- WIDE JUNCTIONS. A junction whose turns join its roads far out from the middle shows as several
+    -- SMALL fork groups more than 15 m apart - the one at (-158, -70) had three pairs, 11-15 m out - so
+    -- no group reached four and it went unnumbered, while the clear locked it fine. Where a group of
+    -- two or three forks lies clear of every junction found so far, the clear's own finder is asked,
+    -- and a junction it finds there is numbered, once (2026-10-07: 19 such sites on the survey map).
+    for _, g in ipairs(smallGroups) do
+        local clear = true
+        for _, f in ipairs(found) do
+            if (f.x - g.x) ^ 2 + (f.z - g.z) ^ 2 <= 15 * 15 then clear = false break end
+        end
+        if clear then
+            local s = self:junctionSelect(g.x, g.z)
+            if s ~= nil then
+                local dup = false
+                for _, f in ipairs(found) do
+                    if (f.x - s.x) ^ 2 + (f.z - s.z) ^ 2 <= 15 * 15 then dup = true break end
+                end
+                if not dup then found[#found + 1] = { x = s.x, z = s.z, forks = #(s.forks or {}) } end
             end
         end
     end
