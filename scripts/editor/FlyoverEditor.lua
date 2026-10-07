@@ -832,6 +832,10 @@ end
 --- says so itself.
 function ADFlyoverEditor:describeBuild()
     if ADBuildInfo == nil then
+        -- the packaged zip carries its build in the Prelude stamp
+        if ADFlyoverPrelude ~= nil and ADFlyoverPrelude.BUILD ~= nil then
+            return "build " .. tostring(ADFlyoverPrelude.BUILD)
+        end
         return "build unknown (running from a working copy, not a packaged zip)"
     end
     return string.format("build %s%s, %s, \"%s\"",
@@ -11244,6 +11248,8 @@ function ADFlyoverEditor:convertAtCursor()
     local flagIds = nil
     -- A lone point's connections, as {from, to} pairs; otherwise the consecutive pairs of `ordered`.
     local pointPairs = nil
+    -- The run is a loop and `ordered` ends where it began.
+    local closedLoop = false
     if self.convertScope == self.DELETE_SCOPE.RUN then
         local run, count, _, junctions = self:collectRunBetweenJunctions(self.hoverId)
         if count >= AutoDrive.FLYOVER_DELETE_RUN_MAX then
@@ -11260,29 +11266,43 @@ function ADFlyoverEditor:convertAtCursor()
         -- BETWEEN the last run point and the junction were never touched, so converting a leg to
         -- two-way left its two end connections one-way and the leg still could not be driven both
         -- ways - the change looked like it had not taken at all.
-        local function junctionNeighbourOf(id)
+        local function junctionNeighbourOf(id, except)
             local wp = ADGraphManager:getWayPointById(id)
             if wp == nil then
                 return nil
             end
             for _, listName in ipairs(LINK_LISTS) do
                 for _, other in pairs(linkList(wp, listName) or {}) do
-                    if junctions[other] then
+                    if junctions[other] and other ~= except then
                         return other
                     end
                 end
             end
             return nil
         end
+        local function linked(a, b)
+            local aw, bw = ADGraphManager:getWayPointById(a), ADGraphManager:getWayPointById(b)
+            return aw ~= nil and bw ~= nil and (table.contains(aw.out, b) or table.contains(bw.out, a))
+        end
 
         if #ordered > 0 then
-            local head = junctionNeighbourOf(ordered[1])
+            local first, last = ordered[1], ordered[#ordered]
+            local head = junctionNeighbourOf(first)
+            -- not the head again: a lone point between two junctions found the same one twice
+            local tail = junctionNeighbourOf(last, head)
             if head ~= nil then
                 table.insert(ordered, 1, head)
             end
-            local tail = junctionNeighbourOf(ordered[#ordered])
-            if tail ~= nil and tail ~= head then
+            if tail ~= nil then
                 table.insert(ordered, tail)
+            elseif (head ~= nil and first ~= last and linked(last, head))
+                or (head == nil and #ordered >= 3 and linked(last, first)) then
+                -- The run closes on itself: a loop on its own (AutoDrive's field loop) comes back to
+                -- the clicked point, a loop off one junction comes back to that junction. The link
+                -- that closes it is the run's like any other. Left out, it kept its old direction
+                -- while the rest changed - and a later click elsewhere picked it up.
+                table.insert(ordered, head or first)
+                closedLoop = true
             end
         end
     else
@@ -11347,6 +11367,27 @@ function ADFlyoverEditor:convertAtCursor()
         end
     else
         if pointPairs == nil then
+            -- One-way and reverse-way keep the way the run already runs: the way most of its one-way
+            -- links go. The walk only decides a run that is two-way throughout - it starts from
+            -- whichever end it found first, or on a loop from the clicked point, so a click on a
+            -- two-way bit of a one-way loop could otherwise send it all the other way round.
+            if op == self.CONVERT_OP.ONEWAY or op == self.CONVERT_OP.REVERSEROAD then
+                local vote = 0
+                for i = 1, #ordered - 1 do
+                    local aw = ADGraphManager:getWayPointById(ordered[i])
+                    local bw = ADGraphManager:getWayPointById(ordered[i + 1])
+                    if aw ~= nil and bw ~= nil then
+                        local f = table.contains(aw.out, ordered[i + 1])
+                        local b = table.contains(bw.out, ordered[i])
+                        if f and not b then vote = vote + 1 elseif b and not f then vote = vote - 1 end
+                    end
+                end
+                if vote < 0 then
+                    local rev = {}
+                    for i = #ordered, 1, -1 do rev[#rev + 1] = ordered[i] end
+                    ordered = rev
+                end
+            end
             pointPairs = {}
             for i = 1, #ordered - 1 do
                 pointPairs[#pointPairs + 1] = { ordered[i], ordered[i + 1] }
@@ -11428,7 +11469,8 @@ function ADFlyoverEditor:convertAtCursor()
         (op == self.CONVERT_OP.SECONDARY or op == self.CONVERT_OP.PRIMARY)
             and string.format("%d waypoint(s)", #(flagIds or ordered))
             or string.format("%d connection(s)%s", #(pointPairs or {}),
-                self.convertScope == self.DELETE_SCOPE.RUN and ", junctions at the ends included" or " at the point"),
+                self.convertScope ~= self.DELETE_SCOPE.RUN and " at the point"
+                    or closedLoop and ", a closed loop" or ", junctions at the ends included"),
         self.CONVERT_OP_NAMES[op], changed)
     if changed == 0 then
         ADFlyoverSettings.debugLog("[AD]   nothing to do - it was already %s.", self.CONVERT_OP_NAMES[op])

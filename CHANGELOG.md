@@ -16,6 +16,11 @@ points they touched were left behind as strays when AutoDrive laid the loop agai
   mark and number, so the loop stays one loop AutoDrive can replace.
 - **Copies and new tracks** (Move's copy, Parallel and Siding, the junction tool's new connectors) no
   longer carry a half field-point mark from the point they were made from.
+- **Convert on a whole loop** (a field loop, or any closed loop) now changes every link of it. The link
+  at the clicked point used to be skipped: after one-way it stayed two-way, after other way it pointed
+  against the rest, and the next click somewhere else picked it up. One-way also keeps the way a
+  mostly one-way run already goes instead of following where the click happened to start, and a single
+  point between two junctions now has both its links converted.
 
 ### Warnings you can read
 
