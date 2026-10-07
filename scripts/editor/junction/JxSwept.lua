@@ -279,7 +279,8 @@ end
 ---      curved or gapped site it flexes to stay on the road, and reports its smallest radius so a turn
 ---      tighter than the setting can be flagged instead of laid.
 --- Returns { ax,ay,az, bx,by,bz, points, minRadius } or (nil, reason) when the tracks genuinely cannot
---- be joined into ONE turn. `reason` is "far" for the plausibility gate below, or nil for every other
+--- be joined into ONE turn. `reason` is "far" for the plausibility gate below (then also the angle
+--- between the two lanes where they meet, in degrees, and how far apart they are there), or nil for every other
 --- failure (degenerate/opposed tangents; not a shallow angle - see the note on `delta`). Used by BOTH
 --- preview and placement, so what is drawn is what is laid.
 function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, turnR)
@@ -388,10 +389,10 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     local extend = self.junctionExtendTrim ~= false
     if not extend then
         local meetCap = math.max(turnR * 3, 15)   -- the turn's own scale, not the search radius
-        if bestd > meetCap * meetCap then return nil, "far" end
+        if bestd > meetCap * meetCap then return nil, "far", math.deg(delta), math.sqrt(bestd) end
     elseif math.abs(det) > 1e-6 then
         local farCap = math.max(turnR * 6, 20)    -- the turn's own scale, not the search radius
-        if sA > farCap or sB > farCap then return nil, "far" end
+        if sA > farCap or sB > farCap then return nil, "far", math.deg(delta), math.sqrt(bestd) end
     else
         -- Parallel/near-parallel tangents (delta ~ 0) - the MOST common case, a straight-through
         -- continuation, and the corner test above does not apply (there is no corner). Colinearity
@@ -403,7 +404,7 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
         -- genuinely different, merely parallel one (an adjacent lane a few lanes over, say).
         local perpDist = math.abs((pB.x - pA.x) * uAz - (pB.z - pA.z) * uAx)
         local perpCap = math.max(turnR, 6)
-        if perpDist > perpCap then return nil, "far" end
+        if perpDist > perpCap then return nil, "far", math.deg(delta), math.sqrt(bestd) end
     end
 
     -- Tie-ins: t back from the corner, walked along the real chains (a non-positive walk stays at the
@@ -524,6 +525,118 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     return { ax = pax, ay = pay, az = paz, bx = pbx, by = pby, bz = pbz,
         points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd),
         throughCentre = bi.throughCentre }
+end
+
+-- THE HOOK: A Y'S SHARP-BACK TURN, LAID IN THE GORE (the user, 2026-10-07: "lay it in the gore").
+-- At a shallow Y the turn from one branch back into the other is nearly a U-turn - at 53, in from
+-- the east and back out to the south-east, 178 deg between lanes 3.8 m apart where they meet - so
+-- the corner the turn above is built round lies 145 m off and the pair is refused as "far". The
+-- maps have such a turn anyway: a tight hook out in the gore, 20-25 m from the middle, where the two
+-- branches have drifted far enough apart to turn between. That is where this lays it: ONE arc of
+-- radius r touching both lanes, found by walking out along the exit lane until a circle of that
+-- radius beside it just touches the entry lane. The lanes drift apart at the Y's angle, so a wider
+-- hook sits further out; nothing is tried past JX_HOOK_REACH from the middle, and only an arc that
+-- actually turns back (JX_HOOK_SWEEP degrees or more) counts as a hook.
+-- Tried only at a Y's MOUTH: where the two lanes meet they run side by side, a lane apart (the Ys on
+-- the survey map: 3.8 and 4.7 m) and nearly opposite (JX_HOOK_OPPOSED degrees or more). Two
+-- separate roads leaving a junction at 45 deg met 8.6 and 12.6 m apart at j2 (a T and a track
+-- beside it), and hooks laid between them ran across the grass.
+local JX_HOOK_REACH, JX_HOOK_SWEEP, JX_HOOK_MOUTH, JX_HOOK_OPPOSED = 35, 120, 6.5, 150
+-- The closest point of a lane (chain order) to (x, z): the point, the distance, the direction of
+-- the chain there, whether it fell inside the lane rather than on one of its two ends, and the
+-- lane's height there.
+local function jxClosestOnChain(chain, x, z)
+    local bx, bz, bd, bdx, bdz, inner, by = nil, nil, math.huge, 0, 0, false, 0
+    for i = 1, #chain - 1 do
+        local p, q = chain[i], chain[i + 1]
+        local dx, dz = q.x - p.x, q.z - p.z
+        local L2 = dx * dx + dz * dz
+        if L2 > 1e-9 then
+            local t = math.max(0, math.min(1, ((x - p.x) * dx + (z - p.z) * dz) / L2))
+            local px, pz = p.x + dx * t, p.z + dz * t
+            local d = (x - px) ^ 2 + (z - pz) ^ 2
+            if d < bd then
+                local L = math.sqrt(L2)
+                bx, bz, bd, bdx, bdz = px, pz, d, dx / L, dz / L
+                inner = not ((i == 1 and t <= 0) or (i == #chain - 1 and t >= 1))
+                by = (p.y or 0) + ((q.y or 0) - (p.y or 0)) * t
+            end
+        end
+    end
+    return bx, bz, math.sqrt(bd), bdx, bdz, inner, by
+end
+
+function ADFlyoverEditor:junctionHookConnector(fromAp, toAp, cx, cz, radius, r)
+    local A = self:junctionChain(fromAp, cx, cz, radius)
+    local B = self:junctionChain(toAp, cx, cz, radius)
+    if #A < 2 or #B < 2 then return nil end
+    -- Where the two lanes come closest: the Y's mouth. The hook is looked for outward from there.
+    local j0, bestd = #B, math.huge
+    for j = 1, #B do
+        local _, _, d = jxClosestOnChain(A, B[j].x, B[j].z)
+        if d < bestd then j0, bestd = j, d end
+    end
+    -- Which side the exit lane lies on, seen along the entry lane: the turn goes that way, and the
+    -- hook's centre sits on that side of travel on both lanes (x east, z south: left of (vx, vz) is
+    -- (vz, -vx)).
+    local qx, qz, _, vax, vaz = jxClosestOnChain(A, B[j0].x, B[j0].z)
+    local side = ((B[j0].x - qx) * vaz - (B[j0].z - qz) * vax) > 0 and 1 or -1
+    local function centreBeside(px, pz, vx, vz)
+        return px + side * vz * r, pz - side * vx * r
+    end
+    -- Out along the exit lane (its travel runs against chain order), half a metre at a time, until
+    -- the circle beside it reaches the entry lane from the near side.
+    local prevF, prev = nil, nil
+    local hit = nil
+    for j = j0, 2, -1 do
+        local p, q = B[j], B[j - 1]
+        local dx, dz = q.x - p.x, q.z - p.z
+        local L = math.sqrt(dx * dx + dz * dz)
+        if L > 1e-6 then
+            local vx, vz = dx / L, dz / L
+            local n = math.max(1, math.ceil(L / 0.5))
+            for k = 0, n - 1 do
+                local f0 = k / n
+                local px, pz = p.x + dx * f0, p.z + dz * f0
+                if (px - cx) ^ 2 + (pz - cz) ^ 2 > JX_HOOK_REACH * JX_HOOK_REACH then break end
+                local ccx, ccz = centreBeside(px, pz, vx, vz)
+                local ax, az, d, avx, avz = jxClosestOnChain(A, ccx, ccz)
+                -- the centre must be on the turn's side of the entry lane too
+                local onSide = ((ccx - ax) * avz - (ccz - az) * avx) * side > 0
+                local f = onSide and (d - r) or -(d + r)
+                if prevF ~= nil and prevF < 0 and f >= 0 then
+                    local w = (f - prevF) ~= 0 and (-prevF / (f - prevF)) or 0
+                    hit = { x = prev.x + (px - prev.x) * w, z = prev.z + (pz - prev.z) * w,
+                        y = (p.y or 0) + ((q.y or 0) - (p.y or 0)) * f0, vx = vx, vz = vz }
+                    break
+                end
+                prevF, prev = f, { x = px, z = pz }
+            end
+            if hit ~= nil then break end
+        end
+    end
+    if hit == nil then return nil end
+    local ccx, ccz = centreBeside(hit.x, hit.z, hit.vx, hit.vz)
+    local ax, az, _, avx, avz, inner, ay = jxClosestOnChain(A, ccx, ccz)
+    if not inner then return nil end
+    -- Round the circle from the entry tie to the exit tie, the way travel on the entry lane turns.
+    local a0 = math.atan2(az - ccz, ax - ccx)
+    local a1 = math.atan2(hit.z - ccz, hit.x - ccx)
+    local dir = ((-math.sin(a0)) * avx + math.cos(a0) * avz) > 0 and 1 or -1
+    local sweep = (a1 - a0) * dir
+    while sweep <= 0 do sweep = sweep + 2 * math.pi end
+    while sweep > 2 * math.pi do sweep = sweep - 2 * math.pi end
+    if math.deg(sweep) < JX_HOOK_SWEEP or math.deg(sweep) > 200 then return nil end
+    -- ...and leaves it heading the way the exit lane runs.
+    if dir * ((-math.sin(a1)) * hit.vx + math.cos(a1) * hit.vz) <= 0 then return nil end
+    local n = math.max(2, math.ceil(sweep * r / 2))
+    local pts = {}
+    for k = 1, n - 1 do
+        local a = a0 + dir * sweep * k / n
+        pts[#pts + 1] = { x = ccx + r * math.cos(a), y = ay + (hit.y - ay) * k / n, z = ccz + r * math.sin(a) }
+    end
+    return { ax = ax, ay = ay, az = az, bx = hit.x, by = hit.y, bz = hit.z, points = pts, minRadius = r,
+        t = 0, meetDist = bestd, hook = true, hookSweep = math.deg(sweep) }
 end
 
 --- How many of a connector's corridor samples leave the road surface, and how many were taken. Every
@@ -998,13 +1111,54 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
         end
         return nil
     end
+    -- A HOOK where two lanes never meet in a corner (junctionHookConnector): the widest that fits,
+    -- down to the rigs' full lock, half a metre at a time - a hook moves out along the gore as it
+    -- widens, so a whole metre skips past the one place it fits. Returns the hook and its radius, or
+    -- nil, the last hook tried and why it failed, or nil alone where no hook shape exists at all
+    -- (two lanes of separate crossings, the reason "far" was there for).
+    local function hookInstead()
+        local rr, lo = turnR, math.max(floor, rigFloor)
+        local lastHook, why = nil, nil
+        while rr >= lo - 1e-6 do
+            local hook = self:junctionHookConnector(fromAp, toAp, cx, cz, radius, rr)
+            if hook ~= nil then
+                lastHook = hook
+                if checkSurface and self:junctionCorridorTooOffRoad(hook) then
+                    why = "offroad"
+                elseif checkObstacles and self:junctionObstacleHits(hook) > 0 then
+                    why = "blocked"
+                elseif rigs == nil then
+                    return hook, rr
+                else
+                    local verdict = judge(hook, true)
+                    if verdict == nil then return hook, rr end
+                    why = verdict
+                end
+            end
+            rr = rr - 0.5
+        end
+        return nil, lastHook, why
+    end
     local r = turnR
     while r >= floor - 1e-6 do
-        local con, whyNil = self:junctionTrackConnector(fromAp, toAp, cx, cz, radius, r)
+        local con, whyNil, farDelta, farApart = self:junctionTrackConnector(fromAp, toAp, cx, cz, radius, r)
         if con == nil then
             -- "far" does not depend on the turn radius candidate - stepping r down cannot bring two
             -- tracks closer together, so stop instead of retrying it at every floor step.
-            if whyNil == "far" then return nil, r, "far" end
+            if whyNil == "far" then
+                local hook, a, b = nil, nil, nil
+                if farDelta ~= nil and farDelta >= JX_HOOK_OPPOSED and farApart <= JX_HOOK_MOUTH then
+                    hook, a, b = hookInstead()
+                end
+                if hook ~= nil then return hook, a, nil end
+                if a ~= nil then
+                    roadNote(string.format("hook:%d_%d", fromAp.wp.id, toAp.wp.id),
+                        "junction - entry id=%d -> exit id=%d: a sharp-back turn (hook) - none fits in the gore, from %.1f m down to %.1f m (the tightest the vehicles that must fit can turn): %s - refused.",
+                        fromAp.wp.id, toAp.wp.id, turnR, math.max(floor, rigFloor), tostring(b))
+                    return a, a.minRadius, b
+                end
+                return nil, r, "far"
+            end
             if last == nil then return nil, r, "nocurve" end
             local wide, wr = swungInstead()
             if wide ~= nil then return wide, wr, nil end

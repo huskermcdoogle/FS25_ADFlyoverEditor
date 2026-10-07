@@ -24,8 +24,9 @@ local function check(name, ok, detail)
     print(string.format("%-4s %s%s", ok and "ok" or "FAIL", name, detail and (" - " .. tostring(detail)) or ""))
     if not ok then fails = fails + 1 end
 end
--- the plan, packed the way build_zip.py packs it
-local src = assert(io.open("../testplans/current.xml", "rb")):read("*a")
+-- the plan, packed the way build_zip.py packs it. A FIXED plan of its own (the first one, ad64dbd), not
+-- tools/testplans/current.xml: that changes every round, and the checks below name its tests.
+local src = assert(io.open("testpanel_plan.xml", "rb")):read("*a")
 createFolder(TMP .. "/mod/")
 local f = assert(io.open(TMP .. "/mod/testplan.xml", "wb")); f:write((src:gsub("@BUILD@", ADFlyoverPrelude.BUILD))); f:close()
 

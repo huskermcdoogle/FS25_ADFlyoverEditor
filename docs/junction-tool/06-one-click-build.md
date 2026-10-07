@@ -54,6 +54,11 @@ From doc 05. Each one is there because of how AutoDrive drives:
 - **X:** all four straights stay, plus a right and a left turn from each road.
 - **One-way roads:** only the moves the directions allow.
 - **No U-turns,** ever.
+- **Y:** the sharp-back turn from one branch into the other is a **hook** in the gore, where the two
+  branches have drifted apart enough to turn between (added 2026-10-07, the user: "lay it in the
+  gore"). The widest hook that stays on the road and that every ticked vehicle can drive; if none
+  fits, it is refused with the reason. Only tried where the two lanes meet side by side (6.5 m apart
+  at most) and nearly opposite (150° or more), so two separate roads are never hooked together.
 
 ## How each turn is shaped
 
