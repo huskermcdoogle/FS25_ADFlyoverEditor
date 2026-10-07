@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
+     this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
+     auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
+     matched against the editor's own log lines. A click always wins. -->
+<testPlan title="road runs + spline" build="@BUILD@">
+    <test id="build" title="The game loaded this build" auto="build"
+          hint="Ticks itself: the running build is the one this plan was packed with."/>
+    <test id="bendLane" title="Lane bends stay in the middle"
+          hint="Road runs: hover the lane with the widening bends near (283,-440). The line keeps to the middle of the asphalt through the bends."/>
+    <test id="trackToRoad" title="Field track runs to the asphalt" passLog="road runs %- built"
+          hint="Road runs: build the field track at x 579. Straight, follows the bend at its south end, stops right at the asphalt."/>
+    <test id="spline" title="Multi-point spline"
+          hint="Spline tool: click 4-5 points, drag one, add one near the curve, ctrl-click one away, build. The curve passes every point."/>
+</testPlan>
