@@ -311,6 +311,14 @@ Each is one choice. We'll ask them one at a time.
    middle, so the slide is extra, measured from today's centre: k x half-width x cot(angle), with k
    being tested offline (0, 0.5, 1, 1.5). The side road re-aims to the slid centre (your choice). Y
    merges need a cap or their own rule.
+   **Answered 2026-10-07: parked.** You confirmed this slide (picture A at 41). Judged by the room
+   test we agreed (the biggest smooth turn joining the two lanes with a full lane width on the
+   asphalt, no vehicle), it adds 0-0.5 m of radius to the tight turn at 3, 7, 41 and 52 and takes
+   3-4 m from the other sharp turn, or stops it fitting. The turns don't pass through the centre:
+   their room comes from where the lanes run and where the paving is, and bending the side road toward
+   the wide side makes the angle sharper. What does make room: the builder's swing-wide (kickout)
+   judged against tractor rigs instead of the semi, and the trailer allowed onto the gravel shoulder
+   (the vehicle set, docs/swept-path-spec.md).
 2. ~~Which fit first for a curving side road?~~ **Pick by cause**, as in "Picking by situation".
 3. ~~Your time.~~ **Flag-only review first, a click page only if needed, no test drives** (see "Pass mark
    and asking you").

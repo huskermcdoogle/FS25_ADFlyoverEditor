@@ -247,6 +247,9 @@ ADFlyoverEditor = {
     -- overlaps one shrinks its radius to swing clear, and refuses (red, "blocked") if nothing fits.
     junctionCheckObstacles = true,
     junctionSwept = true,
+    -- Which rigs of the vehicle set (SweptSim.RIGS, plus a rig measured in game) a built turn must fit:
+    -- the two tractor rigs by default, never the semi alone (decided 2026-10-07). Card toggles.
+    junctionRigs = { small = true, big = true, semi = false, measured = true },
     -- Card-tunable widths: the on-road corridor (surface check) and the obstacle-clearance box.
     junctionCorridor = 4.0,
     junctionClearance = 5.0,

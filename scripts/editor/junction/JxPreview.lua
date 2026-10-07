@@ -96,9 +96,10 @@ function ADFlyoverEditor:updateJunctionPreview()
             .. tostring(self.junctionCheckObstacles ~= false)
             .. string.format("_%d_%d", (self.junctionCorridor or 4) * 10, (self.junctionClearance or 5) * 10)
             -- The swept-path prediction runs only on a LOCKED site (see below), so locking must
-            -- refresh the preview; and a newly captured rig changes every predicted line.
+            -- refresh the preview; and the rigs that must fit (ticked on the card, or newly measured)
+            -- change every predicted line.
             .. "_" .. tostring(self.junctionSwept ~= false) .. "_" .. tostring(self.junctionArmed ~= nil)
-            .. "_" .. tostring(ADFlyoverSweptPath and ADFlyoverSweptPath.rig and ADFlyoverSweptPath.rig.name or "-"),
+            .. "_" .. self:junctionRigsKey(),
         ADGraphManager:getWayPointsCount())
     if key == self.junctionPreviewKey and self.junctionPreview ~= nil then
         return
@@ -2061,12 +2062,14 @@ function ADFlyoverEditor:updateJunctionPreview()
     local nNew, nExisting, nTight, nOffRoad, nNoCurve, nUTurn, nFar, nRebuild, nBlocked = 0, 0, 0, 0, 0, 0, 0, 0, 0
     local nTrailerRoad, nTrailerHit = 0, 0
     local usedMin, usedMax = nil, nil
-    -- The design rig for the swept-path gate: only on a LOCKED site with the toggle on (a simulation
-    -- per candidate radius per turn is too much for the scouting preview that re-solves on every
-    -- half-metre of cursor travel). Unlocked, the solve is the line-only one as before.
+    -- The rigs for the swept-path gate (the vehicle set, those ticked on the card): only on a LOCKED
+    -- site with the toggle on (a simulation per candidate radius per turn is too much for the scouting
+    -- preview that re-solves on every half-metre of cursor travel). Unlocked, or with no rig ticked,
+    -- the solve is the line-only one as before.
     local sweptRig = nil
     if self.junctionSwept ~= false and self.junctionArmed ~= nil and SweptSim ~= nil then
-        sweptRig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or SweptSim.EXAMPLE_RIG
+        sweptRig = self:junctionDesignRigs()
+        if #sweptRig == 0 then sweptRig = nil end
     end
     -- 150 deg turned out to be too tight on a real site - a legitimate sharp hook (a two-way point's
     -- "in" arm doubling back onto a nearby "out" arm) measured 152 deg and was silently dropped before
@@ -2263,13 +2266,18 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- claims are made visible before anything is allowed to refuse on them.
     local sweptMax, nSweptWide = nil, 0
     local nSweep, sweepMax = 0, nil
+    local rigFits = nil
     if self.junctionSwept ~= false and self.junctionArmed ~= nil and SweptSim ~= nil then
-        local rig = (ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig) or SweptSim.EXAMPLE_RIG
+        -- Drawn: the rig the solve judged the line by (the failing one, else the first that must fit);
+        -- with no rig ticked, the first of the set, so the lines still show.
+        local allRigs = self:junctionDesignRigs(true)
+        local drawRig = self:junctionDesignRigs()[1] or allRigs[1] or SweptSim.EXAMPLE_RIG
         local halfCorr = (self.junctionCorridor or AutoDrive.FLYOVER_JUNCTION_CORRIDOR or 4.0) / 2
         for _, m in ipairs(movements) do
             -- Refused turns too: their red connector is exactly where seeing the predicted bodies
             -- explains the refusal. The solve already ran the prediction on the connector it kept.
             if m.connector ~= nil and (not m.exists or m.rebuild) then
+                local rig = m.connector.sweptRig or drawRig
                 local ok, sw = true, m.connector.swept
                 if sw == nil then
                     ok, sw = pcall(function() return self:junctionSweptPredict(m.from, m.to, m.connector, cx, cz, R, rig) end)
@@ -2301,6 +2309,34 @@ function ADFlyoverEditor:updateJunctionPreview()
                 elseif not ok then
                     roadNote("sweptErr", "swept-path prediction failed: %s", tostring(sw))
                 end
+            end
+        end
+        -- WHICH RIGS EACH TURN FITS, for the card: every rig of the set, ticked or not, over the turns
+        -- this build would lay. A rig the solve already drove through a line is not driven again; a
+        -- turn with no usable prediction does not count as a fit.
+        local checkSurface = self.junctionCheckSurface ~= false
+        local checkObstacles = self.junctionCheckObstacles ~= false
+        rigFits = {}
+        for _, g in ipairs(allRigs) do
+            local fit, total = 0, 0
+            for _, m in ipairs(movements) do
+                if m.connector ~= nil and m.refused == nil and (not m.exists or m.rebuild) then
+                    total = total + 1
+                    local s = m.connector.sweptBy and m.connector.sweptBy[g.key] or nil
+                    if s == nil then
+                        local ok, res = pcall(function() return self:junctionSweptPredict(m.from, m.to, m.connector, cx, cz, R, g) end)
+                        if ok then s = res end
+                    end
+                    if s ~= nil and not (checkSurface and self:junctionSweptOffRoad(s))
+                        and not (checkObstacles and self:junctionSweptHits(s, g) > 0) then
+                        fit = fit + 1
+                    end
+                end
+            end
+            rigFits[g.key] = { fit = fit, total = total }
+            if total > 0 then
+                Logging.info("[FlyoverEditor]: swept - %s (%s, %s): fits %d of the %d turns this build lays.",
+                    tostring(g.short or g.key), tostring(g.name), self:junctionRigOn(g.key) and "must fit" or "not checked", fit, total)
             end
         end
     end
@@ -2549,7 +2585,7 @@ function ADFlyoverEditor:updateJunctionPreview()
         protectedOf = protectedOf,
         usedMin = usedMin, usedMax = usedMax, confidence = conf,
         sweptMax = sweptMax, nSweptWide = nSweptWide, nTrailerRoad = nTrailerRoad, nTrailerHit = nTrailerHit,
-        nSweep = nSweep, sweepMax = sweepMax,
+        nSweep = nSweep, sweepMax = sweepMax, rigFits = rigFits,
     }
     -- Run the lane-end tidy in DRY mode and keep what it says: where each end would land, and the
     -- claim bands it measured against. Drawn below, so the site can be judged on screen before

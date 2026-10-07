@@ -349,6 +349,16 @@ function ADFlyoverEditor:toggleJunctionSwept()
         self.junctionSwept and "on (tow and trailer lines drawn on the locked site)" or "off")
 end
 
+--- Toggle whether one rig of the vehicle set must fit the turns the build lays (junctionDesignRigs).
+function ADFlyoverEditor:toggleJunctionRig(key)
+    local on = not self:junctionRigOn(key)
+    self.junctionRigs = self.junctionRigs or {}
+    self.junctionRigs[key] = on
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction vehicle set - %s %s.", tostring(key),
+        on and "must fit the turns" or "no longer checked")
+end
+
 function ADFlyoverEditor:toggleJunctionCheckObstacles()
     self.junctionCheckObstacles = not (self.junctionCheckObstacles ~= false)
     self.junctionPreviewKey = nil

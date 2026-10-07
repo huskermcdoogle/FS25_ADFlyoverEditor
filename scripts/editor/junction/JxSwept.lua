@@ -1,11 +1,12 @@
 -- Part of the flyover editor, moved out of FlyoverEditor.lua (docs/editor-modules-spec.md). Prelude.lua
 -- loads it after FlyoverEditor.lua, in the old file's order.
 -- MODSPLIT: HELPERS FROM THE FILES LOADED BEFORE THIS ONE (tools/modsplit/split.py writes this block)
-for _, name in ipairs({ "isRoadAt", "junctionAngDiff", "junctionBiarc", "junctionBranchTurn", "junctionChainIndexNear", "junctionConnect", "junctionDisconnect", "junctionDubins", "junctionSegDir", "junctionWalkBack", "jxNoteAdded", "roadNote" }) do
+for _, name in ipairs({ "isPavedAt", "isRoadAt", "junctionAngDiff", "junctionBiarc", "junctionBranchTurn", "junctionChainIndexNear", "junctionConnect", "junctionDisconnect", "junctionDubins", "junctionSegDir", "junctionWalkBack", "jxNoteAdded", "roadNote" }) do
     if ADFlyoverEditor.shared == nil or ADFlyoverEditor.shared[name] == nil then
         Logging.error("[FlyoverEditor]: JxSwept.lua needs %s, which no file loaded before it shares", name)
     end
 end
+local isPavedAt = ADFlyoverEditor.shared.isPavedAt
 local isRoadAt = ADFlyoverEditor.shared.isRoadAt
 local junctionAngDiff = ADFlyoverEditor.shared.junctionAngDiff
 local junctionBiarc = ADFlyoverEditor.shared.junctionBiarc
@@ -534,11 +535,16 @@ function ADFlyoverEditor:junctionCorridorOffRoad(con)
     local pts = { { x = con.ax, z = con.az } }
     for _, p in ipairs(con.points) do pts[#pts + 1] = p end
     pts[#pts + 1] = { x = con.bx, z = con.bz }
+    -- The line itself stays on the PAVING where it joins two paved lanes (decided 2026-10-07): only
+    -- the corridor's edges - and the trailer, in the swept check - may use a gravel shoulder. Between
+    -- gravel or dirt-track roads the line keeps the plain road test.
+    local onLine = isRoadAt
+    if isPavedAt(con.ax, con.az) and isPavedAt(con.bx, con.bz) then onLine = isPavedAt end
     local off, total = 0, 0
     for i = 1, #pts do
         local p = pts[i]
         total = total + 1
-        if not isRoadAt(p.x, p.z) then off = off + 1 end
+        if not onLine(p.x, p.z) then off = off + 1 end
         if i > 1 and i < #pts then
             local a, b = pts[i - 1], pts[i + 1]
             local dx, dz = b.x - a.x, b.z - a.z
@@ -849,15 +855,148 @@ function ADFlyoverEditor:junctionKickout(fromAp, toAp, con, d, leftTurn, rig, cx
         sweep = d, kickEarly = earlyGot, kickLate = lateGot }
 end
 
-function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR, rig)
+--- The VEHICLE SET (docs/swept-path-spec.md §1, decided 2026-10-07): the rigs a built turn must fit.
+--- SweptSim.RIGS are the presets (a small and a big tractor with a tipping trailer, and the captured
+--- semi); a rig measured in game this session (FlyoverSweptRig) joins them as "measured". A fake rig
+--- with no wheelbase (the offline harness's RIG_TRAILER reach stand-in) is not a rig. junctionRigs says
+--- which must fit; all = true returns every rig of the set (the card counts turns for each).
+function ADFlyoverEditor:junctionDesignRigs(all)
+    local out = {}
+    if SweptSim == nil then return out end
+    local list = {}
+    for _, g in ipairs(SweptSim.RIGS or { SweptSim.EXAMPLE_RIG }) do list[#list + 1] = g end
+    local measured = ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.rig or nil
+    if measured ~= nil and measured.wheelbase ~= nil then
+        measured.key, measured.short = "measured", "measured rig"
+        list[#list + 1] = measured
+    end
+    for _, g in ipairs(list) do
+        if all or self:junctionRigOn(g.key) then out[#out + 1] = g end
+    end
+    return out
+end
+
+--- Whether the rig with this key must fit (junctionRigs, falling back to the defaults: the tractor
+--- rigs and a measured rig yes, the semi no).
+function ADFlyoverEditor:junctionRigOn(key)
+    local on = nil
+    if self.junctionRigs ~= nil then on = self.junctionRigs[key] end
+    if on == nil then on = (key ~= "semi") end
+    return on
+end
+
+--- The rigs that must fit, as text for the preview's cache key: ticking a rig or measuring a new one
+--- changes every predicted line.
+function ADFlyoverEditor:junctionRigsKey()
+    local parts = {}
+    for _, g in ipairs(self:junctionDesignRigs()) do parts[#parts + 1] = tostring(g.key) .. ":" .. tostring(g.name) end
+    return table.concat(parts, ",")
+end
+
+--- Which way a connector turns, from its own end tangents (the sense junctionSweptPredict reads off the
+--- lanes): forward = (sin h, cos h), left = (cos h, -sin h), so a left turn has a NEGATIVE cross.
+local function connectorLeftTurn(con)
+    local p1, pn = con.points[1], con.points[#con.points]
+    if p1 == nil then return false end
+    local ux, uz = p1.x - con.ax, p1.z - con.az
+    local vx, vz = con.bx - pn.x, con.bz - pn.z
+    return ux * vz - uz * vx < 0
+end
+
+function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR, rigs)
     local floor = AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4
     local checkSurface = self.junctionCheckSurface ~= false
     local checkObstacles = self.junctionCheckObstacles ~= false
     local last, lastReason = nil, nil
-    -- The design vehicle's own floor (docs/swept-path-spec.md §6, gate 1): a connector tighter than
-    -- its full-lock radius is one the driver would understeer straight through, whatever the setting
-    -- says. Candidates below it are not even tried.
-    local rigFloor = (rig ~= nil and rig.minTurnRadius) or 0
+    -- The rigs the turn must fit: a list (the vehicle set), one rig on its own (as callers passed it
+    -- before the set), or nil for the line-only solve.
+    if rigs ~= nil and rigs.minTurnRadius ~= nil then rigs = { rigs } end
+    if rigs ~= nil and (#rigs == 0 or SweptSim == nil) then rigs = nil end
+    -- The design vehicles' own floor (docs/swept-path-spec.md §6, gate 1): a connector tighter than the
+    -- full lock of any rig that must fit is one that rig's driver would understeer straight through,
+    -- whatever the setting says. Candidates below it are not even tried. And the kickout's ease
+    -- lengths come from the most demanding rig: the longest look-ahead before the curve, the longest
+    -- look-ahead plus trailer after it.
+    local rigFloor, kickRig = 0, nil
+    if rigs ~= nil then
+        local ahead, behind = 0, 0
+        for _, g in ipairs(rigs) do
+            rigFloor = math.max(rigFloor, g.minTurnRadius or 0)
+            ahead = math.max(ahead, g.lookAhead or 8)
+            behind = math.max(behind, (g.lookAhead or 8) + (g.trailerLength or 0))
+        end
+        kickRig = { lookAhead = ahead, trailerLength = behind - ahead }
+    end
+    -- Swept-path gate (spec §6, gates 2-3): drive every rig through the line and probe the road and
+    -- the obstacles under where its bodies actually go. Nil when every rig fits, else the first failing
+    -- rig's reason. The prediction rides on the line so the preview draws it without a second
+    -- simulation - the failing rig's, else the first rig's - with each rig's in sweptBy. `strict`: a
+    -- rig with no prediction (unusable geometry) does not count as fitting.
+    local function judge(line, strict)
+        line.swept, line.sweptRig, line.sweptBy = nil, nil, {}
+        for i, g in ipairs(rigs) do
+            local ok, res = pcall(function() return self:junctionSweptPredict(fromAp, toAp, line, cx, cz, radius, g) end)
+            if not ok then
+                roadNote("sweptErr", "swept-path prediction failed: %s", tostring(res))
+                res = nil
+            end
+            line.sweptBy[g.key or i] = res
+            if i == 1 then line.swept, line.sweptRig = res, g end
+            local verdict = nil
+            if res == nil then
+                if strict then verdict = "nopredict" end
+            elseif checkSurface and self:junctionSweptOffRoad(res) then
+                verdict = "trailerRoad"
+            elseif checkObstacles and self:junctionSweptHits(res, g) > 0 then
+                verdict = "trailerHit"
+            end
+            if verdict ~= nil then
+                line.swept, line.sweptRig = res, g
+                return verdict
+            end
+        end
+        return nil
+    end
+    -- SWEEP WIDE before giving up on a radius: push the line outward in steps and re-judge. A wider
+    -- line at the SAME radius beats a tighter radius - the rig cuts in from wherever the line is, so
+    -- moving the line out moves the bodies back onto the road and away from whatever stands on the
+    -- inside. Each shifted line must itself stay on the road (corridor) and clear of obstacles - that
+    -- is the outer-edge bound. The early/late KICKOUT first; the inside-the-curve blend only when the
+    -- kickout cannot fit (cramped scope, or a dead-end stem) - it recovers about a third as much, but
+    -- it is better than refusing. Returns the accepted line, or nil.
+    local function sweepWide(con, r, leftTurn)
+        local d = AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP or 1.0
+        while d <= (AutoDrive.FLYOVER_JUNCTION_SWEEP_MAX or 3.0) + 1e-6 do
+            local wide, why, gotE, gotL, need = self:junctionKickout(fromAp, toAp, con, d, leftTurn, kickRig, cx, cz, radius, r)
+            if wide == nil then
+                if why == "scope" then
+                    roadNote(string.format("kickScope:%d_%d", fromAp.wp.id, toAp.wp.id),
+                        "junction - entry id=%d -> exit id=%d: not enough lane for an early/late kickout (%.0f m of lane before / %.0f m after the curve inside the work region, %.0f m needed for a %.0f m kickout) - using the inside-the-curve blend instead.",
+                        fromAp.wp.id, toAp.wp.id, gotE or 0, gotL or 0, need or 0, d)
+                end
+                wide = junctionSweepWide(con, d, leftTurn)
+            end
+            if wide == nil then return nil end
+            local lineOk = not (checkSurface and self:junctionCorridorTooOffRoad(wide))
+                and not (checkObstacles and self:junctionObstacleHits(wide) > 0)
+            if lineOk and judge(wide, true) == nil then return wide end
+            d = d + (AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP or 1.0)
+        end
+        return nil
+    end
+    -- Lines that ran off the road, kept for one last try swung out once no plain line of any radius
+    -- passes: the kickout moves a line toward the outside of the turn, where a skewed T has room
+    -- (offline 2026-10-07: swung 1-3 m, both tractor rigs make the tight turn at 41, 52, 7 and 8 on the
+    -- asphalt). A plain line that stays in its lane always wins over a swung one.
+    local offRoad = {}
+    local function swungInstead()
+        if rigs == nil then return nil end
+        for _, c in ipairs(offRoad) do
+            local wide = sweepWide(c.con, c.r, connectorLeftTurn(c.con))
+            if wide ~= nil then return wide, c.r end
+        end
+        return nil
+    end
     local r = turnR
     while r >= floor - 1e-6 do
         local con, whyNil = self:junctionTrackConnector(fromAp, toAp, cx, cz, radius, r)
@@ -866,74 +1005,31 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
             -- tracks closer together, so stop instead of retrying it at every floor step.
             if whyNil == "far" then return nil, r, "far" end
             if last == nil then return nil, r, "nocurve" end
+            local wide, wr = swungInstead()
+            if wide ~= nil then return wide, wr, nil end
             return last, r + 1, lastReason
         end
         if con.minRadius < math.max(r * 0.7, rigFloor) then
             last, lastReason = con, "tight"
         elseif checkSurface and self:junctionCorridorTooOffRoad(con) then
+            offRoad[#offRoad + 1] = { con = con, r = r }
             last, lastReason = con, "offroad"
         elseif checkObstacles and self:junctionObstacleHits(con) > 0 then
             -- A static obstacle in the corridor: a smaller radius swings a different line, so the
             -- same shrink search doubles as first-order avoidance; nothing clear down to the floor
             -- is a verbose red refusal, never a connector through a tree.
             last, lastReason = con, "blocked"
+        elseif rigs == nil then
+            return con, r, nil
         else
-            -- Swept-path gate (spec §6, gates 2-3), only with a design rig (locked site, toggle on):
-            -- drive the rig through this candidate and probe the road and the obstacles under where
-            -- its bodies actually go. The prediction rides on the connector so the preview draws it
-            -- without a second simulation.
-            local sw = nil
-            if rig ~= nil and SweptSim ~= nil then
-                local ok, res = pcall(function() return self:junctionSweptPredict(fromAp, toAp, con, cx, cz, radius, rig) end)
-                if ok then sw = res else roadNote("sweptErr", "swept-path prediction failed: %s", tostring(res)) end
-                con.swept = sw
-            end
-            local function sweptVerdict(s)
-                if s == nil then return nil end
-                if checkSurface and self:junctionSweptOffRoad(s) then return "trailerRoad" end
-                if checkObstacles and self:junctionSweptHits(s, rig) > 0 then return "trailerHit" end
-                return nil
-            end
-            local verdict = sweptVerdict(sw)
+            local verdict = judge(con, false)
             if verdict == nil then
                 return con, r, nil
             end
-            -- SWEEP WIDE before giving up on this radius: push the curve outward in steps and
-            -- re-judge. A wider line at the SAME radius beats a tighter radius - the rig cuts in
-            -- from wherever the line is, so moving the line out moves the bodies back onto the road
-            -- and away from whatever stands on the inside. Each shifted line must itself stay on the
-            -- road (corridor) and clear of obstacles - that is the outer-edge bound.
-            local accepted = nil
-            if sw ~= nil then
-                local d = AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP or 1.0
-                while d <= (AutoDrive.FLYOVER_JUNCTION_SWEEP_MAX or 3.0) + 1e-6 do
-                    -- The early/late KICKOUT first; the inside-the-curve blend only when the
-                    -- kickout cannot fit (cramped scope, or a dead-end stem) - it recovers about a
-                    -- third as much, but it is better than refusing.
-                    local wide, why, gotE, gotL, need = self:junctionKickout(fromAp, toAp, con, d, sw.leftTurn, rig, cx, cz, radius, r)
-                    if wide == nil then
-                        if why == "scope" then
-                            roadNote(string.format("kickScope:%d_%d", fromAp.wp.id, toAp.wp.id),
-                                "junction - entry id=%d -> exit id=%d: not enough lane for an early/late kickout (%.0f m of lane before / %.0f m after the curve inside the work region, %.0f m needed for a %.0f m kickout) - using the inside-the-curve blend instead.",
-                                fromAp.wp.id, toAp.wp.id, gotE or 0, gotL or 0, need or 0, d)
-                        end
-                        wide = junctionSweepWide(con, d, sw.leftTurn)
-                    end
-                    if wide == nil then break end
-                    local lineOk = not (checkSurface and self:junctionCorridorTooOffRoad(wide))
-                        and not (checkObstacles and self:junctionObstacleHits(wide) > 0)
-                    if lineOk then
-                        local ok, res = pcall(function() return self:junctionSweptPredict(fromAp, toAp, wide, cx, cz, radius, rig) end)
-                        if ok and res ~= nil then
-                            wide.swept = res
-                            if sweptVerdict(res) == nil then accepted = wide; break end
-                        end
-                    end
-                    d = d + (AutoDrive.FLYOVER_JUNCTION_SWEEP_STEP or 1.0)
-                end
-            end
-            if accepted ~= nil then
-                return accepted, r, nil
+            local wide = nil
+            if con.swept ~= nil then wide = sweepWide(con, r, con.swept.leftTurn) end
+            if wide ~= nil then
+                return wide, r, nil
             end
             last, lastReason = con, verdict
         end
@@ -943,6 +1039,8 @@ function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, tur
             break
         end
     end
+    local wide, wr = swungInstead()
+    if wide ~= nil then return wide, wr, nil end
     return last, math.max(floor, r + 1), lastReason
 end
 

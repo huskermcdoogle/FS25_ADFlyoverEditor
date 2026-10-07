@@ -993,6 +993,20 @@ function ADFlyoverHud:buildRows(editor)
             function() editor:toggleJunctionCheckObstacles() end)
         add("toggle", "swept path", (editor.junctionSwept ~= false) and "on" or "off", false,
             function() editor:toggleJunctionSwept() end)
+        -- THE VEHICLE SET: one row per rig - must the turns fit it, and (on a locked site) how many of
+        -- the turns this build lays it does fit. Click to tick it in or out.
+        if editor.junctionSwept ~= false and editor.junctionDesignRigs ~= nil then
+            local fits = editor.junctionPreview and editor.junctionPreview.rigFits
+            for _, g in ipairs(editor:junctionDesignRigs(true)) do
+                local key = g.key
+                local value = editor:junctionRigOn(key) and TR("must fit") or TR("not checked")
+                local f = fits and fits[key]
+                if f ~= nil and f.total > 0 then
+                    value = string.format("%s, %d/%d %s", value, f.fit, f.total, TR("fit"))
+                end
+                add("toggle", g.short or tostring(key), value, false, function() editor:toggleJunctionRig(key) end)
+            end
+        end
         add("number", "corridor", string.format("%.1f m", editor.junctionCorridor or 4))
         rows[#rows].stepAction = function(dir)
             editor.junctionCorridor = math.max(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MIN,

@@ -100,6 +100,33 @@ S.EXAMPLE_RIG = {
     hitchOffset = 0.93, trailerLength = 7.08,
     towWidth = 2.7, trailerWidth = 2.6,
     totalMass = 57.5, steerLimitDeg = 45,
+    key = "semi", short = "semi",
+}
+
+--- The VEHICLE SET (decided 2026-10-07): the rigs a built turn can be asked to fit, chosen on the
+--- junction card. The semi above is the biggest and is never the one that decides by default - with it,
+--- the skewed T's tight turns were refused that a farm tractor and trailer take easily once the line
+--- swings wide. The two tractor rigs are read from the game's own vehicle files the way the game
+--- reads them: full lock = |dz| / tan(rotMax) + |dx| of the steered wheel from the ackermann centre
+--- (Wheels.lua loadAckermannSteeringFromXML; it gives the Transtar 6.09 m, the game's 6.1),
+--- maxRotTime = rotMax / rotSpeed, look-ahead = 2 x (front axle - rear axle) and reach = length / 2 +
+--- the rear axle's offset (AutoDrive getMinLookaheadByVehicleType / defineMinDistanceByVehicleType),
+--- hitch = the trailerLow joint, trailer pivot = the middle of its axle group, mass = tow + trailer +
+--- a full load of wheat at 0.78 t/m3. Not yet measured in game.
+S.RIGS = {
+    { key = "small", short = "small rig", name = "Fendt 700 Vario + Krampe Halfpipe HP 20",
+      wheelbase = 2.90, steerNodeOffset = 0, minTurnRadius = 3.89, maxRotTime = 43.5 / 40,
+      lookAhead = 5.80, minDistance = 3.66,
+      hitchOffset = -0.744, trailerLength = 5.36,
+      towWidth = 2.77, trailerWidth = 2.7,
+      totalMass = 21.5, steerLimitDeg = 43.5 },
+    { key = "big", short = "big rig", name = "Fendt 900 Vario + Krampe Big Body 750 S",
+      wheelbase = 3.16, steerNodeOffset = 0, minTurnRadius = 5.02, maxRotTime = 37 / 40,
+      lookAhead = 6.32, minDistance = 4.16,
+      hitchOffset = -0.814, trailerLength = 6.55,
+      towWidth = 2.75, trailerWidth = 2.8,
+      totalMass = 44.9, steerLimitDeg = 37 },
+    S.EXAMPLE_RIG,
 }
 
 local function dist2d(ax, az, bx, bz)

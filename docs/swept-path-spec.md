@@ -22,6 +22,19 @@ not against whatever happens to be driving today.
 - The current "tight" heuristic in `junctionSolveMovement` (`minRadius < 0.7 × r`) was a guess. It
   is **replaced** by the kinematic feasibility gate in §6.
 
+**Changed 2026-10-07: a vehicle set, not one design vehicle.** Judging every turn by the largest rig
+(the Transtar + SKS semi) refused turns a farm tractor and trailer take easily, and kept the builder's
+own swing-wide from ever helping. Now the build card lists a set of rigs and you tick which must fit
+(`SweptSim.RIGS`, `junctionRigs`): a small rig (Fendt 700 Vario + Krampe Halfpipe HP 20) and a big
+rig (Fendt 900 Vario + Krampe Big Body 750 S), read from the game's own vehicle files, both ticked
+by default; the semi, not checked by default; a rig measured in game (FlyoverSweptRig) joins as
+"measured". Each card row shows how many of the build's turns that rig fits. Every ticked rig must
+pass the swept gate; the floor is the largest full lock among them. A line that runs off the road at
+every radius is tried swung wide (the kickout) before it is refused; a plain line always wins. The
+turn's line stays on the paving where it joins two paved lanes, while the trailer's inside wheels
+may cut over the gravel shoulder (Ground.lua `isPavedAt`). The tractor numbers still need measuring
+in game.
+
 Decisions locked in the interview:
 
 | | Decision |

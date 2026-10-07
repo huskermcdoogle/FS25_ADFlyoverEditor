@@ -5,9 +5,16 @@
 -- design rig (SweptSim.EXAMPLE_RIG). With TERRAIN=1 the road-surface check is live as well, so the
 -- swept gate (trailer off the road) can refuse a radius and the sweep-wide reshape runs; without it
 -- only the prediction itself is measured. Prints one line per turn, sorted, then a summary.
+--   RIGS=small,big,semi picks which rigs of the vehicle set (SweptSim.RIGS) must fit; unset, the
+--   editor's default (the two tractor rigs). RIGS=semi is the old single design rig.
 local H = dofile("harness.lua")
 dofile(os.getenv("SWEPT_SRC") or "../../scripts/editor/SweptSim.lua")
-ADFlyoverSweptPath = { rig = SweptSim.EXAMPLE_RIG }
+if os.getenv("RIGS") then
+    local want = {}
+    for k in os.getenv("RIGS"):gmatch("[^,]+") do want[k] = true end
+    ADFlyoverEditor.junctionRigs = {}
+    for _, g in ipairs(SweptSim.RIGS) do ADFlyoverEditor.junctionRigs[g.key] = want[g.key] == true end
+end
 
 -- Every twin run: how many, how many ran out of time before the route ended, the slowest speed.
 local runs, outOfTime, slowest = 0, 0, math.huge
@@ -59,7 +66,9 @@ for _, m in ipairs(jp.movements or {}) do
     end
 end
 table.sort(rows)
+if os.getenv("SHOWLOG") then for _, l in ipairs(LOG or {}) do if l:find(os.getenv("SHOWLOG"), 1, true) then print("LOG " .. l) end end end
 for _, r in ipairs(rows) do print(r) end
+for k, f in pairs(jp.rigFits or {}) do print(string.format("RIGFIT %s %d/%d", k, f.fit, f.total)) end
 print(string.format("SUMMARY turns %d | new %d rebuild %d | refused: tight %d offroad %d trailerRoad %d | swept wide %d, worst trailer cut %.2f m, sweeps %d | twin runs %d, out of time %d, slowest %.1f km/h",
     #rows, jp.nNew or 0, jp.nRebuild or 0, jp.nTight or 0, jp.nOffRoad or 0, jp.nTrailerRoad or 0,
     jp.nSweptWide or 0, jp.sweptMax or 0, jp.nSweep or 0, runs, outOfTime, runs > 0 and slowest or -1))

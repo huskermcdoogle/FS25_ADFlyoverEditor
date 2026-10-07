@@ -211,6 +211,22 @@ local function isRoadAt(x, z)
     return true
 end
 
+--- Is (x, z) PAVED: a road mesh, or the asphalt-sound paint (asphalt and concrete) that isRoadAt passes
+--- - not rock, not a field? Gravel shoulders and dirt tracks are road to isRoadAt but not paved here.
+--- Decided 2026-10-07: a junction turn's laid line stays on the paving; the trailer's inside wheels
+--- may cut over the shoulder, as a real truck's do.
+local function isPavedAt(x, z)
+    if not isRoadAt(x, z) then return false end
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    if terrain == nil or raycastClosest == nil then return true end
+    -- isRoadAt passed on a hit that is not the terrain: a road mesh (or something parked on it).
+    if roadHitId ~= nil and roadHitId ~= 0 and roadHitId ~= terrain then return true end
+    local ty = getTerrainHeightAtWorldPos(terrain, x, 1, z) or 0
+    local ok, _, _, _, _, mat = pcall(getTerrainAttributesAtWorldPos, terrain, x, ty, z, true, true, true, true, false)
+    if ok and type(mat) == "number" then return math.floor(mat + 0.5) == 7 end
+    return true
+end
+
 --- Where a waypoint at (x, y, z) belongs, for the ground tool specifically.
 ---
 --- NOT resolveHeightAt, which is right for placing a new point and wrong here: in surface mode it
@@ -605,6 +621,7 @@ end
 
 -- MODSPLIT: SHARED WITH THE FILES LOADED AFTER THIS ONE (tools/modsplit/split.py writes this block)
 ADFlyoverEditor.shared.isRoadAt = isRoadAt
+ADFlyoverEditor.shared.isPavedAt = isPavedAt
 ADFlyoverEditor.shared.roadNote = roadNote
 ADFlyoverEditor.shared.roadProbeNoted = roadProbeNoted
 -- MODSPLIT: end of the shared block
