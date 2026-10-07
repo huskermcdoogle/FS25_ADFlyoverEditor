@@ -3,6 +3,8 @@
 
     python tools/build_zip.py [output.zip]              a dev build
     python tools/build_zip.py --release [output.zip]    a build meant to be published
+    python tools/build_zip.py --testplan PLAN.xml [output.zip]
+                                                        a test build carrying the in-game test plan
 
 Three things it will not let you get wrong.
 
@@ -38,8 +40,16 @@ def tag_exists(v):
         return False
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--release"]
+    argv = sys.argv[1:]
+    testplan = None
+    if "--testplan" in argv:
+        i = argv.index("--testplan")
+        testplan = pathlib.Path(argv[i + 1])
+        del argv[i:i + 2]
+    args = [a for a in argv if a != "--release"]
     is_release = "--release" in sys.argv
+    if is_release and testplan is not None:
+        sys.exit("REFUSED: a release never carries a test plan.")
     out = pathlib.Path(args[0]) if args else ROOT / "FS25_ADFlyoverEditor.zip"
 
     if is_release:
@@ -77,6 +87,14 @@ def main():
 
     version = re.search(r"<version>\s*([0-9.]+)", (ROOT / "modDesc.xml").read_text(encoding="utf8")).group(1)
     build = re.search(r'^P\.BUILD\s*=\s*"([^"]*)"', prelude, re.M).group(1)
+    # THE IN-GAME TEST PLAN (scripts/editor/TestPanel.lua): only a test build carries testplan.xml, so
+    # only a test build shows the plan card. Its @BUILD@ becomes this build's number, which the card's
+    # "build" check compares with the running game.
+    if testplan is not None:
+        text = testplan.read_text(encoding="utf8").replace("@BUILD@", build)
+        with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("testplan.xml", text)
+        print(f"  test plan {testplan.name} packed as testplan.xml")
     print(f"  {len(names)} files -> {out}")
     print(f"  release {version}   build {build}")
     print(f"  all {len(needed)} sourced file(s) present, forward slashes only")

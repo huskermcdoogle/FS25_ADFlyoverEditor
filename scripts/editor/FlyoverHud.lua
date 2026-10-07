@@ -1295,6 +1295,8 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
+                    local tr = self.testRect   -- a test build's plan card, at the right edge
+                    if tr ~= nil then avoid[#avoid + 1] = { tr.x, tr.y, tr.w, tr.h } end
                     local found
                     sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY, nil, nil, tsegs)
                 end
@@ -1332,6 +1334,8 @@ function ADFlyoverHud:draw(editor)
                         if self.frameW ~= nil and self.frameW > 0 then
                             avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                         end
+                        local tr = self.testRect   -- a test build's plan card, at the right edge
+                        if tr ~= nil then avoid[#avoid + 1] = { tr.x, tr.y, tr.w, tr.h } end
                         local sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs)
                         if not found then
                             -- Nothing clear close by: it is sitting on the work, so go as far as it takes.
@@ -1664,6 +1668,14 @@ function ADFlyoverHud:draw(editor)
         self:drawHelp(editor)
     end
 
+    -- A test build's plan (TestPanel.lua), at the right edge. Guarded: a fault in the test card must
+    -- never take the editor's own screen down with it - it is said once in the log instead.
+    local tpOk, tpErr = pcall(self.drawTestPanel, self, editor)
+    if not tpOk and not self.testPanelFaultSaid then
+        self.testPanelFaultSaid = true
+        Logging.warning("[FlyoverEditor]: test panel - the card could not be drawn: %s", tostring(tpErr))
+    end
+
     -- Last, so it sits on top of whatever it hangs off, and its click row is found first.
     self:drawWarning(editor)
 end
@@ -1757,6 +1769,129 @@ function ADFlyoverHud:drawWarning(editor)
 
     table.insert(self.rows, { x = x - edge, y = y - edge, w = w + edge * 2, h = h + edge * 2,
         action = function() editor.warning = nil end })
+end
+
+-- Pass / fail / skip in fixed colours (sRGB): the themes have no "good" or "caution" role, and the
+-- three must read the same whichever theme is on.
+local TEST_COL = { pass = { 0.24, 0.80, 0.47 }, fail = { 1.00, 0.42, 0.42 }, skip = { 0.96, 0.65, 0.14 } }
+
+--- THE IN-GAME TEST PANEL (TestPanel.lua): a test build's plan as a card at the right edge. One row
+--- per test with pass / fail / skip buttons; the first test not yet done shows what to do; an
+--- automatic tick shows what it saw; the editor's last log lines below. The header folds it to one
+--- line. Only drawn when the build carries a plan (test builds) and FlyoverTestPanel has not hidden it.
+function ADFlyoverHud:drawTestPanel(editor)
+    local TP = ADFlyoverTestPanel
+    self.testRect = nil
+    if TP == nil or TP.plan == nil or not TP.shown then return end
+    pcall(TP.poll)
+
+    local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
+    local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
+    local W = 0.28 * uiScale
+    local rowH = 0.020 * uiScale
+    local smallH = rowH * 0.78
+    local pad = 0.005 * uiScale
+    local fontSize = 0.0102 * uiScale
+    local small = fontSize * 0.84
+    local btnW = 0.030 * uiScale
+    local chipW = (rowH * 0.5) / (g_screenAspectRatio or (16 / 9))
+    local mx, my = editor.mouseX, editor.mouseY
+    local edge = 0.0025
+    setTextBold(false)
+
+    -- Lay the lines out first (the background needs the height), then draw them.
+    local items = {}
+    local function item(kind, h, data) data = data or {}; data.kind, data.h = kind, h; items[#items + 1] = data end
+    item("head", rowH * 1.25)
+    local nextT = TP.nextTest()
+    if not TP.folded then
+        for _, t in ipairs(TP.plan.tests) do
+            item("test", rowH, { t = t })
+            local s = TP.state[t.id]
+            if t == nextT and t.hint ~= "" then
+                for _, l in ipairs(wrapToWidth(TR(t.hint), small, W - pad * 6 - chipW)) do item("hint", smallH, { text = l }) end
+            elseif s ~= nil and s.auto and s.evidence ~= nil and s.evidence ~= "" then
+                item("hint", smallH, { text = TR("seen") .. ": " .. s.evidence, muted = true })
+            end
+        end
+        item("section", rowH, { text = TR("log") })
+        local first = math.max(1, #TP.log - 5)
+        if #TP.log == 0 then item("log", smallH, { text = TR("(no editor lines yet)") }) end
+        for i = first, #TP.log do item("log", smallH, { text = TP.log[i].text }) end
+        item("foot", smallH, { text = TR("results") .. ": modSettings/FS25_ADFlyoverEditor/" .. TP.FILE })
+    end
+    local h = pad * 2
+    for _, it in ipairs(items) do h = h + it.h end
+    local x = 1 - W - 0.008
+    local top = 0.975
+    local y0 = top - h
+
+    fillRole(self.borderOverlay, x - edge, y0 - edge, W + edge * 2, h + edge * 2, "cardBorder", 0.96)
+    fillRoleSolid(self.background, x, y0, W, h, "cardBg")
+    self.testRect = { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2 }
+    -- Whole-card blocker first: a click on a label never reaches the world behind.
+    table.insert(self.rows, { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2 })
+
+    local y = top - pad
+    for _, it in ipairs(items) do
+        y = y - it.h
+        local ty = y + (it.h - fontSize) * 0.5
+        local sty = y + (it.h - small) * 0.5
+        if it.kind == "head" then
+            fillRole(self.headerOverlay, x, y, W, it.h, "headerBg", 1)
+            local done, total, _, fails = TP.counts()
+            local right = string.format("%d/%d%s  %s", done, total, fails > 0 and string.format(", %d %s", fails, TR("failed")) or "",
+                TP.folded and "+" or "-")
+            local rw = self:measure(fontSize, right)
+            local title, tsize = self:fitToWidth(TR("Test plan") .. ": " .. TR(TP.plan.title), fontSize, W - pad * 6 - rw)
+            labelRole(x + pad * 1.5, y + (it.h - tsize) * 0.5, tsize, title, "headerText")
+            labelRole(x + W - pad * 1.5, ty, fontSize, right, fails > 0 and "danger" or "mutedText", 1, RenderText.ALIGN_RIGHT)
+            table.insert(self.rows, { x = x, y = y, w = W, h = it.h, action = function() TP.folded = not TP.folded end })
+        elseif it.kind == "test" then
+            local t = it.t
+            local s = TP.state[t.id]
+            local status = s and s.status
+            local cy = y + (it.h - rowH * 0.5) * 0.5
+            if status ~= nil and TEST_COL[status] ~= nil then
+                fillC(self.rowOverlay, x + pad * 1.5, cy, chipW, rowH * 0.5, TEST_COL[status], 1)
+            else
+                fillRole(self.rowOverlay, x + pad * 1.5, cy, chipW, rowH * 0.5, "toolBorder", 1)
+            end
+            local bx0 = x + W - pad - btnW * 3 - pad
+            local tx = x + pad * 3 + chipW
+            local text, tsize = self:fitToWidth(TR(t.title), fontSize, bx0 - tx - pad)
+            labelRole(tx, y + (it.h - tsize) * 0.5, tsize, text, t == nextT and "headerText" or "bodyText")
+            for bi, v in ipairs({ "pass", "fail", "skip" }) do
+                local bx = bx0 + (bi - 1) * (btnW + pad * 0.5)
+                local by, bh = y + it.h * 0.12, it.h * 0.76
+                local on = status == v
+                local hov = mx ~= nil and mx >= bx and mx <= bx + btnW and my >= by and my <= by + bh
+                if on then
+                    fillC(self.rowOverlay, bx, by, btnW, bh, TEST_COL[v], 0.95)
+                    label(bx + btnW * 0.5, by + (bh - small) * 0.5, small, TR(v), 0.02, 0.02, 0.02, 1, RenderText.ALIGN_CENTER)
+                else
+                    fillRole(self.rowOverlay, bx, by, btnW, bh, hov and "hoverBg" or "toolBg", 0.95)
+                    labelRole(bx + btnW * 0.5, by + (bh - small) * 0.5, small, TR(v), hov and "bodyText" or "mutedText", 1,
+                        RenderText.ALIGN_CENTER)
+                end
+                local id = t.id
+                table.insert(self.rows, { x = bx, y = by, w = btnW, h = bh, action = function() TP.set(id, v, false) end })
+            end
+        elseif it.kind == "hint" then
+            local text, tsize = self:fitToWidth(it.text, small, W - pad * 6 - chipW)
+            labelRole(x + pad * 3 + chipW, y + (it.h - tsize) * 0.5, tsize, text, it.muted and "mutedText" or "hintText")
+        elseif it.kind == "section" then
+            fillRole(self.rowOverlay, x + pad, y + it.h - 0.0012, W - pad * 2, 0.0012, "toolBorder", 1)
+            labelRole(x + pad * 1.5, ty, small, it.text, "sectionText")
+        elseif it.kind == "log" then
+            local text, tsize = self:fitToWidth(it.text, small, W - pad * 3)
+            labelRole(x + pad * 1.5, y + (it.h - tsize) * 0.5, tsize, text,
+                (it.text:sub(1, 1) == "!") and "danger" or "mutedText")
+        elseif it.kind == "foot" then
+            local text, tsize = self:fitToWidth(it.text, small, W - pad * 3)
+            labelRole(x + pad * 1.5, y + (it.h - tsize) * 0.5, tsize, text, "mutedText", 0.8)
+        end
+    end
 end
 
 --- Screen-space bounding box of what a Select-mode menu is about to act on (point / span / run), or
@@ -2890,6 +3025,8 @@ function ADFlyoverHud:coversPoint(x, y)
     if inRect(self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH) then return true end
     local r = self.helpRect
     if r ~= nil and inRect(r.x, r.y, r.w, r.h) then return true end
+    local tr = self.testRect
+    if tr ~= nil and inRect(tr.x, tr.y, tr.w, tr.h) then return true end
     return (self:isMouseOver(x, y))
 end
 

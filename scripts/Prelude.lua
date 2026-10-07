@@ -105,6 +105,7 @@ P.EDITOR_FILES = {
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",
     "scripts/editor/SweptSim.lua",
+    "scripts/editor/TestPanel.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
     "scripts/editor/tools/Menus.lua",
@@ -690,6 +691,16 @@ addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check 
 addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)
 addConsoleCommand("FlyoverProxyOff", "Stage 4: turn the proxy and the fake gate off", "consoleProxyOff", P)
 addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)
+--- A test build's plan card (TestPanel.lua): show or hide it; "reload" reads testplan.xml again.
+function P:consoleTestPanel(arg)
+    if ADFlyoverTestPanel == nil then return "The test panel is not loaded (load a savegame first)." end
+    if arg == "reload" then
+        return ADFlyoverTestPanel.load() and "Test plan read again." or "This build carries no test plan (testplan.xml) - test builds only."
+    end
+    if ADFlyoverTestPanel.plan == nil then return "This build carries no test plan (testplan.xml) - test builds only." end
+    return ADFlyoverTestPanel.toggleShown() and "Test plan card shown (it sits on the editor's screen)." or "Test plan card hidden."
+end
+addConsoleCommand("FlyoverTestPanel", "Show or hide the test build's test plan card (reload: read testplan.xml again)", "consoleTestPanel", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 
 Logging.info("[%s] build %s loaded", P.MOD_NAME, P.versionString())
