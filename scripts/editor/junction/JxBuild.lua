@@ -17,6 +17,18 @@ local jxState = ADFlyoverEditor.shared.jxState
 local tryCall = ADFlyoverEditor.shared.tryCall
 -- MODSPLIT: end of the helpers
 
+--- THE HEIGHT FOR A POINT SPLICED INTO AN EXISTING LANE OR LINK: the surface under it, found the way the
+--- ground tool and the move tool find it (groundTargetAt: the surface nearest the height it would
+--- otherwise get, so a point on a bridge stays on the deck) - not the height copied between its two
+--- neighbours. On a crowned or sloping road the copied height can sit a few tenths of a metre off the
+--- ground, under the ground tool's tolerance, so nothing ever put it right (decided 2026-10-07). Where
+--- the surface cannot be read (offline, without the real ground) the copied height stands.
+local function jxSpliceY(x, z, copiedY)
+    local ok, y = pcall(ADFlyoverEditor.groundTargetAt, ADFlyoverEditor, x, copiedY, z, copiedY, true)
+    if ok and type(y) == "number" then return y end
+    return copiedY
+end
+
 -- EVERY CROSSING IS A SHARED POINT (docs/junction-tool/06-one-click-build.md, layout rule 1).
 -- AutoDrive only makes a driver wait where two routes share a point (CollisionDetectionModule:
 -- detectAdTrafficOnRoute matches point ids), so two paths that cross in open space are invisible to
@@ -143,7 +155,8 @@ local function junctionSquareUp(sq)
             bent = true
             return
         end
-        local wp = ADFlyoverRecordWayPoint(N.x + sign * d * sx, N.y + (s.y - N.y) * (d / ds),
+        local wp = ADFlyoverRecordWayPoint(N.x + sign * d * sx,
+            jxSpliceY(N.x + sign * d * sx, N.z + sign * d * sz, N.y + (s.y - N.y) * (d / ds)),
             N.z + sign * d * sz, false, false, false, 0, flags or AutoDrive.FLAG_NONE, false)
         jxState.jxLayLabel = label
         jxNoteAdded(wp)
@@ -338,7 +351,7 @@ local function junctionShareCrossings(cx, cz, reach)
         else
             -- The existing road's flags, so a crossing point on it keeps the road's priority.
             local road = L2.new and L1 or L2
-            N = ADFlyoverRecordWayPoint(found.x, found.y, found.z, false, false, false, 0,
+            N = ADFlyoverRecordWayPoint(found.x, jxSpliceY(found.x, found.z, found.y), found.z, false, false, false, 0,
                 road.a.flags or AutoDrive.FLAG_NONE, false)
             jxState.jxLayLabel = "x"
             jxNoteAdded(N)
@@ -433,7 +446,7 @@ local function jxpOnLane(px, pz, dx, dz, through, dry)
     if bt * slen <= 0.3 then return a end
     if (1 - bt) * slen <= 0.3 then return b end
     local x, z = a.x + bt * (b.x - a.x), a.z + bt * (b.z - a.z)
-    local y = (a.y or 0) + bt * ((b.y or 0) - (a.y or 0))
+    local y = jxSpliceY(x, z, (a.y or 0) + bt * ((b.y or 0) - (a.y or 0)))
     local N = ADFlyoverRecordWayPoint(x, y, z, false, false, false, 0, a.flags or AutoDrive.FLAG_NONE, false)
     jxNoteAdded(N)
     if N == nil then return nil end
@@ -1536,4 +1549,5 @@ ADFlyoverEditor.shared.junctionPlacePattern = junctionPlacePattern
 ADFlyoverEditor.shared.junctionRouteCheck = junctionRouteCheck
 ADFlyoverEditor.shared.junctionShareCrossings = junctionShareCrossings
 ADFlyoverEditor.shared.jxpUnit = jxpUnit
+ADFlyoverEditor.shared.jxSpliceY = jxSpliceY
 -- MODSPLIT: end of the shared block

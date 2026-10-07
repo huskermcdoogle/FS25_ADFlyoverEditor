@@ -1205,9 +1205,15 @@ function ADFlyoverEditor:applyJunction()
     local allowDual = (jp.siteHasTwoWay == true) and AutoDrive.FLYOVER_JUNCTION_DUAL_TURNS == true
     local baseCount = ADGraphManager:getWayPointsCount()
     local placedSet = {}   -- movements laid by this build, for the route check
+    -- Every lane walked once, before anything is laid, so each turn ties into its lane and never into
+    -- a turn laid a moment before (see junctionTieLanesPrepare).
+    self:junctionTieLanesPrepare(newMoves, cx, cz, radius)
     for _, m in ipairs(newMoves) do
         local key = pairKey(m.from.wp.id, m.to.wp.id)
-        if dualPairPlaced[key] then
+        if m.tieOffLane ~= nil then
+            Logging.warning("[FlyoverEditor]: junction - turn from id=%d to id=%d not laid: one of its ends lies %.0f m off the lane it joins (a curve that did not land on its lane).",
+                m.from.wp.id, m.to.wp.id, m.tieOffLane)
+        elseif dualPairPlaced[key] then
             mirrorsSkipped = mirrorsSkipped + 1
         else
         local c = m.connector
@@ -1240,6 +1246,7 @@ function ADFlyoverEditor:applyJunction()
         end
     end
 
+    self.junctionTieLanes = nil
     -- A mirrored pair folded into one two-way connector was laid by that connector too.
     for _, m in ipairs(newMoves) do
         if dualPairPlaced[pairKey(m.from.wp.id, m.to.wp.id)] then placedSet[m] = true end

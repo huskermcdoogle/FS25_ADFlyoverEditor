@@ -1,13 +1,14 @@
 -- Part of the flyover editor, moved out of FlyoverEditor.lua (docs/editor-modules-spec.md). Prelude.lua
 -- loads it after FlyoverEditor.lua, in the old file's order.
 -- MODSPLIT: HELPERS FROM THE FILES LOADED BEFORE THIS ONE (tools/modsplit/split.py writes this block)
-for _, name in ipairs({ "isPavedAt", "isRoadAt", "junctionAngDiff", "junctionBiarc", "junctionBranchTurn", "junctionChainIndexNear", "junctionConnect", "junctionDisconnect", "junctionDubins", "junctionSegDir", "junctionWalkBack", "jxNoteAdded", "roadNote" }) do
+for _, name in ipairs({ "isPavedAt", "isRoadAt", "jxSpliceY", "junctionAngDiff", "junctionBiarc", "junctionBranchTurn", "junctionChainIndexNear", "junctionConnect", "junctionDisconnect", "junctionDubins", "junctionSegDir", "junctionWalkBack", "jxNoteAdded", "roadNote" }) do
     if ADFlyoverEditor.shared == nil or ADFlyoverEditor.shared[name] == nil then
         Logging.error("[FlyoverEditor]: JxSwept.lua needs %s, which no file loaded before it shares", name)
     end
 end
 local isPavedAt = ADFlyoverEditor.shared.isPavedAt
 local isRoadAt = ADFlyoverEditor.shared.isRoadAt
+local jxSpliceY = ADFlyoverEditor.shared.jxSpliceY
 local junctionAngDiff = ADFlyoverEditor.shared.junctionAngDiff
 local junctionBiarc = ADFlyoverEditor.shared.junctionBiarc
 local junctionBranchTurn = ADFlyoverEditor.shared.junctionBranchTurn
@@ -1234,14 +1235,86 @@ function ADFlyoverEditor:junctionChainWalk(ap, cx, cz, radius)
     return chain, (not continues)
 end
 
+--- How far along a lane chain (from its anchor inward) the point (x, z) projects: the arc length to
+--- the nearest point on it, and how far off the lane the point lies.
+local function junctionTiePos(chain, x, z)
+    if #chain == 1 then return 0, math.sqrt((chain[1].x - x) ^ 2 + (chain[1].z - z) ^ 2) end
+    local bestd, pos, run = math.huge, 0, 0
+    for i = 1, #chain - 1 do
+        local a, b = chain[i], chain[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local len2 = dx * dx + dz * dz
+        local len = math.sqrt(len2)
+        local f = (len2 > 1e-6) and math.max(0, math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / len2)) or 0
+        local d = (a.x + f * dx - x) ^ 2 + (a.z + f * dz - z) ^ 2
+        if d < bestd then bestd, pos = d, run + f * len end
+        run = run + len
+    end
+    return pos, math.sqrt(bestd)
+end
+
+-- A planned tie point further than this off the lane it joins is a curve that did not land on its
+-- lane. Over the 75 registry junctions 330 of 332 sit within 0.5 m; the two others were 23 m and 137 m
+-- off (j53, j72) and their turns could not be driven.
+local JX_TIE_OFF_LANE = 5
+
+--- EVERY TURN ON A LANE TIES INTO THAT LANE. Two turns often share one lane - a T's side road carries
+--- a left and a right turn - and each used to walk the lane again when it was laid, with the turns
+--- before it already in. A dead-end stem's first tie cuts the stem behind it, so the second turn's
+--- walk had nowhere on but the first turn's own line, and spliced into THAT, metres from where the
+--- preview put it (j7, 2026-10-07: a hump, a link across the middle and two turns AutoDrive could not
+--- drive; 31 of 75 junctions in regbuild had such turns). So the build walks each lane ONCE, here,
+--- before anything is laid, and every tie-in splices into that walked lane, kept up to date as the
+--- tie points go in. And only the INNERMOST tie on a dead-end lane ends it; every tie further out keeps
+--- the lane running through, so the ties inside it still have lane to land on.
+function ADFlyoverEditor:junctionTieLanesPrepare(moves, cx, cz, radius)
+    local lanes = {}
+    local function lane(ap)
+        local L = lanes[ap]
+        if L == nil then
+            local chain, deadEnd = self:junctionChain(ap, cx, cz, radius, true)
+            local orig = {}
+            for i, w in ipairs(chain) do orig[i] = w end
+            L = { chain = chain, orig = orig, deadEnd = deadEnd, innermost = -1 }
+            lanes[ap] = L
+        end
+        return L
+    end
+    -- A TURN THAT DOES NOT LAND ON ITS LANE IS NOT LAID: m.tieOffLane says how far off it is, and it
+    -- does not count toward where its lane's innermost tie is.
+    for _, m in ipairs(moves) do
+        local c = m.connector
+        local LA, LB = lane(m.from), lane(m.to)
+        local pa, da = junctionTiePos(LA.orig, c.ax, c.az)
+        local pb, db = junctionTiePos(LB.orig, c.bx, c.bz)
+        if math.max(da, db) > JX_TIE_OFF_LANE then
+            m.tieOffLane = math.max(da, db)
+        else
+            m.tieOffLane = nil
+            LA.innermost = math.max(LA.innermost, pa)
+            LB.innermost = math.max(LB.innermost, pb)
+        end
+    end
+    self.junctionTieLanes = lanes
+end
+
 --- Create the tie-in node at the tangent point (Tx,Tz) on an approach's track and splice it in. A
 --- through-road keeps both sides (insert). A dead-end keeps only the outer side and returns the stub
 --- past the tie-in for the caller to consume (deleted LAST, since removeWayPoint renumbers ids). The
 --- new node inherits the track's priority flags. Returns the node, its priority flags, the stub, and
 --- whether the LOCAL track at the tie-in is itself two-way - the caller uses this (both ends must
 --- agree) to decide whether the new connector should be dual too, instead of always one-way.
+--- During a build the lane comes from junctionTieLanesPrepare, not from a new walk.
 function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
-    local chain, deadEnd = self:junctionChain(ap, cx, cz, radius, true)
+    local lane = nil
+    if self.junctionTieLanes ~= nil then lane = self.junctionTieLanes[ap] end
+    local chain, deadEnd
+    if lane ~= nil then
+        chain, deadEnd = lane.chain, lane.deadEnd
+        if deadEnd and junctionTiePos(lane.orig, Tx, Tz) < lane.innermost - 0.5 then deadEnd = false end
+    else
+        chain, deadEnd = self:junctionChain(ap, cx, cz, radius, true)
+    end
     if #chain < 2 then
         -- Only the boundary node here; tie at it. Its own edge (to whatever it still connects to)
         -- tells us if this stub of track is two-way.
@@ -1317,7 +1390,7 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
         end
     end
 
-    local ny = (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac
+    local ny = jxSpliceY(Tx, Tz, (outer.y or 0) + ((inner.y or 0) - (outer.y or 0)) * bestFrac)
     -- A tie point put into a field loop's link is still that field's loop (as main's 1.0.2.1 has it):
     -- it takes the field number when both points it sits between carry the same one.
     local tieField = ADFlyoverEditor.fieldOf(outer)
@@ -1337,5 +1410,7 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
         junctionConnect(N, outer, segDual)
         if not deadEnd then junctionConnect(inner, N, segDual) end
     end
+    -- The next turn on this lane finds this tie point where it now sits in the lane.
+    if lane ~= nil then table.insert(lane.chain, bestSeg + 1, N) end
     return N, trackFlags, stubs, segDual
 end
