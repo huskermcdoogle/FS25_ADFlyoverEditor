@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.2.1 — Keeps AutoDrive 3.0.1.4's field points intact (2026-10-06)
+
+AutoDrive 3.0.1.4 (5 October 2026) can lay a loop of points round a field from its own editor
+(Ctrl+Shift+F). It marks each of those points with the field it belongs to, so that pressing it again
+finds the old loop, deletes it and lays a new one. Our tools used to strip or break those marks, and the
+points they touched were left behind as strays when AutoDrive laid the loop again.
+
+- **Convert** (the tool, the selection popup and the span menu) now changes only a point's priority.
+  AutoDrive's own marks on the point stay: its field-point mark, and the marks it puts on the map's
+  traffic roads.
+- **Smooth, Straighten and Divide**, and a point added into a link, give the new points the field's
+  mark and number, so the loop stays one loop AutoDrive can replace.
+- **Copies and new tracks** (Move's copy, Parallel and Siding, the junction tool's new connectors) no
+  longer carry a half field-point mark from the point they were made from.
+
+Also in this release (the tester build after 1.0.2.0):
+
+- The whole-HUD hide now runs in the same order as the restore, for a tester whose mouse-wheel zoom in
+  the vehicle stopped working after leaving the editor. `FlyoverHudOrder legacy` brings back the 1.0.2.0
+  order for a comparison.
+- Extra debug log lines for that report: which input events each HUD toggle and editor visit added or
+  removed, and whether AutoDrive took the first wheel events after leaving the editor.
+
 ## 1.0.2.0 — Reworked editor UI, one way of picking things everywhere, field loop on tilled ground (2026-09-26)
 
 The biggest change since the move tool: every tool card, popup and pick gesture was redone so the
