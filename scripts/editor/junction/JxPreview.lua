@@ -14,6 +14,58 @@ local roadNote = ADFlyoverEditor.shared.roadNote
 local tryCall = ADFlyoverEditor.shared.tryCall
 -- MODSPLIT: end of the helpers
 
+--- How far the build's search circle at (cx, cz) must reach to take in the lane ends the last clear
+--- of this junction cut: the circle `R` itself, or 2 m past the furthest such end within JX_GROW_MAX -
+--- and how many ends lie out there. Only the ends that clear CUT (self.junctionClearedEnds, written by
+--- applyJunctionClear), and only while the clear was of this junction - its middle within JX_PART_NEAR
+--- of the build's, or, where the build found no junction of its own and works from the click, within
+--- JX_GROW_SAME of the click - and each end is still a lane end where it was left. A build on 20n
+--- after a clear of its twin 20s (the selection finds the wired twin once 20s is cleared) took one of
+--- 20s's cut ends. Grown to every lane end that
+--- pointed at the middle, the circle took in loose track ends that had lain beside 1, 26 and 63
+--- before any clear, and laid turns to them (at 1, three AutoDrive could not take). Kept per place,
+--- radius, network and clear, as the preview asks every frame.
+local JX_GROW_MAX, JX_GROW_SAME = 30, 20
+function ADFlyoverEditor:junctionReachEnds(cx, cz, R)
+    local rec = self.junctionClearedEnds
+    if rec == nil then return R, 0 end
+    local same = (self.junctionSite == nil) and JX_GROW_SAME or JX_PART_NEAR
+    if (rec.x - cx) ^ 2 + (rec.z - cz) ^ 2 > same * same then return R, 0 end
+    local key = string.format("%d_%d_%d_%d_%d_%s", math.floor(cx * 2), math.floor(cz * 2), math.floor(R * 2),
+        ADGraphManager:getWayPointsCount(), rec.serial or 0, tostring(self.junctionSite == nil))
+    if self._jxReachKey == key then return self._jxReachR, self._jxReachN end
+    local want = {}
+    for _, e in ipairs(rec.ends or {}) do
+        local d2 = (e.x - cx) ^ 2 + (e.z - cz) ^ 2
+        if d2 > R * R and d2 <= JX_GROW_MAX * JX_GROW_MAX then want[#want + 1] = e end
+    end
+    local best, n = R, 0
+    if #want > 0 then
+        for _, w in pairs(ADGraphManager:getWayPoints()) do
+            if w ~= nil and w.id ~= nil then
+                for _, e in ipairs(want) do
+                    if not e.found and (w.x - e.x) ^ 2 + (w.z - e.z) ^ 2 <= 0.3 * 0.3 then
+                        local s, nb = {}, 0
+                        for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                            for _, id in ipairs(lst) do
+                                if id ~= w.id and not s[id] then s[id], nb = true, nb + 1 end
+                            end
+                        end
+                        if nb == 1 then
+                            e.found = true
+                            n = n + 1
+                            best = math.max(best, math.sqrt((w.x - cx) ^ 2 + (w.z - cz) ^ 2) + 2)
+                        end
+                    end
+                end
+            end
+        end
+        for _, e in ipairs(want) do e.found = nil end
+    end
+    self._jxReachKey, self._jxReachR, self._jxReachN = key, best, n
+    return best, n
+end
+
 function ADFlyoverEditor:updateJunctionPreview()
     -- Armed: the site is locked where it was clicked and the preview stops following the cursor (the
     -- wheel and the turn radius still reshape it). Unarmed: it follows the cursor as a live scout.
@@ -33,6 +85,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     end
     local clearMode0 = (self.junctionMode == "clear")
     local R = self:junctionRadiusValue()
+    local searchR0 = nil
     -- NB: a DIFFERENT name from the scope radius R - shadowing it once made the scope circle render
     -- at the turn radius instead of the search radius.
     local turnR = self.junctionTurnRadius or 12
@@ -85,6 +138,22 @@ function ADFlyoverEditor:updateJunctionPreview()
             cx, cz = site.x, site.z
         else
             self.junctionSite, self.junctionRefused = nil, why
+        end
+        -- THE CIRCLE REACHES THE CLEARED LANE ENDS (the user, 2026-10-07). A clear cuts a Y's side
+        -- lanes far out - 53's south-east lane in ends 22 m from its middle, 36's south-west lane
+        -- 16 m - and with the circle at its 15 m a build left such a lane hanging, connected to
+        -- nothing. So the circle grows to take in the lane ends the clear of this junction cut.
+        -- The middle is still looked for inside the circle as it was set (lockCap, below): grown, the
+        -- circle let the build on cleared 67 take a crossing 13 m off as its middle.
+        searchR0 = R
+        if AutoDrive.FLYOVER_JUNCTION_GROW_TO_ENDS ~= false then
+            local grown, nEnds = self:junctionReachEnds(cx, cz, R)
+            if grown > R then
+                roadNote(string.format("growEnds:%d:%d:%d", math.floor(cx), math.floor(cz), math.floor(grown)),
+                    "junction build - the search circle grows from %.0f to %.0f m to take in %d lane end(s) the clear of this junction cut further out.",
+                    R, grown, nEnds)
+                R = grown
+            end
         end
     end
     -- The solve raycasts the road surface for every candidate radius of every turn, so it is only
@@ -849,7 +918,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- circle (selectR): R is the 60-70 m work region by now.
     local lockedCrossing, bestLockD = nil, math.huge
     local lockCap = math.huge
-    if not clearMode and self.junctionSite == nil then lockCap = selectR * selectR end
+    if not clearMode and self.junctionSite == nil then lockCap = (searchR0 or selectR) ^ 2 end
     for _, c in ipairs(crossings) do
         local d = (c.x - cx) ^ 2 + (c.z - cz) ^ 2
         if d < bestLockD and d <= lockCap then bestLockD, lockedCrossing = d, c end

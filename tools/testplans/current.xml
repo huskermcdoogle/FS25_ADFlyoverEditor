@@ -3,7 +3,7 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="lane splice fix, new numbers, Y junctions and hooks, ground heights" build="@BUILD@">
+<testPlan title="lane splice fix, new numbers, Y junctions, hooks, growing circle, ground heights" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="drivable" title="Builds come out drivable"
@@ -19,7 +19,9 @@
     <test id="y82" title="The Y at (784, 892) is one junction, j82"
           hint="Lock it at either end and in the middle: the card says j82 every time. Clear it: both sharp turns go."/>
     <test id="hook" title="A Y builds with a hook in the gore"
-          hint="Clear 82 (or 53), build with the search circle at 25 m: the sharp-back turn is a loop out where the road splits, on the paving, and the route check is clean."/>
+          hint="Clear 82 (or 53), then build with the circle as it is: the sharp-back turn is a loop out where the road splits, on the paving, and the route check is clean."/>
+    <test id="grow" title="The build circle reaches the cleared lane ends" passLog="the search circle grows from"
+          hint="Clear 36, 53 or 82, then build: the circle grows by itself (ticks itself on the log line) and no cut lane is left hanging."/>
     <test id="ground" title="Placed points sit on the ground"
           hint="Clear 28, place it, then pick the placed turns with Ground: nothing to fix, and the points sit on the road."/>
     <test id="saveSplit" title="A save keeps the split"

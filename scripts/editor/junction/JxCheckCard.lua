@@ -42,6 +42,32 @@ local jxTurnLabel = ADFlyoverEditor.shared.jxTurnLabel
 local tryCall = ADFlyoverEditor.shared.tryCall
 -- MODSPLIT: end of the helpers
 
+--- THE LANE ENDS AROUND A SITE, by place: every point within 45 m of (cx, cz) with one neighbour.
+--- Taken before and after a clear, so the build that follows knows which ends this clear cut
+--- (junctionReachEnds) - by place, as the clear reissues ids. Neighbours are counted by PLACE too:
+--- a loose track start beside 1 led to two points lying on one spot, which the clear folded into one,
+--- and counted by id it came out as an end this clear had cut.
+local function jxLaneEndsNear(cx, cz)
+    local out = {}
+    for _, w in pairs(ADGraphManager:getWayPoints() or {}) do
+        if w ~= nil and w.id ~= nil and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= 45 * 45 then
+            local s, n = {}, 0
+            for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+                for _, id in ipairs(lst) do
+                    local o = id ~= w.id and ADGraphManager:getWayPointById(id) or nil
+                    if o ~= nil then
+                        local k = string.format("%.1f_%.1f", o.x, o.z)
+                        if not s[k] then s[k], n = true, n + 1 end
+                    end
+                end
+            end
+            if n == 1 then out[string.format("%.2f_%.2f", w.x, w.z)] = { x = w.x, z = w.z } end
+        end
+    end
+    return out
+end
+
+
 --- WHAT THE NETWORK LOOKS LIKE AROUND A CLEARED JUNCTION, as one string: every point within 60 m,
 --- where it stands and where each of its links leads. Equal strings mean the clear's result still
 --- describes the network there.
@@ -476,6 +502,10 @@ end
 function ADFlyoverEditor:applyJunctionClear()
     local jp = self.junctionPreview
     if jp == nil then return end
+    -- The lane ends before, to tell the ones this clear cuts (self.junctionClearedEnds, below).
+    local endsAt = jp.tracksCentre or self.junctionSite
+    local endsBefore = nil
+    if endsAt ~= nil then endsBefore = jxLaneEndsNear(endsAt.x, endsAt.z) end
     -- The card's line on the last clear goes now: whatever this clear's check says or fails to say,
     -- the last one described another clear.
     self.junctionLastCheck = nil
@@ -1078,6 +1108,18 @@ function ADFlyoverEditor:applyJunctionClear()
     end
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
+    -- THE LANE ENDS THIS CLEAR CUT, for the build that follows: its circle grows to take them in
+    -- (junctionReachEnds). Only these - the loose track ends that were lying near 1, 26 and 63 before
+    -- any clear are not this junction's lanes, and a circle grown to them laid turns to nowhere.
+    if endsBefore ~= nil then
+        local cut = {}
+        for k, e in pairs(jxLaneEndsNear(endsAt.x, endsAt.z)) do
+            if endsBefore[k] == nil then cut[#cut + 1] = e end
+        end
+        table.sort(cut, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.z < b.z end)
+        self.junctionClearedEnds = { x = endsAt.x, z = endsAt.z, ends = cut,
+            serial = ((self.junctionClearedEnds or {}).serial or 0) + 1 }
+    end
     -- THE CLEAR CHECKS ITS OWN WORK. Report only: it undoes nothing and refuses nothing, and a
     -- failure inside it cannot stop the clear, which is already done. Before the capture closes, so
     -- a capture's tool.log carries the check too.
