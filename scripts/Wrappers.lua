@@ -369,9 +369,12 @@ function W.install(AD)
             Logging.warning("[%s] a destination named '%s' already exists (waypoint id=%s) - not applying. Pick another name.",
                 W.MOD_NAME, marker.name, tostring(marker.id))
             -- On-screen, because the dialog closes either way and silence reads as "it did nothing".
-            if g_currentMission ~= nil and g_currentMission.showBlinkingWarning ~= nil then
-                pcall(g_currentMission.showBlinkingWarning, g_currentMission,
-                    string.format("'%s' is already a destination name - pick another", marker.name), 4000)
+            -- The editor's own warning box while it is open; showWarning falls back to the game's.
+            local text = string.format("'%s' is already a destination name - pick another", marker.name)
+            if ADFlyoverEditor ~= nil and ADFlyoverEditor.showWarning ~= nil then
+                ADFlyoverEditor:showWarning(text)
+            elseif g_currentMission ~= nil and g_currentMission.showBlinkingWarning ~= nil then
+                pcall(g_currentMission.showBlinkingWarning, g_currentMission, text, 4000)
             end
         end
 

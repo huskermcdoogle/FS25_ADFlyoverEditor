@@ -1340,6 +1340,100 @@ function ADFlyoverHud:draw(editor)
     if editor.helpOpen and not editor.dialogOpen and not editor.manualOpen then
         self:drawHelp(editor)
     end
+
+    -- Last, so it sits on top of whatever it hangs off, and its click row is found first.
+    self:drawWarning(editor)
+end
+
+--- Greedy word-wrap to a measured width, so the breaks follow the real glyph widths at the size the
+--- text is drawn (the character-count wrap in the locale module assumes the panel's own text size).
+--- A word longer than a whole line keeps a line to itself rather than being split.
+local function wrapToWidth(text, size, maxW)
+    local measure = getTextWidth or function(s, t) return #t * s * 0.3 end
+    local out = {}
+    for para in string.gmatch(text, "[^\n]+") do
+        local line = ""
+        for word in string.gmatch(para, "%S+") do
+            local candidate = line == "" and word or (line .. " " .. word)
+            if line ~= "" and measure(size, candidate) > maxW then
+                out[#out + 1] = line
+                line = word
+            else
+                line = candidate
+            end
+        end
+        if line ~= "" then out[#out + 1] = line end
+    end
+    return out
+end
+
+--- The editor's own warning box (see ADFlyoverEditor:showWarning). Bigger text than the game's red
+--- blinking warning, and attached to whichever card is in front - the tool card, else the Select-mode
+--- menu, else the corner panel - so the message shows up where the player is already looking instead
+--- of mid-screen. It hangs below that card, or above it when below would run into the game's HUD map.
+--- It fades over its last moments; a click on it closes it, and like any panel row never reaches the world.
+function ADFlyoverHud:drawWarning(editor)
+    local warning = editor.warning
+    if warning == nil then
+        return
+    end
+    local left = warning.untilMs - editor:nowMs()
+    if left <= 0 then
+        editor.warning = nil
+        return
+    end
+    local alpha = math.min(1, left / 400)
+
+    local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
+    local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
+    local pad = self.padding
+    -- About 1.5x the cards' own text, and a touch larger than the game's warning it stands in for.
+    local fontSize = 0.0160 * uiScale
+    local lineH = fontSize * 1.25
+
+    -- The card in front. The tool card and the Select-mode menu never show together (see buildRows).
+    local ax, ay, aw, ah
+    if self.ctxFrameW ~= nil and self.ctxFrameW > 0 then
+        ax, ay, aw, ah = self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH
+    elseif self.menuRect ~= nil then
+        local r = self.menuRect
+        ax, ay, aw, ah = r.x, r.y, r.w, r.h
+    else
+        ax, ay, aw, ah = self.frameX, self.frameY, self.frameW, self.frameH
+    end
+    if ax == nil then
+        return
+    end
+    -- The menu is narrower than the cards; at this text size it would wrap into a tall thin column.
+    local w = math.max(aw, self.width * uiScale)
+    local x = math.max(0, math.min(1 - w, ax))
+
+    -- getTextWidth measures in the current bold state, which the game's own HUD may have left on.
+    setTextBold(false)
+    local closeSize = fontSize * 0.7
+    local closeW = (getTextWidth ~= nil and getTextWidth(closeSize, "x") or closeSize * 0.3) + pad * 2
+    local lines = wrapToWidth(warning.text, fontSize, w - pad * 4 - closeW)
+    local h = #lines * lineH + pad * 2
+
+    local edge = 0.0025
+    local gap = edge * 2 + pad * 0.6
+    local y = ay - gap - h
+    if y < self:mapFloorFor(x, w) and ay + ah + gap + h <= 1 then
+        y = ay + ah + gap
+    end
+    y = math.max(0, math.min(1 - h, y))
+
+    fillRole(self.borderOverlay, x - edge, y - edge, w + edge * 2, h + edge * 2, "danger", 0.9 * alpha)
+    fillRole(self.background, x, y, w, h, "cardBg", 0.99 * alpha)
+    for i, text in ipairs(lines) do
+        local lineY = y + h - pad - i * lineH
+        labelRole(x + pad * 2, lineY + (lineH - fontSize) * 0.5, fontSize, text, "danger", alpha)
+    end
+    labelRole(x + w - pad * 1.5, y + h - pad - lineH + (lineH - closeSize) * 0.5, closeSize, "x",
+        "mutedText", alpha, RenderText.ALIGN_RIGHT)
+
+    table.insert(self.rows, { x = x - edge, y = y - edge, w = w + edge * 2, h = h + edge * 2,
+        action = function() editor.warning = nil end })
 end
 
 --- Screen-space bounding box of what a Select-mode menu is about to act on (point / span / run), or
