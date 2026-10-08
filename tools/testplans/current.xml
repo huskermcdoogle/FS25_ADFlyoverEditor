@@ -3,27 +3,26 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="lane splice fix, new numbers, Y junctions, hooks, growing circle, ground heights" build="@BUILD@">
+<testPlan title="junction numbers, ground heights, farm tracks, spacing, pattern builds, two trucks" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
+    <test id="numbers" title="Junction numbers show over the junctions"
+          hint="Open the junction tool: yellow numbers over wired junctions, blue over cleared ones, split parts by name (j39se). The card row junction numbers turns them off, and they stay off after a restart."/>
+    <test id="ground" title="Placed and built points sit on the ground"
+          hint="Clear 28 and place it; clear 7 and build it. Pick the new turns with Ground: nothing to fix, and no point floats or sinks."/>
+    <test id="pattern" title="A plain T or X builds as the mod's pattern" passLog="laid as the pattern"
+          hint="Clear a plain two-lane T or X (through roads kept), then build: the log says it is laid as the pattern (ticks itself), and it looks like the placed one."/>
+    <test id="spacing" title="Built turns have their points well apart"
+          hint="Build a junction the pattern does not fit (a Y, a skewed one): the turn points sit about 3-5 m apart on wide turns, closer on tight ones, and trucks still drive them at a steady speed."/>
+    <test id="farmtrack" title="Farm-track junction 101 builds drivable"
+          failLog="turn%(s%) we laid cannot be driven"
+          hint="Clear 101 (through roads kept), build with a 3-6 m turn radius: short turns at the middle, no loop across the field, and the route check is clean both ways along the track."/>
     <test id="drivable" title="Builds come out drivable"
           passLog="AutoDrive can take through here, all of them turns we meant"
           failLog="turn%(s%) we laid cannot be driven"
           hint="Build a few junctions. Ticks itself: pass on a clean route check, fail if any build says a turn cannot be driven."/>
-    <test id="j7" title="Junction 7 looks right"
-          hint="Clear 7 (through roads kept), build with a 9 m turn radius: the side road's lanes run in smoothly, no hump, nothing across the middle."/>
-    <test id="j89" title="West of j40w is now j89" passLog="%(j89%)"
-          hint="Lock the junction at (-158, -68): the card names it j89 (ticks itself)."/>
-    <test id="newNumbers" title="The new numbers are junctions"
-          hint="The log lists j78 to j93 as new. Look at two or three; j90 to j93 are on dirt tracks."/>
-    <test id="y82" title="The Y at (784, 892) is one junction, j82"
-          hint="Lock it at either end and in the middle: the card says j82 every time. Clear it: both sharp turns go."/>
-    <test id="hook" title="A Y builds with a hook in the gore"
-          hint="Clear 82 (or 53), then build with the circle as it is: the sharp-back turn is a loop out where the road splits, on the paving, and the route check is clean."/>
-    <test id="grow" title="The build circle reaches the cleared lane ends" passLog="the search circle grows from"
-          hint="Clear 36, 53 or 82, then build: the circle grows by itself (ticks itself on the log line) and no cut lane is left hanging."/>
-    <test id="ground" title="Placed points sit on the ground"
-          hint="Clear 28, place it, then pick the placed turns with Ground: nothing to fix, and the points sit on the road."/>
+    <test id="twotrucks" title="Two trucks share a junction without trouble"
+          hint="On a junction you just built or placed, send two AutoDrive trucks through at the same time on crossing or merging routes: one waits, the other goes, no crash, nobody stuck. Try it a few times with different timing."/>
     <test id="saveSplit" title="A save keeps the split"
           hint="Change a split decision, save the game, reload: the decision is still there."/>
 </testPlan>
