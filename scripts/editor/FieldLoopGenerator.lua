@@ -1525,18 +1525,23 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     end
 
     if smallestMargin ~= nil and smallestMargin < marginDistance - 1e-6 then
-        Logging.info("[AD] %s: margin pulled in from %.2fm to %.2fm to keep clear of another loop beside this field.",
+        Logging.info("[FlyoverEditor]: field loop (%s): margin pulled in from %.2fm to %.2fm to keep clear of another loop beside this field.",
             source, marginDistance, smallestMargin)
     end
 
     if #fences > 0 and (fenceEdgesPulled > 0 or fenceEdgesBlocked > 0) then
-        Logging.info("[AD] %s: %d field edge(s) pulled in to stay on the field side of a fence (%d fence section(s) nearby)%s.",
+        Logging.info("[FlyoverEditor]: field loop (%s): %d field edge(s) pulled in to stay on the field side of a fence (%d fence section(s) nearby)%s.",
             source, fenceEdgesPulled, #fences,
             fenceEdgesBlocked > 0 and string.format(", %d edge(s) could not be cleared even at the field edge", fenceEdgesBlocked) or "")
     end
 
+    if treeStats.stuck > 0 then
+        Logging.warning("[FlyoverEditor]: field loop (%s): %d point(s) could not be routed around an obstacle and were left in place - check them by hand.",
+            source, treeStats.stuck)
+    end
+
     if anyCrowded then
-        Logging.warning("[AD] %s: this loop still runs within %.0fm of another loop - the strip between the fields is narrower than the other loop's margin. Lower that loop's margin, or move one of them by hand.",
+        Logging.warning("[FlyoverEditor]: field loop (%s): this loop still runs within %.0fm of another loop - the strip between the fields is narrower than the other loop's margin. Lower that loop's margin, or move one of them by hand.",
             source, AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE)
     end
 
