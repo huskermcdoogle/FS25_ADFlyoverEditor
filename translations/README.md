@@ -51,9 +51,17 @@ Long help text (the `HELP` section) is one paragraph per line. Do not break it i
 
 3. **The junction help** was translated from the German version, because the English has no text for it yet.
 
-## How to send your changes
+## How to edit and save (in your browser, nothing to install)
 
-- **Easiest:** copy the lines you changed into a comment on [issue #16](https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/issues/16).
-- **Or** fork the repository, edit `scripts/editor/locale/br.lua`, and open a pull request.
+1. Accept the invitation to the repository (GitHub or your email).
+2. Open the file on the translation branch:
+   <https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/blob/translation-pt-br/scripts/editor/locale/br.lua>
+3. Check that the branch name at the top left says **translation-pt-br**. Do not use `main`.
+4. Click the **pencil** icon (Edit this file) and change the Portuguese text.
+5. Click **Commit changes...**, write a short note (for example "fix junction words"), and confirm.
+
+You can save as often as you like, a few lines or many. Every save goes to the translation branch only, and nothing reaches the released mod until the maintainer merges it.
+
+If you are unsure about a word, leave a comment on [issue #16](https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/issues/16) and we will talk it through.
 
 To test in game, the Brazilian Portuguese game language is used automatically.
