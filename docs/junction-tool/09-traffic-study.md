@@ -65,3 +65,25 @@ one-way turns 0 crashes, 8 stand-offs in 1476 runs; two-way turns 36 crashes.
 - Put each merge's shared point where the two paths first come within a truck's width.
 - On farm tracks, give each direction of a turn its own line, with room to wait off the other's.
 - Run every new layout through the simulator (all movement pairs, small, big and semi) before it ships.
+
+## Done 2026-10-08 (150f2dd)
+
+- **Spacing:** built turns and the smooth pattern are laid with points 0.4 x the curve's radius apart,
+  up to 5 m, never so far that a point bends more than 25 deg (AutoDrive keeps about 20-25 km/h).
+- **Place:** old lane points within 2.5 m of a new tie are taken out; the mod's shape is untouched.
+  On build the same tidy traded crashes for stand-offs, so it is place only.
+- **Merges zipped back** to where the paths first touch: tried, made the built X worse, not kept.
+
+Crashes / stand-offs, before -> after:
+
+| Junction | Big tractor rig | Small tractor rig |
+|---|---|---|
+| T built | 16 / 4 -> 2 / 0 | 18 / 4 -> 4 / 0 |
+| T smooth | 8 / 2 -> 2 / 0 | 20 / 2 -> 6 / 0 |
+| T exact | 6 / 2 -> **0 / 0** | 8 / 2 -> **0 / 0** |
+| X built | 64 / 8 -> 24 / 12 | 84 / 8 -> 60 / 8 |
+| X plain piece | 0 / 0 | 0 / 0 |
+
+The placed patterns (exact T, plain X) are now clean for both tractor rigs. The per-turn built X is
+still the weak one: 24 shared points against the plain X's 9, and its merges run side by side before
+they join.
