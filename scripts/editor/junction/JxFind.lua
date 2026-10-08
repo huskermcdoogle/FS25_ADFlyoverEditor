@@ -359,6 +359,8 @@ end
 ---
 --- Returns a site table, or nil and a reason - and a reason is meant to be shown, not swallowed:
 --- refusing without saying why is indistinguishable from the tool being broken.
+-- How far out an arm's direction is read (evaluate, below).
+local JX_ARM_AIM = 12
 function ADFlyoverEditor:junctionSelect(cx, cz)
     if cx == nil or cz == nil then return nil, "no cursor" end
     local SELECT = AutoDrive.FLYOVER_JUNCTION_SELECT_RADIUS or 20
@@ -412,7 +414,7 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
     -- is the site. Taking the nearest and stopping there let a stray cluster beside a real junction
     -- - three lane ends at a field gate - be picked, fail, and refuse the click outright with the
     -- real junction a few metres further on.
-    local function evaluate(best)
+    local function evaluate(best, allowAim)
         local inCluster = {}
         for _, f in ipairs(best.nodes) do inCluster[f.id] = true end
         local arms = {}
@@ -440,8 +442,15 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                             if nxt == nil then break end
                             prev, cur = cur, nxt
                         end
+                        -- THE WAY AN ARM GOES, 12 m out, as well as its first step (aimBearing; used only
+                        -- where the first steps make fewer than three roads, below).
+                        local aim = walked[#walked] or w
+                        for _, q in ipairs(walked) do
+                            if (q.x - best.x) ^ 2 + (q.z - best.z) ^ 2 >= JX_ARM_AIM * JX_ARM_AIM then aim = q break end
+                        end
                         arms[#arms + 1] = {
                             bearing = math.atan2(w.x - best.x, w.z - best.z),
+                            aimBearing = math.atan2(aim.x - best.x, aim.z - best.z),
                             -- Clamped, because the walk adds a whole segment before it re-tests the
                             -- cap: a 10 m hop at the end of a 39 m arm had the arm reported as 49 m,
                             -- and the bound is only ever as tight as the arm it is told about.
@@ -457,6 +466,36 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
 
         -- Fold the lanes of one road together: same bearing, so a two-lane road counts once. The arm
         -- keeps the LONGEST of its lanes - one lane of a road being stubbed does not shorten the road.
+        -- TWO WAYS LEAVING ONE FORK SIDE BY SIDE AND PARTING LATER are one road by their first steps:
+        -- at 101 (a T of farm tracks) the turn up to the north road and the track to the south-east leave
+        -- the west road's fork 4 m apart, heading east, and the junction was refused as "only 2 roads" -
+        -- it would not lock or clear (the user's 2026-10-08 test). So where the first steps make fewer
+        -- than three roads, the arms are folded again by where they are 12 m out. Only then: read that
+        -- way everywhere, the clears of 26 junctions that worked moved (19 cut 26 m out, not 14).
+        local useAim = false
+        do
+            local seenB = {}
+            for _, a in ipairs(arms) do
+                local found = false
+                for _, b in ipairs(seenB) do
+                    local d = math.abs(a.bearing - b) % (2 * math.pi)
+                    if d > math.pi then d = 2 * math.pi - d end
+                    if d <= math.rad(30) then found = true break end
+                end
+                if not found then seenB[#seenB + 1] = a.bearing end
+            end
+            -- ...and only where every way out is a road in its own right, running the whole walk
+            -- without forking: read 12 m out, a merge on the road between 87 and 88 (its ways forking
+            -- again 17 and 25 m on) came out as three roads.
+            local allRoads = true
+            for _, a in ipairs(arms) do
+                if a.fork or a.len < WALK - 1e-6 then allRoads = false break end
+            end
+            if #seenB < 3 and allowAim and allRoads then
+                for _, a in ipairs(arms) do a.bearing = a.aimBearing end
+                useAim = true
+            end
+        end
         local roads = {}
         for _, a in ipairs(arms) do
             local joined = nil
@@ -633,6 +672,15 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
         local site, why = evaluate(s)
         if site ~= nil then return partSiteFor(site) end
         firstWhy = firstWhy or why
+        if not s.virgin and #s.nodes >= 4 then break end
+    end
+    -- ...and only where none passes, the arms read 12 m out (evaluate's allowAim): read that way first,
+    -- a fork group beside 86 that used to be refused was picked before its cleared site, and place
+    -- refused it as still wired.
+    for _, s in ipairs(sites) do
+        if s.d2 > SELECT * SELECT then break end
+        local site = evaluate(s, true)
+        if site ~= nil then return partSiteFor(site) end
         if not s.virgin and #s.nodes >= 4 then break end
     end
     local ps = partSiteFor(nil)
