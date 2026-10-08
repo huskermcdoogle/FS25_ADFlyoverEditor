@@ -179,6 +179,51 @@ local function junctionSquareUp(sq)
     return bent
 end
 
+-- NO OLD LANE POINT RIGHT BESIDE A TIE (the traffic study, doc 09). A turn's tie point is spliced into its
+-- lane wherever the turn needs it, and that is often a metre or two from a point the lane already had
+-- (the exact T on the test junction: gaps of 0.9, 1.0 and 1.2 m). AutoDrive looks 5 POINTS ahead for
+-- traffic, so every such crumb shortens how far a truck sees; with the old points beside the ties
+-- taken out the exact T had no crash and no stand-off in the simulator, for either tractor rig. So a
+-- plain old point of a one-way lane (one way in, one way out) closer than JX_TIE_CLEAR to a point this
+-- place added with three or more links is removed, and the lane runs straight past it. Place only: on
+-- the per-turn build it traded crashes for stand-offs (built X 24/12 -> 16/32 of 3168).
+local JX_TIE_CLEAR = 2.5
+local function junctionTieTidy(cx, cz, reach)
+    local new = jxState.jxBuildNew
+    if new == nil then return 0 end
+    local function wp(id) return ADGraphManager:getWayPointById(id) end
+    local function distinct(list)
+        local s, n = {}, 0
+        for _, id in ipairs(list or {}) do if not s[id] then s[id] = true n = n + 1 end end
+        return n
+    end
+    local ties = {}
+    for w in pairs(new) do
+        if w.id ~= nil and wp(w.id) == w and distinct(w.incoming) + distinct(w.out) >= 3 then ties[#ties + 1] = w end
+    end
+    table.sort(ties, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.z < b.z end)
+    local removed = 0
+    for _, T in ipairs(ties) do
+        local near = {}
+        for _, id in ipairs(T.incoming or {}) do near[#near + 1] = id end
+        for _, id in ipairs(T.out or {}) do near[#near + 1] = id end
+        for _, id in ipairs(near) do
+            local N = wp(id)
+            if N ~= nil and N ~= T and not new[N] and distinct(N.incoming) == 1 and distinct(N.out) == 1
+                and N.incoming[1] ~= N.out[1] and (N.x - T.x) ^ 2 + (N.z - T.z) ^ 2 < JX_TIE_CLEAR * JX_TIE_CLEAR then
+                local before, after = wp(N.incoming[1]), wp(N.out[1])
+                if before ~= nil and after ~= nil and before ~= after then
+                    if jxRemove(N, "junction tie tidy") then
+                        junctionConnect(before, after, false)
+                        removed = removed + 1
+                    end
+                end
+            end
+        end
+    end
+    return removed
+end
+
 local function junctionShareCrossings(cx, cz, reach)
     if jxState.jxBuildNew == nil then return 0 end
     jxState.jxShallowJoins = 0
@@ -945,7 +990,9 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
         if A == nil or B == nil or A == B then return false end
         label(k)
         local ok, laid = tryCall("junction pattern lay", function()
-            return junctionLayChain(A, pts, B, false, B.flags or AutoDrive.FLAG_NONE)
+            -- The smooth shape's arcs are laid every 2 m: spaced as far as the speed allows. The exact
+            -- shape keeps the mod's own points (about 3.8 m apart already).
+            return junctionLayChain(A, pts, B, false, B.flags or AutoDrive.FLAG_NONE, shape == "smooth")
         end)
         jxState.jxLayLabel = nil
         if ok and laid == true then turns = turns + 1 return true end
@@ -1560,4 +1607,5 @@ ADFlyoverEditor.shared.junctionRouteCheck = junctionRouteCheck
 ADFlyoverEditor.shared.junctionShareCrossings = junctionShareCrossings
 ADFlyoverEditor.shared.jxpUnit = jxpUnit
 ADFlyoverEditor.shared.jxSpliceY = jxSpliceY
+ADFlyoverEditor.shared.junctionTieTidy = junctionTieTidy
 -- MODSPLIT: end of the shared block

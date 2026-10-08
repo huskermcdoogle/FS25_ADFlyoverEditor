@@ -852,7 +852,102 @@ end
 -- single. With this, EVERY link the junction tool creates goes through junctionConnect above, whose
 -- result is exactly what its arguments say. Interior points carry `flags` from creation (no
 -- after-the-fact re-flag pass over an id range). Returns true when the whole chain laid.
-local function junctionLayChain(NA, points, NB, dual, flags)
+-- POINTS AS FAR APART AS THE SPEED ALLOWS (docs/junction-tool/06, "How each turn is shaped"; the traffic
+-- study, doc 09). AutoDrive looks 5 POINTS ahead for traffic, so a turn laid every 2 m let a truck see
+-- the other only 10 m out - less than it needs to stop - and in the simulator built junctions crashed
+-- where the same layouts with points 3.5 m apart did not (exact T 6 -> 0, built X 64 -> 24). AutoDrive
+-- also sets its speed from the bend at each point (getMaxSpeedForAngle: about 20 km/h at 25 deg), so a
+-- point may be at most 0.4 x the curve's radius from the next before the turn gets slower than 20 km/h.
+-- Each stretch between fixed points (the ends, a left turn's shared centre) is resampled evenly at
+-- 0.4 x its tightest radius, up to 5 m - and never more densely than it was laid: a tight turn keeps
+-- its close points, as the speed needs them (a 2.5 m floor bent a 3 m turn 48 deg at every point).
+-- JX_SPACE_BEND: the sharpest bend a resampled point may make (AutoDrive about 25 km/h there).
+local JX_SPACE_PER_RADIUS, JX_SPACE_MIN, JX_SPACE_MAX, JX_SPACE_BEND = 0.4, 1.0, 5.0, 25
+local function jxResample(NA, points, NB)
+    local out = {}
+    local piece = { { x = NA.x, y = NA.y or 0, z = NA.z } }
+    local function flush(last)
+        -- piece: fixed start .. fixed end (inclusive); emit its new interior points, then the end
+        local n = #piece
+        if n >= 2 then
+            local cum = { 0 }
+            for i = 2, n do
+                cum[i] = cum[i - 1] + math.sqrt((piece[i].x - piece[i - 1].x) ^ 2 + (piece[i].z - piece[i - 1].z) ^ 2)
+            end
+            local L = cum[n]
+            local kmax = 0
+            for i = 2, n - 1 do
+                local ax, az = piece[i].x - piece[i - 1].x, piece[i].z - piece[i - 1].z
+                local bx, bz = piece[i + 1].x - piece[i].x, piece[i + 1].z - piece[i].z
+                local la, lb = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
+                if la > 1e-6 and lb > 1e-6 then
+                    local c = math.max(-1, math.min(1, (ax * bx + az * bz) / (la * lb)))
+                    kmax = math.max(kmax, math.acos(c) / ((la + lb) / 2))
+                end
+            end
+            local step = JX_SPACE_MAX
+            if kmax > 1e-9 then step = math.max(JX_SPACE_MIN, math.min(JX_SPACE_MAX, JX_SPACE_PER_RADIUS / kmax)) end
+            local laid = L / math.max(1, n - 1)
+            -- The points at `step`, and the sharpest bend they make (start and end included): the radius
+            -- read off the laid points runs low where a curve tightens, so the result is checked, and
+            -- the step shortened until no point bends more than JX_SPACE_BEND.
+            local function sample(st)
+                local m = math.max(1, math.floor(L / st + 0.5))
+                local pts, j = {}, 1
+                for k = 1, m - 1 do
+                    local d = L * k / m
+                    while j < n - 1 and cum[j + 1] < d do j = j + 1 end
+                    local f = (d - cum[j]) / math.max(1e-9, cum[j + 1] - cum[j])
+                    pts[#pts + 1] = { x = piece[j].x + (piece[j + 1].x - piece[j].x) * f,
+                        y = piece[j].y + (piece[j + 1].y - piece[j].y) * f,
+                        z = piece[j].z + (piece[j + 1].z - piece[j].z) * f }
+                end
+                local seq = { piece[1] }
+                for _, q in ipairs(pts) do seq[#seq + 1] = q end
+                seq[#seq + 1] = piece[n]
+                local worst = 0
+                for i = 2, #seq - 1 do
+                    local ax, az = seq[i].x - seq[i - 1].x, seq[i].z - seq[i - 1].z
+                    local bx, bz = seq[i + 1].x - seq[i].x, seq[i + 1].z - seq[i].z
+                    local la, lb = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
+                    if la > 1e-6 and lb > 1e-6 then
+                        worst = math.max(worst, math.deg(math.acos(math.max(-1, math.min(1, (ax * bx + az * bz) / (la * lb))))))
+                    end
+                end
+                return pts, worst
+            end
+            local chosen = nil
+            for _ = 1, 8 do
+                if step <= laid + 1e-6 then break end
+                local pts, worst = sample(step)
+                if worst <= JX_SPACE_BEND then chosen = pts break end
+                step = step * 0.85
+            end
+            if chosen == nil then
+                -- already as far apart as the speed allows: keep the points as laid
+                chosen = {}
+                for i = 2, n - 1 do chosen[#chosen + 1] = { x = piece[i].x, y = piece[i].y, z = piece[i].z } end
+            end
+            for _, q in ipairs(chosen) do out[#out + 1] = q end
+        end
+        if not last then out[#out + 1] = piece[#piece].keep end
+    end
+    for _, p in ipairs(points) do
+        local q = { x = p.x, y = p.y or 0, z = p.z }
+        piece[#piece + 1] = q
+        if p.centre then
+            q.keep = p
+            flush(false)
+            piece = { q }
+        end
+    end
+    piece[#piece + 1] = { x = NB.x, y = NB.y or 0, z = NB.z }
+    flush(true)
+    return out
+end
+
+local function junctionLayChain(NA, points, NB, dual, flags, spaced)
+    if spaced and AutoDrive.FLYOVER_JUNCTION_SPACED ~= false then points = jxResample(NA, points, NB) end
     local prev = NA
     for _, p in ipairs(points) do
         local wp

@@ -1269,7 +1269,7 @@ function ADFlyoverEditor:applyJunction()
             jxState.jxLaySeq = jxState.jxLaySeq + 1
             jxState.jxLayLabel = jxTurnLabel(c) .. "#" .. jxState.jxLaySeq
             local ok, laid = tryCall("junction lay chain", function()
-                return junctionLayChain(NA, c.points, NB, dual, exitFlags)
+                return junctionLayChain(NA, c.points, NB, dual, exitFlags, true)
             end)
             jxState.jxLayLabel = nil
             ok = ok and laid == true

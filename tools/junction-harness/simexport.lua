@@ -33,7 +33,7 @@ elseif MODE == "build" then
     assert(jp ~= nil, "build refused: " .. tostring(E.junctionRefused))
     local log = H.build()
     for _, l in ipairs(log) do
-        if l:find("placed %d") or l:find("route check") or l:find("refused") then print((l:gsub(".*FlyoverEditor%]: ", ""))) end
+        if l:find("placed %d") or l:find("route check") or l:find("refused") or l:find("merge") or l:find("from the lane") then print((l:gsub(".*FlyoverEditor%]: ", ""))) end
     end
 end
 local f = assert(io.open(OUT, "w"))

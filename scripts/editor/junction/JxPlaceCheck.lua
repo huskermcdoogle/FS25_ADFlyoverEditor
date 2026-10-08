@@ -1,7 +1,7 @@
 -- Part of the flyover editor, moved out of FlyoverEditor.lua (docs/editor-modules-spec.md). Prelude.lua
 -- loads it after FlyoverEditor.lua, in the old file's order.
 -- MODSPLIT: HELPERS FROM THE FILES LOADED BEFORE THIS ONE (tools/modsplit/split.py writes this block)
-for _, name in ipairs({ "junctionPlacePattern", "junctionRouteCheck", "junctionShareCrossings", "jxBuildBegin", "jxBuildEnd", "jxState", "jxpUnit", "tryCall" }) do
+for _, name in ipairs({ "junctionPlacePattern", "junctionRouteCheck", "junctionShareCrossings", "junctionTieTidy", "jxBuildBegin", "jxBuildEnd", "jxState", "jxpUnit", "tryCall" }) do
     if ADFlyoverEditor.shared == nil or ADFlyoverEditor.shared[name] == nil then
         Logging.error("[FlyoverEditor]: JxPlaceCheck.lua needs %s, which no file loaded before it shares", name)
     end
@@ -9,6 +9,7 @@ end
 local junctionPlacePattern = ADFlyoverEditor.shared.junctionPlacePattern
 local junctionRouteCheck = ADFlyoverEditor.shared.junctionRouteCheck
 local junctionShareCrossings = ADFlyoverEditor.shared.junctionShareCrossings
+local junctionTieTidy = ADFlyoverEditor.shared.junctionTieTidy
 local jxBuildBegin = ADFlyoverEditor.shared.jxBuildBegin
 local jxBuildEnd = ADFlyoverEditor.shared.jxBuildEnd
 local jxState = ADFlyoverEditor.shared.jxState
@@ -133,6 +134,14 @@ function ADFlyoverEditor:applyJunctionPlace()
     -- over roads it does not fit, which it must not be joined to.)
     if placed and res.shape ~= "plain" and AutoDrive.FLYOVER_JUNCTION_SHARE_CROSSINGS ~= false then
         tryCall("junction share crossings", function() shared = junctionShareCrossings(jp.cx, jp.cz, 15) end)
+    end
+    -- ...and the old lane points left right beside the pattern's ties taken out (doc 09).
+    if placed and res.shape ~= "plain" and AutoDrive.FLYOVER_JUNCTION_TIE_TIDY ~= false then
+        local tidied = 0
+        tryCall("junction tie tidy", function() tidied = junctionTieTidy(jp.cx, jp.cz, 15) end)
+        if tidied > 0 then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d old lane point(s) right beside a new tie taken out, so AutoDrive sees further ahead.", tidied)
+        end
     end
     if placed then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: junction placed: %s %s, lane gap %.1f m, %d turn piece(s), %d shared crossing point(s), %d loose end(s).",
