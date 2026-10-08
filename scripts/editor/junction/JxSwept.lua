@@ -1445,6 +1445,20 @@ function ADFlyoverEditor:junctionTieLanesPrepare(moves, cx, cz, radius)
         local L = lanes[ap]
         if L == nil then
             local chain, deadEnd = self:junctionChain(ap, cx, cz, radius, true)
+            -- A LANE THAT RUNS THROUGH DOES NOT END HERE, wherever its walk stops. j101's west track
+            -- walks on across the junction and out along the north-east track to where that one
+            -- ends, 41 m away: taken for a dead end, the first tie on it cut the track behind it and
+            -- the through road was gone. A lane ends at this junction only where it gets no nearer.
+            if deadEnd and #chain >= 2 then
+                local last = chain[#chain]
+                local dl = math.sqrt((last.x - cx) ^ 2 + (last.z - cz) ^ 2)
+                for _, w in ipairs(chain) do
+                    if math.sqrt((w.x - cx) ^ 2 + (w.z - cz) ^ 2) < dl - 5 then
+                        deadEnd = false
+                        break
+                    end
+                end
+            end
             for _, o in ipairs(made) do
                 if o.ap.wp == ap.wp and o.ap.dir ~= ap.dir and sameChain(o.L.orig, chain) then
                     L = o.L

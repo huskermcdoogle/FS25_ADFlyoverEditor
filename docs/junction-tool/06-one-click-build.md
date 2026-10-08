@@ -149,6 +149,20 @@ Two AutoDrive behaviours found on the way, which matter anywhere:
 - **A waiting truck is released once the other truck's cab is 4 points past,** while its trailer can
   still be in the way.
 
+**Farm tracks that meet at one point** (j101, 2026-10-08). Three or more two-way tracks join at a
+single shared point, with no turns at all:
+
+- **The clear** keeps the pair of tracks that runs straightest through the point (measured 8 m out,
+  not by the first step). It cuts every other track off the point and takes its first points until
+  it is 5 m clear of the kept track - what the user did by hand at j101. With through roads off,
+  every track is cut, each 5 m clear of the others, and the point goes.
+- **The build** then lays the turns as on any other two-way road. A lane that runs on through the
+  middle is not a road ending here, wherever its walk stops: j101's west track walked out to where the
+  north-east track ends 41 m away, and the build cut the kept track as a stub (j67 and j93 lost 4 and
+  12 road points the same way).
+- **A two-way road's way in and way out** are one lane, walked once: two copies put two tie points on
+  the same spot.
+
 ## Stopping in time (every approach)
 
 Measured 2026-10-02 in the truck twin on one-way lanes (`tools/xt-study/throughdist.lua`). Another

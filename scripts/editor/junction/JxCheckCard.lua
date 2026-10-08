@@ -499,6 +499,143 @@ function ADFlyoverEditor:junctionSplitPartsOf(jp)
     return out
 end
 
+--- A JUNCTION THAT IS ONE POINT. Farm tracks often meet at a single shared point: three or more
+--- two-way tracks and no turn wiring at all (j101). The clear's box needs two roads crossing and what
+--- it takes out is wiring, so it found nothing to do there. Cleared here as the user did it by hand
+--- (2026-10-08): the straightest pair of tracks through the point is the through road and stays;
+--- every other track is cut off the point and its first points are taken until it is 5 m clear of
+--- the tracks that stay. With through roads not kept, every track is cut, each clear of the others,
+--- and the point goes. Returns how many links and points it took (0: not a one-point junction), and
+--- the through road it kept, both ways, as point lists (empty when it kept none).
+function ADFlyoverEditor:junctionClearOnePoint(jp, leave)
+    local c = self.junctionSite or jp.tracksCentre
+    if c == nil then return 0 end
+    local REACH, NEAR, CLEAR, BEND, HEAD, WALK = 15, 6, 5, 45, 8, 60
+    local function nbrs(w)
+        local seen, list = {}, {}
+        for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                if id ~= w.id and not seen[id] then seen[id] = true list[#list + 1] = id end
+            end
+        end
+        table.sort(list)
+        return list
+    end
+    local function twoWay(a, b) return table.contains(a.out or {}, b.id) and table.contains(b.out or {}, a.id) end
+    -- The point: the one place within reach where more than two tracks meet.
+    local P, forks = nil, 0
+    for id = 1, ADGraphManager:getWayPointsCount() do
+        local w = ADGraphManager:getWayPointById(id)
+        if w ~= nil and (w.x - c.x) ^ 2 + (w.z - c.z) ^ 2 <= REACH * REACH and #nbrs(w) >= 3 then
+            forks = forks + 1
+            P = w
+        end
+    end
+    if forks ~= 1 or (P.x - c.x) ^ 2 + (P.z - c.z) ^ 2 > NEAR * NEAR then return 0 end
+    -- Each track out of it, walked over plain two-way points, as far as its lane runs (the check
+    -- holds the kept one up against the lanes end to end).
+    local tracks = {}
+    for _, nid in ipairs(nbrs(P)) do
+        local n = ADGraphManager:getWayPointById(nid)
+        if n == nil or not twoWay(P, n) then return 0 end
+        local path, prev, cur, run = { P, n }, P, n, math.sqrt((n.x - P.x) ^ 2 + (n.z - P.z) ^ 2)
+        while run < WALK do
+            local ns = nbrs(cur)
+            if #ns ~= 2 then break end
+            local nx = ADGraphManager:getWayPointById(ns[1] == prev.id and ns[2] or ns[1])
+            if nx == nil or not twoWay(cur, nx) then break end
+            run = run + math.sqrt((nx.x - cur.x) ^ 2 + (nx.z - cur.z) ^ 2)
+            path[#path + 1] = nx
+            prev, cur = cur, nx
+        end
+        -- Its heading: towards where it is HEAD metres out, not its first step - j101's south track
+        -- leaves the point beside the north-east one and turns away over the next 6 m.
+        local hx, hz, acc = path[#path].x - P.x, path[#path].z - P.z, 0
+        for k = 2, #path do
+            local seg = math.sqrt((path[k].x - path[k - 1].x) ^ 2 + (path[k].z - path[k - 1].z) ^ 2)
+            if acc + seg >= HEAD then
+                local f = (seg > 1e-6) and (HEAD - acc) / seg or 0
+                hx = path[k - 1].x + (path[k].x - path[k - 1].x) * f - P.x
+                hz = path[k - 1].z + (path[k].z - path[k - 1].z) * f - P.z
+                break
+            end
+            acc = acc + seg
+        end
+        local l = math.sqrt(hx * hx + hz * hz)
+        if l < 1e-6 then return 0 end
+        tracks[#tracks + 1] = { path = path, hx = hx / l, hz = hz / l }
+    end
+    -- The through road: the pair that bends least through the point, if it bends little enough.
+    local keepA, keepB = nil, nil
+    if leave then
+        local best = math.rad(BEND)
+        for i = 1, #tracks do
+            for j = i + 1, #tracks do
+                local dot = -(tracks[i].hx * tracks[j].hx + tracks[i].hz * tracks[j].hz)
+                local bend = math.acos(math.max(-1, math.min(1, dot)))
+                if bend < best then best, keepA, keepB = bend, i, j end
+            end
+        end
+    end
+    local function distTo(path, x, z)
+        local best = math.huge
+        for k = 2, #path do
+            local a, b = path[k - 1], path[k]
+            local vx, vz = b.x - a.x, b.z - a.z
+            local L2 = vx * vx + vz * vz
+            local t = (L2 > 1e-9) and math.max(0, math.min(1, ((x - a.x) * vx + (z - a.z) * vz) / L2)) or 0
+            local d = (a.x + vx * t - x) ^ 2 + (a.z + vz * t - z) ^ 2
+            if d < best then best = d end
+        end
+        return math.sqrt(best)
+    end
+    -- What each cut track is measured against, read before anything changes.
+    local doomed, cutLinks = {}, 0
+    for i, t in ipairs(tracks) do
+        if i ~= keepA and i ~= keepB then
+            junctionDisconnect(P, t.path[2])
+            cutLinks = cutLinks + 1
+            -- Never past its walk's last point: what lies beyond is road this clear did not look at.
+            for k = 2, #t.path - 1 do
+                local w, near = t.path[k], false
+                for j, o in ipairs(tracks) do
+                    if j ~= i and (keepA == nil or j == keepA or j == keepB) and distTo(o.path, w.x, w.z) < CLEAR then
+                        near = true break
+                    end
+                end
+                if not near then break end
+                doomed[#doomed + 1] = w
+            end
+        end
+    end
+    if cutLinks == 0 then return 0 end
+    if keepA == nil then doomed[#doomed + 1] = P end
+    local kept = {}
+    if keepA ~= nil then
+        local there = {}
+        for k = #tracks[keepA].path, 1, -1 do there[#there + 1] = tracks[keepA].path[k] end
+        for k = 2, #tracks[keepB].path do there[#there + 1] = tracks[keepB].path[k] end
+        local back = {}
+        for k = #there, 1, -1 do back[#back + 1] = there[k] end
+        kept = { there, back }
+    end
+    local took = 0
+    -- Highest id first: a removal renumbers every point above it.
+    table.sort(doomed, function(a, b) return a.id > b.id end)
+    for _, w in ipairs(doomed) do
+        if jxRemove(w, "junction one-point cut") then took = took + 1 end
+    end
+    if keepA ~= nil then
+        local a, b = tracks[keepA], tracks[keepB]
+        Logging.info("[FlyoverEditor]: junction - this junction is one shared point of %d two-way tracks. Kept the track through it (bearings %.0f and %.0f), cut %d track(s) off the point and took %d point(s), to %d m clear of the kept track.",
+            #tracks, math.deg(math.atan2(a.hx, -a.hz)) % 360, math.deg(math.atan2(b.hx, -b.hz)) % 360, cutLinks, took, CLEAR)
+    else
+        Logging.info("[FlyoverEditor]: junction - this junction is one shared point of %d two-way tracks. Cut every track off the point and took %d point(s), each track to %d m clear of the others.",
+            #tracks, took, CLEAR)
+    end
+    return cutLinks + took, kept
+end
+
 function ADFlyoverEditor:applyJunctionClear()
     local jp = self.junctionPreview
     if jp == nil then return end
@@ -559,6 +696,55 @@ function ADFlyoverEditor:applyJunctionClear()
             ADEditorHistory:commit(undo)
             undo = nil
         end
+    end
+
+    -- THE END OF EVERY CLEAR THAT CHANGED SOMETHING: what it took, the lane ends it cut, and its own check.
+    local function finish()
+        -- WHICH STAGE TOOK WHAT, AND FROM HOW FAR. One total hides the stage that is over-reaching: in
+        -- game a clear reported 29 points taken, the farthest 39 m out, at a junction 12 m across - and
+        -- nothing in the log said which of fourteen removers had gone that far.
+        do
+            local parts = {}
+            for why, e in pairs(jxState.jxWhy) do
+                parts[#parts + 1] = string.format("%s %d (to %.0f m)", why:gsub("^junction ", ""), e.n, e.far)
+            end
+            table.sort(parts)
+            if #parts > 0 then
+                Logging.info("[FlyoverEditor]: junction - taken by stage: %s.", table.concat(parts, "; "))
+            end
+        end
+        local held, took, farOut = jxEnd()
+        chk.journal = jxState.jxJournal
+        jxState.jxJournal, jxState.jxStage, jxState.jxKeptRoad = nil, nil, nil
+        Logging.info("[FlyoverEditor]: junction - took %d point(s) in all, the farthest %.0f m out; %d left alone as belonging to a neighbouring junction rather than this one.",
+            took, farOut, held)
+        if jxState.jxTwinHeld > 0 then
+            Logging.info("[FlyoverEditor]: junction - %d point(s) a step of the clear would have taken were kept: another part's turn, or the road it leaves or joins (left working).",
+                jxState.jxTwinHeld)
+        end
+        self:invalidateIdReferences()
+        ADGraphManager:markChanges()
+        -- THE LANE ENDS THIS CLEAR CUT, for the build that follows: its circle grows to take them in
+        -- (junctionReachEnds). Only these - the loose track ends that were lying near 1, 26 and 63 before
+        -- any clear are not this junction's lanes, and a circle grown to them laid turns to nowhere.
+        if endsBefore ~= nil then
+            local cut = {}
+            for k, e in pairs(jxLaneEndsNear(endsAt.x, endsAt.z)) do
+                if endsBefore[k] == nil then cut[#cut + 1] = e end
+            end
+            table.sort(cut, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.z < b.z end)
+            self.junctionClearedEnds = { x = endsAt.x, z = endsAt.z, ends = cut,
+                serial = ((self.junctionClearedEnds or {}).serial or 0) + 1 }
+        end
+        -- THE CLEAR CHECKS ITS OWN WORK. Report only: it undoes nothing and refuses nothing, and a
+        -- failure inside it cannot stop the clear, which is already done. Before the capture closes, so
+        -- a capture's tool.log carries the check too.
+        if not tryCall("junction clear check", function() self:junctionClearCheck(chk) end) then
+            self:junctionCheckFailed(chk)
+        end
+        -- After markChanges, so what is written is the network as the game now holds it.
+        self:debugCaptureEnd(cap)
+        self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
     end
 
     -- STEP 2: CLEAN THE SITE BEFORE ANYTHING MEASURES IT. This used to run last of all, which meant
@@ -721,6 +907,19 @@ function ADFlyoverEditor:applyJunctionClear()
                 throughCut = throughCut + 1
             end
         end
+    end
+    local onePoint, onePointKept = 0, nil
+    if nodeCount == 0 and #linksToSever == 0 then
+        tryCall("junction clear at one point", function() onePoint, onePointKept = self:junctionClearOnePoint(jp, leave) end)
+    end
+    if onePoint > 0 then
+        -- The check holds the through road up as the track this kept, not as the walks paired it.
+        jp.pathRoutes = jp.pathRoutes or {}
+        jp.pathRoutes.through = onePointKept or {}
+        chk.routeLines = jxRouteLines(jp)
+        keepUndo()
+        finish()
+        return
     end
     if nodeCount == 0 and #linksToSever == 0 then
         Logging.info("[FlyoverEditor]: junction - nothing here for this site to clear.")
@@ -1084,51 +1283,7 @@ function ADFlyoverEditor:applyJunctionClear()
         Logging.info("[FlyoverEditor]: junction - removed %d point(s) of old turn wiring and %d stale link(s). Roads it joined are untouched.",
             cleared, staleCut)
     end
-    -- WHICH STAGE TOOK WHAT, AND FROM HOW FAR. One total hides the stage that is over-reaching: in
-    -- game a clear reported 29 points taken, the farthest 39 m out, at a junction 12 m across - and
-    -- nothing in the log said which of fourteen removers had gone that far.
-    do
-        local parts = {}
-        for why, e in pairs(jxState.jxWhy) do
-            parts[#parts + 1] = string.format("%s %d (to %.0f m)", why:gsub("^junction ", ""), e.n, e.far)
-        end
-        table.sort(parts)
-        if #parts > 0 then
-            Logging.info("[FlyoverEditor]: junction - taken by stage: %s.", table.concat(parts, "; "))
-        end
-    end
-    local held, took, farOut = jxEnd()
-    chk.journal = jxState.jxJournal
-    jxState.jxJournal, jxState.jxStage, jxState.jxKeptRoad = nil, nil, nil
-    Logging.info("[FlyoverEditor]: junction - took %d point(s) in all, the farthest %.0f m out; %d left alone as belonging to a neighbouring junction rather than this one.",
-        took, farOut, held)
-    if jxState.jxTwinHeld > 0 then
-        Logging.info("[FlyoverEditor]: junction - %d point(s) a step of the clear would have taken were kept: another part's turn, or the road it leaves or joins (left working).",
-            jxState.jxTwinHeld)
-    end
-    self:invalidateIdReferences()
-    ADGraphManager:markChanges()
-    -- THE LANE ENDS THIS CLEAR CUT, for the build that follows: its circle grows to take them in
-    -- (junctionReachEnds). Only these - the loose track ends that were lying near 1, 26 and 63 before
-    -- any clear are not this junction's lanes, and a circle grown to them laid turns to nowhere.
-    if endsBefore ~= nil then
-        local cut = {}
-        for k, e in pairs(jxLaneEndsNear(endsAt.x, endsAt.z)) do
-            if endsBefore[k] == nil then cut[#cut + 1] = e end
-        end
-        table.sort(cut, function(a, b) if a.x ~= b.x then return a.x < b.x end return a.z < b.z end)
-        self.junctionClearedEnds = { x = endsAt.x, z = endsAt.z, ends = cut,
-            serial = ((self.junctionClearedEnds or {}).serial or 0) + 1 }
-    end
-    -- THE CLEAR CHECKS ITS OWN WORK. Report only: it undoes nothing and refuses nothing, and a
-    -- failure inside it cannot stop the clear, which is already done. Before the capture closes, so
-    -- a capture's tool.log carries the check too.
-    if not tryCall("junction clear check", function() self:junctionClearCheck(chk) end) then
-        self:junctionCheckFailed(chk)
-    end
-    -- After markChanges, so what is written is the network as the game now holds it.
-    self:debugCaptureEnd(cap)
-    self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+    finish()
 end
 
 function ADFlyoverEditor:applyJunction()
