@@ -421,6 +421,49 @@ function AutoDrive:hasTreeNear(x, z, halfExtent)
     return self.fieldLoopTreeHit == true
 end
 
+--- What the obstacle test actually hit at (x, z): one log line per object, with its name, the names
+--- of its parents (a map's own collision helpers and leftover objects are named in their groups),
+--- whether it is visible, its rigid body type and where it sits. The test only ever says "something
+--- is there", and a spot where nothing can be seen (reported 2026-10-08) needs to say what. Never
+--- called from the hot path - only when the generator has already given up on a spot.
+function AutoDrive:fieldLoopTreeCollectCallback(transformId)
+    local list = self.fieldLoopHitList
+    if list ~= nil and #list < 8 then
+        list[#list + 1] = transformId
+    end
+end
+
+function AutoDrive:describeObstaclesAt(x, z, halfExtent)
+    local y = AutoDrive:getTerrainHeightAtWorldPos(x, z)
+    local halfHeight = (ADFlyoverSettings.get("fieldLoopVehicleHeight") or 4.0) / 2
+    self.fieldLoopHitList = {}
+    pcall(overlapBox, x, y + halfHeight, z, 0, 0, 0, halfExtent, halfHeight, halfExtent,
+        "fieldLoopTreeCollectCallback", AutoDrive, AutoDrive.FIELD_LOOP_OBSTACLE_MASK, true, true, true, true)
+    local hits = self.fieldLoopHitList
+    self.fieldLoopHitList = nil
+    if #hits == 0 then
+        Logging.info("[AD] field loop obstacle at x=%.1f z=%.1f: the check finds nothing there now.", x, z)
+        return
+    end
+    for _, id in ipairs(hits) do
+        local chain = {}
+        local node = id
+        for _ = 1, 5 do
+            local okName, name = pcall(getName, node)
+            chain[#chain + 1] = (okName and name) or "?"
+            local okParent, parent = pcall(getParent, node)
+            if not okParent or parent == nil or parent == 0 then break end
+            node = parent
+        end
+        local okV, visible = pcall(getVisibility, id)
+        local okB, body = pcall(getRigidBodyType, id)
+        local okT, tx, ty, tz = pcall(getWorldTranslation, id)
+        Logging.info("[AD] field loop obstacle at x=%.1f z=%.1f: node %s, parents [%s], visible=%s, body=%s, at %s",
+            x, z, tostring(id), table.concat(chain, " < "), okV and tostring(visible) or "?",
+            okB and tostring(body) or "?", okT and string.format("%.1f %.1f %.1f", tx, ty, tz) or "?")
+    end
+end
+
 -- Unit normal at each point, perpendicular to the local path direction, pointing toward the field
 -- interior. Displacing along THIS rather than along "toward the field centroid" is what keeps a
 -- detour from bunching points up: the centroid direction can be largely parallel to the path
@@ -601,6 +644,7 @@ local function detourAroundTrees(ring, fieldCentroid, treeClearance, turningRadi
                 "[AD] ADGenerateFieldLoop: could not route around a tree near x=%.1f z=%.1f within %.0fm - left in place, check that spot manually.",
                 ring[run[1]].x, ring[run[1]].z, maxAmplitude
             )
+            AutoDrive:describeObstaclesAt(ring[run[1]].x, ring[run[1]].z, treeClearance)
         end
     end
 
