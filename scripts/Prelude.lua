@@ -103,6 +103,7 @@ P.EDITOR_FILES = {
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",
+    "scripts/editor/locale/br.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
 }

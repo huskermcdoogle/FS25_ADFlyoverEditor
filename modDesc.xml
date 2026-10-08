@@ -41,14 +41,17 @@ Single player only.
 		<text name="input_AD_FLYOVER_TOGGLE">
 			<en>AutoDrive Flyover: open / close editor</en>
 			<de>AutoDrive Flyover: Editor öffnen / schließen</de>
+			<br>AutoDrive Flyover: abrir / fechar o editor</br>
 		</text>
 		<text name="input_AD_FLYOVER_RESET_THEME">
 			<en>AutoDrive Flyover: reset editor colours and scale</en>
 			<de>AutoDrive Flyover: Editor-Farben und -Größe zurücksetzen</de>
+			<br>AutoDrive Flyover: redefinir cores e tamanho do editor</br>
 		</text>
 		<text name="input_AD_FLYOVER_SETTINGS">
 			<en>AutoDrive Flyover: open the settings dialog</en>
 			<de>AutoDrive Flyover: Einstellungen öffnen</de>
+			<br>AutoDrive Flyover: abrir a janela de configurações</br>
 		</text>
 	</l10n>
 	<extraSourceFiles>
