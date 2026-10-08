@@ -11,12 +11,12 @@
     <test id="ground" title="Placed and built points sit on the ground"
           hint="Clear 28 and place it; clear 7 and build it. Pick the new turns with Ground: nothing to fix, and no point floats or sinks."/>
     <test id="pattern" title="A plain T or X builds as the mod's pattern" passLog="laid as the pattern"
-          hint="Clear a plain two-lane T or X (through roads kept), then build: the log says it is laid as the pattern (ticks itself), and it looks like the placed one."/>
+          hint="Clear a plain two-lane T or X such as 52 or 7 (through roads kept), then switch the action to BUILD - not place - and right-click: the log says it is laid as the pattern (ticks itself)."/>
     <test id="spacing" title="Built turns have their points well apart"
           hint="Build a junction the pattern does not fit (a Y, a skewed one): the turn points sit about 3-5 m apart on wide turns, closer on tight ones, and trucks still drive them at a steady speed."/>
     <test id="farmtrack" title="Farm-track junction 101 builds drivable"
           failLog="turn%(s%) we laid cannot be driven"
-          hint="Clear 101 (through roads kept), build with a 3-6 m turn radius: short turns at the middle, no loop across the field, and the route check is clean both ways along the track."/>
+          hint="Switch debug capture on in the clear card first. Clear 101 (through roads kept), build with a 3-6 m turn radius: short turns at the middle, no loop across the field, and the route check is clean both ways along the track."/>
     <test id="drivable" title="Builds come out drivable"
           passLog="AutoDrive can take through here, all of them turns we meant"
           failLog="turn%(s%) we laid cannot be driven"
