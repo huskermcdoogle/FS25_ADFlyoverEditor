@@ -126,7 +126,7 @@ Spline connects two waypoints with a curve rather than a straight segment, for s
 
 *Create — Generate a drivable loop around the field under the cursor.*
 
-Field loop builds a complete two-way route that runs just outside a field's boundary, smoothed to a turning radius and nudged inward around any trees in the way. It is a standalone loop - no map markers, not wired to the rest of the network - so you connect it in afterwards with Draw or the editor.
+Field loop builds a complete two-way route that runs just outside a field's boundary, smoothed to a turning radius and nudged inward around any trees in the way. It stays on the field side of a fence (running inside the field outline where the fence stands inside it) and pulls its margin in to keep clear of another field loop beside it. It is a standalone loop - no map markers, not wired to the rest of the network - so you connect it in afterwards with Draw or the editor.
 
 **How to use it**
 
@@ -138,11 +138,11 @@ Field loop builds a complete two-way route that runs just outside a field's boun
 
 - **margin** — how far outside the boundary the loop runs.
 - **obstacle clearance** — how far the loop keeps from trees, poles, fences and buildings before detouring.
-- **turning radius** — the tightest turn the loop is allowed to make. Never used below 5m even if set lower - a sharper corner than that reads as an awkward kink rather than a smooth turn.
+- **turning radius** — the tightest turn the loop is allowed to make, from 2m to 20m. Very small values can leave a sharp field corner looking like a kink.
 - **vehicle height** — how tall a machine the tree check clears for.
 - **detect custom field** — on by default; also finds ground plowed to connect two separate map fields into one, not just a field shipped with the map. Turn it off to fall back to the map-field-only lookup if it ever misreads a field on your save.
 - **avoid obstacles** — on by default; nudges the loop away from trees, poles, fences and buildings instead of laying it straight through them. Turn it off to take the offset boundary as laid if the obstacle check keeps flagging something that isn't really in the way.
-- **combo gap** — how far to auto-search for another disconnected patch of the same field when it's split by a lane, and combine it into the same course - a live scan can only ever return the one piece a click lands on, so this finds the rest on its own, no extra clicks needed. A real per-map setting, not just a safety margin: raise it if a wide lane gets missed, lower it if it ever reaches across an actual road into an unrelated field.
+- **combo gap** — how far to auto-search for another disconnected patch of the same field when it's split by a lane, and combine it into the same course. 0 (the default) never leaves the field you click. Raise it only for a field split by a lane; lower it if it ever reaches across an actual road into an unrelated field. Two fields that touch with no gap at all still read as one field.
 
 <a id="parallel"></a>
 ## Parallel

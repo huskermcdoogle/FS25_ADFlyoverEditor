@@ -497,7 +497,7 @@ L.HELP = {
         },
         ["field loop"] = {
             what = {
-                "Feldschleife baut eine vollständige beidseitige Route, die knapp außerhalb der Feldgrenze verläuft, auf einen Wenderadius geglättet und um Bäume herum nach innen versetzt. Es ist eine eigenständige Schleife - keine Kartenmarker, nicht mit dem übrigen Netz verbunden - die du danach mit Zeichnen oder dem Editor einbindest.",
+                "Feldschleife baut eine vollständige beidseitige Route, die knapp außerhalb der Feldgrenze verläuft, auf einen Wenderadius geglättet und um Bäume herum nach innen versetzt. Sie bleibt auf der Feldseite eines Zauns (innerhalb der Feldgrenze, wo der Zaun dort steht) und zieht ihren Rand ein, um Abstand zu einer anderen Feldschleife daneben zu halten. Es ist eine eigenständige Schleife - keine Kartenmarker, nicht mit dem übrigen Netz verbunden - die du danach mit Zeichnen oder dem Editor einbindest.",
             },
             how = {
                 "Den Cursor auf das Feld richten, um das die Schleife laufen soll.",
