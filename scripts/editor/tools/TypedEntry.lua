@@ -686,6 +686,7 @@ function ADFlyoverEditor:draw()
     -- having the network's labels bleed through it.
     if not self:isModalOpen() then
         tryCall("drawNetwork", function() self:drawNetwork() end)
+        tryCall("drawJunctionNumbers", function() self:drawJunctionNumbers() end)
     end
 
     tryCall("flyoverPanel", function() ADFlyoverHud:draw(self) end)

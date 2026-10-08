@@ -1040,3 +1040,55 @@ ADFlyoverEditor.shared.JX_PART_NEAR = JX_PART_NEAR
 ADFlyoverEditor.shared.jxPartNames = jxPartNames
 ADFlyoverEditor.shared.jxSortParts = jxSortParts
 -- MODSPLIT: end of the shared block
+
+--- THE JUNCTION NUMBERS OVER THE JUNCTIONS (the user, 2026-10-07): "j82" floating above each numbered
+--- junction in the editor view, and each part of a split one under its own name ("j39se"), so the
+--- number the card, the log and the test plan use can be found where the clicking happens. Only while
+--- the junction tool is open, and only with the card's "junction numbers" row on (kept between
+--- sessions). Yellow is a junction that is still wired; blue one the scan no longer finds wired - a
+--- cleared junction keeping its number. Labels a HUD panel covers are left out: the engine draws text
+--- in a pass no panel can hide, so they would show straight through it.
+local JX_NUMBERS_FAR, JX_NUMBERS_LIFT = 400, 4
+function ADFlyoverEditor:drawJunctionNumbers()
+    if self.tool ~= self.TOOL.JUNCTION or ADFlyoverSettings.get("junctionShowNumbers") == false then return end
+    if project == nil or renderText == nil or getCamera == nil then return end
+    local cam = getCamera()
+    if cam == nil or cam == 0 then return end
+    local camX, camY, camZ = getWorldTranslation(cam)
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    local labels = {}
+    for _, f in ipairs(self:junctionRegistry() or {}) do
+        if f.n ~= nil then
+            local wired = not (f.cleared or f.virgin)
+            if f.decision == "split" and f.parts ~= nil and #f.parts > 0 then
+                for _, p in ipairs(f.parts) do
+                    labels[#labels + 1] = { x = p.x, z = p.z, text = string.format("j%02d%s", f.n, p.letter or ""), wired = wired }
+                end
+            else
+                labels[#labels + 1] = { x = f.x, z = f.z, text = string.format("j%02d", f.n), wired = wired }
+            end
+        end
+    end
+    setTextAlignment(RenderText.ALIGN_CENTER)
+    setTextBold(true)
+    for _, l in ipairs(labels) do
+        local d2 = (l.x - camX) ^ 2 + (l.z - camZ) ^ 2
+        if d2 <= JX_NUMBERS_FAR * JX_NUMBERS_FAR then
+            local y = camY
+            if terrain ~= nil then y = getTerrainHeightAtWorldPos(terrain, l.x, 0, l.z) end
+            local sx, sy, sz = project(l.x, y + JX_NUMBERS_LIFT, l.z)
+            if sx ~= nil and sz ~= nil and sz >= 0 and sz <= 1 and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1
+                and not ADFlyoverHud:coversPoint(sx, sy) then
+                -- Bigger close by, never smaller than reads across the map.
+                local size = math.max(0.014, math.min(0.026, 0.026 * 60 / math.max(60, math.sqrt(d2))))
+                setTextColor(0, 0, 0, 0.85)
+                renderText(sx + size * 0.06, sy - size * 0.08, size, l.text)
+                if l.wired then setTextColor(1, 0.85, 0.2, 1) else setTextColor(0.45, 0.8, 1, 1) end
+                renderText(sx, sy, size, l.text)
+            end
+        end
+    end
+    setTextColor(1, 1, 1, 1)
+    setTextBold(false)
+    setTextAlignment(RenderText.ALIGN_LEFT)
+end

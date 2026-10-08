@@ -148,12 +148,13 @@ function ADFlyoverEditor:updateJunctionPreview()
         searchR0 = R
         if AutoDrive.FLYOVER_JUNCTION_GROW_TO_ENDS ~= false then
             local grown, nEnds = self:junctionReachEnds(cx, cz, R)
-            if grown > R then
+            -- Said once the site is locked: following the cursor it was said 20 times in a second.
+            if grown > R and self.junctionArmed ~= nil then
                 roadNote(string.format("growEnds:%d:%d:%d", math.floor(cx), math.floor(cz), math.floor(grown)),
                     "junction build - the search circle grows from %.0f to %.0f m to take in %d lane end(s) the clear of this junction cut further out.",
                     R, grown, nEnds)
-                R = grown
             end
+            if grown > R then R = grown end
         end
     end
     -- The solve raycasts the road surface for every candidate radius of every turn, so it is only

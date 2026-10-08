@@ -419,6 +419,7 @@ L.STRINGS = {
         ["semi"] = "Sattelzug",
         ["measured rig"] = "gemessenes Gespann",
         ["must fit"] = "muss passen",
+        ["junction numbers"] = "Kreuzungsnummern",
         ["not checked"] = "nicht geprüft",
         ["fit"] = "passen",
         ["trailer cut-in"] = "Anhänger schneidet",

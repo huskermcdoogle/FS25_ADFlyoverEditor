@@ -828,6 +828,9 @@ function ADFlyoverHud:buildRows(editor)
         -- solving settings below apply when nothing is being laid.
         add("toggle", "action", editor.junctionMode or "build", false,
             function() editor:toggleJunctionMode() end)
+        -- The numbers over every junction in view (drawJunctionNumbers). Kept between sessions.
+        add("toggle", "junction numbers", (ADFlyoverSettings.get("junctionShowNumbers") ~= false) and "on" or "off", false,
+            function() ADFlyoverSettings.cycle("junctionShowNumbers", 1) end)
         if editor.junctionMode == "clear" then
             -- No scope row, and the wheel does nothing here. What belongs to a junction is a
             -- property of the road; a number the user could turn only meant the same click gave

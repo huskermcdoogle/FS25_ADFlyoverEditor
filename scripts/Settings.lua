@@ -80,6 +80,9 @@ S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 5
 -- testing where a fix looked like it had done nothing.
 S.settings.junctionRadius = { values = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 }, default = 10, current = 10 }          -- 6..40 m, default 15
 S.settings.junctionTurnRadius = { values = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }, default = 11, current = 11 }      -- 2..30 m, default 12
+-- Junction numbers floating over each junction in the editor view while the junction tool is open
+-- (the user, 2026-10-07). On by default; the card row turns them off, and that choice is kept.
+S.settings.junctionShowNumbers = { values = { false, true }, default = 2, current = 2 }
 -- Move's own tolerance for auto-hookup (item 6) - deliberately its own setting rather than
 -- reusing flyoverMergeDistance/Divergence: those back a deliberate three-click confirmed action,
 -- this fires silently with no confirmation at all, so a tighter default is the safer starting
