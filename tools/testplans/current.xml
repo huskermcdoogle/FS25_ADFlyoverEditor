@@ -3,24 +3,20 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="junction numbers, ground heights, farm tracks, spacing, pattern builds, two trucks" build="@BUILD@">
+<testPlan title="farm track 101: lock, clear, build, clear again" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="numbers" title="Junction numbers show over the junctions"
-          hint="Open the junction tool: yellow numbers over wired junctions, blue over cleared ones, split parts by name (j39se). The card row junction numbers turns them off, and they stay off after a restart."/>
-    <test id="ground" title="Placed and built points sit on the ground"
-          hint="Clear 28 and place it; clear 7 and build it. Pick the new turns with Ground: nothing to fix, and no point floats or sinks."/>
-    <test id="pattern" title="A plain T or X builds as the mod's pattern" passLog="laid as the pattern"
-          hint="Clear a plain two-lane T or X such as 52 or 7 (through roads kept), then switch the action to BUILD - not place - and right-click: the log says it is laid as the pattern (ticks itself)."/>
-    <test id="spacing" title="Built turns have their points well apart"
-          hint="Build a junction the pattern does not fit (a Y, a skewed one): the turn points sit about 3-5 m apart on wide turns, closer on tight ones, and trucks still drive them at a steady speed."/>
-    <test id="farmtrack" title="Farm-track junction 101 builds drivable"
+    <test id="clear101" title="Junction 101 clears" passLog="one shared point of %d+ two%-way tracks"
+          hint="Lock 101 and clear it with through roads kept: the log says it is one shared point (ticks itself), the south track comes off the point (about 5 points go) and the west to north-east track stays whole. The card says the middle is empty."/>
+    <test id="farmtrack" title="Junction 101 builds drivable"
           failLog="turn%(s%) we laid cannot be driven"
-          hint="Switch debug capture on in the clear card first. Clear 101 (through roads kept), build with a 3-6 m turn radius: short turns at the middle, no loop across the field, and the route check is clean both ways along the track."/>
+          hint="Then build 101 with a 3-6 m turn radius: 4 turns to and from the south track, no two points on one spot, the west to north-east track still runs through, and the route check is clean."/>
+    <test id="clearAgain" title="The built 101 clears again"
+          hint="Clear 101 once more: the turns go, the card says the middle is empty, and nothing else is touched. Undo brings the turns back."/>
     <test id="drivable" title="Builds come out drivable"
           passLog="AutoDrive can take through here, all of them turns we meant"
           failLog="turn%(s%) we laid cannot be driven"
-          hint="Build a few junctions. Ticks itself: pass on a clean route check, fail if any build says a turn cannot be driven."/>
+          hint="Build a few other junctions too. Ticks itself: pass on a clean route check, fail if any build says a turn cannot be driven."/>
     <test id="twotrucks" title="Two trucks share a junction without trouble"
           hint="On a junction you just built or placed, send two AutoDrive trucks through at the same time on crossing or merging routes: one waits, the other goes, no crash, nobody stuck. Try it a few times with different timing."/>
     <test id="saveSplit" title="A save keeps the split"
