@@ -42,6 +42,8 @@ AutoDrive.FIELD_LOOP_TREE_DETOUR_AMPLITUDE_STEP = 0.25 -- meters; granularity of
 AutoDrive.FIELD_LOOP_TREE_DETOUR_MAX_DEPTH = 15 -- meters; give up rather than bend the loop further than this into the field
 AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added along segments passing near a tree, before detouring
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
+AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE = 1.0 -- meters a new loop keeps from another standalone loop (its margin is pulled in to manage it)
+AutoDrive.FIELD_LOOP_MARGIN_PULL_STEP = 0.25 -- meters the margin comes in per try
 AutoDrive.FIELD_LOOP_CORNER_PUSH_STEP = 0.5 -- meters a blocked field corner moves inward per try, before it is re-rounded
 AutoDrive.FIELD_LOOP_CORNER_PUSH_MAX = 30 -- meters; give up moving one corner further in than this
 -- How close to a full 180-degree fold-back counts as a spike (see ADOffsetGeometry.removeSpikes,
@@ -765,8 +767,97 @@ local function pushBlockedCornersIn(offset, treeClearance, turningRadius, arcSpa
     return poly, rounded
 end
 
-function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
+--- Two waypoints joined, in either direction.
+local function waypointsLinked(wayPoints, a, b)
+    local wa = wayPoints[a]
+    if wa == nil or wayPoints[b] == nil then
+        return false
+    end
+    for _, id in ipairs(wa.out or {}) do
+        if id == b then return true end
+    end
+    for _, id in ipairs(wa.incoming or {}) do
+        if id == b then return true end
+    end
+    return false
+end
+
+--- Every link of every FIELD LOOP in the network near a box. A loop laid by this generator is a run of
+--- consecutively numbered waypoints, each linked to the next, with the last linked back to the first -
+--- and that stays true when the player has since joined it to a road (extra links hanging off a loop
+--- change nothing about the run), which is why this looks at the numbering and not at how many links
+--- each point has. A road that is a plain chain, or a junction, never closes back on itself, so it is
+--- left out and a loop that merely crosses a road is never held back by it. Returns a list of
+--- {ax, az, bx, bz}. A loop the player has edited so its numbers are no longer one closed run is not
+--- seen - the margin then simply stays as asked.
+function AutoDrive:findFieldLoopSegments(minX, maxX, minZ, maxZ)
+    local segs = {}
+    local okAll, wayPoints = pcall(function() return ADGraphManager:getWayPoints() end)
+    if not okAll or wayPoints == nil then
+        return segs
+    end
+    local MAX_RUN = 20000
+    local MIN_RUN = 8
+    local done = {}
+    for startId, wp in pairs(wayPoints) do
+        if not done[startId] and wp.x >= minX and wp.x <= maxX and wp.z >= minZ and wp.z <= maxZ then
+            local first = startId
+            local back = 0
+            while back < MAX_RUN and waypointsLinked(wayPoints, first - 1, first) do
+                first = first - 1
+                back = back + 1
+            end
+            local last = startId
+            while last - first < MAX_RUN and waypointsLinked(wayPoints, last, last + 1) do
+                last = last + 1
+            end
+            for id = first, last do done[id] = true end
+            if last - first + 1 >= MIN_RUN and last - first < MAX_RUN and waypointsLinked(wayPoints, last, first) then
+                for id = first, last do
+                    local a = wayPoints[id]
+                    local b = wayPoints[id == last and first or id + 1]
+                    segs[#segs + 1] = { ax = a.x, az = a.z, bx = b.x, bz = b.z }
+                end
+            end
+        end
+    end
+    return segs
+end
+
+local function pointToSegmentDistance(px, pz, ax, az, bx, bz)
+    local dx, dz = bx - ax, bz - az
+    local len2 = dx * dx + dz * dz
+    local t = len2 > 1e-12 and math.max(0, math.min(1, ((px - ax) * dx + (pz - az) * dz) / len2)) or 0
+    return MathUtil.vector2Length(px - (ax + t * dx), pz - (az + t * dz))
+end
+
+--- True when any part of the polygon runs within `clear` metres of any of the segments. Sampled every
+--- metre along each edge: an edge that crosses a segment has a sample within half a metre of the
+--- crossing, so with clear >= 0.5 a crossing can never slip between samples.
+local function polygonNearSegments(poly, segs, clear)
+    local n = #poly
+    for i = 1, n do
+        local a, b = poly[i], poly[(i % n) + 1]
+        local len = MathUtil.vector2Length(b.x - a.x, b.z - a.z)
+        local steps = math.max(1, math.ceil(len))
+        for k = 0, steps do
+            local t = k / steps
+            local x, z = a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t
+            for _, sg in ipairs(segs) do
+                if x > math.min(sg.ax, sg.bx) - clear and x < math.max(sg.ax, sg.bx) + clear
+                    and z > math.min(sg.az, sg.bz) - clear and z < math.max(sg.az, sg.bz) + clear
+                    and pointToSegmentDistance(x, z, sg.ax, sg.az, sg.bx, sg.bz) < clear then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius, otherLoopSegments)
     turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
+    local requestedMargin = marginDistance
     local points = ADPolygonUtils.stripDuplicateClosingVertex(rawPoints)
     -- Light cleanup only - the offset/corner pipeline below classifies real corners by actual
     -- turning-radius cross-track error rather than by pre-removing detail, so this just drops
@@ -782,6 +873,36 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     if offset == nil then
         return nil, nil, nil, offsetErr
     end
+
+    -- Two fields with a strip between them narrower than twice the margin make loops that overlap
+    -- and cross (issue 15), and crossing at under 80 degrees lets a driver hop from one to the other.
+    -- So when this loop would run within a metre of another standalone loop, the margin is pulled in
+    -- - only as far as needed, never past the field's own edge - and the log says so. Done on the
+    -- plain offset polygon, before any tree work, so it costs nothing.
+    if otherLoopSegments ~= nil and #otherLoopSegments > 0 and marginDistance > 0
+        and polygonNearSegments(offset, otherLoopSegments, AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE) then
+        local m = marginDistance
+        local best = nil
+        while m > 0 do
+            m = math.max(0, m - AutoDrive.FIELD_LOOP_MARGIN_PULL_STEP)
+            local candidate = ADOffsetGeometry.generateOffset(
+                simplified, -m, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR
+            )
+            if candidate ~= nil then
+                best = { margin = m, offset = candidate }
+                if not polygonNearSegments(candidate, otherLoopSegments, AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE) then
+                    break
+                end
+            end
+        end
+        if best ~= nil then
+            marginDistance, offset = best.margin, best.offset
+        end
+    end
+    -- Still within a metre of another loop even at the field's own edge: the strip is narrower than the
+    -- other loop's margin took up. Said in the log rather than hidden.
+    local crowded = otherLoopSegments ~= nil and #otherLoopSegments > 0
+        and polygonNearSegments(offset, otherLoopSegments, AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE)
 
     -- Sample corner arcs at a constant ANGULAR resolution rather than a constant distance: what a
     -- driver feels is the heading change per waypoint, and a fixed spacing delivers wildly
@@ -903,7 +1024,10 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
         detours = treeStats.detours,
         smoothMoves = smoothMoveCount,
         rawVertexCount = #points,
-        simplifiedVertexCount = #simplified
+        simplifiedVertexCount = #simplified,
+        marginUsed = marginDistance,
+        marginRequested = requestedMargin,
+        crowded = crowded
     }, nil
 end
 
@@ -1114,10 +1238,30 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
 
     local rawRegions = AutoDrive:findConnectedFieldRegions(x, z, rawPoints)
 
+    -- Loops already in the network near this field, so a new loop can keep clear of them (a narrow
+    -- strip between two fields otherwise gets two loops that overlap and cross - issue 15).
+    local minX, maxX, minZ, maxZ = math.huge, -math.huge, math.huge, -math.huge
+    for _, region in ipairs(rawRegions) do
+        for _, p in ipairs(region) do
+            minX, maxX = math.min(minX, p.x), math.max(maxX, p.x)
+            minZ, maxZ = math.min(minZ, p.z), math.max(maxZ, p.z)
+        end
+    end
+    local reach = math.max(marginDistance, 0) + AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE + 15
+    local otherLoops = AutoDrive:findFieldLoopSegments(minX - reach, maxX + reach, minZ - reach, maxZ + reach)
+
     local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
     local lastRingErr = nil
+    local smallestMargin, anyCrowded = nil, false
     for _, region in ipairs(rawRegions) do
-        local ring, ringPerimeter, ringTreeStats, ringErr = AutoDrive:buildFieldLoopRing(region, marginDistance, treeClearance, turningRadius)
+        local ring, ringPerimeter, ringTreeStats, ringErr = AutoDrive:buildFieldLoopRing(region, marginDistance, treeClearance, turningRadius, otherLoops)
+        if ring ~= nil and ringTreeStats ~= nil and ringTreeStats.marginUsed ~= nil
+            and (smallestMargin == nil or ringTreeStats.marginUsed < smallestMargin) then
+            smallestMargin = ringTreeStats.marginUsed
+        end
+        if ring ~= nil and ringTreeStats ~= nil and ringTreeStats.crowded then
+            anyCrowded = true
+        end
         if ring == nil then
             lastRingErr = ringErr
             Logging.warning("[AD] %s: dropped one of %d discovered region(s) - %s", source, #rawRegions, tostring(ringErr))
@@ -1128,6 +1272,16 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
                 treeStats[key] = treeStats[key] + (ringTreeStats[key] or 0)
             end
         end
+    end
+
+    if smallestMargin ~= nil and smallestMargin < marginDistance - 1e-6 then
+        Logging.info("[AD] %s: margin pulled in from %.2fm to %.2fm to keep clear of another loop beside this field.",
+            source, marginDistance, smallestMargin)
+    end
+
+    if anyCrowded then
+        Logging.warning("[AD] %s: this loop still runs within %.0fm of another loop - the strip between the fields is narrower than the other loop's margin. Lower that loop's margin, or move one of them by hand.",
+            source, AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE)
     end
 
     if #rings == 0 then
