@@ -979,6 +979,26 @@ end
 --- metre inside the field's outline is "far" from a loop running outside it, but then the fence is between
 --- the loop and the field. "Along it" means roughly parallel (cos >= 0.7) with the sample falling within the
 --- fence section; the field side is the side a point 10 m inside the field from the edge is on.
+--- How far from a fence section a loop point has to stay for the game's obstacle test not to see it. That
+--- test is a SQUARE box, `clear` metres either way, so a section running at an angle is reached from further
+--- away than `clear` (at 45 degrees, by up to 1.41 times as much): half-extent x (|nx| + |nz|) for the
+--- section's unit normal, plus a little for the thickness of the wire and the collision posts.
+local FENCE_THICKNESS = 0.3
+local function fenceNeed(sg, clear)
+    local need = sg.need
+    if need == nil or sg.needFor ~= clear then
+        local sx, sz = sg.bx - sg.ax, sg.bz - sg.az
+        local sl = MathUtil.vector2Length(sx, sz)
+        if sl < 1e-6 then
+            need = clear + FENCE_THICKNESS
+        else
+            need = clear * (math.abs(sz) + math.abs(sx)) / sl + FENCE_THICKNESS
+        end
+        sg.need, sg.needFor = need, clear
+    end
+    return need
+end
+
 local function edgeClearOfSegments(a, b, ox, oz, m, clear, segs)
     local dx, dz = b.x - a.x, b.z - a.z
     local len = MathUtil.vector2Length(dx, dz)
@@ -994,9 +1014,10 @@ local function edgeClearOfSegments(a, b, ox, oz, m, clear, segs)
         local x, z = bx0 + ox * m, bz0 + oz * m      -- where the loop would run
         local rx, rz = bx0 - ox * 10, bz0 - oz * 10  -- well inside the field
         for _, sg in ipairs(segs) do
-            if x > math.min(sg.ax, sg.bx) - clear and x < math.max(sg.ax, sg.bx) + clear
-                and z > math.min(sg.az, sg.bz) - clear and z < math.max(sg.az, sg.bz) + clear then
-                if pointToSegmentDistance(x, z, sg.ax, sg.az, sg.bx, sg.bz) < clear then
+            local need = fenceNeed(sg, clear)
+            if x > math.min(sg.ax, sg.bx) - need and x < math.max(sg.ax, sg.bx) + need
+                and z > math.min(sg.az, sg.bz) - need and z < math.max(sg.az, sg.bz) + need then
+                if pointToSegmentDistance(x, z, sg.ax, sg.az, sg.bx, sg.bz) < need then
                     return false
                 end
             end
