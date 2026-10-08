@@ -1430,15 +1430,34 @@ local JX_TIE_OFF_LANE = 5
 --- tie points go in. And only the INNERMOST tie on a dead-end lane ends it; every tie further out keeps
 --- the lane running through, so the ties inside it still have lane to land on.
 function ADFlyoverEditor:junctionTieLanesPrepare(moves, cx, cz, radius)
-    local lanes = {}
+    local lanes, made = {}, {}
+    -- A TWO-WAY ROAD IS ONE LANE BOTH WAYS. Its way in and its way out start at the same node and walk
+    -- the same points, and they must share one walked lane: the first tie point spliced in takes the
+    -- road's two-way link with it, so a second copy of the lane still showing that link put a second
+    -- tie point on the same spot, joined one way only (j101, 2026-10-08: two points at each tie, and a
+    -- one-way road beside the two-way one).
+    local function sameChain(p, q)
+        if #p ~= #q then return false end
+        for i = 1, #p do if p[i] ~= q[i] then return false end end
+        return true
+    end
     local function lane(ap)
         local L = lanes[ap]
         if L == nil then
             local chain, deadEnd = self:junctionChain(ap, cx, cz, radius, true)
-            local orig = {}
-            for i, w in ipairs(chain) do orig[i] = w end
-            L = { chain = chain, orig = orig, deadEnd = deadEnd, innermost = -1 }
+            for _, o in ipairs(made) do
+                if o.ap.wp == ap.wp and o.ap.dir ~= ap.dir and sameChain(o.L.orig, chain) then
+                    L = o.L
+                    break
+                end
+            end
+            if L == nil then
+                local orig = {}
+                for i, w in ipairs(chain) do orig[i] = w end
+                L = { chain = chain, orig = orig, deadEnd = deadEnd, innermost = -1 }
+            end
             lanes[ap] = L
+            made[#made + 1] = { ap = ap, L = L }
         end
         return L
     end

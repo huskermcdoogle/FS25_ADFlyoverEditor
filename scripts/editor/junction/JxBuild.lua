@@ -1504,13 +1504,17 @@ local function junctionRouteCheck(jp, placedSet, cx, cz, reach)
     local found, nRoutes, extra = {}, 0, {}
     for _, e in ipairs(ins) do
         local start = e.wp
-        -- Seeded from every link into the lane's first point, so its first bend is judged too.
+        -- Seeded from every link into the lane's first point, so its first bend is judged too. A lane
+        -- that starts at the END of a two-way road (j101's farm track) has only the link back the way it
+        -- came: a truck there starts out from it, with no bend before, so it is walked from the point.
         local stack, seen = {}, {}
         for _, pid in ipairs(start.incoming or {}) do
             local p = ADGraphManager:getWayPointById(pid)
             if p ~= nil then stack[#stack + 1] = { p, start, false, { start } } end
         end
-        if #stack == 0 then stack[1] = { nil, start, false, { start } } end
+        local outs = start.out or {}
+        local roadEnd = #outs == 1 and table.contains(start.incoming or {}, outs[1])
+        if #stack == 0 or roadEnd then stack[#stack + 1] = { nil, start, false, { start } } end
         while #stack > 0 do
             local top = table.remove(stack)
             local prev, cur, usedNew, path = top[1], top[2], top[3], top[4]
