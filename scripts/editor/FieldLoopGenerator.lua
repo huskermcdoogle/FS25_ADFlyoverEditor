@@ -856,31 +856,39 @@ local function polygonNearSegments(poly, segs, clear)
     return false
 end
 
---- Every fence section near a box, as {ax, az, bx, bz}: the game keeps each fence's sections with their
---- exact start and end, gates included (a closed gate is as much a wall as the rest). Read straight from
---- the placeables, so it gives the fence LINE and not just the few spots an overlap test happened to
---- touch - and it needs no physics. Returns an empty list wherever the game has none.
+--- Every fence section near a box, as {ax, az, bx, bz}. The game keeps each placed fence's sections on the
+--- placeable (spec_fence.segments), every one a table with its two ends as x1, z1, x2, z2 and, for a
+--- gate, a gateIndex - a closed gate is as much a wall as the rest. Read straight from there, so it
+--- gives the fence LINE and not just the few spots an overlap test happened to touch, and it needs no
+--- physics. (An older fence class names the ends startPosX / endPosX; both spellings are accepted.)
+--- Returns an empty list wherever the game has none. The second result is a small count table for the log.
 function AutoDrive:findFenceSegments(minX, maxX, minZ, maxZ)
     local segs = {}
+    local counts = { placeables = 0, fences = 0, sections = 0, gates = 0 }
     local okList, placeables = pcall(function() return g_currentMission.placeableSystem.placeables end)
     if not okList or placeables == nil then
-        return segs
+        return segs, counts
     end
     for _, placeable in ipairs(placeables) do
+        counts.placeables = counts.placeables + 1
         local spec = placeable.spec_fence
         if spec ~= nil and spec.segments ~= nil then
+            counts.fences = counts.fences + 1
             for _, sg in pairs(spec.segments) do
-                if sg.startPosX ~= nil and sg.endPosX ~= nil then
-                    local x0, x1 = math.min(sg.startPosX, sg.endPosX), math.max(sg.startPosX, sg.endPosX)
-                    local z0, z1 = math.min(sg.startPosZ, sg.endPosZ), math.max(sg.startPosZ, sg.endPosZ)
-                    if x1 >= minX and x0 <= maxX and z1 >= minZ and z0 <= maxZ then
-                        segs[#segs + 1] = { ax = sg.startPosX, az = sg.startPosZ, bx = sg.endPosX, bz = sg.endPosZ }
+                local ax, az = sg.x1 or sg.startPosX, sg.z1 or sg.startPosZ
+                local bx, bz = sg.x2 or sg.endPosX, sg.z2 or sg.endPosZ
+                if ax ~= nil and az ~= nil and bx ~= nil and bz ~= nil then
+                    counts.sections = counts.sections + 1
+                    if sg.gateIndex ~= nil then counts.gates = counts.gates + 1 end
+                    if math.max(ax, bx) >= minX and math.min(ax, bx) <= maxX
+                        and math.max(az, bz) >= minZ and math.min(az, bz) <= maxZ then
+                        segs[#segs + 1] = { ax = ax, az = az, bx = bx, bz = bz }
                     end
                 end
             end
         end
     end
-    return segs
+    return segs, counts
 end
 
 --- True when the edge a->b, shifted `m` metres outward, keeps at least `clear` from every segment.
@@ -1349,8 +1357,9 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     local reach = math.max(marginDistance, 0) + AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE + 15
     local otherLoops = AutoDrive:findFieldLoopSegments(minX - reach, maxX + reach, minZ - reach, maxZ + reach)
     local fenceReach = math.max(marginDistance, 0) + treeClearance + 10
-    local fences = AutoDrive:findFenceSegments(minX - fenceReach, maxX + fenceReach, minZ - fenceReach, maxZ + fenceReach)
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop sees %d fence section(s) and %d other loop link(s) near this field.", #fences, #otherLoops)
+    local fences, fenceCounts = AutoDrive:findFenceSegments(minX - fenceReach, maxX + fenceReach, minZ - fenceReach, maxZ + fenceReach)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop sees %d fence section(s) near this field (the game has %d section(s), %d gate(s), on %d fence(s), of %d placeable(s)) and %d other loop link(s).",
+        #fences, fenceCounts.sections, fenceCounts.gates, fenceCounts.fences, fenceCounts.placeables, #otherLoops)
 
     local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
     local lastRingErr = nil
