@@ -783,6 +783,40 @@ local function waypointsLinked(wayPoints, a, b)
     return false
 end
 
+--- True when the ring of waypoints first..last runs AROUND the field(s) being looped now: nearly all of
+--- their outline points lie inside it. That is an earlier loop of this very field (a test loop not yet
+--- undone, say), not a neighbour, and treating it as one would collapse the new loop's margin to nothing
+--- every time the same field is looped again - larger margins first, since they sit closest to it.
+function AutoDrive.fieldLoopEnclosesRegions(wayPoints, first, last, regions)
+    if regions == nil or #regions == 0 then
+        return false
+    end
+    local ring = {}
+    for id = first, last do
+        local wp = wayPoints[id]
+        if wp == nil then return false end
+        ring[#ring + 1] = { x = wp.x, z = wp.z }
+    end
+    -- Sampled along the whole outline (every few metres), not at its corner points: a loop with a small
+    -- margin rounds its corners inside the field's own corner points, so those can lie outside a loop
+    -- that very much runs round the field.
+    local total, inside = 0, 0
+    for _, region in ipairs(regions) do
+        local n = #region
+        for i = 1, n do
+            local a, b = region[i], region[(i % n) + 1]
+            local len = MathUtil.vector2Length(b.x - a.x, b.z - a.z)
+            local steps = math.max(1, math.ceil(len / 4))
+            for k = 0, steps - 1 do
+                local t = k / steps
+                total = total + 1
+                if pointInPolygon(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t, ring) then inside = inside + 1 end
+            end
+        end
+    end
+    return total > 0 and inside >= total * 0.85
+end
+
 --- Every link of every FIELD LOOP in the network near a box. A loop laid by this generator is a run of
 --- consecutively numbered waypoints, each linked to the next, with the last linked back to the first -
 --- and that stays true when the player has since joined it to a road (extra links hanging off a loop
@@ -791,7 +825,7 @@ end
 --- left out and a loop that merely crosses a road is never held back by it. Returns a list of
 --- {ax, az, bx, bz}. A loop the player has edited so its numbers are no longer one closed run is not
 --- seen - the margin then simply stays as asked.
-function AutoDrive:findFieldLoopSegments(minX, maxX, minZ, maxZ)
+function AutoDrive:findFieldLoopSegments(minX, maxX, minZ, maxZ, enclosedRegions)
     local segs = {}
     local okAll, wayPoints = pcall(function() return ADGraphManager:getWayPoints() end)
     if not okAll or wayPoints == nil then
@@ -813,7 +847,8 @@ function AutoDrive:findFieldLoopSegments(minX, maxX, minZ, maxZ)
                 last = last + 1
             end
             for id = first, last do done[id] = true end
-            if last - first + 1 >= MIN_RUN and last - first < MAX_RUN and waypointsLinked(wayPoints, last, first) then
+            if last - first + 1 >= MIN_RUN and last - first < MAX_RUN and waypointsLinked(wayPoints, last, first)
+                and not AutoDrive.fieldLoopEnclosesRegions(wayPoints, first, last, enclosedRegions) then
                 for id = first, last do
                     local a = wayPoints[id]
                     local b = wayPoints[id == last and first or id + 1]
@@ -1355,7 +1390,7 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         end
     end
     local reach = math.max(marginDistance, 0) + AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE + 15
-    local otherLoops = AutoDrive:findFieldLoopSegments(minX - reach, maxX + reach, minZ - reach, maxZ + reach)
+    local otherLoops = AutoDrive:findFieldLoopSegments(minX - reach, maxX + reach, minZ - reach, maxZ + reach, rawRegions)
     local fenceReach = math.max(marginDistance, 0) + treeClearance + 10
     local fences, fenceCounts = AutoDrive:findFenceSegments(minX - fenceReach, maxX + fenceReach, minZ - fenceReach, maxZ + fenceReach)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop sees %d fence section(s) near this field (the game has %d section(s), %d gate(s), on %d fence(s), of %d placeable(s)) and %d other loop link(s).",
