@@ -31,3 +31,19 @@ twin's truck numbers). `ONE="D s mid delay" lua overlap.lua ...` traces a single
 front stops, for each split distance, point spacing and braking strength.
 `drive.lua` writes `drive_results.txt`, `drive.html` (every panel) and one `panel_*.svg` per move.
 The doc's drive pictures are copies of three of those panels.
+
+## Traffic through a whole junction (2026-10-07)
+
+`adtraffic.lua` is a small 2-D traffic sim: trucks follow their routes through a network, with
+AutoDrive 3.0.1.4's "who waits" check replayed line for line (CollisionDetectionModule.lua 88-195) and
+its bumper box, and every run ends ok, MEET (two bodies overlap) or STUCK (everyone stopped for good).
+Routes come from AutoDrive's own rules (80 degree rule, drive-time cost).
+
+    lua farmtrack.lua ../../scripts/editor [small|big|semi] [kmh] [turn radius]   # a T of single-track roads
+    python synthjunction.py T|X <net.lua>                                        # a clean two-lane T or X
+    (in ../junction-harness) GRAPH=<net.lua> [WIREFIRST=1] [PATTERN=exact|smooth] lua simexport.lua 0 0 place|build <out.lua>
+    STEP=2 lua junctionsim.lua ../../scripts/editor <out.lua> [rig] [kmh] [variant]
+
+`junctionsim.lua` runs two trucks through every pair of movements at start offsets -10..+10 s and both
+check orders. Variants: `as laid`, `main two-way R`, `box two-way R`, `spaced` (junction points at
+least 3.5 m apart), combinable.
