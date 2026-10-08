@@ -87,3 +87,11 @@ Crashes / stand-offs, before -> after:
 The placed patterns (exact T, plain X) are now clean for both tractor rigs. The per-turn built X is
 still the weak one: 24 shared points against the plain X's 9, and its merges run side by side before
 they join.
+
+## Build lays the pattern (2026-10-08, 8473357)
+
+On a cleared plain two-lane T or X (no lane end left loose, exactly 6 or 12 movements) the build now
+lays the mod's pattern, as place does. On the 75 survey junctions: 46 built as the pattern, meant
+routes 581 -> 589, routes we did not mean 17 -> 3, none newly undrivable. 56 gets two U-turn routes on
+its exact X. The mod shape's corners are sharp (AutoDrive slows right down there); the card's smooth
+shape has none.

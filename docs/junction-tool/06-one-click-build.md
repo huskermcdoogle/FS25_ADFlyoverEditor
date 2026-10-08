@@ -28,7 +28,10 @@ If something needs you, the second click does not build. The card says what and 
 2. **Clear** what is there (skipped on a bare crossing). The middle ends up empty and the stubs reach
    in to the other road's paved edge.
 3. **Measure:** lane gap, paved area, which roads are one-way.
-4. **Lay the turns** by the rules below.
+4. **Lay the turns** by the rules below. **Where the mod's T or X fits, the build lays that pattern
+   instead** (added 2026-10-08, the traffic study, doc 09): on a cleared plain two-lane T or X - no
+   lane end left loose, exactly 6 or 12 movements - it is laid as place lays it. The turn-by-turn rules
+   are for every other junction.
 5. **Check everything** (see "Checks before it commits"). Any failure means nothing is built.
 6. **Commit** as one undo, and save the junction's description.
 
