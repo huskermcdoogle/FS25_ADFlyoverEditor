@@ -1142,6 +1142,8 @@ function ADFlyoverEditor:applyJunction()
         self:applyJunctionClear()
         return
     end
+    -- Where the mod's pattern fits every road, the build lays it (junctionBuildAsPattern, doc 09).
+    if AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false and self:junctionBuildAsPattern(jp) then return end
     -- A build changes the network just as a clear does, so it is captured the same way: the point of
     -- the numbered folders is to follow a SEQUENCE, and a sequence with the builds missing from it
     -- cannot be replayed.

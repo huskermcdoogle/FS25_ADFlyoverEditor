@@ -115,6 +115,72 @@ local function junctionPlaceRouteCheck(res)
 end
 
 --- Place mode's right-click: lay the X or T the preview worked out, under one undo.
+--- THE BUILD LAYS THE MOD'S PATTERN WHERE IT FITS (the user, 2026-10-02 "build must place the X/T pattern",
+--- and 2026-10-08). The traffic study (doc 09) ran every pair of movements through each layout: the
+--- mod's exact T and plain X came out with no crash and no stand-off, for both tractor rigs, where the
+--- turn-by-turn build of the same X still crashed (24 of 3168 runs, big rig). So on a cleared junction
+--- the build first asks place, dry, whether the pattern fits; if it joins every road there (no lane
+--- end left loose) it is laid exactly as place lays it, and the turn-by-turn build is only for
+--- junctions the pattern does not fit. Wired, or nowhere place would work, it says no.
+--- Returns true when it laid the pattern (the build is done).
+function ADFlyoverEditor:junctionBuildAsPattern(jp)
+    self.junctionLastPattern, self.junctionLastPatternWhy = nil, nil
+    local site = self.junctionSite
+    if site ~= nil and not site.virgin then
+        self.junctionLastPatternWhy = "turn wiring is still here"
+        return false
+    end
+    if site == nil then
+        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place.
+        local bd = 15 * 15
+        for _, e in ipairs(self:junctionRegistry() or {}) do
+            local d = (e.x - jp.cx) ^ 2 + (e.z - jp.cz) ^ 2
+            if d < bd then site, bd = { x = e.x, z = e.z, virgin = true }, d end
+        end
+    end
+    if site == nil then
+        self.junctionLastPatternWhy = "no junction place knows here"
+        return false
+    end
+    local shape = self.junctionPattern or "exact"
+    local ok, res, why = tryCall("junction build: does the pattern fit", function()
+        return junctionPlacePattern(site.x, site.z, 15, shape, true)
+    end)
+    if not ok or res == nil then
+        self.junctionLastPatternWhy = tostring(why or "it does not fit")
+        return false
+    end
+    if #(res.loose or {}) > 0 then
+        self.junctionLastPatternWhy = string.format("it would leave %d lane end(s) loose", #res.loose)
+        return false
+    end
+    -- ONLY A PLAIN TWO-LANE T OR X: the pattern lays 6 movements on a T and 12 on an X, so the junction
+    -- must have exactly those - no more (a T laid on a 4-way left half its routes out: 38, 83 on the
+    -- survey map), no fewer (one-way roads), refused turns counted, as the pattern lays them anyway.
+    -- And never the plain piece on a T: that is place's fallback where the T does not fit, and in game
+    -- it left a road unjoined (43, 2026-10-07).
+    local need = #(jp.movements or {})
+    local lays = (res.kind == "X") and 12 or 6
+    if need ~= lays then
+        self.junctionLastPatternWhy = string.format("the junction has %d movement(s), the %s lays %d", need, tostring(res.kind), lays)
+        return false
+    end
+    if res.shape == "plain" and res.kind ~= "X" then
+        self.junctionLastPatternWhy = "only the plain piece would go here"
+        return false
+    end
+    Logging.info("[FlyoverEditor]: junction build - the mod's %s %s fits every road here, so it is laid as the pattern (the traffic study, doc 09).",
+        tostring(res.shape), tostring(res.kind))
+    self.junctionPreview = { placeMode = true, cx = site.x, cz = site.z, shape = shape, ok = true, plan = res }
+    self:applyJunctionPlace()
+    local last = self.junctionLastPlace or {}
+    self.junctionLastPattern = { shape = last.shape, kind = last.kind }
+    self.junctionLastRouteCheck = self.junctionLastPlaceRouteCheck
+    self:junctionBuildCheckKeep({ card = last.routeCard or { "Route check: could not run - see the log" },
+        number = jp.junctionNumber, x = site.x, z = site.z, extra = last.extra })
+    return true
+end
+
 function ADFlyoverEditor:applyJunctionPlace()
     local jp = self.junctionPreview
     if jp == nil or not jp.ok then return end
@@ -190,6 +256,7 @@ function ADFlyoverEditor:applyJunctionPlace()
         turns = placed and res.turns or 0, shared = shared, why = (not placed) and tostring(why) or nil,
         loose = placed and #(res.loose or {}) or 0, fitWhy = placed and res.fitWhy or nil,
         x = jp.cx, z = jp.cz }
+    self.junctionLastPlaceRouteCheck = rc
     self.junctionLastLinkLabels = jxState.jxLinkLabel
     self.junctionLastNodeLabels = jxState.jxNodeLabel
     jxBuildEnd()
