@@ -44,7 +44,7 @@ AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added alon
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
 AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE = 1.0 -- meters a new loop keeps from another standalone loop (its margin is pulled in to manage it)
 AutoDrive.FIELD_LOOP_MARGIN_PULL_STEP = 0.25 -- meters the margin comes in per try
-AutoDrive.FIELD_LOOP_EDGE_MARGIN_FLOOR = 0.1 -- meters; a field edge's margin is never pulled in past this (the loop stays outside the field)
+AutoDrive.FIELD_LOOP_EDGE_MARGIN_FLOOR = -4.0 -- meters; how far INSIDE the field's outline an edge's loop may go to stay on the field side of a fence (negative = inside)
 AutoDrive.FIELD_LOOP_CORNER_PUSH_STEP = 0.5 -- meters a blocked field corner moves inward per try, before it is re-rounded
 AutoDrive.FIELD_LOOP_CORNER_PUSH_MAX = 30 -- meters; give up moving one corner further in than this
 -- How close to a full 180-degree fold-back counts as a spike (see ADOffsetGeometry.removeSpikes,
@@ -111,21 +111,32 @@ local function traceRotateBy(node, angleStep)
     setRotation(node, 0, yRot + angleStep, 0)
 end
 
---- True when every point from the probe out to `lookahead` ahead of it is on field ground, not just
---- the last one. Checking only the far point let the probe see a field BEYOND a narrow strip as the
---- field continuing: two fields closer than the lookahead (5 m) came out as one contour (measured
---- offline: gaps of 4 m or less merged, 5 m and up did not). Walking the line stops at the gap.
-local FIELD_RAY_STEP = 0.5
+--- True when the line from the probe out to `lookahead` ahead of it is field ground all the way. Checking
+--- only the far point let the probe see a field BEYOND a narrow strip as the field continuing: two fields
+--- closer than the lookahead (5 m) came out as one contour (measured offline: gaps of 4 m or less merged,
+--- 5 m and up did not). Walking the line stops at the gap. Gaps under about a metre are forgiven, though:
+--- the density map is a grid of cells, so a field edge is a stair, and a line aimed along it clips the
+--- steps - strict checking made the traced outline zigzag (39 corners on a plain rectangle where it had
+--- 7). A step is under a metre wide; a strip worth separating is not.
+local FIELD_RAY_STEP = 0.25
+local FIELD_RAY_FORGIVE = 4 -- consecutive off-field samples forgiven (x step metres): a pixel step in the edge, not a strip
 local function isFieldClearAhead(node, lookahead)
     local d = lookahead
+    local offRun = 0
     while d > 0 do
         local x, _, z = localToWorld(node, 0, 0, d)
-        if not isOnFieldGround(x, z) then
-            return false
+        if isOnFieldGround(x, z) then
+            offRun = 0
+        else
+            offRun = offRun + 1
+            if offRun >= FIELD_RAY_FORGIVE then
+                return false
+            end
         end
         d = d - FIELD_RAY_STEP
     end
-    return true
+    local x, _, z = localToWorld(node, 0, 0, lookahead)
+    return isOnFieldGround(x, z)
 end
 
 --- Rotate the probe until a point `lookahead` ahead of it just crosses the field edge, so the
@@ -963,28 +974,55 @@ function AutoDrive:findFenceSegments(minX, maxX, minZ, maxZ)
     return segs, counts
 end
 
---- True when the edge a->b, shifted `m` metres outward, keeps at least `clear` from every segment.
+--- True when the edge a->b, shifted `m` metres outward, keeps at least `clear` from every segment AND stays
+--- on the FIELD side of every segment that runs along it. Distance alone is not enough: a fence standing a
+--- metre inside the field's outline is "far" from a loop running outside it, but then the fence is between
+--- the loop and the field. "Along it" means roughly parallel (cos >= 0.7) with the sample falling within the
+--- fence section; the field side is the side a point 10 m inside the field from the edge is on.
 local function edgeClearOfSegments(a, b, ox, oz, m, clear, segs)
     local dx, dz = b.x - a.x, b.z - a.z
     local len = MathUtil.vector2Length(dx, dz)
-    local steps = math.max(1, math.ceil(len))
+    local ux, uz = len > 1e-9 and dx / len or 1, len > 1e-9 and dz / len or 0
+    -- An edge shifted INWARD is cut back at both ends by the corners it meets (by about the shift, at a
+    -- right angle); the loop never runs along those ends, so they are not sampled.
+    local trim = (m < 0 and len > 2 * (-m) + 1) and (-m) or 0
+    local from, to = trim, len - trim
+    local steps = math.max(1, math.ceil(to - from))
     for k = 0, steps do
-        local t = k / steps
-        local x, z = a.x + dx * t + ox * m, a.z + dz * t + oz * m
+        local t = (from + (to - from) * k / steps) / math.max(len, 1e-9)
+        local bx0, bz0 = a.x + dx * t, a.z + dz * t -- on the field edge itself
+        local x, z = bx0 + ox * m, bz0 + oz * m      -- where the loop would run
+        local rx, rz = bx0 - ox * 10, bz0 - oz * 10  -- well inside the field
         for _, sg in ipairs(segs) do
             if x > math.min(sg.ax, sg.bx) - clear and x < math.max(sg.ax, sg.bx) + clear
-                and z > math.min(sg.az, sg.bz) - clear and z < math.max(sg.az, sg.bz) + clear
-                and pointToSegmentDistance(x, z, sg.ax, sg.az, sg.bx, sg.bz) < clear then
-                return false
+                and z > math.min(sg.az, sg.bz) - clear and z < math.max(sg.az, sg.bz) + clear then
+                if pointToSegmentDistance(x, z, sg.ax, sg.az, sg.bx, sg.bz) < clear then
+                    return false
+                end
+            end
+            -- field side: only for a fence along this edge, with the sample alongside it
+            local sx, sz = sg.bx - sg.ax, sg.bz - sg.az
+            local sl = MathUtil.vector2Length(sx, sz)
+            if sl > 1e-6 and math.abs((sx * ux + sz * uz) / sl) >= 0.7 then
+                local along = ((x - sg.ax) * sx + (z - sg.az) * sz) / (sl * sl)
+                if along >= 0 and along <= 1
+                    and pointToSegmentDistance(bx0, bz0, sg.ax, sg.az, sg.bx, sg.bz) < 15 then
+                    local sideLoop = sx * (z - sg.az) - sz * (x - sg.ax)
+                    local sideField = sx * (rz - sg.az) - sz * (rx - sg.ax)
+                    if sideLoop * sideField < 0 then
+                        return false
+                    end
+                end
             end
         end
     end
     return true
 end
 
---- Each field edge keeps the largest margin (down to just outside the field) that stays `clear` from
---- every fence, so a loop beside a fence sits on the FIELD side of it instead of trying to detour round
---- a fence that runs the whole length of the edge. Returns insets (one per edge, negative = outward, the
+--- Each field edge keeps the largest margin that stays `clear` from every fence - down past the field's own
+--- outline if need be (a placed fence often stands a metre INSIDE the outline) - so a loop beside a fence
+--- sits on the FIELD side of it instead of trying to detour round a fence that runs the whole length of
+--- the edge. Returns insets (one per edge, negative = outward, the
 --- convention generateOffset takes), how many edges were pulled in, and how many could not be cleared
 --- even at the floor (those keep the full margin and are left to the later passes and the log).
 local function limitEdgeInsetsByFences(poly, margin, clear, segs)
@@ -1039,7 +1077,7 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     local fenceEdgesPulled, fenceEdgesBlocked = 0, 0
     local function offsetFor(m)
         local insets = nil
-        if fenceSegments ~= nil and #fenceSegments > 0 and m > 0 then
+        if fenceSegments ~= nil and #fenceSegments > 0 then
             local ins, changed, blocked = limitEdgeInsetsByFences(simplified, m, treeClearance, fenceSegments)
             fenceEdgesPulled, fenceEdgesBlocked = changed, blocked
             if changed > 0 then insets = ins end

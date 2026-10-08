@@ -317,7 +317,9 @@ local function dropInvertedVertices(candidates, source, offsetDistance, wantInsi
     local kept = {}
     for i = 1, #candidates do
         local p = candidates[i]
-        if distanceToRing(p, source) >= minimumClearance and isPointInsideRing(p, source) == wantInside then
+        -- wantInside == nil: the edges were shifted in BOTH directions (some outward, some inward), so
+        -- a vertex may rightly be on either side; the fold clean-up that follows deals with the rest.
+        if distanceToRing(p, source) >= minimumClearance and (wantInside == nil or isPointInsideRing(p, source) == wantInside) then
             kept[#kept + 1] = p
         end
     end
@@ -460,11 +462,19 @@ function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, max
     -- With per-edge distances the validity test uses the smallest of them: a vertex is only
     -- certain to be wrong if it is nearer the source boundary than every edge was shifted.
     local smallest = math.abs(insetDistance)
+    local mixed = false
     for i = 1, #lines do
-        smallest = math.min(smallest, math.abs(lines[i].dist or insetDistance))
+        local d = lines[i].dist or insetDistance
+        smallest = math.min(smallest, math.abs(d))
+        if (d > 0) ~= (insetDistance > 0) and math.abs(d) > 1e-6 then
+            mixed = true
+        end
+    end
+    if mixed then
+        smallest = 0
     end
     local candidates = dropDuplicates(offsetVertices(lines, insetDistance), 1e-6)
-    candidates = dropInvertedVertices(candidates, ring, smallest, insetDistance > 0)
+    candidates = dropInvertedVertices(candidates, ring, smallest, (not mixed) and (insetDistance > 0) or nil)
     if #candidates < 3 then
         return nil, "Offset collapsed the polygon to fewer than 3 vertices."
     end
