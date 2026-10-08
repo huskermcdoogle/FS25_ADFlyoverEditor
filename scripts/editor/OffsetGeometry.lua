@@ -204,7 +204,7 @@ end
 --- Shift every edge along its inward normal, returning the shifted edges as lines in
 --- point + unit-direction form. `windingSign` is +1 for a counter-clockwise ring, so that the
 --- left normal (-uz, ux) points into the polygon.
-local function shiftedEdgeLines(ring, offsetDistance, windingSign)
+local function shiftedEdgeLines(ring, offsetDistance, windingSign, edgeInsets)
     local n = #ring
     local lines = {}
     for i = 1, n do
@@ -214,13 +214,17 @@ local function shiftedEdgeLines(ring, offsetDistance, windingSign)
         if length > EPS then
             local ux, uz = dx / length, dz / length
             local nx, nz = -uz * windingSign, ux * windingSign
+            -- Each edge may carry its own distance (edgeInsets[i], same sign convention as the
+            -- overall one); an edge without an entry uses the overall distance.
+            local d = (edgeInsets ~= nil and edgeInsets[i]) or offsetDistance
             lines[#lines + 1] = {
-                px = a.x + nx * offsetDistance,
-                pz = a.z + nz * offsetDistance,
+                px = a.x + nx * d,
+                pz = a.z + nz * d,
                 ux = ux,
                 uz = uz,
                 nx = nx,
                 nz = nz,
+                dist = d,
                 corner = b, -- the source vertex this edge shares with the next one
             }
         end
@@ -245,7 +249,11 @@ end
 local function offsetVertices(lines, offsetDistance)
     local count = #lines
     local out = {}
-    local miterCap = math.abs(offsetDistance) * MITER_LIMIT
+    local widest = math.abs(offsetDistance)
+    for i = 1, count do
+        widest = math.max(widest, math.abs(lines[i].dist or offsetDistance))
+    end
+    local miterCap = widest * MITER_LIMIT
     for i = 1, count do
         local current = lines[i]
         local following = lines[(i % count) + 1]
@@ -254,8 +262,9 @@ local function offsetVertices(lines, offsetDistance)
         if mitered ~= nil and distanceBetween(mitered, corner) <= miterCap then
             out[#out + 1] = mitered
         else
-            out[#out + 1] = { x = corner.x + current.nx * offsetDistance, z = corner.z + current.nz * offsetDistance }
-            out[#out + 1] = { x = corner.x + following.nx * offsetDistance, z = corner.z + following.nz * offsetDistance }
+            local dc, df = current.dist or offsetDistance, following.dist or offsetDistance
+            out[#out + 1] = { x = corner.x + current.nx * dc, z = corner.z + current.nz * dc }
+            out[#out + 1] = { x = corner.x + following.nx * df, z = corner.z + following.nz * df }
         end
     end
     return out
@@ -308,7 +317,9 @@ local function dropInvertedVertices(candidates, source, offsetDistance, wantInsi
     local kept = {}
     for i = 1, #candidates do
         local p = candidates[i]
-        if distanceToRing(p, source) >= minimumClearance and isPointInsideRing(p, source) == wantInside then
+        -- wantInside == nil: the edges were shifted in BOTH directions (some outward, some inward), so
+        -- a vertex may rightly be on either side; the fold clean-up that follows deals with the rest.
+        if distanceToRing(p, source) >= minimumClearance and (wantInside == nil or isPointInsideRing(p, source) == wantInside) then
             kept[#kept + 1] = p
         end
     end
@@ -424,7 +435,7 @@ end
 ---@param turningRadius number meters, used to classify which vertices count as real corners
 ---@param maxCrossTrackError number meters, the corner-classification threshold
 ---@return table|nil offsetRing, string|nil errorMessage
-function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, maxCrossTrackError)
+function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, maxCrossTrackError, edgeInsets)
     if #ring < 3 then
         return nil, "Polygon has fewer than 3 vertices."
     end
@@ -443,13 +454,27 @@ function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, max
     -- are preserved by construction rather than by being protected from a stepwise collapse.
     ADOffsetGeometry.tagTightCorners(ring, turningRadius, maxCrossTrackError)
 
-    local lines = shiftedEdgeLines(ring, insetDistance, windingSign)
+    local lines = shiftedEdgeLines(ring, insetDistance, windingSign, edgeInsets)
     if #lines < 3 then
         return nil, "Polygon has fewer than 3 usable edges."
     end
 
+    -- With per-edge distances the validity test uses the smallest of them: a vertex is only
+    -- certain to be wrong if it is nearer the source boundary than every edge was shifted.
+    local smallest = math.abs(insetDistance)
+    local mixed = false
+    for i = 1, #lines do
+        local d = lines[i].dist or insetDistance
+        smallest = math.min(smallest, math.abs(d))
+        if (d > 0) ~= (insetDistance > 0) and math.abs(d) > 1e-6 then
+            mixed = true
+        end
+    end
+    if mixed then
+        smallest = 0
+    end
     local candidates = dropDuplicates(offsetVertices(lines, insetDistance), 1e-6)
-    candidates = dropInvertedVertices(candidates, ring, insetDistance, insetDistance > 0)
+    candidates = dropInvertedVertices(candidates, ring, smallest, (not mixed) and (insetDistance > 0) or nil)
     if #candidates < 3 then
         return nil, "Offset collapsed the polygon to fewer than 3 vertices."
     end
@@ -808,7 +833,16 @@ function ADOffsetGeometry.smoothTightVertices(ring, turningRadius, maxCrossTrack
         local movedThisPass = false
         for i = 1, n do
             local prev, cur, nxt = ringNeighbours(points, i)
-            if cornerCrossTrackError(turnAngle(prev, cur, nxt), turningRadius) > maxCrossTrackError then
+            -- Too tight means the circle through this point and its neighbours is smaller than the
+            -- turning radius. The turn angle alone cannot say: an arc of exactly the right radius,
+            -- thinned to one point a metre, turns 28 degrees per point at a 2m radius, which the
+            -- angle-only test called too tight - so this pass rounded every small-radius corner off
+            -- to a far bigger one (measured offline: a setting of 2 came out at about 23m with
+            -- obstacle avoidance on, the only time this pass runs). The slack is a tenth.
+            -- A kink (over 60 degrees at one point) is relaxed whatever its radius says: a rounded
+            -- corner never turns that much at a single point, so it is a fold, not a corner.
+            if localRadius(prev, cur, nxt) < turningRadius * 0.9
+                or math.abs(turnAngle(prev, cur, nxt)) > math.rad(60) then
                 local candidateX = cur.x + TIGHT_RELAX_WEIGHT * ((prev.x + nxt.x) * 0.5 - cur.x)
                 local candidateZ = cur.z + TIGHT_RELAX_WEIGHT * ((prev.z + nxt.z) * 0.5 - cur.z)
                 if isPositionAllowed == nil or isPositionAllowed(candidateX, candidateZ, prev, nxt) then
