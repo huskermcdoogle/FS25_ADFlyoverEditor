@@ -863,7 +863,17 @@ local function junctionLayChain(NA, points, NB, dual, flags)
             and ADGraphManager:getWayPointById(jxState.jxCentreNode.id) == jxState.jxCentreNode then
             wp = jxState.jxCentreNode
         else
-            wp = ADFlyoverRecordWayPoint(p.x, p.y, p.z, false, false, false, 0,
+            -- ON THE SURFACE. A turn's heights run in a straight line from one lane end to the other,
+            -- and on a crowned or sloping junction that line floats over the road or sinks into it
+            -- ("not on the ground", the user's 2026-10-07 test). Each point takes the surface the
+            -- ground tool would give it (the one nearest that line, so a deck stays a deck), never
+            -- more than 2 m from it; offline, without the real ground, the line's height stands.
+            local y = p.y
+            if y ~= nil and ADFlyoverEditor.groundTargetAt ~= nil then
+                local ok, s = pcall(ADFlyoverEditor.groundTargetAt, ADFlyoverEditor, p.x, y, p.z, y, true)
+                if ok and type(s) == "number" and math.abs(s - y) <= 2 then y = s end
+            end
+            wp = ADFlyoverRecordWayPoint(p.x, y, p.z, false, false, false, 0,
                 flags or AutoDrive.FLAG_NONE, false)
             jxNoteAdded(wp)
             if wp == nil then return false end

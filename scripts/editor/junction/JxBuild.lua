@@ -399,7 +399,17 @@ local function jxpUnit(x, z)
     return x / n, z / n
 end
 
+-- THE SURFACE, NOT THE TERRAIN UNDER IT. A map's road is its own surface laid over the terrain, and
+-- the terrain under it can sit well below the top: every point a place laid from the terrain height
+-- was under the road, and the ground tool then wanted to move all of them ("placed junction runs are
+-- not on the ground", the user, 2026-10-07 test). So the surface is read the way the ground tool and
+-- the splice read it (groundTargetAt: the surface nearest the height the point would otherwise get); the
+-- terrain is only the fallback where that cannot be read.
 local function jxpGroundY(x, z, fallback)
+    if fallback ~= nil then
+        local ok, s = pcall(ADFlyoverEditor.groundTargetAt, ADFlyoverEditor, x, fallback, z, fallback, true)
+        if ok and type(s) == "number" and math.abs(s - fallback) <= 2 then return s end
+    end
     local y = nil
     if getTerrainHeightAtWorldPos ~= nil and g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil then
         local ok, v = pcall(getTerrainHeightAtWorldPos, g_currentMission.terrainRootNode, x, 1, z)
