@@ -42,6 +42,8 @@ AutoDrive.FIELD_LOOP_TREE_DETOUR_AMPLITUDE_STEP = 0.25 -- meters; granularity of
 AutoDrive.FIELD_LOOP_TREE_DETOUR_MAX_DEPTH = 15 -- meters; give up rather than bend the loop further than this into the field
 AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added along segments passing near a tree, before detouring
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
+AutoDrive.FIELD_LOOP_CORNER_PUSH_STEP = 0.5 -- meters a blocked field corner moves inward per try, before it is re-rounded
+AutoDrive.FIELD_LOOP_CORNER_PUSH_MAX = 30 -- meters; give up moving one corner further in than this
 -- How close to a full 180-degree fold-back counts as a spike (see ADOffsetGeometry.removeSpikes,
 -- the final cleanup pass on the ring that actually gets placed) rather than a genuine sharp field
 -- corner. 90-120 degrees is a normal corner; 150+ is the path doubling back on itself.
@@ -636,6 +638,74 @@ local function densifyNearTrees(ring, treeClearance, fineSpacing)
     return result
 end
 
+--- Moves any polygon corner whose ROUNDED arc touches a tree further into the field, then rounds
+--- again, until the arc clears. Doing this on the sharp polygon, before the corners are rounded, is
+--- the point: the rounding then redraws every corner at the full turning radius. Bending the finished
+--- path instead (detourAroundTrees) pushes a rounded corner inward along per-point normals, which
+--- converge on the corner's centre and fold it into a hook (measured offline: 0.47m radius, points
+--- 0.17m apart). Only the corner vertex moves, so the two edges just tilt slightly toward it.
+---@return table polygon, table rounded
+local function pushBlockedCornersIn(offset, treeClearance, turningRadius, arcSpacing)
+    local poly = {}
+    for i, p in ipairs(offset) do
+        poly[i] = { x = p.x, z = p.z, y = p.y }
+    end
+    local n = #poly
+    local areaSign = ADPolygonUtils.getSignedArea(poly) > 0 and 1 or -1
+    local pushedBy = {}
+    local step = AutoDrive.FIELD_LOOP_CORNER_PUSH_STEP
+    local maxPush = AutoDrive.FIELD_LOOP_CORNER_PUSH_MAX
+
+    local rounded
+    for _ = 1, math.ceil(maxPush / step) + 1 do
+        rounded = ADOffsetGeometry.roundPreservedCorners(
+            poly, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR, arcSpacing
+        )
+
+        local blocked, any = {}, false
+        for _, q in ipairs(rounded) do
+            if q.isCornerArc and AutoDrive:hasTreeNear(q.x, q.z, treeClearance) then
+                -- Which corner built this arc point: the nearest tight vertex of the polygon.
+                local best, bestD = nil, math.huge
+                for i = 1, n do
+                    if poly[i].isCorner then
+                        local d = MathUtil.vector2Length(poly[i].x - q.x, poly[i].z - q.z)
+                        if d < bestD then best, bestD = i, d end
+                    end
+                end
+                if best ~= nil and (pushedBy[best] or 0) < maxPush then
+                    blocked[best] = true
+                    any = true
+                end
+            end
+        end
+        if not any then
+            break
+        end
+
+        for i in pairs(blocked) do
+            local prev, cur, nxt = poly[((i - 2) % n) + 1], poly[i], poly[(i % n) + 1]
+            local ax, az = prev.x - cur.x, prev.z - cur.z
+            local bx, bz = nxt.x - cur.x, nxt.z - cur.z
+            local la, lb = MathUtil.vector2Length(ax, az), MathUtil.vector2Length(bx, bz)
+            if la > 1e-6 and lb > 1e-6 then
+                local dx, dz = ax / la + bx / lb, az / la + bz / lb
+                local dl = MathUtil.vector2Length(dx, dz)
+                if dl > 1e-6 then
+                    -- The sum of the unit vectors to both neighbours points into the polygon at a
+                    -- convex corner and out of it at a reflex one; "into the field" is wanted.
+                    local cross = (cur.x - prev.x) * (nxt.z - cur.z) - (cur.z - prev.z) * (nxt.x - cur.x)
+                    local sign = (cross * areaSign > 0) and 1 or -1
+                    cur.x = cur.x + sign * dx / dl * step
+                    cur.z = cur.z + sign * dz / dl * step
+                    pushedBy[i] = (pushedBy[i] or 0) + step
+                end
+            end
+        end
+    end
+    return poly, rounded
+end
+
 function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius)
     turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
     local points = ADPolygonUtils.stripDuplicateClosingVertex(rawPoints)
@@ -659,9 +729,14 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
     -- different angles depending on the radius (0.75m is 3.6deg at r=12 but 14deg at r=3).
     local arcSpacing = math.max(0.3, turningRadius * math.rad(AutoDrive.FIELD_LOOP_MAX_WAYPOINT_TURN_DEG))
 
-    local rounded = ADOffsetGeometry.roundPreservedCorners(
-        offset, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR, arcSpacing
-    )
+    local rounded
+    if ADFlyoverSettings.get("fieldLoopAvoidObstacles") then
+        offset, rounded = pushBlockedCornersIn(offset, treeClearance, turningRadius, arcSpacing)
+    else
+        rounded = ADOffsetGeometry.roundPreservedCorners(
+            offset, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR, arcSpacing
+        )
+    end
 
     -- Round off the medium bends the corner pass deliberately leaves alone. Adds points, which
     -- thinToAdaptiveSpacing below claws back wherever they turn out not to be earning their keep.
