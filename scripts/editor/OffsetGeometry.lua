@@ -808,7 +808,16 @@ function ADOffsetGeometry.smoothTightVertices(ring, turningRadius, maxCrossTrack
         local movedThisPass = false
         for i = 1, n do
             local prev, cur, nxt = ringNeighbours(points, i)
-            if cornerCrossTrackError(turnAngle(prev, cur, nxt), turningRadius) > maxCrossTrackError then
+            -- Too tight means the circle through this point and its neighbours is smaller than the
+            -- turning radius. The turn angle alone cannot say: an arc of exactly the right radius,
+            -- thinned to one point a metre, turns 28 degrees per point at a 2m radius, which the
+            -- angle-only test called too tight - so this pass rounded every small-radius corner off
+            -- to a far bigger one (measured offline: a setting of 2 came out at about 23m with
+            -- obstacle avoidance on, the only time this pass runs). The slack is a tenth.
+            -- A kink (over 60 degrees at one point) is relaxed whatever its radius says: a rounded
+            -- corner never turns that much at a single point, so it is a fold, not a corner.
+            if localRadius(prev, cur, nxt) < turningRadius * 0.9
+                or math.abs(turnAngle(prev, cur, nxt)) > math.rad(60) then
                 local candidateX = cur.x + TIGHT_RELAX_WEIGHT * ((prev.x + nxt.x) * 0.5 - cur.x)
                 local candidateZ = cur.z + TIGHT_RELAX_WEIGHT * ((prev.z + nxt.z) * 0.5 - cur.z)
                 if isPositionAllowed == nil or isPositionAllowed(candidateX, candidateZ, prev, nxt) then
