@@ -899,27 +899,64 @@ end
 --- Returns an empty list wherever the game has none. The second result is a small count table for the log.
 function AutoDrive:findFenceSegments(minX, maxX, minZ, maxZ)
     local segs = {}
-    local counts = { placeables = 0, fences = 0, sections = 0, gates = 0 }
+    local counts = { placeables = 0, fences = 0, sections = 0, gates = 0, looked = {} }
     local okList, placeables = pcall(function() return g_currentMission.placeableSystem.placeables end)
     if not okList or placeables == nil then
         return segs, counts
     end
     for _, placeable in ipairs(placeables) do
         counts.placeables = counts.placeables + 1
-        local spec = placeable.spec_fence
-        if spec ~= nil and spec.segments ~= nil then
-            counts.fences = counts.fences + 1
-            for _, sg in pairs(spec.segments) do
-                local ax, az = sg.x1 or sg.startPosX, sg.z1 or sg.startPosZ
-                local bx, bz = sg.x2 or sg.endPosX, sg.z2 or sg.endPosZ
-                if ax ~= nil and az ~= nil and bx ~= nil and bz ~= nil then
-                    counts.sections = counts.sections + 1
-                    if sg.gateIndex ~= nil then counts.gates = counts.gates + 1 end
-                    if math.max(ax, bx) >= minX and math.min(ax, bx) <= maxX
-                        and math.max(az, bz) >= minZ and math.min(az, bz) <= maxZ then
-                        segs[#segs + 1] = { ax = ax, az = az, bx = bx, bz = bz }
+        -- A fence is a spec_ table that holds a list of sections. The game's current fences (the
+        -- "newFence" placeable type, which the barbed wire fence mod and the map's fences are) keep it at
+        -- spec_newFence.fence.segments, each section with startPosX / startPosZ / endPosX / endPosZ (a
+        -- gate has an animatedObject); the older fence type keeps spec_fence.segments with x1 / z1 / x2 / z2
+        -- and a gateIndex. Looking at every spec_ table for either shape means a changed name does not
+        -- blind it.
+        local found = false
+        for key, spec in pairs(placeable) do
+            local list = nil
+            if type(key) == "string" and key:sub(1, 5) == "spec_" and type(spec) == "table" then
+                if type(spec.segments) == "table" then
+                    list = spec.segments
+                elseif type(spec.fence) == "table" and type(spec.fence.segments) == "table" then
+                    list = spec.fence.segments
+                end
+            end
+            if list ~= nil then
+                local hadSection = false
+                for _, sg in pairs(list) do
+                    if type(sg) == "table" then
+                        local ax, az = sg.x1 or sg.startPosX, sg.z1 or sg.startPosZ
+                        local bx, bz = sg.x2 or sg.endPosX, sg.z2 or sg.endPosZ
+                        if ax ~= nil and az ~= nil and bx ~= nil and bz ~= nil then
+                            hadSection = true
+                            counts.sections = counts.sections + 1
+                            if sg.gateIndex ~= nil or sg.animatedObject ~= nil then counts.gates = counts.gates + 1 end
+                            if math.max(ax, bx) >= minX and math.min(ax, bx) <= maxX
+                                and math.max(az, bz) >= minZ and math.min(az, bz) <= maxZ then
+                                segs[#segs + 1] = { ax = ax, az = az, bx = bx, bz = bz }
+                            end
+                        end
                     end
                 end
+                if hadSection then found = true end
+            end
+        end
+        if found then
+            counts.fences = counts.fences + 1
+        else
+            -- Not recognised as a fence: if its file name still says fence, keep what it IS so the log can
+            -- show how the game labels it (at most three, for the log).
+            local name = tostring(placeable.configFileName or "")
+            if name:lower():find("fence", 1, true) ~= nil and #counts.looked < 3 then
+                local keys = {}
+                for key, value in pairs(placeable) do
+                    if type(key) == "string" and key:sub(1, 5) == "spec_" then
+                        keys[#keys + 1] = key .. (type(value) == "table" and "{" .. (value.segments ~= nil and "segments" or "") .. "}" or "")
+                    end
+                end
+                table.sort(keys)
+                counts.looked[#counts.looked + 1] = string.format("%s type=%s specs=[%s]", name, tostring(placeable.typeName), table.concat(keys, ", "))
             end
         end
     end
@@ -1395,6 +1432,9 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     local fences, fenceCounts = AutoDrive:findFenceSegments(minX - fenceReach, maxX + fenceReach, minZ - fenceReach, maxZ + fenceReach)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop sees %d fence section(s) near this field (the game has %d section(s), %d gate(s), on %d fence(s), of %d placeable(s)) and %d other loop link(s).",
         #fences, fenceCounts.sections, fenceCounts.gates, fenceCounts.fences, fenceCounts.placeables, #otherLoops)
+    for _, line in ipairs(fenceCounts.looked or {}) do
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop - a placeable named like a fence that was not read: %s", line)
+    end
 
     local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
     local lastRingErr = nil
