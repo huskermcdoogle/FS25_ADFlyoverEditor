@@ -204,7 +204,7 @@ end
 --- Shift every edge along its inward normal, returning the shifted edges as lines in
 --- point + unit-direction form. `windingSign` is +1 for a counter-clockwise ring, so that the
 --- left normal (-uz, ux) points into the polygon.
-local function shiftedEdgeLines(ring, offsetDistance, windingSign)
+local function shiftedEdgeLines(ring, offsetDistance, windingSign, edgeInsets)
     local n = #ring
     local lines = {}
     for i = 1, n do
@@ -214,13 +214,17 @@ local function shiftedEdgeLines(ring, offsetDistance, windingSign)
         if length > EPS then
             local ux, uz = dx / length, dz / length
             local nx, nz = -uz * windingSign, ux * windingSign
+            -- Each edge may carry its own distance (edgeInsets[i], same sign convention as the
+            -- overall one); an edge without an entry uses the overall distance.
+            local d = (edgeInsets ~= nil and edgeInsets[i]) or offsetDistance
             lines[#lines + 1] = {
-                px = a.x + nx * offsetDistance,
-                pz = a.z + nz * offsetDistance,
+                px = a.x + nx * d,
+                pz = a.z + nz * d,
                 ux = ux,
                 uz = uz,
                 nx = nx,
                 nz = nz,
+                dist = d,
                 corner = b, -- the source vertex this edge shares with the next one
             }
         end
@@ -245,7 +249,11 @@ end
 local function offsetVertices(lines, offsetDistance)
     local count = #lines
     local out = {}
-    local miterCap = math.abs(offsetDistance) * MITER_LIMIT
+    local widest = math.abs(offsetDistance)
+    for i = 1, count do
+        widest = math.max(widest, math.abs(lines[i].dist or offsetDistance))
+    end
+    local miterCap = widest * MITER_LIMIT
     for i = 1, count do
         local current = lines[i]
         local following = lines[(i % count) + 1]
@@ -254,8 +262,9 @@ local function offsetVertices(lines, offsetDistance)
         if mitered ~= nil and distanceBetween(mitered, corner) <= miterCap then
             out[#out + 1] = mitered
         else
-            out[#out + 1] = { x = corner.x + current.nx * offsetDistance, z = corner.z + current.nz * offsetDistance }
-            out[#out + 1] = { x = corner.x + following.nx * offsetDistance, z = corner.z + following.nz * offsetDistance }
+            local dc, df = current.dist or offsetDistance, following.dist or offsetDistance
+            out[#out + 1] = { x = corner.x + current.nx * dc, z = corner.z + current.nz * dc }
+            out[#out + 1] = { x = corner.x + following.nx * df, z = corner.z + following.nz * df }
         end
     end
     return out
@@ -424,7 +433,7 @@ end
 ---@param turningRadius number meters, used to classify which vertices count as real corners
 ---@param maxCrossTrackError number meters, the corner-classification threshold
 ---@return table|nil offsetRing, string|nil errorMessage
-function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, maxCrossTrackError)
+function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, maxCrossTrackError, edgeInsets)
     if #ring < 3 then
         return nil, "Polygon has fewer than 3 vertices."
     end
@@ -443,13 +452,19 @@ function ADOffsetGeometry.generateOffset(ring, insetDistance, turningRadius, max
     -- are preserved by construction rather than by being protected from a stepwise collapse.
     ADOffsetGeometry.tagTightCorners(ring, turningRadius, maxCrossTrackError)
 
-    local lines = shiftedEdgeLines(ring, insetDistance, windingSign)
+    local lines = shiftedEdgeLines(ring, insetDistance, windingSign, edgeInsets)
     if #lines < 3 then
         return nil, "Polygon has fewer than 3 usable edges."
     end
 
+    -- With per-edge distances the validity test uses the smallest of them: a vertex is only
+    -- certain to be wrong if it is nearer the source boundary than every edge was shifted.
+    local smallest = math.abs(insetDistance)
+    for i = 1, #lines do
+        smallest = math.min(smallest, math.abs(lines[i].dist or insetDistance))
+    end
     local candidates = dropDuplicates(offsetVertices(lines, insetDistance), 1e-6)
-    candidates = dropInvertedVertices(candidates, ring, insetDistance, insetDistance > 0)
+    candidates = dropInvertedVertices(candidates, ring, smallest, insetDistance > 0)
     if #candidates < 3 then
         return nil, "Offset collapsed the polygon to fewer than 3 vertices."
     end

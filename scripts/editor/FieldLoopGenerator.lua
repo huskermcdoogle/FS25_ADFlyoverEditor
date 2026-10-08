@@ -44,6 +44,7 @@ AutoDrive.FIELD_LOOP_TREE_DENSIFY_SPACING = 1.5 -- meters; resolution added alon
 AutoDrive.FIELD_LOOP_TREE_SMOOTH_ITERATIONS = 12 -- relaxation passes available to the post-detour safety net
 AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE = 1.0 -- meters a new loop keeps from another standalone loop (its margin is pulled in to manage it)
 AutoDrive.FIELD_LOOP_MARGIN_PULL_STEP = 0.25 -- meters the margin comes in per try
+AutoDrive.FIELD_LOOP_EDGE_MARGIN_FLOOR = 0.1 -- meters; a field edge's margin is never pulled in past this (the loop stays outside the field)
 AutoDrive.FIELD_LOOP_CORNER_PUSH_STEP = 0.5 -- meters a blocked field corner moves inward per try, before it is re-rounded
 AutoDrive.FIELD_LOOP_CORNER_PUSH_MAX = 30 -- meters; give up moving one corner further in than this
 -- How close to a full 180-degree fold-back counts as a spike (see ADOffsetGeometry.removeSpikes,
@@ -855,7 +856,93 @@ local function polygonNearSegments(poly, segs, clear)
     return false
 end
 
-function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius, otherLoopSegments)
+--- Every fence section near a box, as {ax, az, bx, bz}: the game keeps each fence's sections with their
+--- exact start and end, gates included (a closed gate is as much a wall as the rest). Read straight from
+--- the placeables, so it gives the fence LINE and not just the few spots an overlap test happened to
+--- touch - and it needs no physics. Returns an empty list wherever the game has none.
+function AutoDrive:findFenceSegments(minX, maxX, minZ, maxZ)
+    local segs = {}
+    local okList, placeables = pcall(function() return g_currentMission.placeableSystem.placeables end)
+    if not okList or placeables == nil then
+        return segs
+    end
+    for _, placeable in ipairs(placeables) do
+        local spec = placeable.spec_fence
+        if spec ~= nil and spec.segments ~= nil then
+            for _, sg in pairs(spec.segments) do
+                if sg.startPosX ~= nil and sg.endPosX ~= nil then
+                    local x0, x1 = math.min(sg.startPosX, sg.endPosX), math.max(sg.startPosX, sg.endPosX)
+                    local z0, z1 = math.min(sg.startPosZ, sg.endPosZ), math.max(sg.startPosZ, sg.endPosZ)
+                    if x1 >= minX and x0 <= maxX and z1 >= minZ and z0 <= maxZ then
+                        segs[#segs + 1] = { ax = sg.startPosX, az = sg.startPosZ, bx = sg.endPosX, bz = sg.endPosZ }
+                    end
+                end
+            end
+        end
+    end
+    return segs
+end
+
+--- True when the edge a->b, shifted `m` metres outward, keeps at least `clear` from every segment.
+local function edgeClearOfSegments(a, b, ox, oz, m, clear, segs)
+    local dx, dz = b.x - a.x, b.z - a.z
+    local len = MathUtil.vector2Length(dx, dz)
+    local steps = math.max(1, math.ceil(len))
+    for k = 0, steps do
+        local t = k / steps
+        local x, z = a.x + dx * t + ox * m, a.z + dz * t + oz * m
+        for _, sg in ipairs(segs) do
+            if x > math.min(sg.ax, sg.bx) - clear and x < math.max(sg.ax, sg.bx) + clear
+                and z > math.min(sg.az, sg.bz) - clear and z < math.max(sg.az, sg.bz) + clear
+                and pointToSegmentDistance(x, z, sg.ax, sg.az, sg.bx, sg.bz) < clear then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+--- Each field edge keeps the largest margin (down to just outside the field) that stays `clear` from
+--- every fence, so a loop beside a fence sits on the FIELD side of it instead of trying to detour round
+--- a fence that runs the whole length of the edge. Returns insets (one per edge, negative = outward, the
+--- convention generateOffset takes), how many edges were pulled in, and how many could not be cleared
+--- even at the floor (those keep the full margin and are left to the later passes and the log).
+local function limitEdgeInsetsByFences(poly, margin, clear, segs)
+    local n = #poly
+    local ws = ADPolygonUtils.getSignedArea(poly) > 0 and 1 or -1
+    local floor = AutoDrive.FIELD_LOOP_EDGE_MARGIN_FLOOR
+    local step = AutoDrive.FIELD_LOOP_MARGIN_PULL_STEP
+    local insets, changed, blocked = {}, 0, 0
+    for i = 1, n do
+        local a, b = poly[i], poly[(i % n) + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local len = MathUtil.vector2Length(dx, dz)
+        if len > 1e-6 then
+            local ux, uz = dx / len, dz / len
+            local ox, oz = uz * ws, -ux * ws -- outward: away from the field interior
+            local chosen = nil
+            local m = margin
+            while true do
+                if edgeClearOfSegments(a, b, ox, oz, m, clear, segs) then
+                    chosen = m
+                    break
+                end
+                if m <= floor then break end
+                m = math.max(floor, m - step)
+            end
+            if chosen == nil then
+                insets[i] = -margin
+                blocked = blocked + 1
+            else
+                insets[i] = -chosen
+                if chosen < margin - 1e-6 then changed = changed + 1 end
+            end
+        end
+    end
+    return insets, changed, blocked
+end
+
+function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, turningRadius, otherLoopSegments, fenceSegments)
     turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
     local requestedMargin = marginDistance
     local points = ADPolygonUtils.stripDuplicateClosingVertex(rawPoints)
@@ -867,9 +954,21 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
 
     -- Offset OUTWARD (away from the field interior) by marginDistance: generateOffset's positive
     -- direction is inward, so outward is the same call with a negated distance.
-    local offset, offsetErr = ADOffsetGeometry.generateOffset(
-        simplified, -marginDistance, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR
-    )
+    -- A fence beside the field shortens the margin of just the edges it runs along (see
+    -- limitEdgeInsetsByFences); with no fence nearby this is the plain uniform offset.
+    local fenceEdgesPulled, fenceEdgesBlocked = 0, 0
+    local function offsetFor(m)
+        local insets = nil
+        if fenceSegments ~= nil and #fenceSegments > 0 and m > 0 then
+            local ins, changed, blocked = limitEdgeInsetsByFences(simplified, m, treeClearance, fenceSegments)
+            fenceEdgesPulled, fenceEdgesBlocked = changed, blocked
+            if changed > 0 then insets = ins end
+        end
+        return ADOffsetGeometry.generateOffset(
+            simplified, -m, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR, insets
+        )
+    end
+    local offset, offsetErr = offsetFor(marginDistance)
     if offset == nil then
         return nil, nil, nil, offsetErr
     end
@@ -885,9 +984,7 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
         local best = nil
         while m > 0 do
             m = math.max(0, m - AutoDrive.FIELD_LOOP_MARGIN_PULL_STEP)
-            local candidate = ADOffsetGeometry.generateOffset(
-                simplified, -m, turningRadius, AutoDrive.FIELD_LOOP_MAX_CROSS_TRACK_ERROR
-            )
+            local candidate = offsetFor(m)
             if candidate ~= nil then
                 best = { margin = m, offset = candidate }
                 if not polygonNearSegments(candidate, otherLoopSegments, AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE) then
@@ -1027,7 +1124,9 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
         simplifiedVertexCount = #simplified,
         marginUsed = marginDistance,
         marginRequested = requestedMargin,
-        crowded = crowded
+        crowded = crowded,
+        fenceEdgesPulled = fenceEdgesPulled,
+        fenceEdgesBlocked = fenceEdgesBlocked
     }, nil
 end
 
@@ -1249,18 +1348,26 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     end
     local reach = math.max(marginDistance, 0) + AutoDrive.FIELD_LOOP_OTHER_LOOP_CLEARANCE + 15
     local otherLoops = AutoDrive:findFieldLoopSegments(minX - reach, maxX + reach, minZ - reach, maxZ + reach)
+    local fenceReach = math.max(marginDistance, 0) + treeClearance + 10
+    local fences = AutoDrive:findFenceSegments(minX - fenceReach, maxX + fenceReach, minZ - fenceReach, maxZ + fenceReach)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop sees %d fence section(s) and %d other loop link(s) near this field.", #fences, #otherLoops)
 
     local rings, perimeter, treeStats = {}, 0, { nudged = 0, stuck = 0, detours = 0, smoothMoves = 0, rawVertexCount = 0, simplifiedVertexCount = 0 }
     local lastRingErr = nil
     local smallestMargin, anyCrowded = nil, false
+    local fenceEdgesPulled, fenceEdgesBlocked = 0, 0
     for _, region in ipairs(rawRegions) do
-        local ring, ringPerimeter, ringTreeStats, ringErr = AutoDrive:buildFieldLoopRing(region, marginDistance, treeClearance, turningRadius, otherLoops)
+        local ring, ringPerimeter, ringTreeStats, ringErr = AutoDrive:buildFieldLoopRing(region, marginDistance, treeClearance, turningRadius, otherLoops, fences)
         if ring ~= nil and ringTreeStats ~= nil and ringTreeStats.marginUsed ~= nil
             and (smallestMargin == nil or ringTreeStats.marginUsed < smallestMargin) then
             smallestMargin = ringTreeStats.marginUsed
         end
         if ring ~= nil and ringTreeStats ~= nil and ringTreeStats.crowded then
             anyCrowded = true
+        end
+        if ring ~= nil and ringTreeStats ~= nil then
+            fenceEdgesPulled = fenceEdgesPulled + (ringTreeStats.fenceEdgesPulled or 0)
+            fenceEdgesBlocked = fenceEdgesBlocked + (ringTreeStats.fenceEdgesBlocked or 0)
         end
         if ring == nil then
             lastRingErr = ringErr
@@ -1277,6 +1384,12 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     if smallestMargin ~= nil and smallestMargin < marginDistance - 1e-6 then
         Logging.info("[AD] %s: margin pulled in from %.2fm to %.2fm to keep clear of another loop beside this field.",
             source, marginDistance, smallestMargin)
+    end
+
+    if #fences > 0 and (fenceEdgesPulled > 0 or fenceEdgesBlocked > 0) then
+        Logging.info("[AD] %s: %d field edge(s) pulled in to stay on the field side of a fence (%d fence section(s) nearby)%s.",
+            source, fenceEdgesPulled, #fences,
+            fenceEdgesBlocked > 0 and string.format(", %d edge(s) could not be cleared even at the field edge", fenceEdgesBlocked) or "")
     end
 
     if anyCrowded then
