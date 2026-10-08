@@ -429,6 +429,14 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
             if not deadEnd or #chain < 2 then return nil end
             local tip, before = chain[#chain], chain[#chain - 1]
             if tip.virtual or before.virtual then return nil end
+            -- ONLY A ROAD THAT ENDS AT THIS JUNCTION has its mouth here. On a junction of farm tracks
+            -- the through road is one two-way lane, and the walk along the west lane ran on through the
+            -- junction and down the south road to the edge of the work region - "the end" there was
+            -- 31 m away, and the turn from the north was tied to the south road at that end (101, the
+            -- user's 2026-10-07 test: a loop up the road, and the through road drivable one way only).
+            -- The search circle (junctionOwn, +5 m), not `radius`: that is the 60-70 m work region.
+            local own = self.junctionOwn
+            if own ~= nil and (tip.x - own.cx) ^ 2 + (tip.z - own.cz) ^ 2 > own.r2 then return nil end
             if not (table.contains(tip.out or {}, before.id) and table.contains(before.out or {}, tip.id)) then
                 return nil
             end
