@@ -108,17 +108,32 @@ local function traceRotateBy(node, angleStep)
     setRotation(node, 0, yRot + angleStep, 0)
 end
 
+--- True when every point from the probe out to `lookahead` ahead of it is on field ground, not just
+--- the last one. Checking only the far point let the probe see a field BEYOND a narrow strip as the
+--- field continuing: two fields closer than the lookahead (5 m) came out as one contour (measured
+--- offline: gaps of 4 m or less merged, 5 m and up did not). Walking the line stops at the gap.
+local FIELD_RAY_STEP = 0.5
+local function isFieldClearAhead(node, lookahead)
+    local d = lookahead
+    while d > 0 do
+        local x, _, z = localToWorld(node, 0, 0, d)
+        if not isOnFieldGround(x, z) then
+            return false
+        end
+        d = d - FIELD_RAY_STEP
+    end
+    return true
+end
+
 --- Rotate the probe until a point `lookahead` ahead of it just crosses the field edge, so the
 --- probe ends up aimed roughly along the boundary.
 local function traceRotateToEdgeDirection(node, lookahead)
-    local x, _, z = localToWorld(node, 0, 0, lookahead)
-    local startOnField = isOnFieldGround(x, z)
+    local startOnField = isFieldClearAhead(node, lookahead)
     local target = not startOnField
     local angleStep = AutoDrive.FIELD_TRACE_HIGH_RESOLUTION / AutoDrive.FIELD_TRACE_LOOKAHEAD
     local swept, isOnField = 0, startOnField
     while swept < 2 * math.pi and isOnField ~= target do
-        x, _, z = localToWorld(node, 0, 0, lookahead)
-        isOnField = isOnFieldGround(x, z)
+        isOnField = isFieldClearAhead(node, lookahead)
         traceRotateBy(node, (isOnField and 1 or -1) * angleStep)
         swept = swept + angleStep
     end
