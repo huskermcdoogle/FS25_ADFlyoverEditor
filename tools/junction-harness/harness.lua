@@ -236,6 +236,9 @@ function M.lock(cx, cz, opts)
     E.junctionCheckSurface = false     -- engine raycast, off
     E.junctionCheckObstacles = false   -- engine overlapBox, off
     E.junctionSwept = false            -- needs SweptSim + a rig
+    -- GAMEFLAGS=1: the road check and the swept-path check on, as in game (with TERRAIN=1 and SweptSim
+    -- loaded). Set here, not before the lock: the lock sets these every time.
+    if os.getenv("GAMEFLAGS") == "1" then E.junctionCheckSurface, E.junctionSwept = true, true end
     E.junctionExtendTrim = true
     E.junctionUseDubins = true
     -- Build layout (doc 07): PATTERN=exact (default, as in game) | smooth | off.
