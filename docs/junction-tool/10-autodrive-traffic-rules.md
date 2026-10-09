@@ -46,6 +46,7 @@ this page is not proven** - check the code before building on it, then add it he
 | Date | Rule |
 |---|---|
 | 2026-10-08 | Never two one-way lines on top of each other in opposite directions. |
+| 2026-10-09 | Except a reverse track with a one-way track back out on top of it, as in parking. A tool for placing those comes later. |
 | 2026-10-08 | A turn between two two-way roads is one two-way line. |
 | 2026-10-08 | No shared point with a two-way line unless the angle stops AutoDrive switching onto it (80-100 degrees). |
 | 2026-10-09 | Where a two-way farm track meets a road of one-way lanes, each turn is two-way as solved, all the way to the merge. Its link onto (or off) the road's one-way lane is one-way, so nobody can drive into it backwards from the road. |

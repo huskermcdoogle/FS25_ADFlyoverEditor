@@ -236,7 +236,11 @@ local uturns = uTurnRoutes(newKeys)
 -- are two links with a point in common (they meet there, or one line folds back on itself).
 local opposed = 0
 do
-    local function oneWay(l) return not table.contains(l[2].out or {}, l[1].id) end
+    -- A reverse link (in a's out but not in b's incoming) is not counted: a reverse track with a
+    -- one-way track back out on top of it is allowed, as in parking (the user, 2026-10-09).
+    local function oneWay(l)
+        return not table.contains(l[2].out or {}, l[1].id) and table.contains(l[2].incoming or {}, l[1].id)
+    end
     for k in pairs(newKeys) do
         local L = linksAfter[k]
         if oneWay(L) then
