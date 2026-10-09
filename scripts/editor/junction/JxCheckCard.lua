@@ -1286,6 +1286,92 @@ function ADFlyoverEditor:applyJunctionClear()
     finish()
 end
 
+--- ONE TWO-WAY LINE IS ENOUGH. Two two-way turns into one farm track can cross a few metres before
+--- its end and then both run on into the same point, half a metre apart (j101, 2026-10-08): two
+--- two-way paths between the same two points. The longer one goes. Only paths of this build's own
+--- points, two-way all along, lying within 2 m of the one that stays. Returns how many went.
+function ADFlyoverEditor:junctionDropTwinTwoWay()
+    local new = jxState.jxBuildNew
+    if new == nil then return 0 end
+    local function nbrs(w)
+        local seen, list = {}, {}
+        for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                if id ~= w.id and not seen[id] then seen[id] = true list[#list + 1] = id end
+            end
+        end
+        table.sort(list)
+        return list
+    end
+    local function twoWay(a, b) return table.contains(a.out or {}, b.id) and table.contains(b.out or {}, a.id) end
+    local function plain(w)
+        if w == nil or not new[w] or w.id == nil or ADGraphManager:getWayPointById(w.id) ~= w then return false end
+        local ns = nbrs(w)
+        if #ns ~= 2 then return false end
+        for _, id in ipairs(ns) do
+            local o = ADGraphManager:getWayPointById(id)
+            if o == nil or not twoWay(w, o) then return false end
+        end
+        return true
+    end
+    local order = {}
+    for w in pairs(new) do order[#order + 1] = w end
+    table.sort(order, jxBeforeInPlace)
+    -- Every run of plain two-way points of ours, with the two points it ends at.
+    local seen, groups, keys = {}, {}, {}
+    for _, w in ipairs(order) do
+        if plain(w) and not seen[w] then
+            local run, ends, len = { w }, {}, 0
+            seen[w] = true
+            for side = 1, 2 do
+                local prev, cur = w, ADGraphManager:getWayPointById(nbrs(w)[side])
+                while cur ~= nil do
+                    len = len + math.sqrt((cur.x - prev.x) ^ 2 + (cur.z - prev.z) ^ 2)
+                    if not plain(cur) or seen[cur] then break end
+                    seen[cur] = true
+                    run[#run + 1] = cur
+                    local ns = nbrs(cur)
+                    local nx = ADGraphManager:getWayPointById(ns[1] == prev.id and ns[2] or ns[1])
+                    prev, cur = cur, nx
+                end
+                ends[side] = cur
+            end
+            if ends[1] ~= nil and ends[2] ~= nil and ends[1] ~= ends[2] then
+                local a, b = ends[1], ends[2]
+                if jxBeforeInPlace(b, a) then a, b = b, a end
+                local k = tostring(a) .. "|" .. tostring(b)
+                if groups[k] == nil then groups[k] = {} keys[#keys + 1] = k end
+                table.insert(groups[k], { run = run, len = len })
+            end
+        end
+    end
+    local doomed = {}
+    for _, k in ipairs(keys) do
+        local g = groups[k]
+        if #g >= 2 then
+            table.sort(g, function(p, q) return p.len < q.len end)
+            local keep = g[1].run
+            for i = 2, #g do
+                local near = true
+                for _, w in ipairs(g[i].run) do
+                    local best = math.huge
+                    for _, q in ipairs(keep) do best = math.min(best, (q.x - w.x) ^ 2 + (q.z - w.z) ^ 2) end
+                    if best > 2 * 2 then near = false break end
+                end
+                if near then
+                    for _, w in ipairs(g[i].run) do doomed[#doomed + 1] = w end
+                end
+            end
+        end
+    end
+    local gone = 0
+    table.sort(doomed, function(p, q) return p.id > q.id end)
+    for _, w in ipairs(doomed) do
+        if jxRemove(w, "junction two-way twin") then gone = gone + 1 end
+    end
+    return gone
+end
+
 function ADFlyoverEditor:applyJunction()
     local jp = self.junctionPreview
     if jp == nil then return end
@@ -1398,10 +1484,12 @@ function ADFlyoverEditor:applyJunction()
     -- (jp.siteHasTwoWay, established structurally while scoping), then NOTHING placed here may be
     -- two-way. The mirror-pair signal cannot fire without two-way boundary nodes anyway, but this
     -- gate makes the guarantee independent of that reasoning ever being wrong.
-    -- No two-way TURNS since 2026-10-02 (doc 06, "Two-way roads"): on a two-way link AutoDrive stops
-    -- checking for traffic, so each direction gets its own one-way turn, tied in at the two-way road's
-    -- mouth (see junctionTrackConnector). FLYOVER_JUNCTION_DUAL_TURNS = true brings the old behaviour back.
-    local allowDual = (jp.siteHasTwoWay == true) and AutoDrive.FLYOVER_JUNCTION_DUAL_TURNS == true
+    -- A TURN BETWEEN TWO-WAY ROADS IS TWO-WAY (the user, 2026-10-08: "we should be laying two way
+    -- tracks here"). From 2026-10-02 each direction got its own one-way turn, and on a farm track
+    -- the two came out as two lines on top of each other, opposite ways, sharing no point - so
+    -- AutoDrive never made either truck wait. One two-way line is what the farm track itself is.
+    -- FLYOVER_JUNCTION_DUAL_TURNS = false brings the one-way pairs back.
+    local allowDual = (jp.siteHasTwoWay == true) and AutoDrive.FLYOVER_JUNCTION_DUAL_TURNS ~= false
     local baseCount = ADGraphManager:getWayPointsCount()
     local placedSet = {}   -- movements laid by this build, for the route check
     -- Every lane walked once, before anything is laid, so each turn ties into its lane and never into
@@ -1551,6 +1639,12 @@ function ADFlyoverEditor:applyJunction()
             jxState.jxSquaredJoins)
     end
     self.junctionLastShared = { joined = shared, shallow = jxState.jxShallowJoins, squared = jxState.jxSquaredJoins }
+    local twins = 0
+    tryCall("junction two-way twins", function() twins = self:junctionDropTwinTwoWay() end)
+    if twins > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d two-way path(s) running beside another between the same two points taken out: one is enough.",
+            twins)
+    end
     -- THE ROUTE CHECK, on the junction as built (report only, like the clear's own check).
     local rc = nil
     tryCall("junction route check", function() rc = junctionRouteCheck(jp, placedSet, cx, cz, radius) end)

@@ -129,6 +129,14 @@ checking (doc 05). That rule is built for one-truck-wide tracks, so the builder 
 - **Two junctions close together on one two-way road:** the road between them stays two-way too. The
   same rule covers it.
 
+**A turn between two two-way roads is two-way** (the user, 2026-10-08: "we should be laying two way
+tracks here"). The one-way pairs above came out on farm tracks as two lines on top of each other,
+opposite ways, sharing no point, so AutoDrive never made either truck wait. Now the turn and its way
+back are laid once, as one two-way line, like the tracks it joins. Where two such turns cross just
+before a track's end and then both run on into it, the second path there is taken out: one is enough.
+A turn whose way back does not fit (refused) is still laid one-way. `FLYOVER_JUNCTION_DUAL_TURNS =
+false` brings the one-way pairs back.
+
 **Why not split the road into two one-way lanes before the junction?** We planned to, and the truck
 twin showed it fails (`tools/xt-study/splitpair.lua`, `overlap.lua`):
 
