@@ -228,6 +228,7 @@ local function junctionShareCrossings(cx, cz, reach)
     if jxState.jxBuildNew == nil then return 0 end
     jxState.jxShallowJoins = 0
     jxState.jxSquaredJoins = 0
+    jxState.jxTwoWayUnshared = 0
     jxSquareMade = {}
     jxSlid = {}
     -- EDGE only keeps out crossings AT a link's end (two links meeting at a point already share it);
@@ -306,7 +307,22 @@ local function junctionShareCrossings(cx, cz, reach)
                             if t > EDGE and t < 1 - EDGE and u > EDGE and u < 1 - EDGE then
                                 local y1 = (L1.a.y or 0) + ((L1.b.y or 0) - (L1.a.y or 0)) * t
                                 local y2 = (L2.a.y or 0) + ((L2.b.y or 0) - (L2.a.y or 0)) * u
-                                if math.abs(y1 - y2) <= MAXH then
+                                -- NO SHARED POINT WITH A TWO-WAY LINE where AutoDrive could switch onto it (the
+                                -- user, 2026-10-08): a two-way line runs both ways, so the crossing is safe
+                                -- only between 80 and 100 degrees, where every switch bends more than 80. At
+                                -- j100 a two-way turn shared a point with the road's lane at 77 degrees and a
+                                -- truck could leave the road there, back down the turn to the farm track.
+                                local twoWayShallow = false
+                                if L1.dual or L2.dual then
+                                    local ux, uz, vx, vz = bx - ax, bz - az, rx - qx, rz - qz
+                                    local nu, nv = math.sqrt(ux * ux + uz * uz), math.sqrt(vx * vx + vz * vz)
+                                    local c = (nu > 1e-6 and nv > 1e-6) and math.abs((ux * vx + uz * vz) / (nu * nv)) or 1
+                                    twoWayShallow = c >= math.cos(math.rad(80))
+                                end
+                                if twoWayShallow then
+                                    tried[pairKey(L1, L2)] = true
+                                    jxState.jxTwoWayUnshared = (jxState.jxTwoWayUnshared or 0) + 1
+                                elseif math.abs(y1 - y2) <= MAXH then
                                     found = { L1 = L1, L2 = L2, x = ax + t * (bx - ax), z = az + t * (bz - az), y = (y1 + y2) / 2 }
                                     break
                                 end

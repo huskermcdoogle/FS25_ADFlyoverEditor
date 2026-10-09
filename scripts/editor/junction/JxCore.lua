@@ -946,9 +946,13 @@ local function jxResample(NA, points, NB)
     return out
 end
 
-local function junctionLayChain(NA, points, NB, dual, flags, spaced)
+-- oneWayFirst / oneWayLast: a two-way turn's link off / onto a one-way lane stays one-way - the turn
+-- is two-way up to the merge, and nobody can drive into it backwards from the road (j100: a turn
+-- refused for the trailer was drivable that way, through a 77 degree bend).
+local function junctionLayChain(NA, points, NB, dual, flags, spaced, oneWayFirst, oneWayLast)
     if spaced and AutoDrive.FLYOVER_JUNCTION_SPACED ~= false then points = jxResample(NA, points, NB) end
     local prev = NA
+    local first = true
     for _, p in ipairs(points) do
         local wp
         -- A left turn's centre point is the SAME point for every left turn of this build: that one
@@ -974,10 +978,10 @@ local function junctionLayChain(NA, points, NB, dual, flags, spaced)
             if wp == nil then return false end
             if p.centre and jxState.jxBuildNew ~= nil then jxState.jxCentreNode = wp end
         end
-        junctionConnect(prev, wp, dual)
-        prev = wp
+        junctionConnect(prev, wp, dual and not (first and oneWayFirst))
+        prev, first = wp, false
     end
-    junctionConnect(prev, NB, dual)
+    junctionConnect(prev, NB, dual and not oneWayLast and not (first and oneWayFirst))
     return true
 end
 

@@ -137,17 +137,16 @@ before a track's end and then both run on into it, the second path there is take
 A turn whose way back does not fit (refused) is still laid one-way. `FLYOVER_JUNCTION_DUAL_TURNS =
 false` brings the one-way pairs back.
 
-**A farm track stays two-way until it meets the road's lanes** (the user, 2026-10-08). Where a
-two-way track meets a road of one-way lanes, its way in and way out go to different lanes, so they
-cannot be one line - and from the track's end they ran together on top of each other until they
-curved off. Now turns arriving and leaving there are joined point by point while they run within
-1 m of each other: one two-way line on from the track's end, and each turn one-way only from where
-it parts for its lane. No join may bend a path more than 35 degrees. Over the registry (swept check
-on): every turn and route kept, lines on top of a line the other way 159 -> 41.
-The two-way line stops 1.5 m short of the road's lanes and never links both ways to a lane point:
-the turns go onto and off the lanes one-way (build 536, j99: joined right up to the lane, the last
-link onto it came out two-way). The track's old end past the turns is taken away - it never was on
-a two-way track, whose every point has four links and looked like a fork to the trim.
+**A turn that touches a two-way road is two-way all the way to the merge** (the user, 2026-10-09:
+"just run them as two way lanes all the way to the merge"). Where a farm track meets a road of
+one-way lanes, each turn is laid as solved, two-way end to end, except its link onto (or off) the
+road's lane, which stays one-way - nobody can drive into a turn backwards from the road. Where such a
+turn crosses a lane at under 80 or over 100 degrees it gets no shared point: AutoDrive could switch
+onto the two-way line there (j100: a truck could leave the road down a turn the trailer was refused
+for). A first try that joined the turns into one line point by point (2026-10-08) is gone. The
+track's old end past the turns is taken away - it never was on a two-way track, whose every point
+has four links and looked like a fork to the trim. The traffic rules behind all this, from
+AutoDrive's code, are in doc 10.
 
 **Why not split the road into two one-way lanes before the junction?** We planned to, and the truck
 twin showed it fails (`tools/xt-study/splitpair.lua`, `overlap.lua`):
