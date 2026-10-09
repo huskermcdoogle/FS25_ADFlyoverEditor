@@ -1372,6 +1372,207 @@ function ADFlyoverEditor:junctionDropTwinTwoWay()
     return gone
 end
 
+--- TWO-WAY UNTIL THE ROAD (the user, 2026-10-08: "they should stay two way until merged into one way
+--- tracks on two lane rd"). Where a farm track meets a road of one-way lanes, its turns cannot be one
+--- two-way line each - the way in and the way out go to different lanes - so every turn starts or
+--- ends at the track's mouth, and from there they ran together on top of each other, opposite ways,
+--- until they curved off. Here they are joined, point by point, while they run within JX_ZIP_NEAR of
+--- each other: one two-way line on from the mouth, and each turn one-way only from where it parts.
+--- A way in and a way out side by side start the line; any other turn whose next point lies beside
+--- it joins it there; each new point of the line is the mouth for what lies beyond it. Returns how
+--- many joins were made.
+local JX_ZIP_NEAR = 1.0
+local JX_ZIP_BEND = 35
+function ADFlyoverEditor:junctionZipAtMouths(cx, cz, radius)
+    local new = jxState.jxBuildNew
+    if new == nil then return 0 end
+    local noteMoved = ADFlyoverEditor.shared.jxNoteMoved
+    local NEAR2 = JX_ZIP_NEAR * JX_ZIP_NEAR
+    local function wp(id) return ADGraphManager:getWayPointById(id) end
+    local function alive(w) return w ~= nil and w.id ~= nil and wp(w.id) == w end
+    local function has(lst, id) return table.contains(lst or {}, id) end
+    local function d2(a, b) return (a.x - b.x) ^ 2 + (a.z - b.z) ^ 2 end
+    local function segDist(p, a, b)
+        local vx, vz = b.x - a.x, b.z - a.z
+        local L2 = vx * vx + vz * vz
+        local t = (L2 > 1e-9) and math.max(0, math.min(1, ((p.x - a.x) * vx + (p.z - a.z) * vz) / L2)) or 0
+        return math.sqrt((a.x + vx * t - p.x) ^ 2 + (a.z + vz * t - p.z) ^ 2)
+    end
+    -- Halfway between p and where it lies on the link a-b: where a point of one turn goes when the
+    -- other turn's link is run through it, so neither path kinks.
+    local function halfOnto(p, a, b)
+        local vx, vz = b.x - a.x, b.z - a.z
+        local L2 = vx * vx + vz * vz
+        local t = (L2 > 1e-9) and math.max(0, math.min(1, ((p.x - a.x) * vx + (p.z - a.z) * vz) / L2)) or 0
+        return (p.x + a.x + vx * t) / 2, (p.z + a.z + vz * t) / 2
+    end
+    local function moveTo(w, x, z)
+        ADGraphManager:moveWayPoint(w.id, x, w.y, z, w.flags, false)
+        if noteMoved ~= nil then noteMoved(w) end
+    end
+    -- A plain point of a one-way turn of ours: one way in, one way out.
+    local function plain(w)
+        return alive(w) and new[w] and #(w.out or {}) == 1 and #(w.incoming or {}) == 1 and w.out[1] ~= w.incoming[1]
+    end
+    -- No join may bend a path more than JX_ZIP_BEND where it meets the line: one that would is a turn
+    -- joining the line past where it should, and would have to double back (j4: a turn AutoDrive
+    -- could no longer drive).
+    local function bendOk(p, q, r, qx, qz)
+        qx, qz = qx or q.x, qz or q.z
+        local ux, uz, vx, vz = qx - p.x, qz - p.z, r.x - qx, r.z - qz
+        local nu, nv = math.sqrt(ux * ux + uz * uz), math.sqrt(vx * vx + vz * vz)
+        if nu < 1e-6 or nv < 1e-6 then return false end
+        return (ux * vx + uz * vz) / (nu * nv) >= math.cos(math.rad(JX_ZIP_BEND))
+    end
+    -- The mouth's own points of ours: on the two-way line (stems), on a turn leaving (outs), on a
+    -- turn arriving (ins).
+    local function around(M)
+        local stems, ins, outs, seen = {}, {}, {}, {}
+        for _, lst in ipairs({ M.out or {}, M.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                local o = wp(id)
+                if o ~= nil and not seen[o] and new[o] then
+                    seen[o] = true
+                    local mo, om = has(M.out, o.id), has(o.out, M.id)
+                    if mo and om then stems[#stems + 1] = o
+                    elseif mo and plain(o) then outs[#outs + 1] = o
+                    elseif om and plain(o) then ins[#ins + 1] = o end
+                end
+            end
+        end
+        table.sort(stems, jxBeforeInPlace)
+        table.sort(ins, jxBeforeInPlace)
+        table.sort(outs, jxBeforeInPlace)
+        return stems, ins, outs
+    end
+    -- Turn point c (leaving M if out, else arriving) folded into line point S, and taken out.
+    local function fold(M, c, out, S)
+        if out then
+            local nx = wp(c.out[1])
+            if nx == nil or nx == S or not bendOk(M, S, nx) then return false end
+            junctionDisconnect(M, c)
+            junctionDisconnect(c, nx)
+            junctionConnect(S, nx, false)
+        else
+            local pv = wp(c.incoming[1])
+            if pv == nil or pv == S or not bendOk(pv, S, M) then return false end
+            junctionDisconnect(c, M)
+            junctionDisconnect(pv, c)
+            junctionConnect(pv, S, false)
+        end
+        jxRemove(c, "junction two-way to the road", true)
+        return true
+    end
+    -- One join at mouth M, if any is to be made.
+    local function joinOnce(M)
+        local stems, ins, outs = around(M)
+        local turns = {}
+        for _, c in ipairs(ins) do turns[#turns + 1] = { c = c, out = false } end
+        for _, c in ipairs(outs) do turns[#turns + 1] = { c = c, out = true } end
+        -- A turn beside the two-way line joins it.
+        for _, t in ipairs(turns) do
+            for _, S in ipairs(stems) do
+                local c = t.c
+                if d2(c, S) <= NEAR2 then
+                    if fold(M, c, t.out, S) then return true end
+                elseif d2(M, S) < d2(M, c) and segDist(S, M, c) <= JX_ZIP_NEAR
+                    and ((t.out and bendOk(M, S, c)) or (not t.out and bendOk(c, S, M))) then
+                    -- the line's point lies on the turn's first link: the turn runs through it
+                    if t.out then
+                        junctionDisconnect(M, c)
+                        junctionConnect(S, c, false)
+                    else
+                        junctionDisconnect(c, M)
+                        junctionConnect(c, S, false)
+                    end
+                    return true
+                elseif d2(M, c) < d2(M, S) and segDist(c, M, S) <= JX_ZIP_NEAR
+                    and (function()
+                        local hx, hz = halfOnto(c, M, S)
+                        if not bendOk(M, c, S, hx, hz) then return false end
+                        if t.out then return bendOk(M, c, wp(c.out[1]) or S, hx, hz) end
+                        return bendOk(wp(c.incoming[1]) or S, c, M, hx, hz)
+                    end)() then
+                    -- the turn's point lies on the line's first link: it becomes a point of the line
+                    moveTo(c, halfOnto(c, M, S))
+                    junctionDisconnect(M, S)
+                    junctionConnect(M, c, true)
+                    junctionConnect(c, S, true)
+                    return true
+                end
+            end
+        end
+        -- No line yet: a way in and a way out side by side start one.
+        for _, a in ipairs(ins) do
+            for _, d in ipairs(outs) do
+                if a ~= d then
+                    local pa, nd = wp(a.incoming[1]), wp(d.out[1])
+                    local mx, mz = (a.x + d.x) / 2, (a.z + d.z) / 2
+                    if pa == nil or nd == nil then
+                        -- not a plain pair; leave it
+                    elseif d2(a, d) <= NEAR2 and bendOk(pa, a, M, mx, mz) and bendOk(M, a, nd, mx, mz) then
+                        ADGraphManager:moveWayPoint(a.id, (a.x + d.x) / 2, a.y, (a.z + d.z) / 2, a.flags, false)
+                        if noteMoved ~= nil then noteMoved(a) end
+                        if fold(M, d, true, a) then
+                            junctionConnect(M, a, false)
+                            return true
+                        end
+                    elseif d2(M, a) < d2(M, d) and segDist(a, M, d) <= JX_ZIP_NEAR
+                        and bendOk(M, a, d, halfOnto(a, M, d)) and bendOk(pa, a, M, halfOnto(a, M, d)) then
+                        moveTo(a, halfOnto(a, M, d))
+                        junctionDisconnect(M, d)
+                        junctionConnect(M, a, false)
+                        junctionConnect(a, d, false)
+                        return true
+                    elseif d2(M, d) < d2(M, a) and segDist(d, M, a) <= JX_ZIP_NEAR
+                        and bendOk(a, d, M, halfOnto(d, M, a)) and bendOk(M, d, nd, halfOnto(d, M, a)) then
+                        moveTo(d, halfOnto(d, M, a))
+                        junctionDisconnect(a, M)
+                        junctionConnect(a, d, false)
+                        junctionConnect(d, M, false)
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+    local R2 = (radius + 15) ^ 2
+    local queue = {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if alive(w) and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= R2 then
+            local twoWay = false
+            for _, id in ipairs(w.out or {}) do
+                local o = wp(id)
+                if o ~= nil and has(o.out, w.id) then twoWay = true break end
+            end
+            if twoWay then
+                local _, ins, outs = around(w)
+                if #ins > 0 and #outs > 0 then queue[#queue + 1] = w end
+            end
+        end
+    end
+    table.sort(queue, jxBeforeInPlace)
+    local joined, done, k = 0, {}, 1
+    while queue[k] ~= nil and k <= 400 do
+        local M = queue[k]
+        k = k + 1
+        if alive(M) and not done[M] then
+            done[M] = true
+            for _ = 1, 60 do
+                if not joinOnce(M) then break end
+                joined = joined + 1
+            end
+            -- Each point of the line beyond the mouth is the mouth for what lies past it.
+            local stems = around(M)
+            for _, S in ipairs(stems) do
+                if not done[S] then queue[#queue + 1] = S end
+            end
+        end
+    end
+    return joined
+end
+
 function ADFlyoverEditor:applyJunction()
     local jp = self.junctionPreview
     if jp == nil then return end
@@ -1624,6 +1825,12 @@ function ADFlyoverEditor:applyJunction()
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction placed %d connector(s) (%d dual, %d rebuilt over old ones), consumed %d stub point(s).",
         placed, dualPlaced, rebuiltPlaced, #allStubs)
+    local zipped = 0
+    tryCall("junction two-way to the road", function() zipped = self:junctionZipAtMouths(cx, cz, radius) end)
+    if zipped > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d point(s) where turns into and out of a two-way road ran together joined into one two-way line, up to where each turn parts for its lane.",
+            zipped)
+    end
     -- Last of all, once the stubs and old debris are gone, so a crossing is never shared with a link
     -- that is about to be deleted.
     local shared = 0

@@ -137,6 +137,14 @@ before a track's end and then both run on into it, the second path there is take
 A turn whose way back does not fit (refused) is still laid one-way. `FLYOVER_JUNCTION_DUAL_TURNS =
 false` brings the one-way pairs back.
 
+**A farm track stays two-way until it meets the road's lanes** (the user, 2026-10-08). Where a
+two-way track meets a road of one-way lanes, its way in and way out go to different lanes, so they
+cannot be one line - and from the track's end they ran together on top of each other until they
+curved off. Now turns arriving and leaving there are joined point by point while they run within
+1 m of each other: one two-way line on from the track's end, and each turn one-way only from where
+it parts for its lane. No join may bend a path more than 35 degrees. Over the registry (swept check
+on): every turn and route kept, lines on top of a line the other way 159 -> 41.
+
 **Why not split the road into two one-way lanes before the junction?** We planned to, and the truck
 twin showed it fails (`tools/xt-study/splitpair.lua`, `overlap.lua`):
 
