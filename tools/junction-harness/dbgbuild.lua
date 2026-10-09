@@ -12,6 +12,9 @@
 -- The last line, COUNTS, is one line for a regression to collect.
 LOG_ECHO = false
 local H = dofile("harness.lua")
+-- GAMEFLAGS=1: the swept-path check as in game, which needs the truck twin - loaded after the harness,
+-- since the harness clears SweptSim.
+if os.getenv("GAMEFLAGS") == "1" then dofile("../../scripts/editor/SweptSim.lua") end
 -- NOSHARE=1 builds without the shared-crossing step, to see what the rest of the builder does alone.
 if os.getenv("NOSHARE") == "1" then AutoDrive.FLYOVER_JUNCTION_SHARE_CROSSINGS = false end
 -- SQUARE=1 turns on the S-bend at shallow shared crossings (off in the builder by default).
@@ -227,6 +230,40 @@ local newKeys = {}
 for k in pairs(linksAfter) do if linksBefore[k] == nil then newKeys[k] = true end end
 local crossNo = crossingsWithoutPoint(linksAfter, newKeys)
 local uturns = uTurnRoutes(newKeys)
+-- RULE: never two lines on top of each other, the opposite way (the user, 2026-10-08). Counts new
+-- one-way links with a one-way link running back the other way (within 25 degrees of opposite) less
+-- than 1 m from the new link's middle. A two-way link is one line, not two, and is not counted; nor
+-- are two links with a point in common (they meet there, or one line folds back on itself).
+local opposed = 0
+do
+    local function oneWay(l) return not table.contains(l[2].out or {}, l[1].id) end
+    for k in pairs(newKeys) do
+        local L = linksAfter[k]
+        if oneWay(L) then
+            local a, b = L[1], L[2]
+            local mx, mz = (a.x + b.x) / 2, (a.z + b.z) / 2
+            local ux, uz = b.x - a.x, b.z - a.z
+            local nu = math.sqrt(ux * ux + uz * uz)
+            for _, M in pairs(linksAfter) do
+                if M ~= L and oneWay(M) and nu > 1e-6 and M[1] ~= a and M[1] ~= b and M[2] ~= a and M[2] ~= b then
+                    local c, d = M[1], M[2]
+                    local vx, vz = d.x - c.x, d.z - c.z
+                    local nv = math.sqrt(vx * vx + vz * vz)
+                    if nv > 1e-6 and (ux * vx + uz * vz) / (nu * nv) < -0.9 then
+                        local t = math.max(0, math.min(1, ((mx - c.x) * vx + (mz - c.z) * vz) / (nv * nv)))
+                        if (c.x + vx * t - mx) ^ 2 + (c.z + vz * t - mz) ^ 2 < 1 then
+                            opposed = opposed + 1
+                            if os.getenv("SHOWOPPOSED") == "1" then
+                                print(string.format("  OPPOSED (%.1f,%.1f)->(%.1f,%.1f) beside (%.1f,%.1f)->(%.1f,%.1f)", a.x, a.z, b.x, b.z, c.x, c.z, d.x, d.z))
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
 print(string.format("points %d -> %d | links %d -> %d | two-way links %d -> %d | teal dots %d -> %d",
     before.points, after.points, before.links, after.links, before.dual, after.dual, before.teal, after.teal))
 -- RULE: no two-way TURNS. A two-way link counts when one of its ends is a new point with exactly two
@@ -448,6 +485,6 @@ end
 print(string.format("rules: %d two-way turn link(s) | %d crossing(s) without a shared point | %d extra route(s) of %d | (%d long U-turn guesses)",
     dualTurns, crossNo, extra, rc and rc.routes or 0, uturns))
 local sh = ADFlyoverEditor.junctionLastShared or { joined = 0, shallow = 0 }
-print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d pattern=%s missing=%d why=%s",
+print(string.format("COUNTS %.1f %.1f moves=%d new=%d refused=%d points=%d links=%d dual=%d teal=%d cross=%d extra=%d routes=%d shared=%d shallow=%d squared=%d kink30=%d kink50=%d short=%d pattern=%s missing=%d opposed=%d why=%s",
     CX, CZ, moves, newMoves, refused, after.points - before.points, after.links - before.links,
-    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short, ADFlyoverEditor.junctionLastPattern and ADFlyoverEditor.junctionLastPattern.shape or "no", rc and rc.missing and #rc.missing or 0, (ADFlyoverEditor.junctionLastPatternWhy or "-"):gsub(" ", "_")))
+    dualTurns, after.teal - before.teal, crossNo, extra, rc and rc.routes or 0, sh.joined, sh.shallow, sh.squared or 0, kink30, kink50, short, ADFlyoverEditor.junctionLastPattern and ADFlyoverEditor.junctionLastPattern.shape or "no", rc and rc.missing and #rc.missing or 0, opposed, (ADFlyoverEditor.junctionLastPatternWhy or "-"):gsub(" ", "_")))

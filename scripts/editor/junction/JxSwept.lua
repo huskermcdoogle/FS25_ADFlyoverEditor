@@ -283,6 +283,33 @@ end
 --- between the two lanes where they meet, in degrees, and how far apart they are there), or nil for every other
 --- failure (degenerate/opposed tangents; not a shallow angle - see the note on `delta`). Used by BOTH
 --- preview and placement, so what is drawn is what is laid.
+-- Is the lane two-way where a turn ties into it at (x, z)? The chain's link nearest that point,
+-- both ways. A virtual point (no links) is not.
+local function junctionTwoWayAt(chain, x, z)
+    local best, bestD = nil, math.huge
+    for i = 1, #chain - 1 do
+        local a, b = chain[i], chain[i + 1]
+        local vx, vz = b.x - a.x, b.z - a.z
+        local L2 = vx * vx + vz * vz
+        local f = (L2 > 1e-9) and math.max(0, math.min(1, ((x - a.x) * vx + (z - a.z) * vz) / L2)) or 0
+        local d = (a.x + vx * f - x) ^ 2 + (a.z + vz * f - z) ^ 2
+        if d < bestD then bestD, best = d, i end
+    end
+    if best == nil then return false end
+    local a, b = chain[best], chain[best + 1]
+    if a.virtual or b.virtual or a.id == nil or b.id == nil then return false end
+    return table.contains(a.out or {}, b.id) and table.contains(b.out or {}, a.id)
+end
+
+-- Where a turn from or to a two-way road's mouth is solved from: half the
+-- FLYOVER_JUNCTION_TWO_WAY_GAP to the right of its way along the road, JX_SPLIT_BACK into the
+-- junction - so the straight piece joining the mouth leaves it at about 20 degrees (3.75 m, 25
+-- degrees, put 8 bends of 30-50 degrees into the turns of 16 two-way junctions; 5 m put 2).
+local JX_SPLIT_BACK = 5
+-- How much further out a right turn ties onto a two-way road that runs through than the left turn
+-- that comes back the other way (junctionTrackConnector).
+local JX_THROUGH_APART = 6
+
 function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, turnR)
     local chainA, deadEndA = self:junctionChain(fromAp, cx, cz, radius)
     local chainB, deadEndB = self:junctionChain(toAp, cx, cz, radius)
@@ -413,8 +440,20 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     -- trimmed stem). A chain that merely ran out at the scope circle is a road that keeps going -
     -- projecting a tie-in past that boundary plants a spike node beside the real road (seen with a
     -- turn radius comparable to the scope radius). There the walk clamps at the boundary instead.
-    local pax, pay, paz, tadx, tadz = junctionWalkBack(chainA, iA, t - sA, extend and deadEndA)
-    local pbx, pby, pbz, tbdx, tbdz = junctionWalkBack(chainB, iB, t - sB, extend and deadEndB)
+    -- A RIGHT TURN TIES ONTO A TWO-WAY ROAD THAT RUNS THROUGH JX_THROUGH_APART further out than the
+    -- left turn back, and leaves it at an angle towards its own side (below), so the two do not lie
+    -- on top of each other where they meet the road (the user, 2026-10-08: never two lines on top of
+    -- each other). Tied a gap out and leaving along the road, it still ran under 1 m from the left
+    -- turn's last metres at j101. Further out is wider, so it lies inside the left turn and never
+    -- crosses it; the right turn moves, not the left, since moving the left turn in would tighten it.
+    local gap = AutoDrive.FLYOVER_JUNCTION_TWO_WAY_GAP or 3.5
+    local rightTurn = gap > 0 and (uAx * uBz - uAz * uBx) > 0 and delta >= math.rad(30)
+    local moreA, moreB = 0, 0
+    if rightTurn and junctionTwoWayAt(chainA, pA.x, pA.z) then moreA = JX_THROUGH_APART end
+    if rightTurn and junctionTwoWayAt(chainB, pB.x, pB.z) then moreB = JX_THROUGH_APART end
+    local pax, pay, paz, tadx, tadz = junctionWalkBack(chainA, iA, t - sA + moreA, extend and deadEndA)
+    local pbx, pby, pbz, tbdx, tbdz = junctionWalkBack(chainB, iB, t - sB + moreB, extend and deadEndB)
+    local mouthA, mouthB = false, false
     -- A TWO-WAY ROAD STAYS TWO-WAY RIGHT UP TO THE MOUTH (docs/junction-tool/06-one-click-build.md,
     -- "Two-way roads"). Where a lane is two-way and ends at this junction, every turn into or out of it
     -- starts or ends at ONE point on it, instead of each at its own tie-in. A truck leaving the
@@ -463,9 +502,9 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
         -- Both chains run from the edge of the work region in towards the junction, so the direction
         -- along the chain is the way in for A, and the reverse of the way out for B.
         local mx, my, mz, mdx, mdz = twoWayMouth(chainA, deadEndA)
-        if mx ~= nil then pax, pay, paz, tadx, tadz = mx, my, mz, mdx, mdz end
+        if mx ~= nil then pax, pay, paz, tadx, tadz, mouthA = mx, my, mz, mdx, mdz, true end
         mx, my, mz, mdx, mdz = twoWayMouth(chainB, deadEndB)
-        if mx ~= nil then pbx, pby, pbz, tbdx, tbdz = mx, my, mz, mdx, mdz end
+        if mx ~= nil then pbx, pby, pbz, tbdx, tbdz, mouthB = mx, my, mz, mdx, mdz, true end
     end
     -- A leaves along its chain direction (toward the interior); B is arrived at heading out (negated).
     -- BOTH curve engines solve and the SHORTER path wins. This is not indecision - it is the guard
@@ -474,22 +513,50 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     -- turn as a 450-degree loop (measured: 94 m where 19 m is right, on the same circle). The biarc
     -- IS the optimal answer there and wins on length automatically; where Dubins genuinely helps
     -- (offset poses, S-bends, hooks) it is shorter and wins instead. No tuned threshold to go stale.
+    -- NEVER TWO LINES ON TOP OF EACH OTHER (the user, 2026-10-08). At a two-way road's mouth every
+    -- turn starts or ends at one point, and a turn and its way back were solved into the same curve:
+    -- two one-way lines, opposite ways, on one spot - trucks meeting there share no point, so
+    -- AutoDrive never makes either wait. A turn from or to a mouth keeps to its RIGHT instead: it is
+    -- solved from (or to) a point half the gap to the right of its way along the road and JX_SPLIT_BACK
+    -- into the junction, and joins the mouth from there in one straight piece. The way there and the
+    -- way back part at the mouth like a Y and pass side by side, the right turn inside and the left
+    -- turn outside, as on a two-lane corner - and the curve keeps the radius it was solved at.
+    -- A right turn tied further out on a road running through (above) leaves it the same way, to its
+    -- right - for a right turn that is always away from the road.
+    local sax, saz, sbx, sbz = pax, paz, pbx, pbz
+    local side = (gap > 0) and (gap / 2) * (self.junctionSplitScale or 1) or 0
+    if moreA > 0 and not mouthA then mouthA = true end
+    if moreB > 0 and not mouthB then mouthB = true end
+    if side > 0 and mouthA then
+        sax, saz = pax + tadx * JX_SPLIT_BACK - tadz * side, paz + tadz * JX_SPLIT_BACK + tadx * side
+    end
+    if side > 0 and mouthB then
+        -- arrived at heading (-tbdx, -tbdz): its right is (tbdz, -tbdx)
+        sbx, sbz = pbx + tbdx * JX_SPLIT_BACK + tbdz * side, pbz + tbdz * JX_SPLIT_BACK - tbdx * side
+    end
     local function pathLen(c)
         if c == nil then return math.huge end
-        local len, px, pz = 0, pax, paz
+        local len, px, pz = 0, sax, saz
         for _, p in ipairs(c.points) do
             len = len + math.sqrt((p.x - px) ^ 2 + (p.z - pz) ^ 2)
             px, pz = p.x, p.z
         end
-        return len + math.sqrt((pbx - px) ^ 2 + (pbz - pz) ^ 2)
+        return len + math.sqrt((sbx - px) ^ 2 + (sbz - pz) ^ 2)
     end
-    local bia = junctionBiarc(pax, paz, tadx, tadz, pbx, pbz, -tbdx, -tbdz, pay, pby)
+    local bia = junctionBiarc(sax, saz, tadx, tadz, sbx, sbz, -tbdx, -tbdz, pay, pby)
     local dub = nil
     if self.junctionUseDubins ~= false then
-        dub = junctionDubins(pax, paz, tadx, tadz, pbx, pbz, -tbdx, -tbdz, turnR, pay, pby)
+        dub = junctionDubins(sax, saz, tadx, tadz, sbx, sbz, -tbdx, -tbdz, turnR, pay, pby)
     end
     local bi = bia
     if dub ~= nil and pathLen(dub) < pathLen(bia) - 0.1 then bi = dub end
+    if bi ~= nil and (sax ~= pax or sbx ~= pbx) then
+        local pts = {}
+        if sax ~= pax then pts[1] = { x = sax, y = pay, z = saz } end
+        for _, p in ipairs(bi.points) do pts[#pts + 1] = p end
+        if sbx ~= pbx then pts[#pts + 1] = { x = sbx, y = pby, z = sbz } end
+        bi = { points = pts, minRadius = bi.minRadius, keptRight = side }
+    end
     -- LEFT TURNS THROUGH THE CENTRE (docs/junction-tool/06-one-click-build.md, opposite left turns;
     -- the route check found why). A left turn is laid as two curves meeting at the junction's centre,
     -- arriving there along the line halfway between its way in and its way out. Every left turn then
@@ -532,7 +599,7 @@ function ADFlyoverEditor:junctionTrackConnector(fromAp, toAp, cx, cz, radius, tu
     end
     return { ax = pax, ay = pay, az = paz, bx = pbx, by = pby, bz = pbz,
         points = bi.points, minRadius = bi.minRadius, t = t, meetDist = math.sqrt(bestd),
-        throughCentre = bi.throughCentre }
+        throughCentre = bi.throughCentre, keptRight = bi.keptRight }
 end
 
 -- THE HOOK: A Y'S SHARP-BACK TURN, LAID IN THE GORE (the user, 2026-10-07: "lay it in the gore").
@@ -1025,7 +1092,23 @@ local function connectorLeftTurn(con)
     return ux * vz - uz * vx < 0
 end
 
+-- A turn split at a two-way mouth that fits nowhere is tried again with half the split, then a
+-- quarter, before it is refused: j66's turn back from the road into the farm track was already at
+-- the radius limit, and keeping right puts it on the inside of its U. The lines stay apart, by less.
 function ADFlyoverEditor:junctionSolveMovement(fromAp, toAp, cx, cz, radius, turnR, rigs)
+    local con, r, why = self:junctionSolveMovementOnce(fromAp, toAp, cx, cz, radius, turnR, rigs)
+    if why == nil or why == "far" or con == nil or (con.keptRight or 0) <= 0 then return con, r, why end
+    for _, scale in ipairs({ 0.5, 0.25 }) do
+        self.junctionSplitScale = scale
+        local ok, c2, r2, w2 = pcall(function() return self:junctionSolveMovementOnce(fromAp, toAp, cx, cz, radius, turnR, rigs) end)
+        self.junctionSplitScale = nil
+        if not ok then break end
+        if w2 == nil and c2 ~= nil then return c2, r2, nil end
+    end
+    return con, r, why
+end
+
+function ADFlyoverEditor:junctionSolveMovementOnce(fromAp, toAp, cx, cz, radius, turnR, rigs)
     local floor = AutoDrive.FLYOVER_JUNCTION_TURN_MIN or 4
     local checkSurface = self.junctionCheckSurface ~= false
     local checkObstacles = self.junctionCheckObstacles ~= false
