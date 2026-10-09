@@ -64,4 +64,8 @@ this page is not proven** - check the code before building on it, then add it he
   miss each other. The traffic simulator (doc 09) said about 2 in 100 runs; that is the simulator, not
   the game.
 - With the 80-100 degree rule, 36 crossings at 13 registry junctions have no shared point (build of
-  2026-10-09). AutoDrive does not coordinate trucks at those crossings.
+  2026-10-09). AutoDrive does not coordinate trucks at those crossings. What to do about it is
+  worked out in doc 11 (not built yet, needs the user's decision).
+- A truck stopped by its front sensor stays stopped while the other truck is there; nothing in that
+  path times out (`DrivePathModule.lua` 354). Whether two trucks nose to nose ever free themselves in
+  game is not tested.
