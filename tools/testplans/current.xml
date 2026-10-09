@@ -7,14 +7,14 @@
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="clear101" title="Junction 101 clears" passLog="one shared point of %d+ two%-way tracks"
-          hint="Lock 101 and clear it, through roads kept: the south track comes off the shared point and the west to north-east track stays whole. Ticks itself from the log."/>
+          hint="Lock 101: the line at the bottom of the screen says one shared point of farm tracks. Right-click: the south track comes off the shared point and the west to north-east track stays whole. Ticks itself from the log."/>
     <test id="twoway101" title="101 builds with two-way turns"
           passLog="between two%-way roads laid two%-way"
           failLog="turn%(s%) we laid cannot be driven"
           hint="Build 101 with a 6 m turn radius: two two-way turns, meeting the south track at one point. No lines on top of each other. Ticks itself from the log."/>
     <test id="toroad" title="A farm track stays two-way up to the road's lanes"
           passLog="joined into one two%-way line"
-          hint="Clear 4 (through roads kept) and build it: the farm track's two-way line runs on into the junction until each turn parts for its lane. No lines on top of each other. Ticks itself from the log; look at it too."/>
+          hint="Build 99 or 100 (or clear and build 4): the farm track stays two-way until just short of the road, the turns onto and off the lanes are one-way, and no old end of the track is left lying beside the new turns. Ticks itself from the log; look at it too."/>
     <test id="drivable" title="Builds come out drivable"
           passLog="AutoDrive can take through here, all of them turns we meant"
           failLog="turn%(s%) we laid cannot be driven"
