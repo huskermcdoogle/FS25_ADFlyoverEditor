@@ -266,8 +266,16 @@ end
 
 --- Run the real applyJunctionClear against the loaded graph. Destructive: the graph is mutated for
 --- the rest of this process, so one scenario per run unless the mutation is the point.
+-- AS THE RIGHT-CLICK DOES IT (Mouse.lua): only when junctionHasWork says there is something to do.
+-- Calling the clear directly let j101's one-point clear pass offline while the game's right-click
+-- unlocked the site, "nothing to place" (build 535). HARNESS_DIRECT=1 skips the check, and so does
+-- an older editor (FE_SRC) from before junctionHasWork.
 function M.apply()
     LOG = {}
+    if os.getenv("HARNESS_DIRECT") ~= "1" and E.junctionHasWork ~= nil and not E:junctionHasWork(E.junctionPreview) then
+        LOG[#LOG + 1] = "[FlyoverEditor]: junction site unlocked (nothing to place)."
+        return LOG
+    end
     E:applyJunctionClear()
     return LOG
 end
@@ -280,6 +288,10 @@ function M.build()
     local jp = E.junctionPreview
     if jp == nil then error("M.build: no preview - lock the site with mode = \"build\" first") end
     if jp.clearMode then error("M.build: the preview is a clear - lock with mode = \"build\"") end
+    if os.getenv("HARNESS_DIRECT") ~= "1" and E.junctionHasWork ~= nil and not E:junctionHasWork(jp) then
+        LOG[#LOG + 1] = "[FlyoverEditor]: junction site unlocked (nothing to place)."
+        return LOG
+    end
     E:applyJunction()
     return LOG
 end

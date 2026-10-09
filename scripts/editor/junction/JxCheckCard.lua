@@ -506,9 +506,11 @@ end
 --- every other track is cut off the point and its first points are taken until it is 5 m clear of
 --- the tracks that stay. With through roads not kept, every track is cut, each clear of the others,
 --- and the point goes. Returns how many links and points it took (0: not a one-point junction), and
---- the through road it kept, both ways, as point lists (empty when it kept none).
-function ADFlyoverEditor:junctionClearOnePoint(jp, leave)
-    local c = self.junctionSite or jp.tracksCentre
+--- the through road it kept, both ways, as point lists (empty when it kept none). `dry`: change
+--- nothing, return how many tracks it would cut (the right-click asks this before it clears).
+--- Measured from the clear's own crossing, not the click: in game the lock sat 6.6 m from j101's point.
+function ADFlyoverEditor:junctionClearOnePoint(jp, leave, dry)
+    local c = jp.tracksCentre or self.junctionSite
     if c == nil then return 0 end
     local REACH, NEAR, CLEAR, BEND, HEAD, WALK = 15, 6, 5, 45, 8, 60
     local function nbrs(w)
@@ -577,6 +579,7 @@ function ADFlyoverEditor:junctionClearOnePoint(jp, leave)
             end
         end
     end
+    if dry then return #tracks - ((keepA ~= nil) and 2 or 0) end
     local function distTo(path, x, z)
         local best = math.huge
         for k = 2, #path do
@@ -1284,6 +1287,27 @@ function ADFlyoverEditor:applyJunctionClear()
             cleared, staleCut)
     end
     finish()
+end
+
+--- IS THERE ANYTHING FOR A RIGHT-CLICK TO DO on the armed site? Place: the piece fits. Clear: wiring
+--- or links to take out, filtered as applyJunctionClear filters them - or a junction that is one
+--- shared point of farm tracks, which has neither (j101: build 535's right-click unlocked it,
+--- "nothing to place", and the one-point clear never ran). Build: turns to lay or rebuild.
+function ADFlyoverEditor:junctionHasWork(jp)
+    if jp == nil then return false end
+    if jp.placeMode then return jp.ok == true end
+    if jp.clearMode then
+        local leave = self.junctionLeaveThrough ~= false
+        local nodes = leave and jp.turnDebris or jp.debris
+        if nodes ~= nil and #nodes > 0 then return true end
+        for _, pair in ipairs(jp.staleLinks or {}) do
+            if not leave or not pair.isThrough then return true end
+        end
+        local n = 0
+        tryCall("junction one-point check", function() n = self:junctionClearOnePoint(jp, leave, true) end)
+        return (n or 0) > 0
+    end
+    return ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0
 end
 
 --- ONE TWO-WAY LINE IS ENOUGH. Two two-way turns into one farm track can cross a few metres before

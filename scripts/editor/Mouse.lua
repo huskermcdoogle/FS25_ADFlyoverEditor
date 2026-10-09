@@ -666,30 +666,9 @@ function ADFlyoverEditor:stopCurrentAction()
         -- right-click just unlocks the site. Unarmed falls through, so the next right-click puts the
         -- tool away like any other - the way OUT of the tool without placing anything.
         if self.junctionArmed ~= nil then
-            local jp = self.junctionPreview
-            -- Placeable = new turns OR rebuilds of existing ones: rebuild movements count into
-            -- nRebuild, not nNew, and gating on nNew alone made a pure-rebuild placement report
-            -- "nothing to place" and unlock instead of placing. Clear mode never has new/rebuild
-            -- movements (the solve is skipped entirely) - its own work is a non-empty debris/stale-
-            -- link set, filtered the same way applyJunctionClear will filter it.
-            local hasWork
-            if jp ~= nil and jp.placeMode then
-                hasWork = jp.ok == true
-            elseif jp ~= nil and jp.clearMode then
-                local leave = self.junctionLeaveThrough ~= false
-                local nodes = leave and jp.turnDebris or jp.debris
-                local anySeverableLink = false
-                if leave then
-                    for _, pair in ipairs(jp.staleLinks or {}) do
-                        if not pair.isThrough then anySeverableLink = true; break end
-                    end
-                else
-                    anySeverableLink = (#(jp.staleLinks or {})) > 0
-                end
-                hasWork = (nodes ~= nil and #nodes > 0) or anySeverableLink
-            else
-                hasWork = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0
-            end
+            -- Placeable = new turns OR rebuilds of existing ones; clear mode's work is its wiring and
+            -- links, or a junction that is one shared point (junctionHasWork says which).
+            local hasWork = self:junctionHasWork(self.junctionPreview)
             if hasWork then
                 self:applyJunction()
             else
