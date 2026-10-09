@@ -1500,6 +1500,19 @@ end
 --- whether the LOCAL track at the tie-in is itself two-way - the caller uses this (both ends must
 --- agree) to decide whether the new connector should be dual too, instead of always one-way.
 --- During a build the lane comes from junctionTieLanesPrepare, not from a new walk.
+-- How many points w is linked to, either way. Counting links instead (out + incoming) made every
+-- point of a two-way track look like a fork - four links - so the stub past a tie on a farm track
+-- was never taken (j99, build 536: the track's old end left lying beside the new turns).
+local function junctionNeighbours(w)
+    local seen, n = {}, 0
+    for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+        for _, id in ipairs(lst) do
+            if id ~= w.id and not seen[id] then seen[id], n = true, n + 1 end
+        end
+    end
+    return n
+end
+
 function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
     local lane = nil
     if self.junctionTieLanes ~= nil then lane = self.junctionTieLanes[ap] end
@@ -1566,7 +1579,7 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
         if deadEnd then
             for i = hitIdx + 1, #chain do
                 local w = chain[i]
-                if #(w.out or {}) + #(w.incoming or {}) > 2 then break end
+                if junctionNeighbours(w) > 2 then break end
                 stubs[#stubs + 1] = w
             end
         end
@@ -1580,7 +1593,7 @@ function ADFlyoverEditor:junctionTieIn(ap, Tx, Tz, cx, cz, radius)
     if deadEnd then
         for i = bestSeg + 1, #chain do
             local w = chain[i]
-            if #(w.out or {}) + #(w.incoming or {}) > 2 then break end
+            if junctionNeighbours(w) > 2 then break end
             stubs[#stubs + 1] = w
         end
     end

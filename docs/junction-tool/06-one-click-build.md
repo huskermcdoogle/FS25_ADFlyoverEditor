@@ -144,6 +144,10 @@ curved off. Now turns arriving and leaving there are joined point by point while
 1 m of each other: one two-way line on from the track's end, and each turn one-way only from where
 it parts for its lane. No join may bend a path more than 35 degrees. Over the registry (swept check
 on): every turn and route kept, lines on top of a line the other way 159 -> 41.
+The two-way line stops 1.5 m short of the road's lanes and never links both ways to a lane point:
+the turns go onto and off the lanes one-way (build 536, j99: joined right up to the lane, the last
+link onto it came out two-way). The track's old end past the turns is taken away - it never was on
+a two-way track, whose every point has four links and looked like a fork to the trim.
 
 **Why not split the road into two one-way lanes before the junction?** We planned to, and the truck
 twin showed it fails (`tools/xt-study/splitpair.lua`, `overlap.lua`):

@@ -389,6 +389,8 @@ L.STRINGS = {
         ["Site locked: will clear %d point(s). Right-click clears; left-click moves the lock."] = "Ort gesperrt: %d Punkt(e) werden entfernt. Rechtsklick entfernt; Linksklick versetzt die Sperre.",
         ["Site locked, nothing here to clear. Right-click unlocks; left-click moves the lock."] = "Ort gesperrt, nichts zu entfernen. Rechtsklick entsperrt; Linksklick versetzt die Sperre.",
         ["%d point(s) to clear here. Left-click locks the site; wheel = scope."] = "%d Punkt(e) hier zu entfernen. Linksklick sperrt den Ort; Rad = Suchkreis.",
+        ["Site locked: one shared point of farm tracks, %d track(s) to cut off it. Right-click clears; left-click moves the lock."] = "Ort gesperrt: ein gemeinsamer Punkt von Feldwegen, %d Weg(e) werden davon getrennt. Rechtsklick entfernt; Linksklick versetzt die Sperre.",
+        ["One shared point of farm tracks here. Left-click locks the site; wheel = scope."] = "Hier treffen sich Feldwege in einem Punkt. Linksklick sperrt den Ort; Rad = Suchkreis.",
         ["Point at a junction and left-click to lock it. Wheel = scope; right-click leaves the tool."] = "Auf eine Kreuzung zeigen und mit Linksklick sperren. Rad = Suchkreis; Rechtsklick legt das Werkzeug weg.",
 
         -- junction tool: card labels and values

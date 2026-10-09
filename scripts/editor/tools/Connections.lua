@@ -260,14 +260,24 @@ function ADFlyoverEditor:getNextStepLines()
             local leave = self.junctionLeaveThrough ~= false
             local nodes = (leave and jp.turnDebris or jp.debris) or {}
             local n = #nodes
+            -- A junction that is one shared point of farm tracks has no wiring to count, but the clear
+            -- still cuts tracks off it (junctionClearOnePoint).
+            local cut = 0
+            if n == 0 then cut = self:junctionOnePointCut(jp, leave) end
             if self.junctionArmed ~= nil then
                 if n > 0 then
                     return string.format(L("Site locked: will clear %d point(s). Right-click clears; left-click moves the lock."), n)
+                end
+                if cut > 0 then
+                    return string.format(L("Site locked: one shared point of farm tracks, %d track(s) to cut off it. Right-click clears; left-click moves the lock."), cut)
                 end
                 return L("Site locked, nothing here to clear. Right-click unlocks; left-click moves the lock.")
             end
             if n > 0 then
                 return string.format(L("%d point(s) to clear here. Left-click locks the site; wheel = scope."), n)
+            end
+            if cut > 0 then
+                return L("One shared point of farm tracks here. Left-click locks the site; wheel = scope.")
             end
             return L("Point at a junction and left-click to lock it. Wheel = scope; right-click leaves the tool.")
         end

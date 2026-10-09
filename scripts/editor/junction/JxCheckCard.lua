@@ -1303,11 +1303,24 @@ function ADFlyoverEditor:junctionHasWork(jp)
         for _, pair in ipairs(jp.staleLinks or {}) do
             if not leave or not pair.isThrough then return true end
         end
-        local n = 0
-        tryCall("junction one-point check", function() n = self:junctionClearOnePoint(jp, leave, true) end)
-        return (n or 0) > 0
+        return self:junctionOnePointCut(jp, leave) > 0
     end
     return ((jp.nNew or 0) + (jp.nRebuild or 0)) > 0
+end
+
+--- How many tracks the one-point clear would cut off this preview's site (0: not a one-point
+--- junction). Asked once per preview and kept on it: the status line asks every frame, and the
+--- question walks every point on the map.
+function ADFlyoverEditor:junctionOnePointCut(jp, leave)
+    if jp == nil or not jp.clearMode then return 0 end
+    jp._onePointCut = jp._onePointCut or {}
+    local key = (leave ~= false) and "kept" or "off"
+    if jp._onePointCut[key] == nil then
+        local n = 0
+        tryCall("junction one-point check", function() n = self:junctionClearOnePoint(jp, leave ~= false, true) end)
+        jp._onePointCut[key] = n or 0
+    end
+    return jp._onePointCut[key]
 end
 
 --- ONE TWO-WAY LINE IS ENOUGH. Two two-way turns into one farm track can cross a few metres before
@@ -1407,6 +1420,9 @@ end
 --- many joins were made.
 local JX_ZIP_NEAR = 1.0
 local JX_ZIP_BEND = 35
+-- The two-way line keeps this far off the road's own lanes: the turns go onto and off the lanes
+-- one-way (j99, build 536: joined right up to the lane, the last link onto it came out two-way).
+local JX_ZIP_ROAD = 1.5
 function ADFlyoverEditor:junctionZipAtMouths(cx, cz, radius)
     local new = jxState.jxBuildNew
     if new == nil then return 0 end
@@ -1429,6 +1445,26 @@ function ADFlyoverEditor:junctionZipAtMouths(cx, cz, radius)
         local L2 = vx * vx + vz * vz
         local t = (L2 > 1e-9) and math.max(0, math.min(1, ((p.x - a.x) * vx + (p.z - a.z) * vz) / L2)) or 0
         return (p.x + a.x + vx * t) / 2, (p.z + a.z + vz * t) / 2
+    end
+    -- The road's lanes nearby: one-way links between points this build did not lay.
+    local lanes = {}
+    do
+        local RR = (radius + 20) ^ 2
+        for _, w in pairs(ADGraphManager:getWayPoints()) do
+            if alive(w) and not new[w] and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= RR then
+                for _, id in ipairs(w.out or {}) do
+                    local o = wp(id)
+                    if o ~= nil and not new[o] and not has(o.out, w.id) then lanes[#lanes + 1] = { w, o } end
+                end
+            end
+        end
+    end
+    local function offRoad(x, z)
+        local p = { x = x, z = z }
+        for _, l in ipairs(lanes) do
+            if segDist(p, l[1], l[2]) < JX_ZIP_ROAD then return false end
+        end
+        return true
     end
     local function moveTo(w, x, z)
         ADGraphManager:moveWayPoint(w.id, x, w.y, z, w.flags, false)
@@ -1473,13 +1509,14 @@ function ADFlyoverEditor:junctionZipAtMouths(cx, cz, radius)
     local function fold(M, c, out, S)
         if out then
             local nx = wp(c.out[1])
-            if nx == nil or nx == S or not bendOk(M, S, nx) then return false end
+            -- never a link both ways to the point the turn goes on to (a lane, a shared crossing)
+            if nx == nil or nx == S or has(nx.out, S.id) or not bendOk(M, S, nx) then return false end
             junctionDisconnect(M, c)
             junctionDisconnect(c, nx)
             junctionConnect(S, nx, false)
         else
             local pv = wp(c.incoming[1])
-            if pv == nil or pv == S or not bendOk(pv, S, M) then return false end
+            if pv == nil or pv == S or has(S.out, pv.id) or not bendOk(pv, S, M) then return false end
             junctionDisconnect(c, M)
             junctionDisconnect(pv, c)
             junctionConnect(pv, S, false)
@@ -1513,7 +1550,7 @@ function ADFlyoverEditor:junctionZipAtMouths(cx, cz, radius)
                 elseif d2(M, c) < d2(M, S) and segDist(c, M, S) <= JX_ZIP_NEAR
                     and (function()
                         local hx, hz = halfOnto(c, M, S)
-                        if not bendOk(M, c, S, hx, hz) then return false end
+                        if not offRoad(hx, hz) or not bendOk(M, c, S, hx, hz) then return false end
                         if t.out then return bendOk(M, c, wp(c.out[1]) or S, hx, hz) end
                         return bendOk(wp(c.incoming[1]) or S, c, M, hx, hz)
                     end)() then
@@ -1534,21 +1571,22 @@ function ADFlyoverEditor:junctionZipAtMouths(cx, cz, radius)
                     local mx, mz = (a.x + d.x) / 2, (a.z + d.z) / 2
                     if pa == nil or nd == nil then
                         -- not a plain pair; leave it
-                    elseif d2(a, d) <= NEAR2 and bendOk(pa, a, M, mx, mz) and bendOk(M, a, nd, mx, mz) then
+                    elseif d2(a, d) <= NEAR2 and pa ~= nd and offRoad(mx, mz)
+                        and bendOk(pa, a, M, mx, mz) and bendOk(M, a, nd, mx, mz) then
                         ADGraphManager:moveWayPoint(a.id, (a.x + d.x) / 2, a.y, (a.z + d.z) / 2, a.flags, false)
                         if noteMoved ~= nil then noteMoved(a) end
                         if fold(M, d, true, a) then
                             junctionConnect(M, a, false)
                             return true
                         end
-                    elseif d2(M, a) < d2(M, d) and segDist(a, M, d) <= JX_ZIP_NEAR
+                    elseif d2(M, a) < d2(M, d) and segDist(a, M, d) <= JX_ZIP_NEAR and offRoad(halfOnto(a, M, d))
                         and bendOk(M, a, d, halfOnto(a, M, d)) and bendOk(pa, a, M, halfOnto(a, M, d)) then
                         moveTo(a, halfOnto(a, M, d))
                         junctionDisconnect(M, d)
                         junctionConnect(M, a, false)
                         junctionConnect(a, d, false)
                         return true
-                    elseif d2(M, d) < d2(M, a) and segDist(d, M, a) <= JX_ZIP_NEAR
+                    elseif d2(M, d) < d2(M, a) and segDist(d, M, a) <= JX_ZIP_NEAR and offRoad(halfOnto(d, M, a))
                         and bendOk(a, d, M, halfOnto(d, M, a)) and bendOk(M, d, nd, halfOnto(d, M, a)) then
                         moveTo(d, halfOnto(d, M, a))
                         junctionDisconnect(a, M)
@@ -1799,10 +1837,20 @@ function ADFlyoverEditor:applyJunction()
         end
     end
 
+    -- Points it is linked to, either way: a two-way track's point has four links but two neighbours.
+    local function neighbours(w)
+        local seen, n = {}, 0
+        for _, lst in ipairs({ w.out or {}, w.incoming or {} }) do
+            for _, id in ipairs(lst) do
+                if id ~= w.id and not seen[id] then seen[id], n = true, n + 1 end
+            end
+        end
+        return n
+    end
     local stubSeen = {}
     for _, s in ipairs(allStubs) do
         if s ~= nil and not stubSeen[s] and s.id ~= nil and s.id >= 0
-            and #(s.out or {}) + #(s.incoming or {}) <= 2 then
+            and neighbours(s) <= 2 then
             stubSeen[s] = true
             jxRemove(s.id, "junction removeWayPoint")
         end
