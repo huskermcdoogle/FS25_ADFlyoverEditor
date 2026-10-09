@@ -3,22 +3,20 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="farm track 101: lock, clear, build, clear again" build="@BUILD@">
+<testPlan title="farm tracks: two-way turns, two-way to the road" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="clear101" title="Junction 101 clears" passLog="one shared point of %d+ two%-way tracks"
-          hint="Lock 101 and clear it with through roads kept: the log says it is one shared point (ticks itself), the south track comes off the point (about 5 points go) and the west to north-east track stays whole. The card says the middle is empty."/>
-    <test id="farmtrack" title="Junction 101 builds drivable"
+          hint="Lock 101 and clear it, through roads kept: the south track comes off the shared point and the west to north-east track stays whole. Ticks itself from the log."/>
+    <test id="twoway101" title="101 builds with two-way turns"
+          passLog="between two%-way roads laid two%-way"
           failLog="turn%(s%) we laid cannot be driven"
-          hint="Then build 101 with a 3-6 m turn radius: 4 turns to and from the south track, no two points on one spot, the west to north-east track still runs through, and the route check is clean."/>
-    <test id="clearAgain" title="The built 101 clears again"
-          hint="Clear 101 once more: the turns go, the card says the middle is empty, and nothing else is touched. Undo brings the turns back."/>
+          hint="Build 101 with a 6 m turn radius: two two-way turns, meeting the south track at one point. No lines on top of each other. Ticks itself from the log."/>
+    <test id="toroad" title="A farm track stays two-way up to the road's lanes"
+          passLog="joined into one two%-way line"
+          hint="Clear 4 (through roads kept) and build it: the farm track's two-way line runs on into the junction until each turn parts for its lane. No lines on top of each other. Ticks itself from the log; look at it too."/>
     <test id="drivable" title="Builds come out drivable"
           passLog="AutoDrive can take through here, all of them turns we meant"
           failLog="turn%(s%) we laid cannot be driven"
-          hint="Build a few other junctions too. Ticks itself: pass on a clean route check, fail if any build says a turn cannot be driven."/>
-    <test id="twotrucks" title="Two trucks share a junction without trouble"
-          hint="On a junction you just built or placed, send two AutoDrive trucks through at the same time on crossing or merging routes: one waits, the other goes, no crash, nobody stuck. Try it a few times with different timing."/>
-    <test id="saveSplit" title="A save keeps the split"
-          hint="Change a split decision, save the game, reload: the decision is still there."/>
+          hint="Ticks itself on every build: pass on a clean route check, fail if a build says a turn cannot be driven."/>
 </testPlan>

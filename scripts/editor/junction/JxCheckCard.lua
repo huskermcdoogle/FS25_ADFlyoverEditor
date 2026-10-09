@@ -1825,10 +1825,13 @@ function ADFlyoverEditor:applyJunction()
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction placed %d connector(s) (%d dual, %d rebuilt over old ones), consumed %d stub point(s).",
         placed, dualPlaced, rebuiltPlaced, #allStubs)
+    if dualPlaced > 0 then
+        Logging.info("[FlyoverEditor]: junction - %d turn(s) between two-way roads laid two-way, one line for both ways.", dualPlaced)
+    end
     local zipped = 0
     tryCall("junction two-way to the road", function() zipped = self:junctionZipAtMouths(cx, cz, radius) end)
     if zipped > 0 then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction - %d point(s) where turns into and out of a two-way road ran together joined into one two-way line, up to where each turn parts for its lane.",
+        Logging.info("[FlyoverEditor]: junction - %d point(s) where turns into and out of a two-way road ran together joined into one two-way line, up to where each turn parts for its lane.",
             zipped)
     end
     -- Last of all, once the stubs and old debris are gone, so a crossing is never shared with a link
