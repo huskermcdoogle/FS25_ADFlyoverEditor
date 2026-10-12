@@ -162,7 +162,10 @@ TOOLS = [
                 "that have no AutoDrive path along them. Pick the ones you want and it lays the lanes: "
                 "one-way, one two-way line, or two lanes keeping right. It stops short at forks so the "
                 "junction tool can finish them, and joins an existing path where a road runs straight "
-                "into one.",
+                "into one. Bridges and ramps are found from the game's road meshes, so a road carries "
+                "on across a river. On bridges (or every road, if you choose) the lanes move in to keep "
+                "a rig clear of railings, walls and banks; where two lanes will not fit, that part is "
+                "one two-way line.",
         "how": [
             "Point at a road: the stretch from one fork to the next lights up, with its lanes previewed.",
             "Click to pick it; click a picked road again to drop it. Double-click picks the whole road, carrying straight on through forks.",
@@ -175,8 +178,12 @@ TOOLS = [
             ("roads to find", "paved, gravel and dirt - turn a kind off to stop it lighting up."),
             ("light up", "under mouse only, or every road nearby with no path, faintly."),
             ("lane gap", "from road: 0.6 x the road's measured width, as the map's own two-lane roads are "
-                         "laid (never under 3.3 m, the room two big rigs need); set: type your own. The card shows this road's width and "
+                         "laid (never under the rig width + 0.3 m); set: type your own. The card shows this road's width and "
                          "how far apart the map's own lanes are."),
+            ("side check", "bridges: fit the lanes between the railings on bridges and ramps; everywhere: "
+                           "also keep clear of walls, posts, trees and banks on every road."),
+            ("rig width", "the widest rig the lanes must pass (3.0 m). Lanes are never closer than this "
+                          "plus 0.3 m, and keep half of it plus 0.3 m from a railing."),
             ("fork gap", "how far back from a fork the run stops, leaving room for the junction tool."),
         ],
     },

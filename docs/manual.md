@@ -187,7 +187,7 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 
 *Create — Lay AutoDrive runs along map roads and farm tracks that have no path yet.*
 
-Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt tracks - finds the middle of each road and where roads fork, and lights up the roads that have no AutoDrive path along them. Pick the ones you want and it lays the lanes: one-way, one two-way line, or two lanes keeping right. It stops short at forks so the junction tool can finish them, and joins an existing path where a road runs straight into one.
+Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt tracks - finds the middle of each road and where roads fork, and lights up the roads that have no AutoDrive path along them. Pick the ones you want and it lays the lanes: one-way, one two-way line, or two lanes keeping right. It stops short at forks so the junction tool can finish them, and joins an existing path where a road runs straight into one. Bridges and ramps are found from the game's road meshes, so a road carries on across a river. On bridges (or every road, if you choose) the lanes move in to keep a rig clear of railings, walls and banks; where two lanes will not fit, that part is one two-way line.
 
 **How to use it**
 
@@ -202,7 +202,9 @@ Road runs reads the ground paint round the mouse - asphalt and concrete, gravel,
 - **priority** — primary or secondary, as for Draw.
 - **roads to find** — paved, gravel and dirt - turn a kind off to stop it lighting up.
 - **light up** — under mouse only, or every road nearby with no path, faintly.
-- **lane gap** — from road: 0.6 x the road's measured width, as the map's own two-lane roads are laid (never under 3.3 m, the room two big rigs need); set: type your own. The card shows this road's width and how far apart the map's own lanes are.
+- **lane gap** — from road: 0.6 x the road's measured width, as the map's own two-lane roads are laid (never under the rig width + 0.3 m); set: type your own. The card shows this road's width and how far apart the map's own lanes are.
+- **side check** — bridges: fit the lanes between the railings on bridges and ramps; everywhere: also keep clear of walls, posts, trees and banks on every road.
+- **rig width** — the widest rig the lanes must pass (3.0 m). Lanes are never closer than this plus 0.3 m, and keep half of it plus 0.3 m from a railing.
 - **fork gap** — how far back from a fork the run stops, leaving room for the junction tool.
 
 <a id="move"></a>
