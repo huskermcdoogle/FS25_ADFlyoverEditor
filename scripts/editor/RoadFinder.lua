@@ -177,14 +177,28 @@ end
 local DC = { 1, 1, 0, -1, -1, -1, 0, 1 }   -- 8 neighbours, clockwise from east (z grows south)
 local DR = { 0, 1, 1, 1, 0, -1, -1, -1 }
 
--- Yield hook: the in-game builder runs inside a coroutine and yields every so often; the bench runs
--- straight through.
+-- Yield hook: the in-game builder runs inside a coroutine and hands the frame back once it has used
+-- its time slice (RF.SLICE seconds, checked every few thousand steps); the bench runs straight
+-- through. The clock is the engine's getTimeSec in game, os.clock offline; with neither, a step count.
+RF.SLICE = 0.004
+local function clock()
+    if getTimeSec ~= nil then return getTimeSec() end
+    if os ~= nil and os.clock ~= nil then return os.clock() end
+    return nil
+end
+RF.clock = clock
 local workDone = 0
 local function work(n)
     workDone = workDone + n
-    if workDone > 20000 then
+    if workDone > 2000 then
         workDone = 0
-        if coroutine.running() ~= nil and RF.yielding then coroutine.yield() end
+        if RF.yielding and coroutine.running() ~= nil then
+            local now = clock()
+            if now == nil or RF.sliceStart == nil or now - RF.sliceStart >= RF.SLICE then
+                coroutine.yield()
+                RF.sliceStart = clock()
+            end
+        end
     end
 end
 

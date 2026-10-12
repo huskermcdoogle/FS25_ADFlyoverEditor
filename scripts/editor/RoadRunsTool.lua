@@ -27,7 +27,7 @@ E.TOOL_NAMES[E.TOOL.ROADRUNS] = "road runs"
 E.ROADRUNS_WINDOW = 384            -- metres a side of the ground read round the mouse
 E.ROADRUNS_RECENTRE = 96           -- the window moves when the mouse is this far from its middle
 E.ROADRUNS_SNAP = 32               -- window centres snap to this grid, so a small wobble re-uses it
-E.ROADRUNS_SAMPLES_PER_FRAME = 2500
+E.ROADRUNS_SAMPLES_PER_FRAME = 4000 -- cap; reads stop sooner once the frame's time slice is used
 E.ROADRUNS_MIN_LANE_GAP = 3.3      -- two passing rigs ~2.8-3.0 m wide need about this between lane centres
 E.ROADRUNS_JOIN_RADIUS = 10        -- how far a run's end looks for an existing path to join
 E.ROADRUNS_MODE_NAMES = { "auto", "one-way", "two-way", "two lanes" }
@@ -212,7 +212,13 @@ function E:updateRoadRuns(overPanel)
         if missing > 0 then
             local total = self.ROADRUNS_WINDOW * self.ROADRUNS_WINDOW
             s.progress = 0.8 * (1 - missing / total)
-            RF.cacheStep(s.cache, self.ROADRUNS_SAMPLES_PER_FRAME)
+            -- a time slice of ground reads, in small batches, never more than the per-frame cap
+            local t0, done = RF.clock(), 0
+            repeat
+                local finished = RF.cacheStep(s.cache, 250)
+                done = done + 250
+                local now = RF.clock()
+            until finished or done >= self.ROADRUNS_SAMPLES_PER_FRAME or (t0 ~= nil and now ~= nil and now - t0 >= RF.SLICE)
             return
         end
         local kinds = {}
@@ -229,6 +235,7 @@ function E:updateRoadRuns(overPanel)
         s.progress = 0.85
     end
     if s.job ~= nil then
+        RF.sliceStart = RF.clock()
         local ok, result = coroutine.resume(s.job)
         if not ok then
             Logging.error("[FlyoverEditor]: road runs - reading the roads failed: %s", tostring(result))
