@@ -79,6 +79,13 @@ function ADFlyoverEditor:setTool(tool)
     -- Picking a tool always brings its card back: middle-click hides the CURRENT tool's card to work
     -- under it, but switching tools should not carry that hidden state onto the next one.
     self.cardHidden = false
+    -- The junction turn radius is saved with the settings but was never read back: it started at
+    -- 12 m every session, whatever was saved. Read once, the first time the junction tool opens.
+    if tool == self.TOOL.JUNCTION and not self.junctionTurnRadiusLoaded and ADFlyoverSettings ~= nil then
+        self.junctionTurnRadiusLoaded = true
+        local saved = ADFlyoverSettings.get("junctionTurnRadius")
+        if type(saved) == "number" then self.junctionTurnRadius = saved end
+    end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: tool -> %s", self.TOOL_NAMES[tool] or "none")
 end
 

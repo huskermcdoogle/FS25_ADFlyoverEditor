@@ -979,11 +979,9 @@ function ADFlyoverHud:buildRows(editor)
                 add("note", "point where roads cross")
             end        else
         -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
-        addWheelNumber("search radius", string.format("%.0f m", editor:junctionRadiusValue()))
-        add("number", "turn radius", string.format("%.0f m", editor.junctionTurnRadius or 12))
-        rows[#rows].stepAction = function(dir)
-            editor:setJunctionTurnRadius((editor.junctionTurnRadius or 12) + dir * AutoDrive.FLYOVER_JUNCTION_TURN_STEP)
-        end
+        -- Typed boxes with steppers (getEditableNumbers), like every other tool's numbers.
+        numberAfter("search radius")
+        numberAfter("turn radius")
         add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
             function() editor:toggleJunctionCheckSurface() end)
         add("toggle", "trim/extend", (editor.junctionExtendTrim ~= false) and "on" or "off (clamp at trim)", false,
@@ -1010,20 +1008,8 @@ function ADFlyoverHud:buildRows(editor)
                 add("toggle", g.short or tostring(key), value, false, function() editor:toggleJunctionRig(key) end)
             end
         end
-        add("number", "corridor", string.format("%.1f m", editor.junctionCorridor or 4))
-        rows[#rows].stepAction = function(dir)
-            editor.junctionCorridor = math.max(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MIN,
-                math.min(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MAX,
-                    (editor.junctionCorridor or 4) + dir * AutoDrive.FLYOVER_JUNCTION_CORRIDOR_STEP))
-            editor.junctionPreviewKey = nil
-        end
-        add("number", "clearance", string.format("%.1f m", editor.junctionClearance or 5))
-        rows[#rows].stepAction = function(dir)
-            editor.junctionClearance = math.max(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MIN,
-                math.min(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MAX,
-                    (editor.junctionClearance or 5) + dir * AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP))
-            editor.junctionPreviewKey = nil
-        end
+        numberAfter("corridor")
+        numberAfter("clearance")
         -- WHAT THE ROUTE CHECK SAID ABOUT THE LAST BUILD, as the clear card shows its own check:
         -- display only, named by number, hidden once the network round it is no longer what the build
         -- left (an undo), back after a redo. A build with an extra route is built anyway and marked

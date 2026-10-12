@@ -19,7 +19,7 @@ line when debug logging is on, and the number steppers write none, so "seen used
 | action | all | Build, clear or place. | build | no | 35 builds, 20 clears, 5 places |
 | junction numbers | all | Numbers over the junctions. | on | yes | - |
 | search radius | build, place | How far from the click it looks for the junction's lanes. Clear ignores it (the junction sets its own). Build also grows it to the lane ends a clear cut, up to 30 m. | 15 m | yes | 11 m most (15x), 15 (9x), 14 (7x), 30 (3x), 8 (1x); saved now: 22 m |
-| turn radius | build, place | The size the turns start at; each turn steps down from it until it fits. | 12 m | yes | 6 m most (18x), 5 (9x), 4 (4x), 3 and 7 (2x each); saved now: 11 m |
+| turn radius | build, place | The size the turns start at; each turn steps down from it until it fits. | 12 m | saved, but never read back until 2026-10-11: it started at 12 m every session | 6 m most (18x), 5 (9x), 4 (4x), 3 and 7 (2x each); saved now: 11 m |
 | road check | build | Refuses turns that leave the road surface (asphalt, gravel, dirt). Off: only the radius limits a turn. | on | no | off 2x |
 | trim/extend | build | Lets a turn reach past where a stem was cut back. Off: it stops at the cut. | on | no | off once, on once |
 | existing turns | build | Keep turns already there, or rebuild them. | keep | no | once |
@@ -46,7 +46,8 @@ edge).
 
 Every other tool's numbers are boxes you can click and type into (`getEditableNumbers`,
 `TypedEntry.lua` 26). The junction tool's four - search radius, turn radius, corridor, clearance - were
-never added to that list, so they can only be stepped. It is a small fix: add them to the list.
+never added to that list, so they can only be stepped. **Fixed 2026-10-11:** all four are typed boxes now
+(the radii in whole metres), and the saved turn radius is read back when the tool opens.
 
 ### What the tool already decides by itself
 

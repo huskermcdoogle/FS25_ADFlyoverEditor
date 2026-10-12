@@ -79,6 +79,39 @@ function ADFlyoverEditor:getEditableNumbers()
         return { fieldEntry("strength", "", 0, "smoothStrength", 0, AD.FLYOVER_SMOOTH_MAX, 1, true) }
     end
 
+    if self.tool == self.TOOL.JUNCTION then
+        -- THE JUNCTION TOOL'S NUMBERS, typed as well as stepped (the user, 2026-10-11: "you can't type a
+        -- value into the radius or search boxes" - they were never in this list). Build mode only: clear
+        -- takes its scope from the junction, and place shows none. The two radii are whole metres, as
+        -- they are saved.
+        if self.junctionMode == "clear" or self.junctionMode == "place" then return {} end
+        local function num(label, decimals, get, set, stepBy)
+            return {
+                label = label, unit = "m", decimals = decimals,
+                get = get,
+                apply = function(value) set(value) return get() end,
+                step = function(dir) set(get() + dir * stepBy) end,
+            }
+        end
+        local function inRange(value, lo, hi) return math.max(lo, math.min(hi, value)) end
+        return {
+            num("search radius", 0, function() return editor:junctionRadiusValue() end,
+                function(v) editor:setJunctionRadius(math.floor(v + 0.5)) end, AD.FLYOVER_JUNCTION_RADIUS_STEP),
+            num("turn radius", 0, function() return editor.junctionTurnRadius or 12 end,
+                function(v) editor:setJunctionTurnRadius(math.floor(v + 0.5)) end, AD.FLYOVER_JUNCTION_TURN_STEP),
+            num("corridor", 1, function() return editor.junctionCorridor or 4 end,
+                function(v)
+                    editor.junctionCorridor = inRange(v, AD.FLYOVER_JUNCTION_CORRIDOR_MIN, AD.FLYOVER_JUNCTION_CORRIDOR_MAX)
+                    editor.junctionPreviewKey = nil
+                end, AD.FLYOVER_JUNCTION_CORRIDOR_STEP),
+            num("clearance", 1, function() return editor.junctionClearance or 5 end,
+                function(v)
+                    editor.junctionClearance = inRange(v, AD.FLYOVER_JUNCTION_CLEARANCE_MIN, AD.FLYOVER_JUNCTION_CLEARANCE_MAX)
+                    editor.junctionPreviewKey = nil
+                end, AD.FLYOVER_JUNCTION_CLEARANCE_STEP),
+        }
+    end
+
     if self.tool == self.TOOL.SIDING then
         -- Both persist, so a siding shape settled on once stays settled. The wheel drives the
         -- length because that is what changes per site; the offset is typed here.
