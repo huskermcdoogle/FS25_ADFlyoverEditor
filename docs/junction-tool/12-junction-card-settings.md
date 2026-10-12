@@ -97,3 +97,17 @@ advanced  >
 3. The vehicle set's default (today: small and big must fit).
 4. Through roads kept by default?
 5. Typing into the numbers: fix it now, whatever else is decided.
+
+## Decided (2026-10-11)
+
+- **Typing into the numbers:** done (c400220), with the saved turn radius read back.
+- **The action row:** clear | build | clear + build, starting on clear + build. The user wants the choice
+  kept; one row of three adds nothing over today's build | clear | place.
+- **Place:** the user wants to discuss whether it goes. Proposed: once build lays the mod's pattern
+  wherever it fits, place does the same job and goes; the mod / smooth shape choice moves under advanced.
+- **The pattern:** the user leans to a mod-like pattern for every built or placed junction. Why it was not
+  used on the test course: the mod's pattern anchors to a road whose lanes run through the middle, and
+  every course junction had its middle emptied (J2 got the plain X: "no main-road lane runs past the side
+  road the right way"; J4 none: "it would leave 6 lane ends loose"). Chosen: **A now** - fit the mod's
+  pieces in more cases (empty middles, other lane gaps, skewed angles) for the release; **B after** - a
+  pattern recipe for every junction kind (T, X, Y, farm tracks, two-way roads), designed together.
