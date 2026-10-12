@@ -235,7 +235,15 @@ ADFlyoverEditor = {
     -- Rebuild existing turns, OFF by default: on, an existing connection whose path leaves the road
     -- skeleton (an old connector) is deleted and laid fresh instead of being kept as "already there".
     junctionRebuild = false,
-    junctionMode = "build",     -- "build" (default) or "clear" - see toggleJunctionMode
+    -- The card's action row (doc 12): clear | build | clear + build, starting on clear + build. Clear +
+    -- build is the clear mode with junctionThenBuild set: the right-click clears and then builds on the
+    -- same lock (applyJunctionClearThenBuild), so every clear-mode test in the tool still holds for it.
+    junctionMode = "clear",     -- "build", "clear" or "place" - see setJunctionAction
+    junctionThenBuild = true,
+    -- Build, when the pattern (junctionPattern, mod or smooth) won't fit the junction: "turns" lays it
+    -- turn by turn, as the build always has; "refuse" builds nothing and says why. Under advanced.
+    junctionNoFit = "turns",
+    junctionAdvancedOpen = false, -- the card's "advanced" fold
     junctionLeaveThrough = true, -- clear mode: spare through wiring at a T / 4-way (see debris pass)
     -- Connector curve engine: Dubins (default - radius-bounded pose-to-pose via AutoDrive's own
     -- ADDubins) or the tangent biarc (also the automatic fallback when Dubins declines).

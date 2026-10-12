@@ -1409,6 +1409,44 @@ function ADFlyoverEditor:junctionDropTwinTwoWay()
     return gone
 end
 
+--- CLEAR + BUILD (doc 12): the card's third action. The clear the locked preview shows, then the build on
+--- the same lock - as the harness has always done it (lock, clear, lock again in build mode, build) - and
+--- the two under ONE undo. On a junction that is already clear the preview is the build's (see
+--- updateJunctionPreview) and only the build runs. False when neither found anything to do.
+function ADFlyoverEditor:applyJunctionClearThenBuild()
+    if self.junctionArmed == nil then return false end
+    -- Whether each half changed anything is read off the undo stack: both put the graph before them
+    -- on it once they change something, and nothing when they do not (a build refused, say).
+    local stack = ADEditorHistory.stack
+    local top0 = stack[#stack]
+    local jp = self.junctionPreview
+    if jp ~= nil and jp.clearMode and self:junctionHasWork(jp) then
+        self:applyJunction()
+    end
+    local clearEntry = stack[#stack]
+    if clearEntry == top0 then clearEntry = nil end
+    local cleared = clearEntry ~= nil
+    -- THE BUILD, ON THE SAME LOCK: the preview worked out afresh in build mode on what the clear left.
+    local mode0 = self.junctionMode
+    self.junctionMode = "build"
+    self.junctionPreview, self.junctionPreviewKey = nil, nil
+    tryCall("junction clear + build: the build's preview", function() self:updateJunctionPreview() end)
+    local bjp = self.junctionPreview
+    local top1 = stack[#stack]
+    if bjp ~= nil and not bjp.clearMode and self:junctionHasWork(bjp) then
+        -- Wrapped, so a fault in the build can never leave the card stuck in build mode.
+        tryCall("junction clear + build: the build", function() self:applyJunction() end)
+    end
+    local built = stack[#stack] ~= top1
+    self.junctionMode = mode0
+    if cleared and built then ADEditorHistory:foldOnto(clearEntry) end
+    -- Always logged, one line per right-click: the in-game test plan ticks itself from it.
+    Logging.info("[FlyoverEditor]: junction clear + build - %s, %s%s.",
+        cleared and "cleared" or "nothing to clear", built and "built" or "nothing to build",
+        (cleared and built) and " (one undo takes back both)" or "")
+    return cleared or built
+end
+
 function ADFlyoverEditor:applyJunction()
     local jp = self.junctionPreview
     if jp == nil then return end
@@ -1421,7 +1459,19 @@ function ADFlyoverEditor:applyJunction()
         return
     end
     -- Where the mod's pattern fits every road, the build lays it (junctionBuildAsPattern, doc 09).
-    if AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false and self:junctionBuildAsPattern(jp) then return end
+    if AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false then
+        if self:junctionBuildAsPattern(jp) then return end
+        -- WHERE IT WON'T FIT, the card's advanced setting says what happens (doc 12): the turn-by-turn
+        -- build below, or nothing at all, said on the card and in the log.
+        if self.junctionNoFit == "refuse" then
+            local why = tostring(self.junctionLastPatternWhy or "it does not fit")
+            Logging.info("[FlyoverEditor]: junction build refused - the %s pattern won't fit here (%s), and 'if the pattern won't fit' is set to refuse.",
+                (self.junctionPattern == "smooth") and "smooth" or "mod", why)
+            self:junctionBuildCheckKeep({ card = { "Build refused: the pattern won't fit", why },
+                number = jp.junctionNumber, x = jp.cx, z = jp.cz })
+            return
+        end
+    end
     -- A build changes the network just as a clear does, so it is captured the same way: the point of
     -- the numbered folders is to follow a SEQUENCE, and a sequence with the builds missing from it
     -- cannot be replayed.
@@ -1845,7 +1895,10 @@ function ADFlyoverEditor:applyWheelToActiveTool(step)
         -- of the road, and letting a wheel decide it meant the same click gave different answers.
         -- Clearing takes its scope from the junction now, so there is nothing here to turn. Build
         -- mode still has one - its tie-in and kickout geometry is laid out around it.
-        if self.junctionMode == "clear" then return false end
+        if self.junctionMode == "clear" and not self.junctionThenBuild then return false end
+        -- Only while the search radius is on show: it lives under the card's "advanced" fold now
+        -- (doc 12), and a wheel turning a number nobody can see changed the build unseen.
+        if not self.junctionAdvancedOpen then return false end
         self:setJunctionRadius(self:junctionRadiusValue() + step * AutoDrive.FLYOVER_JUNCTION_RADIUS_STEP)
         return true
     end

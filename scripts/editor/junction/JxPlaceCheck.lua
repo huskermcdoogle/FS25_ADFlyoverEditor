@@ -114,6 +114,52 @@ local function junctionPlaceRouteCheck(res)
     return rc
 end
 
+--- DOES THE PATTERN FIT, dry: the build's own test (junctionBuildAsPattern), asked without laying
+--- anything, so the card can say before the right-click what the build will do (doc 12). Returns the
+--- site and place's plan where the pattern (junctionPattern: mod or smooth) fits every road, else nil
+--- and why not.
+function ADFlyoverEditor:junctionPatternFit(jp)
+    local site = self.junctionSite
+    if site ~= nil and not site.virgin then
+        return nil, nil, "turn wiring is still here"
+    end
+    if site == nil then
+        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place.
+        local bd = 15 * 15
+        for _, e in ipairs(self:junctionRegistry() or {}) do
+            local d = (e.x - jp.cx) ^ 2 + (e.z - jp.cz) ^ 2
+            if d < bd then site, bd = { x = e.x, z = e.z, virgin = true }, d end
+        end
+    end
+    if site == nil then
+        return nil, nil, "no junction place knows here"
+    end
+    local shape = self.junctionPattern or "exact"
+    local ok, res, why = tryCall("junction build: does the pattern fit", function()
+        return junctionPlacePattern(site.x, site.z, 15, shape, true)
+    end)
+    if not ok or res == nil then
+        return nil, nil, tostring(why or "it does not fit")
+    end
+    if #(res.loose or {}) > 0 then
+        return nil, nil, string.format("it would leave %d lane end(s) loose", #res.loose)
+    end
+    -- ONLY A PLAIN TWO-LANE T OR X: the pattern lays 6 movements on a T and 12 on an X, so the junction
+    -- must have exactly those - no more (a T laid on a 4-way left half its routes out: 38, 83 on the
+    -- survey map), no fewer (one-way roads), refused turns counted, as the pattern lays them anyway.
+    -- And never the plain piece on a T: that is place's fallback where the T does not fit, and in game
+    -- it left a road unjoined (43, 2026-10-07).
+    local need = #(jp.movements or {})
+    local lays = (res.kind == "X") and 12 or 6
+    if need ~= lays then
+        return nil, nil, string.format("the junction has %d movement(s), the %s lays %d", need, tostring(res.kind), lays)
+    end
+    if res.shape == "plain" and res.kind ~= "X" then
+        return nil, nil, "only the plain piece would go here"
+    end
+    return site, res
+end
+
 --- Place mode's right-click: lay the X or T the preview worked out, under one undo.
 --- THE BUILD LAYS THE MOD'S PATTERN WHERE IT FITS (the user, 2026-10-02 "build must place the X/T pattern",
 --- and 2026-10-08). The traffic study (doc 09) ran every pair of movements through each layout: the
@@ -125,50 +171,12 @@ end
 --- Returns true when it laid the pattern (the build is done).
 function ADFlyoverEditor:junctionBuildAsPattern(jp)
     self.junctionLastPattern, self.junctionLastPatternWhy = nil, nil
-    local site = self.junctionSite
-    if site ~= nil and not site.virgin then
-        self.junctionLastPatternWhy = "turn wiring is still here"
-        return false
-    end
+    local site, res, why = self:junctionPatternFit(jp)
     if site == nil then
-        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place.
-        local bd = 15 * 15
-        for _, e in ipairs(self:junctionRegistry() or {}) do
-            local d = (e.x - jp.cx) ^ 2 + (e.z - jp.cz) ^ 2
-            if d < bd then site, bd = { x = e.x, z = e.z, virgin = true }, d end
-        end
-    end
-    if site == nil then
-        self.junctionLastPatternWhy = "no junction place knows here"
+        self.junctionLastPatternWhy = why
         return false
     end
     local shape = self.junctionPattern or "exact"
-    local ok, res, why = tryCall("junction build: does the pattern fit", function()
-        return junctionPlacePattern(site.x, site.z, 15, shape, true)
-    end)
-    if not ok or res == nil then
-        self.junctionLastPatternWhy = tostring(why or "it does not fit")
-        return false
-    end
-    if #(res.loose or {}) > 0 then
-        self.junctionLastPatternWhy = string.format("it would leave %d lane end(s) loose", #res.loose)
-        return false
-    end
-    -- ONLY A PLAIN TWO-LANE T OR X: the pattern lays 6 movements on a T and 12 on an X, so the junction
-    -- must have exactly those - no more (a T laid on a 4-way left half its routes out: 38, 83 on the
-    -- survey map), no fewer (one-way roads), refused turns counted, as the pattern lays them anyway.
-    -- And never the plain piece on a T: that is place's fallback where the T does not fit, and in game
-    -- it left a road unjoined (43, 2026-10-07).
-    local need = #(jp.movements or {})
-    local lays = (res.kind == "X") and 12 or 6
-    if need ~= lays then
-        self.junctionLastPatternWhy = string.format("the junction has %d movement(s), the %s lays %d", need, tostring(res.kind), lays)
-        return false
-    end
-    if res.shape == "plain" and res.kind ~= "X" then
-        self.junctionLastPatternWhy = "only the plain piece would go here"
-        return false
-    end
     Logging.info("[FlyoverEditor]: junction build - the mod's %s %s fits every road here, so it is laid as the pattern (the traffic study, doc 09).",
         tostring(res.shape), tostring(res.kind))
     self.junctionPreview = { placeMode = true, cx = site.x, cz = site.z, shape = shape, ok = true, plan = res }

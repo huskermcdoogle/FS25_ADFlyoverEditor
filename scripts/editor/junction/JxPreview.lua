@@ -110,6 +110,19 @@ function ADFlyoverEditor:updateJunctionPreview()
         -- where inside it the click landed - and where it is pointing at nothing, the clear REFUSES
         -- and says why rather than working on whatever happens to be nearby.
         local site, why = self:junctionSelect(cx, cz)
+        -- CLEAR + BUILD WITH NOTHING TO CLEAR (doc 12): a junction already clear - which the
+        -- selection may not even see as one any more (a cleared T reads "the nearest junction is 61 m
+        -- away") - goes straight to the build: the preview is the build's, which finds its junction
+        -- its own way.
+        if self.junctionThenBuild and (site == nil or site.virgin) then
+            self.junctionMode = "build"
+            tryCall("junction clear + build: nothing to clear, the build's preview", function()
+                self:updateJunctionPreview()
+            end)
+            self.junctionMode = "clear"
+            if self.junctionPreview ~= nil then self.junctionPreview.nothingToClear = true end
+            return
+        end
         -- ALREADY CLEAR IS A REFUSAL TOO. A virgin junction - lane ends facing each other, nothing
         -- joining them - has no wiring to take out, and what a second clear finds to remove there is
         -- the lanes' own rebuilt ends. It used to be refused by accident, because the selection
@@ -2666,6 +2679,17 @@ function ADFlyoverEditor:updateJunctionPreview()
         sweptMax = sweptMax, nSweptWide = nSweptWide, nTrailerRoad = nTrailerRoad, nTrailerHit = nTrailerHit,
         nSweep = nSweep, sweepMax = sweepMax, rigFits = rigFits,
     }
+    -- WHAT THE BUILD WILL LAY, said on the card before the right-click (doc 12): the pattern (mod or
+    -- smooth) where it fits, else why not. Worked out dry, and only on a locked site - the preview
+    -- follows the cursor otherwise, and this asks place for a whole plan.
+    if not clearMode and self.junctionArmed ~= nil and AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false then
+        tryCall("junction build: pattern fit for the card", function()
+            local site, res, why = self:junctionPatternFit(self.junctionPreview)
+            self.junctionPreview.patternFit = (site ~= nil)
+                and { ok = true, kind = res.kind, shape = res.shape }
+                or { ok = false, why = why }
+        end)
+    end
     -- Run the lane-end tidy in DRY mode and keep what it says: where each end would land, and the
     -- claim bands it measured against. Drawn below, so the site can be judged on screen before
     -- right-clicking instead of inferred afterwards from a log. It mutates nothing.

@@ -111,3 +111,21 @@ advanced  >
   road the right way"; J4 none: "it would leave 6 lane ends loose"). Chosen: **A now** - fit the mod's
   pieces in more cases (empty middles, other lane gaps, skewed angles) for the release; **B after** - a
   pattern recipe for every junction kind (T, X, Y, farm tracks, two-way roads), designed together.
+- **The short card (from two clickable mocks):**
+  - Each action's options sit right under the action row: clear has "through roads"; build has
+    "shape: pattern | smooth" and "must fit"; clear + build has all three. The user: "through roads kept
+    is a dependent for clear, must fit is a dependent for clear+build and build".
+  - **Shape is on the short card,** not under advanced: "smooth/pattern ... needs to be at this level".
+  - Then: junction, will do, turns (radius the tool picked, or yours), last build, and the go button.
+  - **Advanced:** search radius and turn radius (blank = the tool picks), road check, obstacles, swept
+    path, old turns, corridor (from the rigs), debug capture, counters, and **"if the pattern won't fit:
+    smooth | refuse"** - the user: "fallback or refuse should be an advanced setting". Default: smooth.
+  - Gone: curve type, trim/extend, the report counters on the card face.
+- **Built (2026-10-11):** the short card as above. Shape reuses place's two shapes ("mod", "smooth" -
+  both the X/T pattern), and "pattern won't fit" chooses between the turn-by-turn build (default) and
+  refuse. Clear + build is one right-click and one undo; on a junction with nothing wired it goes straight
+  to the build. The card says before the right-click what the build will lay (the pattern fit is checked
+  dry on a locked site). Not built yet: "blank = the tool picks" for the two radii (they stay typed
+  numbers under advanced), corridor and clearance from the rigs, and the mouse wheel turns the search
+  radius only while advanced is open. Place is off the action row; its code stays until step A is done.
+  Offline: `tools/junction-harness/dbgcard.lua` prints the card's rows for any junction and action.

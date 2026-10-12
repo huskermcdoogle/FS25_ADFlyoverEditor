@@ -83,8 +83,10 @@ function ADFlyoverEditor:getEditableNumbers()
         -- THE JUNCTION TOOL'S NUMBERS, typed as well as stepped (the user, 2026-10-11: "you can't type a
         -- value into the radius or search boxes" - they were never in this list). Build mode only: clear
         -- takes its scope from the junction, and place shows none. The two radii are whole metres, as
-        -- they are saved.
-        if self.junctionMode == "clear" or self.junctionMode == "place" then return {} end
+        -- they are saved. Under the card's "advanced" fold (doc 12), so only while it is open, and only
+        -- where something is built (build, or clear + build).
+        if not self.junctionAdvancedOpen or self.junctionMode == "place"
+            or (self.junctionMode == "clear" and not self.junctionThenBuild) then return {} end
         local function num(label, decimals, get, set, stepBy)
             return {
                 label = label, unit = "m", decimals = decimals,
@@ -449,11 +451,58 @@ function ADFlyoverEditor:toggleJunctionMode()
     -- build -> clear -> place (doc 08: place a whole X or T in one click) -> build.
     local nextMode = { build = "clear", clear = "place", place = "build" }
     self.junctionMode = nextMode[self.junctionMode or "build"] or "build"
+    self.junctionThenBuild = false
     self.junctionPreviewKey = nil
     self.junctionPreview = nil
     local said = { build = "build (lays new turns)", clear = "clear (removes old wiring, leaves the roads)",
         place = "place (lays a whole X or T where roads cross)" }
     Logging.info("[FlyoverEditor]: junction tool set to %s.", said[self.junctionMode])
+end
+
+--- The card's action row (doc 12): "clear", "build" or "both" (clear + build: clear mode, then the
+--- build on the same lock - see applyJunctionClearThenBuild). The lock stays: the same junction, a
+--- different job.
+function ADFlyoverEditor:setJunctionAction(action)
+    if action == "both" then
+        self.junctionMode, self.junctionThenBuild = "clear", true
+    elseif action == "clear" or action == "build" then
+        self.junctionMode, self.junctionThenBuild = action, false
+    else
+        return
+    end
+    self.junctionPreviewKey = nil
+    self.junctionPreview = nil
+    local said = { build = "build (lays new turns)", clear = "clear (removes old wiring, leaves the roads)",
+        both = "clear + build (clears, then builds on the same lock)" }
+    Logging.info("[FlyoverEditor]: junction tool set to %s.", said[action])
+end
+
+--- Which action the card's row shows lit: "clear", "build", "both" or "place".
+function ADFlyoverEditor:junctionAction()
+    local mode = self.junctionMode or "build"
+    if mode == "clear" and self.junctionThenBuild then return "both" end
+    return mode
+end
+
+--- Build's shape (doc 12, on the card): "exact" (the mod's X or T) or "smooth" (the same pattern with
+--- curves).
+function ADFlyoverEditor:setJunctionPattern(shape)
+    if shape ~= "exact" and shape ~= "smooth" then return end
+    self.junctionPattern = shape
+    self.junctionPreviewKey = nil
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction build layout: %s.", self.junctionPattern)
+end
+
+--- Advanced: what the build does where the pattern won't fit - "turns" (turn by turn) or "refuse".
+function ADFlyoverEditor:toggleJunctionNoFit()
+    self.junctionNoFit = (self.junctionNoFit == "refuse") and "turns" or "refuse"
+    self.junctionPreviewKey = nil
+    Logging.info("[FlyoverEditor]: junction build - if the pattern won't fit: %s.",
+        (self.junctionNoFit == "refuse") and "refuse" or "build turn by turn")
+end
+
+function ADFlyoverEditor:toggleJunctionAdvanced()
+    self.junctionAdvancedOpen = not self.junctionAdvancedOpen
 end
 
 --- Clear mode only: at a T or a 4-way, the wiring that carries a road STRAIGHT THROUGH the crossing

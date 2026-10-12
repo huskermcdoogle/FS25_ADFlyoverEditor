@@ -3,18 +3,18 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="farm tracks: two-way turns, two-way to the road" build="@BUILD@">
+<testPlan title="the short junction card" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="clear101" title="Junction 101 clears" passLog="one shared point of %d+ two%-way tracks"
-          hint="Lock 101: the line at the bottom of the screen says one shared point of farm tracks. Right-click: the south track comes off the shared point and the west to north-east track stays whole. Ticks itself from the log."/>
-    <test id="twoway101" title="101 builds with two-way turns"
-          passLog="touching a two%-way road laid two%-way"
-          failLog="turn%(s%) we laid cannot be driven"
-          hint="Build 101 with a 6 m turn radius: two two-way turns, meeting the south track at one point. No lines on top of each other. Ticks itself from the log."/>
-    <test id="toroad" title="Farm-track turns are two-way out to the road"
-          passLog="touching a two%-way road laid two%-way"
-          hint="Build 99 or 100 (or clear and build 4): every turn is two-way out to the road, only its link onto or off a lane is one-way, and no old end of the track is left lying beside the new turns. Ticks itself from the log; look at it too."/>
+    <test id="clearbuild" title="Clear + build in one right-click"
+          passLog="junction clear %+ build %- cleared, built"
+          hint="The junction card opens on clear + build. Lock a wired T of two-lane roads (7 or 33), read what the card says it will do, right-click. Q once should take back both. Ticks itself from the log."/>
+    <test id="smooth" title="Shape smooth lays the smooth pattern"
+          passLog="the mod's smooth"
+          hint="Undo, pick shape: smooth under the action row, lock the same T and right-click. Ticks itself from the log."/>
+    <test id="refuse" title="Refuse when the pattern won't fit"
+          passLog="junction build refused %- the"
+          hint="Open advanced and set pattern won't fit to refuse. Clear + build farm junction 101: nothing is built, and the card says why. Ticks itself from the log."/>
     <test id="drivable" title="Builds come out drivable"
           passLog="AutoDrive can take through here, all of them turns we meant"
           failLog="turn%(s%) we laid cannot be driven"

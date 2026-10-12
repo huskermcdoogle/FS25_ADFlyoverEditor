@@ -229,6 +229,10 @@ function M.lock(cx, cz, opts)
     LOG = {}
     E.tool = E.TOOL.JUNCTION
     E.junctionMode = opts.mode or "clear"
+    -- Clear + build (doc 12) is the card's default in game; here a clear lock stays a plain clear unless
+    -- asked (thenBuild = true), so every script that locks, clears and builds by hand runs as before.
+    E.junctionThenBuild = opts.thenBuild == true
+    E.junctionNoFit = opts.noFit or "turns"
     E.junctionLeaveThrough = (opts.leaveThrough ~= false)
     E.junctionRadius = opts.radius or 15
     E.junctionTurnRadius = opts.turnRadius or tonumber(os.getenv("TURNR") or "") or 12

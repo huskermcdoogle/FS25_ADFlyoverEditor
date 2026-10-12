@@ -55,7 +55,8 @@ function ADFlyoverEditor:junctionClick()
                 AutoDrive.FLYOVER_JUNCTION_CLEAR_SCOPE or 14)
             or string.format("search radius %.0f m, wheel = scope", self:junctionRadiusValue()),
         self.junctionTurnRadius or 12,
-        self.junctionMode or "build", (self.junctionMode == "clear") and "clears" or "places")
+        (self:junctionAction() == "both") and "clear + build" or (self.junctionMode or "build"),
+        (self:junctionAction() == "both") and "clears and builds" or ((self.junctionMode == "clear") and "clears" or "places"))
     if self.junctionMode == "place" then
         self.junctionPreview = nil
     end

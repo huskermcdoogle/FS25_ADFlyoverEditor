@@ -165,6 +165,20 @@ function ADEditorHistory:commit(entry)
     return true
 end
 
+--- Fold every entry above `entry` into it, so one undo takes back a pair of actions done as one (the
+--- junction tool's clear + build). An entry is the graph BEFORE its action, so keeping the lowest keeps
+--- the graph from before the first. False when `entry` is no longer on the stack.
+function ADEditorHistory:foldOnto(entry)
+    if entry == nil then return false end
+    for i = #self.stack, 1, -1 do
+        if self.stack[i] == entry then
+            while #self.stack > i do table.remove(self.stack) end
+            return true
+        end
+    end
+    return false
+end
+
 function ADEditorHistory:canUndo()
     return #self.stack > 0
 end

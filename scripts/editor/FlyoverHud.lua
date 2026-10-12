@@ -823,280 +823,248 @@ function ADFlyoverHud:buildRows(editor)
                 end
             end
         end
-        -- First row always: which job the tool is doing. "clear" reuses everything build does to
-        -- find a site's own runs and old wiring, but shows a much shorter card - none of the turn-
-        -- solving settings below apply when nothing is being laid.
-        add("toggle", "action", editor.junctionMode or "build", false,
-            function() editor:toggleJunctionMode() end)
-        -- The numbers over every junction in view (drawJunctionNumbers). Kept between sessions.
-        add("toggle", "junction numbers", (ADFlyoverSettings.get("junctionShowNumbers") ~= false) and "on" or "off", false,
-            function() ADFlyoverSettings.cycle("junctionShowNumbers", 1) end)
-        if editor.junctionMode == "clear" then
-            -- No scope row, and the wheel does nothing here. What belongs to a junction is a
-            -- property of the road; a number the user could turn only meant the same click gave
-            -- different answers each time.
-            add("toggle", "leave through paths", (editor.junctionLeaveThrough ~= false) and "on" or "off", false,
+        -- A note row is one line and does not wrap: a longer sentence goes over several.
+        local function notes(text)
+            local line = ""
+            for word in tostring(text):gmatch("%S+") do
+                if #line + #word + 1 > 42 and #line > 0 then
+                    add("note", line)
+                    line = word
+                else
+                    line = (#line > 0) and (line .. " " .. word) or word
+                end
+            end
+            if #line > 0 then add("note", line) end
+        end
+        -- THE SHORT CARD (doc 12, agreed 2026-10-11 from two clickable mocks): the action row; straight
+        -- under it, the options that belong to the action picked (the user: "through roads kept is a
+        -- dependent for clear, must fit is a dependent for clear+build and build", and the shape "needs
+        -- to be at this level, not advanced"); then what the tool found and will do; the rest under
+        -- "advanced", closed by default. Place is not on the row: build lays the pattern now.
+        local action = editor:junctionAction()
+        local clears = (action == "clear" or action == "both")
+        local builds = (action == "build" or action == "both")
+        seg("action", {
+            { label = "clear", active = (action == "clear"), action = function() editor:setJunctionAction("clear") end },
+            { label = "build", active = (action == "build"), action = function() editor:setJunctionAction("build") end },
+            { label = "clear + build", active = (action == "both"), action = function() editor:setJunctionAction("both") end },
+        })
+        if clears then
+            add("toggle", "through roads", (editor.junctionLeaveThrough ~= false) and "kept" or "cleared", false,
                 function() editor:toggleJunctionLeaveThrough() end)
-            -- ON THE CARD, not in a menu: it writes a copy of the whole network on every change, so
-            -- it has to be plain that it is running and plain how to stop it. The count is shown
-            -- because "on" alone does not tell you it is actually managing to write anything.
+            rows[#rows].dep = true
+        end
+        if builds then
+            seg("shape", {
+                { label = "mod", active = (editor.junctionPattern ~= "smooth"), action = function() editor:setJunctionPattern("exact") end },
+                { label = "smooth", active = (editor.junctionPattern == "smooth"), action = function() editor:setJunctionPattern("smooth") end },
+            })
+            rows[#rows].dep = true
+            -- THE VEHICLE SET: which rigs every turn must fit. Only while the swept check runs.
+            if editor.junctionSwept ~= false and editor.junctionDesignRigs ~= nil then
+                local opts = {}
+                for _, g in ipairs(editor:junctionDesignRigs(true)) do
+                    local key = g.key
+                    opts[#opts + 1] = { label = g.short or tostring(key), active = editor:junctionRigOn(key),
+                        action = function() editor:toggleJunctionRig(key) end }
+                end
+                if #opts > 0 then
+                    seg("must fit", opts)
+                    rows[#rows].dep = true
+                end
+            end
+        end
+
+        local jp = editor.junctionPreview
+        local leave = editor.junctionLeaveThrough ~= false
+        if jp == nil then
+            -- A REFUSAL HAS TO SAY SO: with no site the card would otherwise look like the tool had
+            -- stopped working, and "that is not a junction" is a useful answer.
+            if editor.junctionRefused ~= nil then
+                add("toggle", "no junction here", "")
+                notes(editor.junctionRefused)
+            else
+                add("note", "point at a junction")
+            end
+        else
+            -- WHICH junction and WHAT KIND, on rows of their own: together they ran back through
+            -- their own label.
+            if jp.clearMode or jp.junctionNumber ~= nil or jp.junctionState ~= nil then
+                add("toggle", "junction", junctionLabel(jp))
+                if jp.junctionType ~= nil then
+                    add("toggle", "type", tostring(jp.junctionType))
+                elseif jp.junctionState ~= nil then
+                    add("toggle", "state", tostring(jp.junctionState))
+                end
+                junctionDecisionRows(jp)
+            elseif editor.junctionRefused ~= nil then
+                add("toggle", "free placement", "")
+                notes(editor.junctionRefused)
+            end
+            -- WHAT THE RIGHT-CLICK WILL DO.
+            if jp.clearMode then
+                local doomed = (leave and jp.turnDebris or jp.debris) or {}
+                local boxed = (type(jp.boxSweep) == "table") and #jp.boxSweep or 0
+                local n = #doomed + boxed
+                local cut = (n == 0) and editor:junctionOnePointCut(jp, leave) or 0
+                local clearText = "nothing to clear"
+                if n > 0 then
+                    clearText = string.format("clear %d point(s)", n)
+                elseif cut > 0 then
+                    clearText = string.format("cut %d track(s) off", cut)
+                end
+                add("toggle", "will do", clearText)
+                if builds then add("toggle", "then", "build") end
+                -- Said plainly: without a box the clear cannot empty the middle, and it looks half done.
+                if jp._box == nil then
+                    add("toggle", "no box here", "")
+                    add("note", "its roads do not cross at an angle a box can be made from")
+                end
+            else
+                local fit = jp.patternFit
+                local buildText
+                if fit == nil then
+                    buildText = string.format("%d new turn(s)", jp.nNew or 0)
+                elseif fit.ok then
+                    local shapeName = "mod's"
+                    if fit.shape == "smooth" then shapeName = "smooth" elseif fit.shape == "plain" then shapeName = "plain" end
+                    buildText = string.format("lay the %s %s", shapeName, tostring(fit.kind))
+                elseif editor.junctionNoFit == "refuse" then
+                    buildText = "nothing - no pattern fits"
+                else
+                    buildText = string.format("%d turn(s), turn by turn", jp.nNew or 0)
+                end
+                add("toggle", "will do", buildText)
+                if jp.nothingToClear then add("note", "nothing to clear here") end
+                if fit == nil then
+                    add("note", "lock it to see if the pattern fits")
+                elseif not fit.ok then
+                    notes("the pattern won't fit: " .. tostring(fit.why))
+                end
+            end
+            -- THE TURNS: the radius the solve used (it steps down from the turn radius until a turn
+            -- fits), and on a locked site how many of the turns fit each rig.
+            if builds then
+                if not jp.clearMode and jp.usedMin ~= nil and jp.usedMax ~= nil then
+                    local used = string.format("radius %.0f-%.0f m", jp.usedMin, jp.usedMax)
+                    if jp.usedMin == jp.usedMax then used = string.format("radius %.0f m", jp.usedMin) end
+                    add("toggle", "turns", used)
+                else
+                    add("toggle", "turns", string.format("from %.0f m, steps down", editor.junctionTurnRadius or 12))
+                end
+                local fits = nil
+                if not jp.clearMode then fits = jp.rigFits end
+                if fits ~= nil and editor.junctionDesignRigs ~= nil then
+                    local parts = {}
+                    for _, g in ipairs(editor:junctionDesignRigs(true)) do
+                        local f = fits[g.key]
+                        if editor:junctionRigOn(g.key) and f ~= nil and f.total > 0 then
+                            parts[#parts + 1] = string.format("%s %d/%d", TR(g.short or tostring(g.key)), f.fit, f.total)
+                        end
+                    end
+                    if #parts > 0 then add("toggle", "fit", table.concat(parts, ", ")) end
+                end
+                if not jp.clearMode then
+                    local refused = (jp.nTight or 0) + (jp.nNoCurve or 0) + (jp.nBlocked or 0)
+                        + (jp.nTrailerRoad or 0) + (jp.nTrailerHit or 0)
+                    if editor.junctionCheckSurface ~= false then refused = refused + (jp.nOffRoad or 0) end
+                    if refused > 0 then
+                        add("toggle", "refused", string.format("%d turn(s)", refused))
+                        add("note", "advanced says why")
+                    end
+                end
+            end
+        end
+        -- WHAT THE CHECKS SAID LAST TIME, display only, named by number since the cursor is usually on
+        -- the next junction by then; hidden once the network round it is no longer what was left (an
+        -- undo), back after a redo.
+        if clears then
+            local lastCheck = editor:junctionLastCheckShown()
+            if lastCheck ~= nil and lastCheck.card ~= nil then
+                local name = lastCheck.name
+                if name == nil and lastCheck.number ~= nil then name = string.format("j%02d", lastCheck.number) end
+                if name == nil then name = string.format("%.0f, %.0f", lastCheck.x or 0, lastCheck.z or 0) end
+                add("toggle", "last clear", name)
+                for _, line in ipairs(lastCheck.card) do add("note", line) end
+            end
+        end
+        if builds then
+            local lastBuild = editor.junctionLastBuildShown and editor:junctionLastBuildShown()
+            if lastBuild ~= nil and lastBuild.card ~= nil then
+                local name = string.format("%.0f, %.0f", lastBuild.x or 0, lastBuild.z or 0)
+                if lastBuild.number ~= nil then name = string.format("j%02d", lastBuild.number) end
+                add("toggle", "last build", name)
+                for _, line in ipairs(lastBuild.card) do add("note", line) end
+            end
+        end
+
+        -- ADVANCED: everything else, closed by default.
+        add("toggle", "advanced", editor.junctionAdvancedOpen and "hide" or "show", false,
+            function() editor:toggleJunctionAdvanced() end)
+        if editor.junctionAdvancedOpen then
+            if builds then
+                -- Typed boxes with steppers (getEditableNumbers), like every other tool's numbers.
+                numberAfter("search radius")
+                numberAfter("turn radius")
+                add("toggle", "pattern won't fit", (editor.junctionNoFit == "refuse") and "refuse" or "turn by turn", false,
+                    function() editor:toggleJunctionNoFit() end)
+                add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
+                    function() editor:toggleJunctionCheckSurface() end)
+                add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
+                    function() editor:toggleJunctionCheckObstacles() end)
+                add("toggle", "swept path", (editor.junctionSwept ~= false) and "on" or "off", false,
+                    function() editor:toggleJunctionSwept() end)
+                add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
+                    function() editor:toggleJunctionRebuild() end)
+                numberAfter("corridor")
+                numberAfter("clearance")
+            end
+            -- It writes a copy of the whole network on every change, so it has to be plain that it is
+            -- running; the count says it is actually managing to write.
             do
                 local capOn = AutoDrive.FLYOVER_DEBUG_CAPTURE == true
                 local where, n = editor:debugCaptureWhere()
                 add("toggle", "debug capture", capOn and string.format("on  -  %d saved", n or 0) or "off", false,
                     function() editor:toggleJunctionDebugCapture() end)
-                if capOn and where == nil then
-                    add("note", "nowhere to write yet - save the game once")
+                if capOn and where == nil then add("note", "nowhere to write yet - save the game once") end
+            end
+            -- The numbers over every junction in view (drawJunctionNumbers). Kept between sessions.
+            add("toggle", "junction numbers", (ADFlyoverSettings.get("junctionShowNumbers") ~= false) and "on" or "off", false,
+                function() ADFlyoverSettings.cycle("junctionShowNumbers", 1) end)
+            -- THE COUNTERS, for finding faults.
+            if jp ~= nil and jp.clearMode then
+                if jp.junctionSituation ~= nil then add("toggle", "situation", tostring(jp.junctionSituation)) end
+                add("toggle", "approaches found", tostring(#(jp.approaches or {})))
+                if leave and #(jp.throughDebris or {}) > 0 then
+                    add("toggle", "through points kept", tostring(#(jp.throughDebris or {})))
                 end
-            end
-            -- WHAT THE CHECK SAID ABOUT THE LAST CLEAR. Display only: the check undoes and refuses
-            -- nothing, and the log has a line for every problem it found. Named by number, because
-            -- once the clear is done the cursor is usually on the next junction already. Hidden
-            -- while the network round that junction is not what the clear left - after an undo of
-            -- the clear, say - since it would be describing a network that is no longer there; back
-            -- again after a redo.
-            local lastCheck = editor:junctionLastCheckShown()
-            if lastCheck ~= nil and lastCheck.card ~= nil then
-                if lastCheck.name ~= nil then
-                    add("toggle", "last clear", lastCheck.name)
-                elseif lastCheck.number ~= nil then
-                    add("toggle", "last clear", string.format("j%02d", lastCheck.number))
-                else
-                    add("toggle", "last clear", string.format("%.0f, %.0f", lastCheck.x or 0, lastCheck.z or 0))
+                add("toggle", "lane ends to box edge", tostring((type(jp.tidyEnds) == "table") and #jp.tidyEnds or 0))
+            elseif jp ~= nil then
+                add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
+                add("toggle", "new movements", tostring(jp.nNew))
+                if (jp.nRebuild or 0) > 0 then add("toggle", "rebuilt existing", tostring(jp.nRebuild)) end
+                add("toggle", "already there", tostring(jp.nExisting))
+                if jp.debris ~= nil and #jp.debris > 0 then add("toggle", "old points to clear", tostring(#jp.debris)) end
+                if (jp.nTight or 0) > 0 then add("toggle", "too tight (refused)", tostring(jp.nTight)) end
+                if (editor.junctionCheckSurface ~= false) and (jp.nOffRoad or 0) > 0 then
+                    add("toggle", "off road (refused)", tostring(jp.nOffRoad))
                 end
-                for _, line in ipairs(lastCheck.card) do
-                    add("note", line)
+                if (jp.nNoCurve or 0) > 0 then add("toggle", "no joinable curve", tostring(jp.nNoCurve)) end
+                if (jp.nBlocked or 0) > 0 then add("toggle", "blocked (refused)", tostring(jp.nBlocked)) end
+                if (jp.nTrailerRoad or 0) > 0 then add("toggle", "rig off road (refused)", tostring(jp.nTrailerRoad)) end
+                if (jp.nTrailerHit or 0) > 0 then add("toggle", "rig hits obstacle (refused)", tostring(jp.nTrailerHit)) end
+                if (jp.nUTurn or 0) > 0 then add("toggle", "skipped as U-turn", tostring(jp.nUTurn)) end
+                if (jp.nFar or 0) > 0 then add("toggle", "too far apart", tostring(jp.nFar)) end
+                if (jp.nLane or 0) > 0 then add("toggle", "redundant lane", tostring(jp.nLane)) end
+                if (jp.nSweep or 0) > 0 then
+                    add("toggle", "laid wide", string.format("%d  (up to %.0f m)", jp.nSweep, jp.sweepMax or 0))
                 end
-            end
-            local cjp = editor.junctionPreview
-            -- A REFUSAL HAS TO SAY SO. With no site there is no preview and nothing on the card,
-            -- which reads exactly like the tool having stopped working - and "that is not a
-            -- junction" is a useful answer, so it is shown rather than left to be guessed at.
-            -- The REASON goes on a line of its own. A toggle row puts its label at the left and its
-            -- value hard against the right, which is fine for "on" and hopeless for a sentence: the
-            -- two ran into each other and printed on top of one another, so neither could be read.
-            if cjp == nil and editor.junctionRefused ~= nil then
-                add("toggle", "no junction here", "")
-                add("note", tostring(editor.junctionRefused))
-            end
-            if cjp ~= nil then
-                -- WHICH junction, and WHAT KIND. The number is the survey's, so a site can be named
-                -- out loud instead of read out as coordinates. The kind is worked out from the site
-                -- as it stands, BEFORE the clear cleans and smooths it, so it can disagree with the
-                -- line in the log afterwards; the log is the one to believe.
-                --
-                -- ON SEPARATE ROWS. Both on one line made a value long enough to run back through
-                -- its own label - "j60  -  4W offset (14 m stagger)" against a label of "junction" -
-                -- and the number is the one thing on this card that has to be readable at a glance,
-                -- since it is how the site gets named out loud afterwards.
-                add("toggle", "junction", junctionLabel(cjp))
-                if cjp.junctionType ~= nil then
-                    add("toggle", "type", tostring(cjp.junctionType))
+                if jp.sweptMax ~= nil then
+                    add("toggle", "trailer cut-in", string.format("%.1f m", jp.sweptMax))
+                    if (jp.nSweptWide or 0) > 0 then add("toggle", "trailer past corridor", tostring(jp.nSweptWide)) end
                 end
-                -- MAYBE MORE THAN ONE JUNCTION: the roads meet in more than one place here, or the
-                -- number is shared with another place roads meet (see junctionPartsNote). The tool
-                -- only suggests; the user decides, with the selector this adds. A row per line: a
-                -- note row is a single line and does not wrap.
-                junctionDecisionRows(cjp)
-                if cjp.junctionSituation ~= nil then
-                    add("toggle", "situation", tostring(cjp.junctionSituation))
-                end
-                -- Said plainly, because without a box the clear cannot empty the middle of the
-                -- junction and the result looks like it half worked.
-                if cjp._box == nil then
-                    add("toggle", "no box here", "")
-                    add("note", "its roads do not cross at an angle a box can be made from")
-                end
-                local cleave = editor.junctionLeaveThrough ~= false
-                local doomed = cleave and cjp.turnDebris or cjp.debris
-                add("toggle", "approaches found", tostring(#(cjp.approaches or {})))
-                -- Plus what the box sweep takes: everything inside the roads' own offset lines, which
-                -- the tidy works out in its dry run. Counted here so the number on the card is the
-                -- number that goes.
-                local boxed = (type(cjp.boxSweep) == "table") and #cjp.boxSweep or 0
-                add("toggle", "will clear", tostring(#(doomed or {}) + boxed))
-                if cleave and #(cjp.throughDebris or {}) > 0 then
-                    add("toggle", "through points kept", tostring(#(cjp.throughDebris or {})))
-                end
-                -- What happens to the ends the clear leaves behind: each is brought onto the edge of
-                -- the box - the parent roads' own offset lines, drawn yellow - and the green spheres
-                -- are where. Counted from the same dry run, so it is the number that will move.
-                local nEnds = (type(cjp.tidyEnds) == "table") and #cjp.tidyEnds or 0
-                add("toggle", "lane ends to box edge", tostring(nEnds))
-            else
-                add("note", "point at a junction")
+                add("toggle", "confidence", string.format("%d%%", math.floor((jp.confidence or 0) * 100 + 0.5)))
             end
-        elseif editor.junctionMode == "place" then
-            -- PLACE (docs/junction-tool/08-place-junction.md): a whole X or T where roads cross, in
-            -- one click. Only the shape to choose; everything else comes from the roads.
-            add("toggle", "shape", (editor.junctionPattern == "smooth") and "smooth" or "mod", false,
-                function() editor:toggleJunctionPattern() end)
-            -- A note row is one line: long reasons go over several.
-            local function notes(text)
-                local line = ""
-                for word in tostring(text):gmatch("%S+") do
-                    if #line + #word + 1 > 42 and #line > 0 then
-                        add("note", line)
-                        line = word
-                    else
-                        line = (#line > 0) and (line .. " " .. word) or word
-                    end
-                end
-                if #line > 0 then add("note", line) end
-            end
-            local last = editor.junctionLastPlace
-            if last ~= nil then
-                if last.ok then
-                    add("toggle", "last placed", string.format("%s %s", last.shape == "exact" and "mod" or tostring(last.shape),
-                        tostring(last.kind)))
-                    if (last.loose or 0) > 0 then
-                        add("toggle", "loose ends", string.format("%d - join by hand", last.loose))
-                    end
-                    for _, line in ipairs(last.routeCard or {}) do add("note", line) end
-                else
-                    add("toggle", "last place failed", "")
-                    notes(last.why)
-                end
-            end
-            local jp = editor.junctionPreview
-            if jp ~= nil and jp.placeMode then
-                if jp.ok and jp.plan ~= nil then
-                    add("toggle", "will place", string.format("%s %s", jp.plan.shape == "exact" and "mod" or tostring(jp.plan.shape),
-                        tostring(jp.plan.kind)))
-                    add("toggle", "lane gap", string.format("%.1f m", jp.plan.L or 0))
-                    if jp.plan.shape == "plain" then
-                        notes("doesn't fit: " .. tostring(jp.plan.fitWhy))
-                        add("toggle", "loose ends", tostring(#(jp.plan.loose or {})))
-                    elseif jp.plan.shape ~= jp.shape then
-                        notes("the smooth shape does not fit here - the mod shape instead")
-                    end
-                    add("note", editor.junctionArmed ~= nil and "right-click places it" or "click to lock")
-                else
-                    add("toggle", "cannot place here", "")
-                    notes(jp.why)
-                end
-            else
-                add("note", "point where roads cross")
-            end        else
-        -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
-        -- Typed boxes with steppers (getEditableNumbers), like every other tool's numbers.
-        numberAfter("search radius")
-        numberAfter("turn radius")
-        add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
-            function() editor:toggleJunctionCheckSurface() end)
-        add("toggle", "trim/extend", (editor.junctionExtendTrim ~= false) and "on" or "off (clamp at trim)", false,
-            function() editor:toggleJunctionExtendTrim() end)
-        add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
-            function() editor:toggleJunctionRebuild() end)
-        add("toggle", "curve", (editor.junctionUseDubins ~= false) and "dubins" or "biarc", false,
-            function() editor:toggleJunctionCurveEngine() end)
-        add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
-            function() editor:toggleJunctionCheckObstacles() end)
-        add("toggle", "swept path", (editor.junctionSwept ~= false) and "on" or "off", false,
-            function() editor:toggleJunctionSwept() end)
-        -- THE VEHICLE SET: one row per rig - must the turns fit it, and (on a locked site) how many of
-        -- the turns this build lays it does fit. Click to tick it in or out.
-        if editor.junctionSwept ~= false and editor.junctionDesignRigs ~= nil then
-            local fits = editor.junctionPreview and editor.junctionPreview.rigFits
-            for _, g in ipairs(editor:junctionDesignRigs(true)) do
-                local key = g.key
-                local value = editor:junctionRigOn(key) and TR("must fit") or TR("not checked")
-                local f = fits and fits[key]
-                if f ~= nil and f.total > 0 then
-                    value = string.format("%s, %d/%d %s", value, f.fit, f.total, TR("fit"))
-                end
-                add("toggle", g.short or tostring(key), value, false, function() editor:toggleJunctionRig(key) end)
-            end
-        end
-        numberAfter("corridor")
-        numberAfter("clearance")
-        -- WHAT THE ROUTE CHECK SAID ABOUT THE LAST BUILD, as the clear card shows its own check:
-        -- display only, named by number, hidden once the network round it is no longer what the build
-        -- left (an undo), back after a redo. A build with an extra route is built anyway and marked
-        -- here (decided 2026-10-02).
-        local lastBuild = editor.junctionLastBuildShown and editor:junctionLastBuildShown()
-        if lastBuild ~= nil and lastBuild.card ~= nil then
-            if lastBuild.number ~= nil then
-                add("toggle", "last build", string.format("j%02d", lastBuild.number))
-            else
-                add("toggle", "last build", string.format("%.0f, %.0f", lastBuild.x or 0, lastBuild.z or 0))
-            end
-            for _, line in ipairs(lastBuild.card) do
-                add("note", line)
-            end
-        end
-        local jp = editor.junctionPreview
-        if jp ~= nil then
-            -- The same naming the clear card has: which junction the click resolved to, and whether
-            -- it is wired or virgin. Where the selection found no junction build still works from
-            -- the cursor, and the card says why it is not locked onto one.
-            -- Number and state on rows of their own, the same as the clear card: together they made
-            -- a value long enough to print back through its own label.
-            if jp.junctionNumber ~= nil or jp.junctionState ~= nil then
-                add("toggle", "junction", junctionLabel(jp))
-                if jp.junctionState ~= nil then
-                    add("toggle", "state", tostring(jp.junctionState))
-                end
-                -- The same suggestion and decision the clear card has (see junctionPartsNote).
-                junctionDecisionRows(jp)
-            elseif editor.junctionRefused ~= nil then
-                add("toggle", "free placement", "")
-                add("note", tostring(editor.junctionRefused))
-            end
-            add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
-            add("toggle", "new movements", tostring(jp.nNew))
-            if (jp.nRebuild or 0) > 0 then
-                add("toggle", "rebuilt existing", tostring(jp.nRebuild))
-            end
-            if jp.debris ~= nil and #jp.debris > 0 then
-                add("toggle", "old points to clear", tostring(#jp.debris))
-            end
-            if jp.usedMin ~= nil and jp.usedMax ~= nil then
-                local used = (jp.usedMin == jp.usedMax) and string.format("%.0f m", jp.usedMin)
-                    or string.format("%.0f-%.0f m", jp.usedMin, jp.usedMax)
-                add("toggle", "radius used", used)
-            end
-            if (jp.nTight or 0) > 0 then
-                add("toggle", "too tight (refused)", tostring(jp.nTight))
-            end
-            if (editor.junctionCheckSurface ~= false) and (jp.nOffRoad or 0) > 0 then
-                add("toggle", "off road (refused)", tostring(jp.nOffRoad))
-            end
-            if (jp.nNoCurve or 0) > 0 then
-                add("toggle", "no joinable curve", tostring(jp.nNoCurve))
-            end
-            if (jp.nUTurn or 0) > 0 then
-                add("toggle", "skipped as U-turn", tostring(jp.nUTurn))
-            end
-            if (jp.nFar or 0) > 0 then
-                add("toggle", "too far apart", tostring(jp.nFar))
-            end
-            if (jp.nLane or 0) > 0 then
-                add("toggle", "redundant lane", tostring(jp.nLane))
-            end
-            if (jp.nBlocked or 0) > 0 then
-                add("toggle", "blocked (refused)", tostring(jp.nBlocked))
-            end
-            if (jp.nSweep or 0) > 0 then
-                add("toggle", "laid wide", string.format("%d  (up to %.0f m)", jp.nSweep, jp.sweepMax or 0))
-            end
-            if (jp.nTrailerRoad or 0) > 0 then
-                add("toggle", "rig off road (refused)", tostring(jp.nTrailerRoad))
-            end
-            if (jp.nTrailerHit or 0) > 0 then
-                add("toggle", "rig hits obstacle (refused)", tostring(jp.nTrailerHit))
-            end
-            add("toggle", "already there", tostring(jp.nExisting))
-            if jp.sweptMax ~= nil then
-                add("toggle", "trailer cut-in", string.format("%.1f m", jp.sweptMax))
-                if (jp.nSweptWide or 0) > 0 then
-                    add("toggle", "trailer past corridor", tostring(jp.nSweptWide))
-                end
-            end
-            add("toggle", "confidence", string.format("%d%%", math.floor(jp.confidence * 100 + 0.5)))
-        else
-            add("note", "point at a crossing")
-        end
         end
     end
     -- MERGE's distance and divergence are the typed number fields above (getEditableNumbers), each
@@ -1242,6 +1210,14 @@ function ADFlyoverHud:draw(editor)
                     row.x, row.y, row.w, row.h = x, y, width, h
                 end
                 i = i + 1
+            end
+        end
+        -- A row that depends on the one above it (row.dep: the junction card's options under the action
+        -- they belong to) sits indented, with an accent bar down its left edge (drawn below).
+        for di = first, last do
+            local row = rows[di]
+            if row.dep and row.x ~= nil then
+                row.x, row.w = row.x + pad * 1.2, row.w - pad * 1.2
             end
         end
         return (top - y) + pad
@@ -1401,6 +1377,10 @@ function ADFlyoverHud:draw(editor)
         local x, y, width, h = row.x, row.y, row.w, row.h
         local textY = y + (h - fontSize) * 0.5
         local textX = x + self.padding * 2
+        if row.dep then
+            -- Tall enough to meet the next one, so a run of dependent rows reads as one block.
+            fillRole(self.rowOverlay, x - self.padding * 0.8, y - self.padding * 0.4, 0.0018, h + self.padding * 0.4, "accent", 0.9)
+        end
 
         if row.kind == "header" then
             fillRole(self.headerOverlay, x, y, width, h, "headerBg", 1)

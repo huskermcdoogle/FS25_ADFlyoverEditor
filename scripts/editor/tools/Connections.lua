@@ -256,6 +256,16 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span to merge, or double-click for the whole run.")
     elseif self.tool == t.JUNCTION then
         local jp = self.junctionPreview
+        -- Clear + build (doc 12): the card says what each half will do; this says what the clicks do.
+        if self.junctionMode == "clear" and self.junctionThenBuild then
+            if self.junctionArmed ~= nil then
+                return L("Site locked. Right-click clears and builds; left-click moves the lock.")
+            end
+            if jp ~= nil then
+                return L("Left-click locks this junction; right-click then clears and builds it.")
+            end
+            return L("Point at a junction and left-click to lock it. Right-click leaves the tool.")
+        end
         if jp ~= nil and jp.clearMode then
             local leave = self.junctionLeaveThrough ~= false
             local nodes = (leave and jp.turnDebris or jp.debris) or {}
@@ -274,12 +284,12 @@ function ADFlyoverEditor:getNextStepLines()
                 return L("Site locked, nothing here to clear. Right-click unlocks; left-click moves the lock.")
             end
             if n > 0 then
-                return string.format(L("%d point(s) to clear here. Left-click locks the site; wheel = scope."), n)
+                return string.format(L("%d point(s) to clear here. Left-click locks the site."), n)
             end
             if cut > 0 then
-                return L("One shared point of farm tracks here. Left-click locks the site; wheel = scope.")
+                return L("One shared point of farm tracks here. Left-click locks the site.")
             end
-            return L("Point at a junction and left-click to lock it. Wheel = scope; right-click leaves the tool.")
+            return L("Point at a junction and left-click to lock it. Right-click leaves the tool.")
         end
         if self.junctionMode == "place" then
             if jp ~= nil and jp.placeMode and jp.ok and jp.plan ~= nil then
@@ -295,6 +305,19 @@ function ADFlyoverEditor:getNextStepLines()
             return L("Point where roads cross and left-click to lock.")
         end
         local placeable = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) or 0
+        -- What the build lays where the pattern was checked (a locked site): the pattern, or nothing
+        -- when it won't fit and the card's advanced setting says refuse (doc 12).
+        local fit = jp ~= nil and jp.patternFit or nil
+        if self.junctionArmed ~= nil and fit ~= nil then
+            if fit.ok then
+                local shapeName = "mod's"
+                if fit.shape == "smooth" then shapeName = "smooth" elseif fit.shape == "plain" then shapeName = "plain" end
+                return string.format(L("Site locked: right-click lays the %s %s; left-click moves the lock."),
+                    shapeName, tostring(fit.kind))
+            elseif self.junctionNoFit == "refuse" then
+                return L("Site locked: the pattern won't fit, so right-click builds nothing. Left-click moves the lock.")
+            end
+        end
         if self.junctionArmed ~= nil then
             if placeable > 0 then
                 if (jp.nRebuild or 0) > 0 then
@@ -307,9 +330,9 @@ function ADFlyoverEditor:getNextStepLines()
             return L("Site locked, nothing new to place. Right-click unlocks; left-click moves the lock.")
         end
         if placeable > 0 then
-            return string.format(L("%d turn(s) to lay here. Left-click locks the site; wheel = scope."), placeable)
+            return string.format(L("%d turn(s) to lay here. Left-click locks the site."), placeable)
         end
-        return L("Point at a crossing and left-click to lock it. Wheel = scope; right-click leaves the tool.")
+        return L("Point at a crossing and left-click to lock it. Right-click leaves the tool.")
     end
 
     return ""

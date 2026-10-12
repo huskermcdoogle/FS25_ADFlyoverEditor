@@ -668,8 +668,12 @@ function ADFlyoverEditor:stopCurrentAction()
         if self.junctionArmed ~= nil then
             -- Placeable = new turns OR rebuilds of existing ones; clear mode's work is its wiring and
             -- links, or a junction that is one shared point (junctionHasWork says which).
-            local hasWork = self:junctionHasWork(self.junctionPreview)
-            if hasWork then
+            -- Clear + build (doc 12) clears and then builds on the same lock, under one undo.
+            if self.junctionMode == "clear" and self.junctionThenBuild then
+                if not self:applyJunctionClearThenBuild() then
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction site unlocked (nothing to place).")
+                end
+            elseif self:junctionHasWork(self.junctionPreview) then
                 self:applyJunction()
             else
                 ADFlyoverSettings.debugLog("[FlyoverEditor]: junction site unlocked (nothing to place).")
