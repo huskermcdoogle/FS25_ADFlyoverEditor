@@ -363,10 +363,29 @@ function ADFlyoverEditor:drawNetwork()
             px0, pz0 = px, pz
         end
 
+        -- THE PATTERN, where the build will lay it (a locked site the pattern fits, jp.patternFit): its own
+        -- lines in white and its shared points, as place drew them - not the turn-by-turn curves below,
+        -- which the right-click would not lay. Those are drawn only on a locked site the pattern does not
+        -- fit; following the cursor nothing is drawn, as the build does not know yet which it will be.
+        local fit = jp.patternFit
+        local turnByTurn = AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN == false
+            or (self.junctionArmed ~= nil and (fit == nil or not fit.ok))
+        if fit ~= nil and fit.ok then
+            for _, line in ipairs(fit.lines or {}) do
+                local pts = line.pts
+                for i = 2, #pts do
+                    local q, p = pts[i - 1], pts[i]
+                    ADDrawingManager:addLineTask(q.x, (q.y or baseY) + 0.5, q.z, p.x, (p.y or baseY) + 0.5, p.z, lw, 1, 1, 1)
+                end
+            end
+            for _, m in ipairs(fit.marks or {}) do
+                ADDrawingManager:addSphereTask(m.x, (m.y or baseY) + 0.5, m.z, 1.4, 1, 1, 1, 0.15)
+            end
+        end
         -- NEW turns as track-tangent connector curves (white): tie-in ON the entry track, curve, tie-in
         -- ON the exit track. The small white spheres mark the tie-in (merge / exit) points - sitting on
         -- the real road a radius-appropriate distance back from where the tracks meet, NOT the boundary.
-        for _, m in ipairs(jp.movements) do
+        for _, m in ipairs(turnByTurn and jp.movements or {}) do
             if (not m.exists or m.rebuild) and m.connector ~= nil then
                 local c = m.connector
                 local chain = { { x = c.ax, y = baseY + 0.5, z = c.az } }

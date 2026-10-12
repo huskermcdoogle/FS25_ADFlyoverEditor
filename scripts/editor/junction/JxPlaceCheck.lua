@@ -114,18 +114,25 @@ local function junctionPlaceRouteCheck(res)
     return rc
 end
 
---- THE JUNCTION'S MOVEMENTS, COUNTED AT 15 M whatever the search radius is set to (the pattern's test,
---- step A, in game 2026-10-12): at the user's 22 m the build's circle took in more than the junction - the
---- course's J4 read 12 movements and 1e, its twin 1w being inside the circle, 4 - so the T was refused
+--- THE JUNCTION'S MOVEMENTS, COUNTED AT 15 M from a given spot, whatever the search radius (the pattern's
+--- test, step A, in game 2026-10-12): at the user's 22 m the build's circle took in more than the junction
+--- - the course's J4 read 12 movements and 1e, its twin 1w inside the circle, 4 - so the T was refused
 --- where it fitted. 15 m is what every survey result was measured at. Worked out with the road, obstacle
---- and swept checks off: they refuse turns but never change which turns there are.
-function ADFlyoverEditor:junctionMovementsAt15(jp)
-    local R = self:junctionRadiusValue()
-    if math.abs(R - 15) < 0.5 or self._jxCountAt15 then return #(jp.movements or {}) end
+--- and swept checks off: they refuse turns but never change which there are. At 15 m from the click
+--- itself the build's own count is that already.
+function ADFlyoverEditor:junctionMovementsAt15(jp, ox, oz)
+    if self._jxCountAt15 or ox == nil then return #(jp.movements or {}) end
+    local a = self.junctionArmed
+    if math.abs(self:junctionRadiusValue() - 15) < 0.5 and a ~= nil and math.abs(a.cx - ox) < 0.01
+        and math.abs(a.cz - oz) < 0.01 then
+        return #(jp.movements or {})
+    end
     local keep = { self.junctionRadius, self.junctionPreview, self.junctionPreviewKey, self.junctionSite,
-        self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles }
+        self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles,
+        self.junctionArmed }
     self._jxCountAt15 = true
     self.junctionRadius, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = 15, false, false, false
+    self.junctionArmed = { cx = ox, cz = oz, cy = (keep[9] ~= nil and keep[9].cy) or 0 }
     self.junctionPreview, self.junctionPreviewKey = nil, nil
     local n = #(jp.movements or {})
     tryCall("junction build: the pattern's count at 15 m", function()
@@ -135,6 +142,7 @@ function ADFlyoverEditor:junctionMovementsAt15(jp)
     end)
     self.junctionRadius, self.junctionPreview, self.junctionPreviewKey, self.junctionSite = keep[1], keep[2], keep[3], keep[4]
     self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = keep[5], keep[6], keep[7], keep[8]
+    self.junctionArmed = keep[9]
     self._jxCountAt15 = false
     return n
 end
@@ -180,7 +188,15 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     -- survey map), no fewer (one-way roads), refused turns counted, as the pattern lays them anyway.
     -- And never the plain piece on a T: that is place's fallback where the T does not fit, and in game
     -- it left a road unjoined (43, 2026-10-07).
-    local need = self:junctionMovementsAt15(jp)
+    -- From the click, as every survey result was counted; where that disagrees, from the piece's own centre
+    -- too, and either will do. From the click alone 1e read 4 from one spot and 6 from another two metres
+    -- off; from the centre alone j34 took in a lane of something else passing (12).
+    local click = self.junctionArmed or { cx = jp.cx, cz = jp.cz }
+    local need = self:junctionMovementsAt15(jp, click.cx, click.cz)
+    if need ~= ((res.kind == "X") and 12 or 6) then
+        local atCentre = self:junctionMovementsAt15(jp, res.ox, res.oz)
+        if atCentre == ((res.kind == "X") and 12 or 6) then need = atCentre end
+    end
     local lays = (res.kind == "X") and 12 or 6
     if need ~= lays then
         return nil, nil, string.format("the junction has %d movement(s), the %s lays %d", need, tostring(res.kind), lays)

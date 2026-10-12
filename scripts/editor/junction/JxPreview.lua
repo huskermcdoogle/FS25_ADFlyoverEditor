@@ -2771,9 +2771,18 @@ function ADFlyoverEditor:updateJunctionPreview()
         and not self._jxCountAt15 then
         tryCall("junction build: pattern fit for the card", function()
             local site, res, why = self:junctionPatternFit(self.junctionPreview)
-            self.junctionPreview.patternFit = (site ~= nil)
-                and { ok = true, kind = res.kind, shape = res.shape }
-                or { ok = false, why = why }
+            if site ~= nil then
+                -- ...and drawn: the pattern's own lines and shared points stand in for the turn-by-turn
+                -- curves, which is not what the right-click will lay (in game 2026-10-12: "preview is
+                -- still showing smooth turns"). Ground heights once here, not every frame.
+                local function ground(q) q.y = AutoDrive:getTerrainHeightAtWorldPos(q.x, q.z) or 0 end
+                for _, line in ipairs(res.lines or {}) do for _, q in ipairs(line.pts) do ground(q) end end
+                for _, q in ipairs(res.marks or {}) do ground(q) end
+                self.junctionPreview.patternFit = { ok = true, kind = res.kind, shape = res.shape,
+                    lines = res.lines, marks = res.marks }
+            else
+                self.junctionPreview.patternFit = { ok = false, why = why }
+            end
         end)
     end
     -- Run the lane-end tidy in DRY mode and keep what it says: where each end would land, and the
