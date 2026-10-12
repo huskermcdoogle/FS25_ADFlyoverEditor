@@ -1462,7 +1462,12 @@ function ADFlyoverEditor:applyJunction()
     if AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false then
         if self:junctionBuildAsPattern(jp) then return end
         -- WHERE IT WON'T FIT, the card's advanced setting says what happens (doc 12): the turn-by-turn
-        -- build below, or nothing at all, said on the card and in the log.
+        -- build below, or nothing at all, said on the card and in the log. Why it won't fit goes in the log
+        -- either way: the card says it, and an in-game test needs it afterwards (2026-10-12).
+        if self.junctionNoFit ~= "refuse" then
+            Logging.info("[FlyoverEditor]: junction build - the %s pattern won't fit here (%s), so it is built turn by turn.",
+                (self.junctionPattern == "smooth") and "smooth" or "mod", tostring(self.junctionLastPatternWhy or "it does not fit"))
+        end
         if self.junctionNoFit == "refuse" then
             local why = tostring(self.junctionLastPatternWhy or "it does not fit")
             Logging.info("[FlyoverEditor]: junction build refused - the %s pattern won't fit here (%s), and 'if the pattern won't fit' is set to refuse.",

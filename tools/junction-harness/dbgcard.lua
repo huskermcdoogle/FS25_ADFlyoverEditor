@@ -47,7 +47,7 @@ if os.getenv("PRECLEAR") == "1" then
     H.lock(x, z, { mode = "clear" })
     H.apply()
 end
-local lockOpts = { mode = (action == "build") and "build" or "clear", thenBuild = (action == "both"),
+local lockOpts = { mode = (action == "build") and "build" or "clear", thenBuild = (action == "both"), radius = tonumber(os.getenv("RADIUS") or ""),
     pattern = os.getenv("SHAPE") == "smooth" and "smooth" or nil, noFit = os.getenv("NOFIT") }
 H.lock(x, z, lockOpts)
 E.junctionAdvancedOpen = (arg[4] == "advanced")

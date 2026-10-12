@@ -2767,7 +2767,8 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- WHAT THE BUILD WILL LAY, said on the card before the right-click (doc 12): the pattern (mod or
     -- smooth) where it fits, else why not. Worked out dry, and only on a locked site - the preview
     -- follows the cursor otherwise, and this asks place for a whole plan.
-    if not clearMode and self.junctionArmed ~= nil and AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false then
+    if not clearMode and self.junctionArmed ~= nil and AutoDrive.FLYOVER_JUNCTION_BUILD_PATTERN ~= false
+        and not self._jxCountAt15 then
         tryCall("junction build: pattern fit for the card", function()
             local site, res, why = self:junctionPatternFit(self.junctionPreview)
             self.junctionPreview.patternFit = (site ~= nil)

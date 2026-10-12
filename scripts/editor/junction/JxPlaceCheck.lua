@@ -114,6 +114,31 @@ local function junctionPlaceRouteCheck(res)
     return rc
 end
 
+--- THE JUNCTION'S MOVEMENTS, COUNTED AT 15 M whatever the search radius is set to (the pattern's test,
+--- step A, in game 2026-10-12): at the user's 22 m the build's circle took in more than the junction - the
+--- course's J4 read 12 movements and 1e, its twin 1w being inside the circle, 4 - so the T was refused
+--- where it fitted. 15 m is what every survey result was measured at. Worked out with the road, obstacle
+--- and swept checks off: they refuse turns but never change which turns there are.
+function ADFlyoverEditor:junctionMovementsAt15(jp)
+    local R = self:junctionRadiusValue()
+    if math.abs(R - 15) < 0.5 or self._jxCountAt15 then return #(jp.movements or {}) end
+    local keep = { self.junctionRadius, self.junctionPreview, self.junctionPreviewKey, self.junctionSite,
+        self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles }
+    self._jxCountAt15 = true
+    self.junctionRadius, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = 15, false, false, false
+    self.junctionPreview, self.junctionPreviewKey = nil, nil
+    local n = #(jp.movements or {})
+    tryCall("junction build: the pattern's count at 15 m", function()
+        self:updateJunctionPreview()
+        local p15 = self.junctionPreview
+        if p15 ~= nil and not p15.clearMode and not p15.placeMode then n = #(p15.movements or {}) end
+    end)
+    self.junctionRadius, self.junctionPreview, self.junctionPreviewKey, self.junctionSite = keep[1], keep[2], keep[3], keep[4]
+    self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = keep[5], keep[6], keep[7], keep[8]
+    self._jxCountAt15 = false
+    return n
+end
+
 --- DOES THE PATTERN FIT, dry: the build's own test (junctionBuildAsPattern), asked without laying
 --- anything, so the card can say before the right-click what the build will do (doc 12). Returns the
 --- site and place's plan where the pattern (junctionPattern: mod or smooth) fits every road, else nil
@@ -155,7 +180,7 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     -- survey map), no fewer (one-way roads), refused turns counted, as the pattern lays them anyway.
     -- And never the plain piece on a T: that is place's fallback where the T does not fit, and in game
     -- it left a road unjoined (43, 2026-10-07).
-    local need = #(jp.movements or {})
+    local need = self:junctionMovementsAt15(jp)
     local lays = (res.kind == "X") and 12 or 6
     if need ~= lays then
         return nil, nil, string.format("the junction has %d movement(s), the %s lays %d", need, tostring(res.kind), lays)
