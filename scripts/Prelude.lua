@@ -99,12 +99,14 @@ P.EDITOR_FILES = {
     "scripts/editor/PolygonUtils.lua",
     "scripts/editor/OffsetGeometry.lua",
     "scripts/editor/FieldLoopGenerator.lua",
+    "scripts/editor/RoadFinder.lua",
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
+    "scripts/editor/RoadRunsTool.lua",   -- adds the road runs tool to ADFlyoverEditor, so after it
 }
 
 P.state = "waiting" -- waiting | armed | gave-up | disabled

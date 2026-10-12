@@ -348,7 +348,7 @@ function ADFlyoverHud:buildRows(editor)
     local T = editor.TOOL
     local GROUPS = {
         { "MODE", { T.NONE } },
-        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
+        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING, T.ROADRUNS } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
         -- JUNCTION is disconnected in this release (see the 0.31.0.1 patch notes) - left out of
         -- this group entirely so there is no button for it, on top of setTool's own refusal.
@@ -680,6 +680,9 @@ function ADFlyoverHud:buildRows(editor)
         if editor.groundPreview ~= nil then
             add("cursor", "off the ground", string.format("%d of %d", #editor.groundPreview, editor.groundChecked or 0))
         end
+    elseif editor.tool == editor.TOOL.ROADRUNS then
+        -- RoadRunsTool.lua builds its own rows from the same kit
+        editor:roadRunsCard({ tgl = tgl, seg = seg, segFlip = segFlip, btn = btn, add = add, numberAfter = numberAfter })
     elseif editor.tool == editor.TOOL.FIELDLOOP then
         segFlip("priority", "primary", "secondary", editor.fieldLoopSubPrio, function() editor:toggleFieldLoopPriority() end)
         segCycle("track", editor.FIELD_LOOP_DIR_NAMES, nil, editor.fieldLoopDirection,

@@ -183,6 +183,30 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 - **length (wheel)** — how long the parallel stretch is.
 
 <a id="move"></a>
+## Road runs
+
+*Create — Lay AutoDrive runs along map roads and farm tracks that have no path yet.*
+
+Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt tracks - finds the middle of each road and where roads fork, and lights up the roads that have no AutoDrive path along them. Pick the ones you want and it lays the lanes: one-way, one two-way line, or two lanes keeping right. It stops short at forks so the junction tool can finish them, and joins an existing path where a road runs straight into one.
+
+**How to use it**
+
+1. Point at a road: the stretch from one fork to the next lights up, with its lanes previewed.
+1. Click to pick it; click a picked road again to drop it. Double-click picks the whole road, carrying straight on through forks.
+1. For a one-way run, click on the side of the road you would drive on (keep right).
+1. Right-click builds everything picked. One undo takes it all back.
+
+**Controls**
+
+- **lay as** — auto (two lanes on paved roads, one two-way line on tracks), one-way, two-way, or two lanes.
+- **priority** — primary or secondary, as for Draw.
+- **roads to find** — paved, gravel and dirt - turn a kind off to stop it lighting up.
+- **light up** — under mouse only, or every road nearby with no path, faintly.
+- **lane gap** — from road: half the road's measured width (never under 3.3 m, the room two big rigs need); set: type your own. The card shows this road's width and how far apart the map's own lanes are.
+- **fork gap** — how far back from a fork the run stops, leaving room for the junction tool.
+
+<a id="move"></a>
+
 ## Move
 
 *Shape — Drag a point, a span, a run or a selection - move, copy, cut loose, or slide sideways.*

@@ -2,7 +2,7 @@
 -- Per-tool help for the in-game contextual help and the browsable manual.
 
 ADFlyoverHelp = {}
-ADFlyoverHelp.ORDER = { "select", "draw", "spline", "field loop", "parallel", "siding", "move", "smooth", "straighten", "divide", "ground", "convert", "merge", "name", "delete" }
+ADFlyoverHelp.ORDER = { "select", "draw", "spline", "field loop", "parallel", "siding", "road runs", "move", "smooth", "straighten", "divide", "ground", "convert", "merge", "name", "delete" }
 ADFlyoverHelp.tools = {}
 local T = ADFlyoverHelp.tools
 
@@ -266,6 +266,55 @@ T["siding"] = {
     "offset: how far to the side the siding sits.",
     "length (wheel): how long the parallel stretch",
     "  is.",
+  },
+}
+
+T["road runs"] = {
+  name = "Road runs",
+  group = "CREATE",
+  summary = {
+    "Lay AutoDrive runs along map roads and farm",
+    "tracks that have no path yet.",
+  },
+  what = {
+    "Road runs reads the ground paint round the",
+    "mouse - asphalt and concrete, gravel, dirt",
+    "tracks - finds the middle of each road and",
+    "where roads fork, and lights up the roads that",
+    "have no AutoDrive path along them. Pick the",
+    "ones you want and it lays the lanes: one-way,",
+    "one two-way line, or two lanes keeping right.",
+    "It stops short at forks so the junction tool",
+    "can finish them, and joins an existing path",
+    "where a road runs straight into one.",
+  },
+  how = {
+    "- Point at a road: the stretch from one fork to",
+    "  the next lights up, with its lanes previewed.",
+    "- Click to pick it; click a picked road again to",
+    "  drop it. Double-click picks the whole road,",
+    "  carrying straight on through forks.",
+    "- For a one-way run, click on the side of the",
+    "  road you would drive on (keep right).",
+    "- Right-click builds everything picked. One undo",
+    "  takes it all back.",
+  },
+  controls = {
+    "lay as: auto (two lanes on paved roads, one",
+    "  two-way line on tracks), one-way, two-way, or",
+    "  two lanes.",
+    "priority: primary or secondary, as for Draw.",
+    "roads to find: paved, gravel and dirt - turn a",
+    "  kind off to stop it lighting up.",
+    "light up: under mouse only, or every road",
+    "  nearby with no path, faintly.",
+    "lane gap: from road: half the road's measured",
+    "  width (never under 3.3 m, the room two big",
+    "  rigs need); set: type your own. The card shows",
+    "  this road's width and how far apart the map's",
+    "  own lanes are.",
+    "fork gap: how far back from a fork the run",
+    "  stops, leaving room for the junction tool.",
   },
 }
 

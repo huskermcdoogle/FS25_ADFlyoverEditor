@@ -1788,6 +1788,8 @@ function ADFlyoverEditor:update(dt)
         self:updateSmoothPreview()
     elseif self.tool == self.TOOL.JUNCTION then
         self:updateJunctionPreview()
+    elseif self.tool == self.TOOL.ROADRUNS then
+        self:updateRoadRuns(overPanel)
     end
 
     -- Move: a held press that has travelled past the threshold becomes a drag.
@@ -2471,6 +2473,10 @@ function ADFlyoverEditor:setTool(tool)
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+    -- road runs keeps its window of read ground (reading it again is the slow part); only the picks go
+    if self.roadRunsReset ~= nil then
+        self:roadRunsReset()
+    end
     self.dragId = nil
     self.boxActive = false
     self.circleActive = false
@@ -3283,6 +3289,10 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    if self.tool == self.TOOL.ROADRUNS then
+        self:drawRoadRuns(lw)
+    end
+
     if self.tool == self.TOOL.PARALLEL and self.offsetPreview ~= nil then
         for i = 1, #self.offsetPreview do
             local p = self.offsetPreview[i]
@@ -3740,6 +3750,7 @@ function ADFlyoverEditor:toolHasPendingStart()
     elseif t == self.TOOL.MERGE then return self.mergeFromId ~= nil
     elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
     elseif t == self.TOOL.JUNCTION then return self.junctionArmed ~= nil
+    elseif t == self.TOOL.ROADRUNS then return self.roadRuns ~= nil and #self.roadRuns.picks > 0
     end
     return false
 end
@@ -4076,6 +4087,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:divideClick()
     elseif self.tool == self.TOOL.JUNCTION then
         self:junctionClick()
+    elseif self.tool == self.TOOL.ROADRUNS then
+        self:roadRunsClick()
     elseif self.tool == self.TOOL.NONE then
         self:selectClick()
     end
@@ -4163,6 +4176,11 @@ function ADFlyoverEditor:stopCurrentAction()
     elseif tool == self.TOOL.SIDING then
         if self.sidingAnchorId ~= nil then
             self:commitSiding()
+            return true
+        end
+    elseif tool == self.TOOL.ROADRUNS then
+        -- road runs (RoadRunsTool.lua): right-click builds what is picked
+        if self:roadRunsStop() then
             return true
         end
     elseif tool == self.TOOL.MOVE then
@@ -6227,6 +6245,9 @@ function ADFlyoverEditor:getEditableNumbers()
         }
     end
     local AD = AutoDrive
+    if self.tool == self.TOOL.ROADRUNS then
+        return self:roadRunsNumbers(fieldEntry)
+    end
     if self.tool == self.TOOL.PARALLEL then
         return { fieldEntry("distance", "m", 1, "offsetDistance", AD.FLYOVER_OFFSET_MIN, AD.FLYOVER_OFFSET_MAX,
             AD.FLYOVER_OFFSET_STEP, false, function() editor.offsetCache = nil end) }
@@ -7517,6 +7538,9 @@ function ADFlyoverEditor:getNextStepLines()
         return L("No tool selected. Pick one above, or press 1-9 / 0.")
     end
 
+    if self.tool == t.ROADRUNS then
+        return self:roadRunsNextStep()
+    end
     if self.tool == t.DRAW then
         if self.lastWaypointId ~= nil then
             return L("Click ground to extend, or a waypoint to link. Right-click ends.")
