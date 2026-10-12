@@ -56,8 +56,8 @@ local stretches = RF.findStretches(win, grid)
 local tCover = os.clock() - t2
 local laneGap, laneGapN = RF.networkLaneGap(grid)
 
-local mode = os.getenv("MODE") or "lanes"
-local gap = tonumber(os.getenv("GAP") or "4")
+local modeArg = os.getenv("MODE") or "auto"
+local gapFixed = tonumber(os.getenv("GAP") or "")
 local forkGap = tonumber(os.getenv("FORKGAP") or "15")
 
 local f = assert(io.open(outPath, "w"))
@@ -87,6 +87,9 @@ for si, st in ipairs(stretches) do
     for _, p in ipairs(st.pts) do t[#t + 1] = string.format("%.2f,%.2f", p.x, p.z) end
     f:write(string.format("stretch %d %s %d %.1f %.1f %s %s %s\n", si, st.class, st.kind or 0, st.width or -1,
         st.len, st.startTag, st.endTag, table.concat(t, " ")))
+    local mode = modeArg
+    if mode == "auto" then mode = (st.class == "paved") and "lanes" or "two" end
+    local gap = gapFixed or math.max(3.3, math.min(6, (st.width or 6) * 0.6))
     local lanes = RF.planLanes(st, mode, 1, gap, forkGap)
     for _, ln in ipairs(lanes or {}) do
         local q = {}

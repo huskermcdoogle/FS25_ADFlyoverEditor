@@ -174,8 +174,8 @@ TOOLS = [
             ("priority", "primary or secondary, as for Draw."),
             ("roads to find", "paved, gravel and dirt - turn a kind off to stop it lighting up."),
             ("light up", "under mouse only, or every road nearby with no path, faintly."),
-            ("lane gap", "from road: half the road's measured width (never under 3.3 m, the room two "
-                         "big rigs need); set: type your own. The card shows this road's width and "
+            ("lane gap", "from road: 0.6 x the road's measured width, as the map's own two-lane roads are "
+                         "laid (never under 3.3 m, the room two big rigs need); set: type your own. The card shows this road's width and "
                          "how far apart the map's own lanes are."),
             ("fork gap", "how far back from a fork the run stops, leaving room for the junction tool."),
         ],

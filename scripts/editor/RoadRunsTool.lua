@@ -67,16 +67,16 @@ function E:roadModeFor(st)
     return key
 end
 
---- Lane centre gap for a stretch: the road's own width split in two (each lane in the middle of its
---- half) when auto, else the typed value; never under the minimum.
+--- Lane centre gap for a stretch. From the road: 0.6 x its width - what the map's own two-lane roads
+--- measure (Riverbend, 2026-10-12, tools/road-runs/widthstudy.lua: roads 5-7 m wide carry lanes
+--- 3.75-3.9 m apart, 9 m roads 5.2 m, and our centre line sits within 0.1 m of the middle between
+--- them). Set: the typed value. Never under the minimum two big rigs need to pass.
+E.ROADRUNS_GAP_PER_WIDTH = 0.6
+E.ROADRUNS_MAX_LANE_GAP = 6
 function E:roadGapFor(st)
     local gap = self.roadLaneGap
     if self.roadGapAuto and st ~= nil and st.width ~= nil then
-        gap = st.width / 2
-        if self.roadRuns ~= nil and self.roadRuns.mapGap ~= nil then
-            gap = math.min(gap, self.roadRuns.mapGap + 1.0)
-        end
-        gap = math.min(gap, 6)
+        gap = math.min(self.ROADRUNS_MAX_LANE_GAP, st.width * self.ROADRUNS_GAP_PER_WIDTH)
     end
     return math.max(self.ROADRUNS_MIN_LANE_GAP, gap)
 end
