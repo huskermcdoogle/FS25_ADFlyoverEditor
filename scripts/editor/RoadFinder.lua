@@ -100,18 +100,53 @@ function RF.groundKindAt(x, z)
     return kind
 end
 
+-- --------------------------------------------------------------------------------- road meshes
+
+-- BRIDGES AND RAMPS. Plain roads on Riverbend are paint (decals with no collision), but bridge decks,
+-- ramps, flyovers and level crossings are meshes in the ROAD collision group (bit 13, see
+-- docs/junction-tool/03b-data-sources-reference.md on the junction branch). Under a bridge the paint
+-- is the river, so paint alone ends every road at the water. A ray cast straight down that only hits
+-- the ROAD group finds the deck and its height.
+--   elevated (more than DECK_MIN_HEIGHT above the terrain): a DECK cell, its own road class, so a
+--     flyover never makes a false crossing with the road under it;
+--   at ground level (a ramp's foot, a level crossing): counts as paved road.
+RF.DECK_MIN_HEIGHT = 1.0
+RF.DECK_RAY_UP = 40              -- rays start this far above the terrain (taller bridges are missed)
+RF.DECK_COARSE = 4               -- a tile is first probed on this grid; a hit reads it (and its neighbours) at 1 m
+RF.DECK_JOIN = 10               -- a deck end this close to a road end on the ground carries on into it (thinning pulls both ends back about half a road width)
+
+local RoadMeshRay = { hitY = nil }
+function RoadMeshRay.cb(self, hitId, x, y, z, distance)
+    if y ~= nil and (self.hitY == nil or y > self.hitY) then self.hitY = y end
+    return true
+end
+
+--- The top of a road mesh at (x, z): its height and whether it is raised (a deck), or nil.
+function RF.roadMeshAt(x, z)
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    if terrain == nil or raycastClosest == nil or CollisionFlag == nil or CollisionFlag.ROAD == nil then return nil end
+    local ty = getTerrainHeightAtWorldPos(terrain, x, 0, z) or 0
+    RoadMeshRay.hitY = nil
+    local ok = pcall(raycastClosest, x, ty + RF.DECK_RAY_UP, z, 0, -1, 0, RF.DECK_RAY_UP + 5, "cb", RoadMeshRay, CollisionFlag.ROAD)
+    if not ok or RoadMeshRay.hitY == nil then return nil end
+    return RoadMeshRay.hitY, (RoadMeshRay.hitY - ty) > RF.DECK_MIN_HEIGHT
+end
+
 -- --------------------------------------------------------------------------------- tile cache
 
 --- A cache of ground kinds in 32 m tiles, filled a budget of cells at a time so a big window never
---- stalls a frame. `classify(x, z)` defaults to groundKindAt; the bench passes its own.
-function RF.newCache(classify)
-    return { tiles = {}, queue = {}, queued = {}, classify = classify or RF.groundKindAt, cursor = nil }
+--- stalls a frame. `classify(x, z)` defaults to groundKindAt, `meshAt(x, z)` to roadMeshAt (pass
+--- false for none); the bench passes its own.
+function RF.newCache(classify, meshAt)
+    if meshAt == nil then meshAt = RF.roadMeshAt end
+    return { tiles = {}, queue = {}, queued = {}, classify = classify or RF.groundKindAt, cursor = nil,
+        meshAt = meshAt or nil, decks = {}, deckNeed = {}, deckDone = {}, deckQueued = {} }
 end
 
 local function tileKey(tx, tz) return tx * 100003 + tz end
 
---- Queue every tile under cells [ix0, ix1] x [iz0, iz1] that is not cached yet. Returns how many
---- cells are still to sample.
+--- Queue every tile under cells [ix0, ix1] x [iz0, iz1] that is not read yet (paint, then road
+--- meshes where the coarse probe found any). Returns how many cells are still to read.
 function RF.cacheRequest(cache, ix0, iz0, ix1, iz1)
     local T = RF.TILE
     local missing = 0
@@ -124,36 +159,69 @@ function RF.cacheRequest(cache, ix0, iz0, ix1, iz1)
                     cache.queued[k] = true
                     cache.queue[#cache.queue + 1] = { tx = tx, tz = tz, k = k }
                 end
+            elseif cache.deckNeed[k] and not cache.deckDone[k] then
+                missing = missing + T * T
+                if not cache.deckQueued[k] then
+                    cache.deckQueued[k] = true
+                    cache.queue[#cache.queue + 1] = { tx = tx, tz = tz, k = k, deck = true }
+                end
             end
         end
     end
     return missing
 end
 
---- Sample up to `budget` cells of queued tiles. Returns true when the queue is empty.
+--- Read up to `budget` cells of queued tiles. Returns true when the queue is empty.
 function RF.cacheStep(cache, budget)
     local T = RF.TILE
-    local classify = cache.classify
+    local classify, meshAt = cache.classify, cache.meshAt
+    local C = RF.DECK_COARSE
     while budget > 0 do
         local job = cache.cursor
         if job == nil then
             job = table.remove(cache.queue, 1)
             if job == nil then return true end
-            job.cells, job.n = {}, 0
+            job.n = 0
+            if job.deck then job.ys = {} else job.cells = {} end
             cache.cursor = job
         end
-        local cells = job.cells
         while job.n < T * T and budget > 0 do
             local n = job.n
-            local ix = job.tx * T + n % T
-            local iz = job.tz * T + floor(n / T)
-            cells[n + 1] = classify(ix + 0.5, iz + 0.5)
+            local c, r = n % T, floor(n / T)
+            local x, z = job.tx * T + c + 0.5, job.tz * T + r + 0.5
+            if job.deck then
+                -- the 1 m read of a tile with a road mesh in or beside it
+                local y, raised = meshAt(x, z)
+                if y ~= nil then
+                    if raised then job.ys[n + 1] = y
+                    elseif cache.tiles[job.k] ~= nil and cache.tiles[job.k][n + 1] == RF.KIND_NONE then
+                        cache.tiles[job.k][n + 1] = RF.KIND_PAVED      -- a ramp foot or level crossing
+                    end
+                end
+            else
+                job.cells[n + 1] = classify(x, z)
+                if meshAt and c % C == floor(C / 2) and r % C == floor(C / 2) and not job.meshHit then
+                    if meshAt(x, z) ~= nil then job.meshHit = true end
+                end
+            end
             job.n = n + 1
             budget = budget - 1
         end
         if job.n >= T * T then
-            cache.tiles[job.k] = cells
-            cache.queued[job.k] = nil
+            if job.deck then
+                cache.decks[job.k] = job.ys
+                cache.deckDone[job.k] = true
+                cache.deckQueued[job.k] = nil
+            else
+                cache.tiles[job.k] = job.cells
+                cache.queued[job.k] = nil
+                if job.meshHit then
+                    -- the mesh may reach into the neighbours without a coarse hit there
+                    for dz = -1, 1 do
+                        for dx = -1, 1 do cache.deckNeed[tileKey(job.tx + dx, job.tz + dz)] = true end
+                    end
+                end
+            end
             cache.cursor = nil
         end
     end
@@ -167,6 +235,15 @@ function RF.cacheKind(cache, ix, iz)
     local cells = cache.tiles[tileKey(tx, tz)]
     if cells == nil then return nil end
     return cells[(iz - tz * T) * T + (ix - tx * T) + 1]
+end
+
+--- Deck height at cell (ix, iz), or nil (no raised road mesh there, or not read).
+function RF.cacheDeck(cache, ix, iz)
+    local T = RF.TILE
+    local tx, tz = floor(ix / T), floor(iz / T)
+    local ys = cache.decks[tileKey(tx, tz)]
+    if ys == nil then return nil end
+    return ys[(iz - tz * T) * T + (ix - tx * T) + 1]
 end
 
 -- --------------------------------------------------------------------------------- grid helpers
@@ -683,28 +760,41 @@ local function smoothPts(P, radius)
     local out = {}
     for i = 1, n do
         local r = min(radius, i - 1, n - i)
-        local sx, sz, sw, cw, c = 0, 0, 0, 0, 0
+        local sx, sz, sw, cw, sy, cy, c = 0, 0, 0, 0, 0, 0, 0
+        local deck = false
         for k = i - r, i + r do
             sx, sz, c = sx + P[k].x, sz + P[k].z, c + 1
             if P[k].w ~= nil then sw, cw = sw + P[k].w, cw + 1 end
+            if P[k].y ~= nil then sy, cy = sy + P[k].y, cy + 1 end
         end
-        out[i] = { x = sx / c, z = sz / c, w = (cw > 0) and (sw / cw) or nil }
+        out[i] = { x = sx / c, z = sz / c, w = (cw > 0) and (sw / cw) or nil, y = (cy > 0) and (sy / cy) or nil,
+            deck = P[i].deck }
     end
     return out
 end
 
---- Resample a polyline at a fixed step (keeps the ends; widths interpolated).
+--- A point a fraction f of the way from a to b: position, width and height interpolated (a missing
+--- one taken from the other end), on a deck if the nearer end is.
+local function lerpPt(a, b, f)
+    local wa, wb = a.w or b.w, b.w or a.w
+    local ya, yb = a.y or b.y, b.y or a.y
+    return { x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f, w = wa and (wa + (wb - wa) * f) or nil,
+        y = ya and (ya + (yb - ya) * f) or nil, deck = (f < 0.5) and a.deck or b.deck }
+end
+RF.lerpPt = lerpPt
+
+local function copyPt(p) return { x = p.x, z = p.z, w = p.w, y = p.y, deck = p.deck } end
+
+--- Resample a polyline at a fixed step (keeps the ends; widths and heights interpolated).
 local function resampleFixed(P, step)
-    local out = { { x = P[1].x, z = P[1].z, w = P[1].w } }
+    local out = { copyPt(P[1]) }
     local carry = 0
     for i = 2, #P do
         local a, b = P[i - 1], P[i]
         local seg = sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
         local t = step - carry
         while t <= seg do
-            local f = t / seg
-            local wa, wb = a.w or b.w, b.w or a.w
-            out[#out + 1] = { x = a.x + (b.x - a.x) * f, z = a.z + (b.z - a.z) * f, w = wa and (wa + (wb - wa) * f) or nil }
+            out[#out + 1] = lerpPt(a, b, t / seg)
             t = t + step
         end
         carry = seg - (t - step)
@@ -712,9 +802,11 @@ local function resampleFixed(P, step)
     local last = P[#P]
     local tail = out[#out]
     if sqrt((tail.x - last.x) ^ 2 + (tail.z - last.z) ^ 2) > step * 0.3 then
-        out[#out + 1] = { x = last.x, z = last.z, w = last.w }
+        out[#out + 1] = copyPt(last)
     else
-        out[#out] = { x = last.x, z = last.z, w = last.w or tail.w }
+        local q = copyPt(last)
+        q.w = last.w or tail.w
+        out[#out] = q
     end
     return out
 end
@@ -722,14 +814,13 @@ RF.resampleFixed = resampleFixed
 
 -- ------------------------------------------------------------------------- one road class
 
---- Build the graph of one road class from the window's kinds. `isClass(kind)` picks the cells.
+--- Build the graph of one road class from the window's kinds. `isClass(kind, cellIndex)` picks the cells.
 local function buildClass(win, isClass, maxWidth, closeRadius)
     local W, H = win.W, win.H
     local m = {}
     local any = false
     for i = 1, W * H do
-        local k = win.kinds[i]
-        if k ~= nil and isClass(k) then m[i] = 1 any = true else m[i] = 0 end
+        if isClass(win.kinds[i] or 0, i) then m[i] = 1 any = true else m[i] = 0 end
     end
     if not any then return newGraph(), m end
     m = closeMask(m, W, H, closeRadius or 0)
@@ -798,6 +889,94 @@ local function splitEdgeAt(G, e, i, px, pz)
         f.class = e.class
     end
     return n
+end
+
+-- ------------------------------------------------------------------------- bridges and ramps
+
+--- Carry the deck lines (bridges, flyovers, raised ramps) into the ground roads they land on. Each
+--- deck end within DECK_JOIN of a ground road's end is tied to it (or, failing an end, to the nearest
+--- point of a ground road, split there), and the joined lines merge into one, so a road reads
+--- straight across a bridge. A deck that meets a paved road joins the paved roads, else the tracks.
+local function joinDecks(D, paved, track)
+    local function dist(a, b) return sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
+    local function findGround(n)
+        local best, bd, bg = nil, RF.DECK_JOIN, nil
+        for _, G in ipairs({ paved, track }) do
+            for _, m in ipairs(G.nodes) do
+                if not m.dead and #m.edges == 1 and m.tag ~= "edge" then
+                    local d = dist(m, n)
+                    if d < bd then best, bd, bg = m, d, G end
+                end
+            end
+        end
+        if best ~= nil then return best, bg end
+        for _, G in ipairs({ paved, track }) do
+            local e, i, dd, px, pz = nearestOnGraph(G, n.x, n.z, RF.DECK_JOIN)
+            if e ~= nil then
+                for _, m in ipairs({ e.a, e.b }) do
+                    if sqrt((m.x - px) ^ 2 + (m.z - pz) ^ 2) < 3 then return m, G end
+                end
+                return splitEdgeAt(G, e, i, px, pz), G
+            end
+        end
+        return nil
+    end
+    local target = {}
+    for _, n in ipairs(D.nodes) do
+        if not n.dead and #n.edges == 1 and n.tag ~= "edge" then
+            local m, G = findGround(n)
+            if m ~= nil then target[n] = { node = m, graph = G } end
+        end
+    end
+    -- move the deck lines into the graph they join (paved first)
+    local placed = {}
+    for _, e in ipairs(D.edges) do
+        if not e.dead then
+            local ta, tb = target[e.a], target[e.b]
+            local G = paved
+            if ta ~= nil and tb ~= nil then
+                G = (ta.graph == paved or tb.graph == paved) and paved or track
+            elseif ta ~= nil then G = ta.graph elseif tb ~= nil then G = tb.graph end
+            e.class = (G == paved) and "paved" or "track"
+            e.deck = true
+            G.edges[#G.edges + 1] = e
+            for _, n in ipairs({ e.a, e.b }) do
+                if placed[n] == nil then
+                    placed[n] = G
+                    G.nodes[#G.nodes + 1] = n
+                end
+            end
+        end
+    end
+    -- tie each landing in, then merge the two lines meeting there into one
+    local joined = 0
+    for n, t in pairs(target) do
+        local G = placed[n]
+        if G ~= nil and G == t.graph then
+            local m = t.node
+            local c = { a = m, b = n, pts = { { x = m.x, z = m.z }, { x = n.x, z = n.z, y = n.y, deck = true } }, class = n.class }
+            G.edges[#G.edges + 1] = c
+            m.edges[#m.edges + 1] = c
+            n.edges[#n.edges + 1] = c
+            n.tag = "ramp"
+            if m.tag ~= "fork" then m.tag = "ramp" end
+            joined = joined + 1
+        end
+    end
+    for _, G in ipairs({ paved, track }) do
+        for _, n in ipairs(G.nodes) do
+            if not n.dead and #n.edges == 2 and n.tag == "ramp" then mergeThrough(G, n) end
+        end
+        for _, e in ipairs(G.edges) do
+            if not e.dead then
+                e.class = (G == paved) and "paved" or "track"
+                e.width = medianWidth(e.pts, 6)
+                e.len = polylineLength(e.pts)
+                for _, p in ipairs(e.pts) do if p.deck then e.deck = true break end end
+            end
+        end
+    end
+    return joined
 end
 
 -- ------------------------------------------------------------------------- the window
@@ -897,7 +1076,54 @@ function RF.buildWindow(kindAt, ix0, iz0, W, H, opts)
         if not e.dead then e.width = medianWidth(e.pts, 6) e.len = polylineLength(e.pts) e.class = "track" end
     end
 
-    local out = { paved = paved, track = track, ix0 = ix0, iz0 = iz0, W = W, H = H, edges = {}, nodes = {} }
+    -- bridges, flyovers, raised ramps: their own class (a flyover must not cross the road under it),
+    -- then carried into the ground roads they land on
+    win.decks = 0
+    if opts.deckAt ~= nil then
+        local dk = {}
+        local any = false
+        for r = 0, H - 1 do
+            for c = 0, W - 1 do
+                local y = opts.deckAt(ix0 + c, iz0 + r)
+                if y ~= nil then dk[r * W + c + 1] = y any = true end
+            end
+            work(W)
+        end
+        if any then
+            local function deckYAt(x, z)
+                local c0, r0 = floor(x) - ix0, floor(z) - iz0
+                for rad = 0, 2 do
+                    local sum, n = 0, 0
+                    for dr = -rad, rad do
+                        for dc = -rad, rad do
+                            local c, r = c0 + dc, r0 + dr
+                            if c >= 0 and r >= 0 and c < W and r < H then
+                                local y = dk[r * W + c + 1]
+                                if y ~= nil then sum, n = sum + y, n + 1 end
+                            end
+                        end
+                    end
+                    if n > 0 then return sum / n end
+                end
+                return nil
+            end
+            local D = buildClass(win, function(_, i) return dk[i] ~= nil end, RF.MAX_ROAD_WIDTH.paved, 1)
+            for _, e in ipairs(D.edges) do
+                if not e.dead then
+                    if (e.width or 0) < RF.MIN_TRACK_WIDTH then removeEdge(D, e) else
+                        for _, p in ipairs(e.pts) do
+                            p.y = deckYAt(p.x, p.z)
+                            p.deck = p.y ~= nil
+                        end
+                    end
+                end
+            end
+            for _, n in ipairs(D.nodes) do n.y = deckYAt(n.x, n.z) end
+            win.decks = joinDecks(D, paved, track)
+        end
+    end
+
+    local out = { paved = paved, track = track, ix0 = ix0, iz0 = iz0, W = W, H = H, edges = {}, nodes = {}, decks = win.decks }
     for _, G in ipairs({ paved, track }) do
         -- a short line joined to nothing (no fork, not running off the window) is a scrap of paint
         -- along a stream or in a yard, not a road
@@ -1135,7 +1361,7 @@ local function trimFrom(P, cx, cz, gap)
             local x, z = a.x + (b.x - a.x) * m, a.z + (b.z - a.z) * m
             if sqrt((x - cx) ^ 2 + (z - cz) ^ 2) < gap then lo = m else hi = m end
         end
-        out[1] = { x = a.x + (b.x - a.x) * hi, z = a.z + (b.z - a.z) * hi, w = b.w }
+        out[1] = lerpPt(a, b, hi)
     end
     for k = i, #P do out[#out + 1] = P[k] end
     return out
@@ -1148,7 +1374,8 @@ local function reversed(P)
 end
 RF.reversed = reversed
 
---- Offset a polyline sideways by d (positive = right of its point order).
+--- Offset a polyline sideways by d (positive = right of its point order): a number, or a list with
+--- one offset per point. Heights and the deck mark carry across.
 local function offsetLine(P, d)
     local out = {}
     for i = 1, #P do
@@ -1157,7 +1384,8 @@ local function offsetLine(P, d)
         local l = sqrt(hx * hx + hz * hz)
         if l < 1e-6 then l = 1 end
         local rx, rz = -hz / l, hx / l
-        out[i] = { x = P[i].x + rx * d, z = P[i].z + rz * d, w = P[i].w }
+        local di = (type(d) == "table") and d[i] or d
+        out[i] = { x = P[i].x + rx * di, z = P[i].z + rz * di, w = P[i].w, y = P[i].y, deck = P[i].deck }
     end
     -- drop points that fold back (inside of a tight bend)
     local clean = { out[1] }
@@ -1231,23 +1459,192 @@ function RF.layCentre(st, forkGap)
     return P
 end
 
+local function anyDeck(P)
+    for _, p in ipairs(P) do if p.deck then return true end end
+    return false
+end
+
+local function slice(P, i0, i1)
+    local out = {}
+    for i = i0, i1 do out[#out + 1] = P[i] end
+    return out
+end
+
 --- The lanes to lay for a stretch. mode: "one" | "two" | "lanes". dir: +1 along the stretch's point
 --- order, -1 against (one-way only). gap: lane centre spacing (lanes only).
---- Returns a list of { pts, dual } in driving order; nil when the stretch is too short to lay.
-function RF.planLanes(st, mode, dir, gap, forkGap)
+---
+--- `fit` (optional) keeps the lanes clear of the road's SIDES - railings, walls, a bank, the edge of a
+--- bridge deck: { clear = function(p, rx, rz) -> roomLeft, roomRight (metres from the centre line to
+--- the first thing in the way on each side, nil = nothing), everywhere = false (bridges only) or true,
+--- rigClear = half a rig's width plus a margin, minGap = the least the two lanes may be apart,
+--- taper = metres over which a lane eases in or out }.
+---   Two lanes: each lane comes in as far as its side needs, never closer than minGap to the other;
+---   where both lanes cannot fit, that part is ONE two-way line down the middle of the room, the lanes
+---   joining it before and leaving it after.
+---   One line (one-way or two-way): moved off the middle only as far as a side needs.
+---
+--- Returns a list of { pts, dual, startAt, endAt } ("start" / "end": which end of the stretch that end
+--- of the lane sits at, for joining), with .links = { { from = k, to = m } } (lane k's last point to
+--- lane m's first, one-way), .collapsed (metres laid as one line), .pulled (true if a lane came in),
+--- .tooNarrow (true if even one rig does not fit somewhere). nil when the stretch is too short.
+function RF.planLanes(st, mode, dir, gap, forkGap, fit)
     local C = RF.layCentre(st, forkGap)
     if C == nil then return nil end
-    local lanes = {}
-    if mode == "one" then
-        local P = (dir or 1) < 0 and reversed(C) or C
-        lanes[1] = { pts = RF.resampleForDriving(P), dual = false, side = 0 }
-    elseif mode == "two" then
-        lanes[1] = { pts = RF.resampleForDriving(C), dual = true, side = 0 }
-    else
-        local h = (gap or 4) / 2
-        -- keep right: the lane right of the point order drives along it, the left one back
-        lanes[1] = { pts = RF.resampleForDriving(offsetLine(C, h)), dual = false, side = 1 }
-        lanes[2] = { pts = RF.resampleForDriving(reversed(offsetLine(C, -h))), dual = false, side = -1 }
+    local lanes = { links = {}, collapsed = 0, pulled = false, tooNarrow = false }
+    local back = mode == "one" and (dir or 1) < 0
+    if back then C = reversed(C) end
+    local useFit = fit ~= nil and fit.clear ~= nil and (fit.everywhere or anyDeck(C))
+    if not useFit then
+        if mode == "one" then
+            lanes[1] = { pts = RF.resampleForDriving(C), dual = false,
+                startAt = back and "end" or "start", endAt = back and "start" or "end" }
+        elseif mode == "two" then
+            lanes[1] = { pts = RF.resampleForDriving(C), dual = true, startAt = "start", endAt = "end" }
+        else
+            local h = (gap or 4) / 2
+            -- keep right: the lane right of the point order drives along it, the left one back
+            lanes[1] = { pts = RF.resampleForDriving(offsetLine(C, h)), dual = false, startAt = "start", endAt = "end" }
+            lanes[2] = { pts = RF.resampleForDriving(reversed(offsetLine(C, -h))), dual = false, startAt = "end", endAt = "start" }
+        end
+        return lanes
+    end
+
+    C = resampleFixed(C, 2)
+    local n = #C
+    local c = fit.rigClear or 1.8
+    local gmin = fit.minGap or 3.3
+    local BIG = 1e6
+    local L, R, applies = {}, {}, {}
+    for i = 1, n do
+        applies[i] = fit.everywhere or C[i].deck == true
+        L[i], R[i] = BIG, BIG
+    end
+    -- probe every other point (4 m) where fitting applies; the ones between take the tighter neighbour
+    for i = 1, n do
+        if applies[i] and (i % 2 == 1 or i == n) then
+            local a, b = C[max(1, i - 1)], C[min(n, i + 1)]
+            local hx, hz = b.x - a.x, b.z - a.z
+            local l = sqrt(hx * hx + hz * hz)
+            if l > 1e-6 then
+                local l1, r1 = fit.clear(C[i], -hz / l, hx / l)
+                L[i], R[i] = l1 or BIG, r1 or BIG
+            end
+        end
+    end
+    for i = 2, n - 1 do
+        if applies[i] and i % 2 == 0 then
+            L[i] = min(L[i - 1], L[i + 1])
+            R[i] = min(R[i - 1], R[i + 1])
+        end
+    end
+    -- the allowed band for a rig's centre line [lo, hi] (left of the centre is negative), eased over
+    -- the taper so a lane moves in BEFORE the narrow part rather than at it
+    local tp = max(1, floor((fit.taper or 10) / 2))
+    local lo, hi = {}, {}
+    for i = 1, n do
+        local l0, h0 = -BIG, BIG
+        for j = max(1, i - tp), min(n, i + tp) do
+            l0 = max(l0, -(L[j] - c))
+            h0 = min(h0, R[j] - c)
+        end
+        lo[i], hi[i] = l0, h0
+        if h0 < l0 then lanes.tooNarrow = true end
+    end
+    local pl, pr, mid, single = {}, {}, {}, {}
+    local half = (gap or 4) / 2
+    for i = 1, n do
+        local l0, h0 = lo[i], hi[i]
+        local m0 = 0
+        if h0 < l0 then m0 = (l0 + h0) / 2 elseif m0 < l0 then m0 = l0 elseif m0 > h0 then m0 = h0 end
+        mid[i] = m0
+        if mode == "lanes" then
+            local a, b = max(-half, l0), min(half, h0)
+            if b - a < gmin then
+                if h0 - l0 >= gmin then
+                    -- room for both lanes only off the middle: slide the pair, keeping the minimum gap
+                    local mm = (l0 + h0) / 2
+                    if l0 < -BIG / 2 then mm = h0 - gmin / 2 end
+                    if h0 > BIG / 2 then mm = l0 + gmin / 2 end
+                    a, b = mm - gmin / 2, mm + gmin / 2
+                else
+                    single[i] = true
+                end
+            end
+            pl[i], pr[i] = a, b
+            if a > -half + 0.05 or b < half - 0.05 then lanes.pulled = true end
+        end
+    end
+    -- light smoothing of the offsets (the probes step in 0.5 m)
+    local function smoothed(v)
+        local out = {}
+        for i = 1, n do
+            local sum, k = 0, 0
+            for j = max(1, i - 2), min(n, i + 2) do
+                if v[j] ~= nil then sum, k = sum + v[j], k + 1 end
+            end
+            out[i] = (k > 0) and sum / k or v[i]
+        end
+        return out
+    end
+    mid = smoothed(mid)
+
+    if mode ~= "lanes" then
+        for i = 1, n do if abs(mid[i]) > 0.05 then lanes.pulled = true end end
+        lanes[1] = { pts = RF.resampleForDriving(offsetLine(C, mid)), dual = (mode == "two"),
+            startAt = back and "end" or "start", endAt = back and "start" or "end" }
+        return lanes
+    end
+
+    pl, pr = smoothed(pl), smoothed(pr)
+    -- sections: runs of two lanes and of one line; a lane run too short to be worth it joins the line
+    local sections = {}
+    local i = 1
+    while i <= n do
+        local j = i
+        while j < n and (single[j + 1] == true) == (single[i] == true) do j = j + 1 end
+        sections[#sections + 1] = { single = single[i] == true, i0 = i, i1 = j }
+        i = j + 1
+    end
+    local merged = {}
+    for _, sec in ipairs(sections) do
+        if not sec.single and sec.i1 - sec.i0 < 3 and #sections > 1 then sec.single = true end
+        local prev = merged[#merged]
+        if prev ~= nil and prev.single == sec.single then prev.i1 = sec.i1 else merged[#merged + 1] = sec end
+    end
+    sections = merged
+    -- lay each section; neighbouring sections are joined end to end by one-way links
+    local prevSec = nil
+    for _, sec in ipairs(sections) do
+        local i0, i1 = sec.i0, sec.i1
+        if sec.single then
+            local P = offsetLine(slice(C, i0, i1), slice(mid, i0, i1))
+            if #P < 2 then P = { C[i0], C[min(n, i0 + 1)] } end
+            lanes[#lanes + 1] = { pts = RF.resampleForDriving(P), dual = true,
+                startAt = (i0 == 1) and "start" or nil, endAt = (i1 == n) and "end" or nil }
+            sec.line = #lanes
+            lanes.collapsed = lanes.collapsed + polylineLength(slice(C, i0, i1))
+        else
+            local right = offsetLine(slice(C, i0, i1), slice(pr, i0, i1))
+            local left = reversed(offsetLine(slice(C, i0, i1), slice(pl, i0, i1)))
+            lanes[#lanes + 1] = { pts = RF.resampleForDriving(right), dual = false,
+                startAt = (i0 == 1) and "start" or nil, endAt = (i1 == n) and "end" or nil }
+            sec.right = #lanes
+            lanes[#lanes + 1] = { pts = RF.resampleForDriving(left), dual = false,
+                startAt = (i1 == n) and "end" or nil, endAt = (i0 == 1) and "start" or nil }
+            sec.left = #lanes
+        end
+        if prevSec ~= nil then
+            if prevSec.single then
+                -- line, then lanes: the line feeds the right lane; the left lane runs into the line
+                lanes.links[#lanes.links + 1] = { from = prevSec.line, to = sec.right }
+                lanes.links[#lanes.links + 1] = { from = sec.left, to = prevSec.line, toEnd = true }
+            else
+                -- lanes, then line: the right lane runs into the line; the line feeds the left lane
+                lanes.links[#lanes.links + 1] = { from = prevSec.right, to = sec.line }
+                lanes.links[#lanes.links + 1] = { from = sec.line, to = prevSec.left, fromStart = true }
+            end
+        end
+        prevSec = sec
     end
     return lanes
 end

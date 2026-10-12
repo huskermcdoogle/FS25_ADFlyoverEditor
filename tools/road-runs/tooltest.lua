@@ -25,7 +25,9 @@ ADFlyoverSettings = { debugLog = function(f, ...) print("[log] " .. string.forma
 dofile(HERE .. "terrain.lua")
 
 -- ---------------------------------------------------------------- AutoDrive graph stand-in
-local wps = dofile(os.getenv("GRAPH") or (JH .. "graph_data.lua"))
+-- SYNTH=bridge: an empty network on a made-up 5 m bridge (see bridgetest.lua) instead of the map
+local SYNTH = os.getenv("SYNTH")
+local wps = SYNTH and {} or dofile(os.getenv("GRAPH") or (JH .. "graph_data.lua"))
 local byId = {}
 for _, w in ipairs(wps) do
     byId[w.id] = w
@@ -93,6 +95,31 @@ end
 dofile(HERE .. "../../scripts/editor/RoadFinder.lua")
 dofile(HERE .. "../../scripts/editor/RoadRunsTool.lua")
 local E = ADFlyoverEditor
+if SYNTH == "bridge" then
+    local RF = ADRoadFinder
+    local deckHalf = tonumber(os.getenv("DECK_HALF") or "2.5")
+    RF.groundKindAt = function(x, z)
+        if math.abs(z) <= 3.5 and math.abs(x) >= 30 and math.abs(x) <= 150 then return RF.KIND_PAVED end
+        return RF.KIND_NONE
+    end
+    RF.roadMeshAt = function(x, z)
+        if math.abs(z) <= deckHalf then
+            if math.abs(x) <= 30 then return 6, true end
+            if math.abs(x) <= 35 then return 0.2, false end
+        end
+        return nil
+    end
+    function E:roadRunsClearance(p, rx, rz)
+        local function room(sx)
+            for d = 0.5, 6, 0.5 do
+                local z = p.z + sx * rz * d
+                if math.abs(p.x) <= 30 and math.abs(z) >= deckHalf - 0.2 then return d - 0.5 end
+            end
+            return nil
+        end
+        return room(-1), room(1)
+    end
+end
 E.ROADRUNS_SAMPLES_PER_FRAME = 50000
 
 local function frames(n)
@@ -187,6 +214,31 @@ for id = before + 1, count do
     for _, i in ipairs(w.incoming) do if i <= before then joins = joins + 1 end end
 end
 print("links between new and old points: " .. joins)
+if SYNTH then
+    -- can a vehicle drive the new network from the west end to the east end, and back?
+    local west, east = nil, nil
+    for id = before + 1, count do
+        local w = byId[id]
+        if west == nil or w.x < byId[west].x then west = id end
+        if east == nil or w.x > byId[east].x then east = id end
+    end
+    local function reach(fromX, toX)
+        -- start: the new points near the from-end that have outgoing links heading the right way
+        local seen, queue = {}, {}
+        for id = before + 1, count do
+            if math.abs(byId[id].x - fromX) < 3 then queue[#queue + 1] = id seen[id] = true end
+        end
+        while #queue > 0 do
+            local id = table.remove(queue)
+            if math.abs(byId[id].x - toX) < 3 then return true end
+            for _, o in ipairs(byId[id].out) do
+                if not seen[o] then seen[o] = true queue[#queue + 1] = o end
+            end
+        end
+        return false
+    end
+    print(string.format("drive west->east: %s; east->west: %s", tostring(reach(byId[west].x, byId[east].x)), tostring(reach(byId[east].x, byId[west].x))))
+end
 -- a second window: move away and back
 local t1 = os.clock()
 settle(cx + 300, cz)

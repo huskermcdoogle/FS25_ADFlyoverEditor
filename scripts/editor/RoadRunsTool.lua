@@ -28,7 +28,9 @@ E.ROADRUNS_WINDOW = 384            -- metres a side of the ground read round the
 E.ROADRUNS_RECENTRE = 96           -- the window moves when the mouse is this far from its middle
 E.ROADRUNS_SNAP = 32               -- window centres snap to this grid, so a small wobble re-uses it
 E.ROADRUNS_SAMPLES_PER_FRAME = 4000 -- cap; reads stop sooner once the frame's time slice is used
-E.ROADRUNS_MIN_LANE_GAP = 3.3      -- two passing rigs ~2.8-3.0 m wide need about this between lane centres
+E.ROADRUNS_RIG_MARGIN = 0.3        -- clearance kept beyond a rig's own width: to the other lane, to a railing
+E.ROADRUNS_PROBE_REACH = 6         -- how far out from the centre line the side check looks
+E.ROADRUNS_TAPER = 12              -- metres over which a lane eases in or out round a narrow part
 E.ROADRUNS_JOIN_RADIUS = 10        -- how far a run's end looks for an existing path to join
 E.ROADRUNS_MODE_NAMES = { "auto", "one-way", "two-way", "two lanes" }
 E.ROADRUNS_MODE_KEYS = { "auto", "one", "two", "lanes" }
@@ -41,6 +43,8 @@ E.roadShowAll = true               -- light up every unpathed road nearby, faint
 E.roadGapAuto = true               -- lane gap from the road's width
 E.roadLaneGap = 4.0
 E.roadForkGap = 15
+E.roadRigWidth = 3.0               -- the widest rig the lanes must pass; sets the minimum lane gap and side room
+E.roadFitEverywhere = false        -- the side check on every road, not only bridges and ramps
 
 local function roadState(self)
     local s = self.roadRuns
@@ -78,7 +82,12 @@ function E:roadGapFor(st)
     if self.roadGapAuto and st ~= nil and st.width ~= nil then
         gap = math.min(self.ROADRUNS_MAX_LANE_GAP, st.width * self.ROADRUNS_GAP_PER_WIDTH)
     end
-    return math.max(self.ROADRUNS_MIN_LANE_GAP, gap)
+    return math.max(self:roadMinGap(), gap)
+end
+
+--- The least two lanes may be apart: two rigs of the set width side by side, plus the margin.
+function E:roadMinGap()
+    return self.roadRigWidth + self.ROADRUNS_RIG_MARGIN
 end
 
 function E:roadRunsReset()
@@ -228,7 +237,8 @@ function E:updateRoadRuns(overPanel)
         s.job = coroutine.create(function()
             RF.yielding = true
             local win = RF.buildWindow(function(ix, iz) return RF.cacheKind(cache, ix, iz) end,
-                ix0, iz0, self.ROADRUNS_WINDOW, self.ROADRUNS_WINDOW, { kinds = kinds })
+                ix0, iz0, self.ROADRUNS_WINDOW, self.ROADRUNS_WINDOW,
+                { kinds = kinds, deckAt = function(ix, iz) return RF.cacheDeck(cache, ix, iz) end })
             RF.yielding = false
             return win
         end)
@@ -253,8 +263,8 @@ function E:updateRoadRuns(overPanel)
             s.progress = 1
             s.netKey = netKey
             self:roadRunsRefreshStretches()
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - window (%d, %d): %d road lines, %d stretches with no path%s.",
-                ix0, iz0, #s.win.edges, #s.stretches, RF.noRockCheck and " (no drive-cost map: rock may read as paved)" or "")
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - window (%d, %d): %d road lines, %d stretches with no path, %d bridge/ramp landing(s) joined%s.",
+                ix0, iz0, #s.win.edges, #s.stretches, s.win.decks or 0, RF.noRockCheck and " (no drive-cost map: rock may read as paved)" or "")
         else
             s.progress = math.min(0.98, (s.progress or 0.85) + 0.01)
         end
@@ -374,6 +384,83 @@ function E:roadRunsPickedLength()
 end
 
 -- ---------------------------------------------------------------------------------------------
+-- the side check: how much room the road has on each side
+
+-- AutoDrive's own object-sensor mask (as the junction tool's corridor check): map furniture is often in
+-- the DEFAULT group and knock-over signs are DYNAMIC bodies. Vehicles, bales and pallets are dropped.
+local SideProbe = { hits = 0 }
+function SideProbe.cb(self, id)
+    if id ~= nil and id ~= 0 and id ~= g_currentMission.terrainRootNode then
+        local obj = g_currentMission.nodeToObject ~= nil and g_currentMission.nodeToObject[id] or nil
+        if obj ~= nil and (obj.rootVehicle ~= nil or obj.spec_wheels ~= nil or obj.getRootVehicle ~= nil
+            or obj.isRoundbale ~= nil or obj.baleDiameter ~= nil or obj.spec_pallet ~= nil) then
+            return true
+        end
+        self.hits = self.hits + 1
+    end
+    return true
+end
+local sideMask = nil
+local sideProbeNoted = false
+
+--- Metres from the centre line at p to the first thing in the way on its left and right (nil = clear
+--- out to PROBE_REACH): something standing there from 0.8 to 2.8 m above the road (a railing, wall,
+--- post, tree), the edge of the deck on a bridge or ramp, or on the ground a bank rising over 1 m or a
+--- drop of over 1.5 m. (rx, rz) is the unit vector to the right. Checked in 0.5 m steps; the answer
+--- is the last clear step, so it never overstates the room.
+function E:roadRunsClearance(p, rx, rz)
+    if overlapBox == nil or g_currentMission == nil or g_currentMission.terrainRootNode == nil then return nil, nil end
+    if sideMask == nil then
+        -- plus ROAD: a bridge's railings may be part of its deck mesh, in the road group. The probe box
+        -- floats 0.8 m over the deck, so the deck itself is not hit.
+        sideMask = (CollisionFlag.DEFAULT or 0) + (CollisionFlag.STATIC_OBJECT or 0) + (CollisionFlag.DYNAMIC_OBJECT or 0)
+            + (CollisionFlag.TREE or 0) + (CollisionFlag.BUILDING or 0) + (CollisionFlag.ROAD or 0)
+    end
+    local y = p.y or terrainY(p.x, p.z)
+    local ry = math.atan2(rz, -rx)        -- heading (rz, -rx): the box's long side runs along the road
+    local step = 0.5
+    local function room(side)
+        for d = step, self.ROADRUNS_PROBE_REACH, step do
+            local x, z = p.x + side * rx * d, p.z + side * rz * d
+            local blocked = false
+            if p.deck then
+                -- still on the deck: a road mesh under the wheel within 0.6 m of the deck's height
+                local my = RF.roadMeshAt(x, z)
+                if my == nil or math.abs(my - y) > 0.6 then blocked = true end
+            else
+                local ty = terrainY(x, z)
+                if ty > y + 1.0 or ty < y - 1.5 then blocked = true end
+            end
+            if not blocked then
+                SideProbe.hits = 0
+                local ok, err = pcall(overlapBox, x, y + 1.8, z, 0, ry, 0, step / 2, 1.0, 0.5, "cb", SideProbe, sideMask,
+                    true, true, true, true)
+                if not ok and not sideProbeNoted then
+                    sideProbeNoted = true
+                    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - side check FAILED (%s): lanes are not fitted to railings.", tostring(err))
+                end
+                blocked = ok and SideProbe.hits > 0
+            end
+            if blocked then return d - step end
+        end
+        return nil
+    end
+    return room(-1), room(1)
+end
+
+--- The side-check settings handed to the lane planner.
+function E:roadRunsFit()
+    local editor = self
+    return {
+        clear = function(p, rx, rz) return editor:roadRunsClearance(p, rx, rz) end,
+        everywhere = self.roadFitEverywhere,
+        rigClear = self.roadRigWidth / 2 + self.ROADRUNS_RIG_MARGIN,
+        minGap = self:roadMinGap(),
+        taper = self.ROADRUNS_TAPER,
+    }
+end
+
+-- ---------------------------------------------------------------------------------------------
 -- building
 
 local function neighbourCount(wp)
@@ -455,39 +542,46 @@ function E:commitRoadRuns()
     if #s.picks == 0 then return false end
     ADEditorHistory:snapshot("road runs")
     local flags = self.roadSubPrio and AutoDrive.FLAG_SUBPRIO or AutoDrive.FLAG_NONE
-    local laid, points, joins = 0, 0, 0
+    local laid, points, joins, narrow = 0, 0, 0, 0
     local pending = {}       -- ends to join once everything is laid (a pick may join another pick)
     local owner = {}         -- point id -> the pick that laid it, this build
     for pickIndex, pk in ipairs(s.picks) do
         local st = pk.st
         local mode = self:roadModeFor(st)
-        local lanes = RF.planLanes(st, mode, pk.dir, self:roadGapFor(st), self.roadForkGap)
-        for _, ln in ipairs(lanes or {}) do
+        local lanes = self:roadRunsLanesFor(st, pk.dir)
+        local ids = {}
+        for k, ln in ipairs(lanes) do
             if #ln.pts >= 2 then
                 local firstId, lastId = self:createRunFrom(withHeights(ln.pts), ln.dual, flags)
                 if firstId ~= nil and lastId ~= nil then
+                    ids[k] = { first = firstId, last = lastId }
                     for id = firstId, lastId do owner[id] = pickIndex end
                     laid = laid + 1
                     points = points + (lastId - firstId + 1)
-                    -- which end of the lane sits at which end of the stretch: lanes run along the
-                    -- stretch's point order unless reversed (the back lane, or a one-way laid against it)
-                    local P = ln.pts
-                    local alongOrder
-                    if ln.side == 1 then alongOrder = true
-                    elseif ln.side == -1 then alongOrder = false
-                    else alongOrder = (mode ~= "one") or (pk.dir or 1) >= 0 end
-                    local startTag = alongOrder and st.startTag or st.endTag
-                    local endTag = alongOrder and st.endTag or st.startTag
-                    if startTag == "path" then
+                    -- a lane end at a stretch end that an existing path takes over from: join it there
+                    local P, n = ln.pts, #ln.pts
+                    local function tagAt(at) return (at == "start") and st.startTag or st.endTag end
+                    if ln.startAt ~= nil and tagAt(ln.startAt) == "path" then
                         pending[#pending + 1] = { pick = pickIndex, id = firstId, p = P[1], h = { P[2].x - P[1].x, P[2].z - P[1].z }, atStart = true, dual = ln.dual }
                     end
-                    if endTag == "path" then
-                        local n = #P
+                    if ln.endAt ~= nil and tagAt(ln.endAt) == "path" then
                         pending[#pending + 1] = { pick = pickIndex, id = lastId, p = P[n], h = { P[n].x - P[n - 1].x, P[n].z - P[n - 1].z }, atStart = false, dual = ln.dual }
                     end
                 end
             end
         end
+        -- lanes into and out of a one-line part (a narrow bridge)
+        for _, lk in ipairs(lanes.links or {}) do
+            local a, b = ids[lk.from], ids[lk.to]
+            if a ~= nil and b ~= nil then
+                local wa = ADGraphManager:getWayPointById(lk.fromStart and a.first or a.last)
+                local wb = ADGraphManager:getWayPointById(lk.toEnd and b.last or b.first)
+                if wa ~= nil and wb ~= nil then
+                    ADGraphManager:toggleConnectionBetween(wa, wb, false, false, false)
+                end
+            end
+        end
+        if lanes.collapsed ~= nil and lanes.collapsed > 0 then narrow = narrow + lanes.collapsed end
     end
     for _, j in ipairs(pending) do
         local own = ADGraphManager:getWayPointById(j.id)
@@ -506,8 +600,8 @@ function E:commitRoadRuns()
     end
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - built %d stretch(es): %d lane(s), %d point(s), %d join(s) to existing paths, %s.",
-        #s.picks, laid, points, joins, self.roadSubPrio and "secondary" or "primary")
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - built %d stretch(es): %d lane(s), %d point(s), %d join(s) to existing paths, %.0f m laid as one two-way line where two lanes did not fit, %s.",
+        #s.picks, laid, points, joins, narrow, self.roadSubPrio and "secondary" or "primary")
     s.picks = {}
     s.netKey = nil
     self:roadRunsRefreshStretches()
@@ -536,11 +630,12 @@ end
 function E:roadRunsLanesFor(st, dir)
     local mode = self:roadModeFor(st)
     local gap = self:roadGapFor(st)
-    local key = string.format("%s:%d:%.2f:%d", mode, dir or 1, gap, self.roadForkGap)
+    local key = string.format("%s:%d:%.2f:%d:%.1f:%s", mode, dir or 1, gap, self.roadForkGap, self.roadRigWidth,
+        tostring(self.roadFitEverywhere))
     st.laneCache = st.laneCache or {}
     local lanes = st.laneCache[key]
     if lanes == nil then
-        lanes = RF.planLanes(st, mode, dir, gap, self.roadForkGap) or {}
+        lanes = RF.planLanes(st, mode, dir, gap, self.roadForkGap, self:roadRunsFit()) or { links = {} }
         for _, ln in ipairs(lanes) do withHeights(ln.pts) end
         st.laneCache[key] = lanes
     end
@@ -548,6 +643,14 @@ function E:roadRunsLanesFor(st, dir)
 end
 
 function E:drawRoadRunLanes(lanes, lw, r, g, b)
+    for _, lk in ipairs(lanes.links or {}) do
+        local a, b2 = lanes[lk.from], lanes[lk.to]
+        if a ~= nil and b2 ~= nil and #a.pts > 0 and #b2.pts > 0 then
+            local p = lk.fromStart and a.pts[1] or a.pts[#a.pts]
+            local q = lk.toEnd and b2.pts[#b2.pts] or b2.pts[1]
+            ADDrawingManager:addLineTask(p.x, p.y + 0.6, p.z, q.x, q.y + 0.6, q.z, lw, r, g, b)
+        end
+    end
     for _, ln in ipairs(lanes) do
         drawLine(ln.pts, 1, lw, r, g, b, 0.6)
         for i, p in ipairs(ln.pts) do
@@ -649,8 +752,22 @@ function E:roadRunsCard(kit)
     if s.mapGap ~= nil then
         kit.add("cursor", "map's own lanes", string.format("%.1f m apart", s.mapGap))
     end
-    if not self.roadGapAuto and self.roadLaneGap < self.ROADRUNS_MIN_LANE_GAP then
-        kit.add("hint", string.format("under %.1f m: big rigs may not pass", self.ROADRUNS_MIN_LANE_GAP))
+    if not self.roadGapAuto and self.roadLaneGap < self:roadMinGap() then
+        kit.add("hint", string.format("under %.1f m: the lanes are put %.1f m apart", self:roadMinGap(), self:roadMinGap()))
+    end
+    kit.segFlip("side check", "bridges", "everywhere", self.roadFitEverywhere, function()
+        editor.roadFitEverywhere = not editor.roadFitEverywhere
+    end)
+    kit.numberAfter("rig width")
+    kit.add("hint", "lanes come in from railings and banks; too narrow = one two-way line")
+    local lanes = st ~= nil and self:roadRunsLanesFor(st, (st == s.hover and s.hoverSide) or 1) or nil
+    if lanes ~= nil and (lanes.collapsed or 0) > 0 then
+        kit.add("cursor", "too narrow for two", string.format("%.0f m as one two-way line", lanes.collapsed))
+    elseif lanes ~= nil and lanes.pulled then
+        kit.add("cursor", "side check", "lanes moved in to clear the sides")
+    end
+    if lanes ~= nil and lanes.tooNarrow then
+        kit.add("hint", string.format("narrower than one %.1f m rig somewhere on this road", self.roadRigWidth))
     end
     kit.numberAfter("fork gap")
     kit.add("hint", "room left at forks for the junction tool")
@@ -682,6 +799,7 @@ function E:roadRunsNumbers(fieldEntry)
     if not self.roadGapAuto then
         list[#list + 1] = fieldEntry("lane gap", "m", 1, "roadLaneGap", 2.5, 8, 0.1, false)
     end
+    list[#list + 1] = fieldEntry("rig width", "m", 1, "roadRigWidth", 2.0, 5.0, 0.1, false)
     list[#list + 1] = fieldEntry("fork gap", "m", 0, "roadForkGap", 0, 40, 1, true)
     return list
 end
