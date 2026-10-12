@@ -437,6 +437,65 @@ local function junctionShareCrossings(cx, cz, reach)
     return joined
 end
 
+-- THE EMPTY MIDDLE (pattern step A, doc 12). A junction whose middle is empty - a cleared one with its
+-- through roads cleared too, or the test course, made that way - has no lane running past the side road:
+-- each road's lanes stop a few metres short of the middle and start again beyond it. The pattern hangs
+-- its pieces on those lanes, so it found nothing to fit (the course's J4: "no main-road lane runs past
+-- the side road the right way"). So a lane that stops is joined, in thought, to the lane that starts
+-- straight ahead of it across the middle: the same way within 10 degrees, within 1 m of its line, under
+-- 30 m on, and passing within 8 m of the middle. While the fit works out its frame those joins count as
+-- lanes (jxpLinksNear); they are only laid for real when the pattern is (junctionPlaceFitted), so a dry
+-- fit changes nothing. Each end pairs with its nearest start and that start with it, nothing else.
+local jxpBridges = nil
+local function jxpFindBridges(cx, cz)
+    local ends, starts = {}, {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil and (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= 20 * 20 then
+            local nin, nout = #(w.incoming or {}), #(w.out or {})
+            if nout == 0 and nin == 1 then ends[#ends + 1] = w end
+            if nin == 0 and nout == 1 then starts[#starts + 1] = w end
+        end
+    end
+    table.sort(ends, function(p, q) return p.id < q.id end)
+    table.sort(starts, function(p, q) return p.id < q.id end)
+    local cand = {}
+    for _, e in ipairs(ends) do
+        local p = ADGraphManager:getWayPointById(e.incoming[1])
+        for _, st in ipairs(starts) do
+            local q = ADGraphManager:getWayPointById(st.out[1])
+            if p ~= nil and q ~= nil then
+                local dx, dz = e.x - p.x, e.z - p.z
+                local n = math.sqrt(dx * dx + dz * dz)
+                local sx, sz = q.x - st.x, q.z - st.z
+                local m = math.sqrt(sx * sx + sz * sz)
+                if n > 1e-6 and m > 1e-6 then
+                    dx, dz, sx, sz = dx / n, dz / n, sx / m, sz / m
+                    local along = (st.x - e.x) * dx + (st.z - e.z) * dz
+                    local side = math.abs((st.x - e.x) * dz - (st.z - e.z) * dx)
+                    -- how near the join passes the middle
+                    local t = math.max(0, math.min(1, ((cx - e.x) * (st.x - e.x) + (cz - e.z) * (st.z - e.z))
+                        / math.max(1e-6, (st.x - e.x) ^ 2 + (st.z - e.z) ^ 2)))
+                    local mx, mz = e.x + t * (st.x - e.x), e.z + t * (st.z - e.z)
+                    if dx * sx + dz * sz > 0.985 and along > 1 and along < 30 and side < 1
+                        and (mx - cx) ^ 2 + (mz - cz) ^ 2 <= 8 * 8 then
+                        cand[#cand + 1] = { e = e, s = st, d = along }
+                    end
+                end
+            end
+        end
+    end
+    local bestOfE, bestOfS = {}, {}
+    for _, c in ipairs(cand) do
+        if bestOfE[c.e] == nil or c.d < bestOfE[c.e].d then bestOfE[c.e] = c end
+        if bestOfS[c.s] == nil or c.d < bestOfS[c.s].d then bestOfS[c.s] = c end
+    end
+    local out = {}
+    for _, c in ipairs(cand) do
+        if bestOfE[c.e] == c and bestOfS[c.s] == c then out[#out + 1] = { a = c.e, b = c.s } end
+    end
+    return out
+end
+
 -- Shared by the fitted pattern and the plain piece (doc 08): lanes near a point, and a point on a lane.
 local function jxpLinksNear(px, pz, r)
     local t = {}
@@ -446,6 +505,11 @@ local function jxpLinksNear(px, pz, r)
                 local b = ADGraphManager:getWayPointById(bid)
                 if b ~= nil and b ~= a then t[#t + 1] = { a = a, b = b } end
             end
+        end
+    end
+    for _, br in ipairs(jxpBridges or {}) do
+        if (br.a.x - px) ^ 2 + (br.a.z - pz) ^ 2 <= r * r or (br.b.x - px) ^ 2 + (br.b.z - pz) ^ 2 <= r * r then
+            t[#t + 1] = { a = br.a, b = br.b }
         end
     end
     table.sort(t, function(p, q)
@@ -568,7 +632,7 @@ local JX_PLAIN = {
 }
 
 local JX_PATTERN_RIGHT, JX_PATTERN_LEFT = 1.5, 1.71
-local function junctionPlaceFitted(cx, cz, reach, shape, dry)
+local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
     local R = math.max(reach or 15, 15)
     local function near(w, r) return (w.x - cx) ^ 2 + (w.z - cz) ^ 2 <= r * r end
     local linksNear, unit = jxpLinksNear, jxpUnit
@@ -576,12 +640,15 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     -- 1. INNER CORNERS: two lanes crossing at a real angle near the site, either in open space or at a
     -- point they already share.
     local corners = {}
-    local function addCorner(x, z, u1x, u1z, u2x, u2z)
+    local function addCorner(x, z, u1x, u1z, u2x, u2z, node)
         if not near({ x = x, z = z }, 12) then return end
         for _, c in ipairs(corners) do
-            if (c.x - x) ^ 2 + (c.z - z) ^ 2 < 0.25 then return end
+            if (c.x - x) ^ 2 + (c.z - z) ^ 2 < 0.25 then
+                if node ~= nil and c.node == nil then c.node = node end
+                return
+            end
         end
-        corners[#corners + 1] = { x = x, z = z, dirs = { { u1x, u1z }, { u2x, u2z } } }
+        corners[#corners + 1] = { x = x, z = z, dirs = { { u1x, u1z }, { u2x, u2z } }, node = node }
     end
     local L0 = linksNear(cx, cz, R + 10)
     for i = 1, #L0 do
@@ -623,8 +690,39 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
             for a = 1, #runs do
                 for b = a + 1, #runs do
                     if math.abs(runs[a][1] * runs[b][1] + runs[a][2] * runs[b][2]) < 0.5 then
-                        addCorner(w.x, w.z, runs[a][1], runs[a][2], runs[b][1], runs[b][2])
+                        addCorner(w.x, w.z, runs[a][1], runs[a][2], runs[b][1], runs[b][2], w)
                     end
+                end
+            end
+        end
+    end
+    -- Lanes that cross at two points lying on top of each other, one each, joined to nothing between them:
+    -- where the clear un-shared an old corner (step A, 2026-10-12). Neither rule above sees it - the lanes'
+    -- links meet end to end there rather than crossing part-way - so a cleared X was laid again as the
+    -- plain piece, over the doubled points. The corner is taken at the one point; laying folds the other
+    -- into it (see cornerNode below).
+    local function runOf(w)
+        local i = w.incoming and w.incoming[1] and ADGraphManager:getWayPointById(w.incoming[1]) or nil
+        local o = w.out and w.out[1] and ADGraphManager:getWayPointById(w.out[1]) or nil
+        if i == nil or o == nil or #(w.incoming or {}) ~= 1 or #(w.out or {}) ~= 1 then return nil end
+        return unit(o.x - i.x, o.z - i.z)
+    end
+    local lone = {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil and near(w, 12) and #(w.incoming or {}) == 1 and #(w.out or {}) == 1 then
+            lone[#lone + 1] = w
+        end
+    end
+    table.sort(lone, function(p, q2) return p.id < q2.id end)
+    for i = 1, #lone do
+        for j = i + 1, #lone do
+            local w, v = lone[i], lone[j]
+            if (w.x - v.x) ^ 2 + (w.z - v.z) ^ 2 <= 0.3 * 0.3
+                and not table.contains(w.out, v.id) and not table.contains(v.out, w.id) then
+                local ax, az = runOf(w)
+                local bx, bz = runOf(v)
+                if ax ~= nil and bx ~= nil and math.abs(ax * bx + az * bz) < 0.5 then
+                    addCorner(w.x, w.z, ax, az, bx, bz, w)
                 end
             end
         end
@@ -684,12 +782,35 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
             if math.sqrt((px - c.x) ^ 2 + (pz - c.z) ^ 2) > 0.25 * math.min(n1, n2) then
                 return nil, "the lanes do not cross in an even box (a lane bends between the corners)"
             end
+        end
+        -- NO TURNING ROUND IN THE MIDDLE (step A, 2026-10-12). Every left runs corner - centre - corner on
+        -- two-way spokes, so a truck can also go in at one corner and out at the next one round: a U-turn
+        -- back onto the road it came from. On a square box that bend is 90 degrees and AutoDrive won't take
+        -- it (80 at most); a box leaning off square, or longer one way than the other (two roads with
+        -- different lane gaps: survey j58, 3.8 by 4.5 m, bends 78.8), takes it below 80 on its long sides,
+        -- and the route check found the U-turn. Measured on the real corners.
+        local order = { "++", "+-", "--", "-+" }
+        for i = 1, 4 do
+            local a, b = q[order[i]], q[order[i % 4 + 1]]
+            local ix, iz = ox - a.x, oz - a.z
+            local jx, jz = b.x - ox, b.z - oz
+            local den = math.sqrt(ix * ix + iz * iz) * math.sqrt(jx * jx + jz * jz)
+            if den > 1e-6 then
+                local bendAt = math.deg(math.acos(math.max(-1, math.min(1, (ix * jx + iz * jz) / den))))
+                if bendAt <= 80.5 then
+                    return nil, string.format("a truck could turn round in the mod's X here (a %.0f degree bend at its middle; the box is %.1f by %.1f m)",
+                        bendAt, n1, n2)
+                end
+            end
         end    else
         kind = "T"
         -- The side road: one lane in that stops near the main road, one lane out that starts there.
         local ends, starts = {}, {}
+        -- A lane joined across the middle (jxpBridges) is a road running through, not the side road.
+        local bridged = {}
+        for _, br in ipairs(jxpBridges or {}) do bridged[br.a], bridged[br.b] = true, true end
         for _, w in pairs(ADGraphManager:getWayPoints()) do
-            if w ~= nil and w.id ~= nil and near(w, 14) then
+            if w ~= nil and w.id ~= nil and near(w, 14) and not bridged[w] then
                 local nin, nout = #(w.incoming or {}), #(w.out or {})
                 if nout == 0 and nin >= 1 then ends[#ends + 1] = w end
                 if nin == 0 and nout >= 1 then starts[#starts + 1] = w end
@@ -996,7 +1117,12 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
                  lines = lines, marks = marks }
     end
 
-    -- 4. LAYING.
+    -- 4. LAYING. First the lanes joined across an empty middle, for real: the pattern's points go on them.
+    if jxpBridges ~= nil and #jxpBridges > 0 then
+        for _, br in ipairs(jxpBridges) do junctionConnect(br.a, br.b, false) end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - %d lane(s) cut short of the middle joined across it.", #jxpBridges)
+        jxpBridges = nil
+    end
     local turns = 0
     local function label(k)
         jxState.jxLaySeq = jxState.jxLaySeq + 1
@@ -1049,8 +1175,32 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
             local px, pz = W(mx, mz)
             local d2x, d2z = D(rot(0, 1, k))
             local d1mx, d1mz = rot(1, 0, k)
-            local N = lanePoint(mx, mz, d1mx, d1mz)
+            -- A CORNER THE LANES ALREADY SHARE is used as it is (step A, 2026-10-12): a rebuilt X - its
+            -- through lanes still crossing at the old corners - put a new corner a few centimetres beside
+            -- each, and two points in one place let a route step from one lane onto the other over a link
+            -- of no length, past AutoDrive's 80 degrees (three U-turns at the course's J2).
+            local shared = nil
+            for _, c in ipairs(corners) do
+                if c.node ~= nil and ADGraphManager:getWayPointById(c.node.id) == c.node
+                    and (c.x - px) ^ 2 + (c.z - pz) ^ 2 <= 0.6 * 0.6 then shared = c.node end
+            end
+            local N = shared or lanePoint(mx, mz, d1mx, d1mz)
             if N == nil then return nil, "lost a lane at an inner corner" end
+            -- ...and a point of the crossing lane lying on top of it - where the clear un-shared the old
+            -- corner, it leaves each lane its own point in the same place - is folded into it, so the two
+            -- lanes share the one corner instead of a link of no length joining two.
+            for _, M in pairs(ADGraphManager:getWayPoints()) do
+                if M ~= nil and M.id ~= nil and M ~= N and (M.x - N.x) ^ 2 + (M.z - N.z) ^ 2 <= 0.3 * 0.3
+                    and not table.contains(N.out or {}, M.id) and not table.contains(N.incoming or {}, M.id) then
+                    local ins, outs = {}, {}
+                    for _, iid in ipairs(M.incoming or {}) do ins[#ins + 1] = ADGraphManager:getWayPointById(iid) end
+                    for _, oid in ipairs(M.out or {}) do outs[#outs + 1] = ADGraphManager:getWayPointById(oid) end
+                    for _, i in ipairs(ins) do if i ~= nil and i ~= N then junctionConnect(i, N, false) end end
+                    for _, o in ipairs(outs) do if o ~= nil and o ~= N then junctionConnect(N, o, false) end end
+                    jxRemove(M, "junction pattern: a doubled corner folded into one", true)
+                    break
+                end
+            end
             if onLane(px, pz, d2x, d2z, N) == nil then return nil, "lost a lane at an inner corner" end
             cornerNode[k] = N
         end
@@ -1133,6 +1283,17 @@ local function junctionPlaceFitted(cx, cz, reach, shape, dry)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: %s, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
         shape, kind, L, ox, oz, turns)
     return { shape = shape, kind = kind, turns = turns, L = L, ox = ox, oz = oz, ux = ux, uz = uz }
+end
+
+-- The fit with the empty middle's lanes joined in thought for as long as it runs (jxpBridges), and never
+-- after: cleared on every way out, an error included.
+local function junctionPlaceFitted(cx, cz, reach, shape, dry)
+    jxpBridges = nil
+    if AutoDrive.FLYOVER_JUNCTION_BRIDGE_CUTS ~= false then jxpBridges = jxpFindBridges(cx, cz) end
+    local ok, res, why, wired = pcall(junctionPlaceFittedInner, cx, cz, reach, shape, dry)
+    jxpBridges = nil
+    if not ok then error(res, 0) end
+    return res, why, wired
 end
 
 local function junctionPlacePlain(cx, cz, dry)

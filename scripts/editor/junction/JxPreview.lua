@@ -1110,6 +1110,7 @@ function ADFlyoverEditor:updateJunctionPreview()
     -- cleared by hand, a severed road cannot be un-severed without rebuilding it.
     local protectedNodes = {}
     local protectedOf = {}   -- the same set by object, for anything that runs after a deletion
+    local protectedLink = {} -- each step of a protected route, "from>to" by id (the stale links' test)
     if clearMode then
         -- Traced whichever way the toggle is set, because the routes are also what the PARENT ROADS
         -- are read from (see roadLine below). They are only PROTECTED when they are being kept.
@@ -1540,6 +1541,7 @@ function ADFlyoverEditor:updateJunctionPreview()
             if x.throughAng == nil or ang < x.throughAng then x.throughAng, x.throughPath = ang, path end
             if keepThrough then
                 nRoutes = nRoutes + 1
+                for i = 2, #path do protectedLink[tostring(path[i - 1]) .. ">" .. tostring(path[i])] = true end
                 for _, pid in ipairs(path) do
                     if not protectedNodes[pid] then
                         protectedNodes[pid] = true
@@ -1846,6 +1848,34 @@ function ADFlyoverEditor:updateJunctionPreview()
         -- above). `debris`/`staleLinks` stay the full set (every existing rebuild caller is
         -- unaffected); `turnDebris`/`throughDebris` split it for clear mode alone.
         local seen, staleSeen = {}, {}
+        -- A TURN INSIDE ONE GROUP (step A, 2026-10-12). Lanes that share a point are one group, and the mod's
+        -- X shares its corners, so each of its right-turn cuts - a direct link from one lane to the crossing
+        -- lane, beside a corner - ran inside a single group and was kept as if it were lane: a cleared X
+        -- still had all four, read as wired, and the build would not lay it again. Such a link is a turn when
+        -- it is no lane link itself and the lanes at its two ends head more than 45 degrees apart (each
+        -- lane's way read off its own lane links).
+        local function laneWayAt(node, into)
+            for _, lst in ipairs({ node.incoming or {}, node.out or {} }) do
+                for _, oid in ipairs(lst) do
+                    if roadLink[linkKey(node.id, oid)] then
+                        local o = ADGraphManager:getWayPointById(oid)
+                        if o ~= nil then
+                            local fromO = table.contains(o.out or {}, node.id)
+                            local dx, dz = node.x - o.x, node.z - o.z
+                            if not fromO then dx, dz = -dx, -dz end
+                            local n = math.sqrt(dx * dx + dz * dz)
+                            if n > 1e-6 then return dx / n, dz / n end
+                        end
+                    end
+                end
+            end
+            return nil
+        end
+        local function turnInGroup(w, o)
+            local ax, az = laneWayAt(w)
+            local bx, bz = laneWayAt(o)
+            return ax ~= nil and bx ~= nil and ax * bx + az * bz < 0.707
+        end
         for id in jxByPlace(skeleton) do
             local w = inside[id] or ADGraphManager:getWayPointById(id)
             if w ~= nil then
@@ -1854,7 +1884,8 @@ function ADFlyoverEditor:updateJunctionPreview()
                     if skeleton[nid] and not roadLink[linkKey(id, nid)] and not staleSeen[linkKey(id, nid)] then
                         local gThere = owner[nid] and findGroup(owner[nid]) or nil
                         local o0 = ADGraphManager:getWayPointById(nid)
-                        if gHere ~= nil and gThere ~= nil and gHere ~= gThere
+                        if gHere ~= nil and gThere ~= nil
+                            and (gHere ~= gThere or (o0 ~= nil and turnInGroup(w, o0)))
                             and (isOwnForClear(w) or (o0 ~= nil and isOwnForClear(o0))) then
                             staleSeen[linkKey(id, nid)] = true
                             local o = ADGraphManager:getWayPointById(nid)
@@ -1864,9 +1895,13 @@ function ADFlyoverEditor:updateJunctionPreview()
                                 -- is recorded at both ends (entry: direction INTO the circle; exit:
                                 -- direction OUT of it), so a road running straight across shows near-
                                 -- identical bearings at its two ends, and a genuine turn a large one.
-                                -- A direct bridge both of whose ends carry a protected through route is
-                                -- part of that route: severing it is exactly what must not happen.
-                                local isThrough = protectedNodes[id] == true and protectedNodes[nid] == true
+                                -- A direct bridge that is a step of a protected through route is part of
+                                -- that route: severing it is exactly what must not happen. ITSELF a step,
+                                -- not merely two ends that each carry one (step A, 2026-10-12): the mod's X
+                                -- puts each right-turn cut between two through lanes, so both its ends are
+                                -- on through routes, and the clear spared all four cuts as through - a
+                                -- cleared X still read as wired, and the build would not lay it again.
+                                local isThrough = protectedLink[tostring(id) .. ">" .. tostring(nid)] == true
                                 staleLinks[#staleLinks + 1] = { w, o, isThrough = isThrough }
                             end
                         end
@@ -2061,6 +2096,56 @@ function ADFlyoverEditor:updateJunctionPreview()
                                         "junction clear - %d point(s) near %.1f, %.1f: %s -> %d cleared, %d spared, %d left to the junction they belong to.",
                                         #cluster, mx, mz, diagWhy, nTurn, nThrough, #cluster - nTurn - nThrough)
                                 end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- A TURN BETWEEN TWO KEPT ROADS (step A, 2026-10-12). With through roads kept, every point a through
+    -- road runs over is kept, and a link joining two such points was kept with them - even a right-turn
+    -- cut from one through lane onto the crossing one. An X laid by the old plain piece is all its own
+    -- points, the through lanes included (the test course's J2), so its four cuts survived the clear, the
+    -- junction still read as wired, and the build would not lay it again. Such a link is cut too when it
+    -- is no step of any through road, nor the other way along one (a two-way road's), and leaves its
+    -- road's line by more than 25 degrees.
+    if rebuildOn and clearMode and self.junctionLeaveThrough ~= false then
+        local have = {}
+        for _, pr in ipairs(staleLinks) do have[tostring(pr[1].id) .. ">" .. tostring(pr[2].id)] = true end
+        local function stepKey(a, b) return tostring(a) .. ">" .. tostring(b) end
+        local function wayOnRoute(node)
+            for _, oid in ipairs(node.incoming or {}) do
+                if protectedLink[stepKey(oid, node.id)] then
+                    local o = ADGraphManager:getWayPointById(oid)
+                    local n = o and math.sqrt((node.x - o.x) ^ 2 + (node.z - o.z) ^ 2) or 0
+                    if n > 1e-6 then return (node.x - o.x) / n, (node.z - o.z) / n end
+                end
+            end
+            for _, oid in ipairs(node.out or {}) do
+                if protectedLink[stepKey(node.id, oid)] then
+                    local o = ADGraphManager:getWayPointById(oid)
+                    local n = o and math.sqrt((o.x - node.x) ^ 2 + (o.z - node.z) ^ 2) or 0
+                    if n > 1e-6 then return (o.x - node.x) / n, (o.z - node.z) / n end
+                end
+            end
+            return nil
+        end
+        for id in jxByPlace(protectedNodes) do
+            local w = inside[id]
+            if w ~= nil then
+                for _, nid in ipairs(w.out or {}) do
+                    local k = stepKey(id, nid)
+                    if protectedNodes[nid] and not protectedLink[k] and not protectedLink[stepKey(nid, id)] and not have[k] then
+                        local o = inside[nid] or ADGraphManager:getWayPointById(nid)
+                        if o ~= nil and (isOwnForClear(w) or isOwnForClear(o)) then
+                            local ax, az = wayOnRoute(w)
+                            local lx, lz = o.x - w.x, o.z - w.z
+                            local ln = math.sqrt(lx * lx + lz * lz)
+                            if ax ~= nil and ln > 1e-6 and (ax * lx + az * lz) / ln < 0.906 then
+                                have[k] = true
+                                staleLinks[#staleLinks + 1] = { w, o, isThrough = false }
                             end
                         end
                     end

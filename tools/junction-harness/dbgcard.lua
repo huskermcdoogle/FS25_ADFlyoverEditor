@@ -70,10 +70,27 @@ if os.getenv("CLICK") == "1" then
         E.junctionPreview, E.junctionPreviewKey = nil, nil
     end
     for _, l in ipairs(LOG) do
-        if l:find("clear %+ build") or l:find("refused") or l:find("laid as the pattern") or l:find("junction placed") then print("  log: " .. l) end
+        if l:find("clear %+ build") or l:find("refused") or l:find("laid as the pattern") or l:find("junction placed") or l:find("did not lay") or l:find("cannot be driven") or l:find("frame:") or l:find("by way of") or l:find("placed plain because") then print("  log: " .. l) end
     end
     print(string.format("undo entries added: %d", #ADEditorHistory.stack - before))
+    if E.junctionLastPatternWhy ~= nil then print("pattern did not fit: " .. tostring(E.junctionLastPatternWhy)) end
     H.lock(x, z, lockOpts)
     E.junctionAdvancedOpen = (arg[4] == "advanced")
     card("after the right-click, locked again")
+end
+
+-- OUTGRAPH=<file>: the network as it stands now, in export_graph.py's format (graph_dump.py plots it).
+if os.getenv("OUTGRAPH") then
+    local f = io.open(os.getenv("OUTGRAPH"), "w")
+    f:write("return {\n")
+    local wps = ADGraphManager:getWayPoints()
+    for i = 1, #wps do
+        local w = wps[i]
+        if w ~= nil then
+            f:write(string.format("  {id=%d,x=%.3f,y=%.3f,z=%.3f,flags=%d,out={%s}},\n", w.id, w.x, w.y or 0, w.z,
+                w.flags or 0, table.concat(w.out or {}, ",")))
+        end
+    end
+    f:write("}\n")
+    f:close()
 end

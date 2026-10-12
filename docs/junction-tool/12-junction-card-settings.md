@@ -129,3 +129,31 @@ advanced  >
   numbers under advanced), corridor and clearance from the rigs, and the mouse wheel turns the search
   radius only while advanced is open. Place is off the action row; its code stays until step A is done.
   Offline: `tools/junction-harness/dbgcard.lua` prints the card's rows for any junction and action.
+
+## Step A: the pattern on more junctions (2026-10-12)
+
+Measured on the test course as it is made (every middle empty) with `tools/junction-harness/regcourse.sh`:
+before, the mod's pattern fitted none of the road junctions; now J1e, J1w and J4 get the mod's T and J2 the
+mod's X, every route as meant. J3 (a Y, 65 degrees off square) is past what the mod's T can do under
+AutoDrive's 80-degree bend limit, and the farm tracks J5-J7 are two-way: both stay turn by turn, for
+step B.
+
+What changed:
+- **Empty middles.** A lane that stops short of the middle is joined, in thought, to the lane that starts
+  straight ahead across it; the pattern fits on those joins and lays them for real when it is laid.
+- **Split junctions.** The pattern finds each part of a split junction (the course's 1w was 15.3 m from
+  the pair's middle and was missed).
+- **No U-turns in the X.** The mod's X lets a truck turn round in its middle when the box leans or is
+  longer one way than the other (bend under 80 degrees at the middle); it is refused there and the build
+  goes on to the square piece or turn by turn. Survey j56 lost its 2 U-turns this way.
+- **Clearing a pattern junction.** The clear now takes the X's and T's right-turn cuts (they ran inside
+  one lane group, or between two through roads, and were kept as road), and a rebuilt X shares the old
+  corners instead of laying a second point beside each. J2 and J4 clear and rebuild cleanly round after
+  round. Survey j68's four missed connections went too.
+
+On the survey map: j38 gets the mod's X; j56, j58 and j83 the square X piece, all 12 routes each.
+
+**Open:** redoing a split junction's part (the course's pair) with clear + build is not stable - the
+second clear reaches the other part. Build the pair once on a cleared or unbuilt course; redoing it is
+the next fix. Slot 10's junctions were built by older builds and leave odd leftovers (doubled points, a
+turning loop in the build's circle), so the clean test is the course's own unbuilt network.

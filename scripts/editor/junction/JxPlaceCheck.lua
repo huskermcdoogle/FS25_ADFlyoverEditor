@@ -124,11 +124,17 @@ function ADFlyoverEditor:junctionPatternFit(jp)
         return nil, nil, "turn wiring is still here"
     end
     if site == nil then
-        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place.
+        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place. A
+        -- junction split into parts is anchored by its parts, each its own junction (the course's pair:
+        -- 1w lies 15.3 m from the pair's middle, and was not found).
         local bd = 15 * 15
         for _, e in ipairs(self:junctionRegistry() or {}) do
-            local d = (e.x - jp.cx) ^ 2 + (e.z - jp.cz) ^ 2
-            if d < bd then site, bd = { x = e.x, z = e.z, virgin = true }, d end
+            local spots = { e }
+            if e.decision == "split" and e.parts ~= nil and #e.parts >= 2 then spots = e.parts end
+            for _, q in ipairs(spots) do
+                local d = (q.x - jp.cx) ^ 2 + (q.z - jp.cz) ^ 2
+                if d < bd then site, bd = { x = q.x, z = q.z, virgin = true }, d end
+            end
         end
     end
     if site == nil then
@@ -251,6 +257,13 @@ function ADFlyoverEditor:applyJunctionPlace()
             for _, e in ipairs(rc.extra) do
                 Logging.warning("[FlyoverEditor]:   route we did not lay: from the lane in at %.1f, %.1f to the lane out at %.1f, %.1f.",
                     e.from.x, e.from.z, e.to.x, e.to.z)
+                -- The way it goes, point by point, so where it slips through can be seen.
+                local via = {}
+                for i, w in ipairs(e.path or {}) do
+                    if i <= 16 then via[#via + 1] = string.format("%.1f,%.1f", w.x, w.z) end
+                end
+                ADFlyoverSettings.debugLog("[FlyoverEditor]:     by way of %s%s", table.concat(via, " > "),
+                    (#(e.path or {}) > 16) and " ..." or "")
             end
             for _, e in ipairs(rc.missing or {}) do
                 Logging.warning("[FlyoverEditor]:   turn that cannot be driven: from the lane in at %.1f, %.1f to the lane out at %.1f, %.1f.",

@@ -3,20 +3,17 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="the short junction card" build="@BUILD@">
+<testPlan title="test course: the mod's pattern on the road junctions" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
-          hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="clearbuild" title="Clear + build in one right-click"
+          hint="Ticks itself: the running build is the one this plan was packed with. Play on the test course with its own network (nothing built yet)."/>
+    <test id="t4" title="J4 gets the mod's T"
+          passLog="the mod's exact T fits"
+          hint="Lock J4, pick build, right-click. The card says lay the mod's T before you click. Then build 1w and 1e the same way, once each. Ticks itself from the log."/>
+    <test id="x2" title="J2 gets the mod's X"
+          passLog="the mod's exact X fits"
+          hint="Lock J2, pick build, right-click. Ticks itself from the log."/>
+    <test id="redo" title="Clear + build J2 again stays clean"
           passLog="junction clear %+ build %- cleared, built"
-          hint="The junction card opens on clear + build. Lock a wired T of two-lane roads (7 or 33), read what the card says it will do, right-click. Q once should take back both. Ticks itself from the log."/>
-    <test id="smooth" title="Shape smooth lays the smooth pattern"
-          passLog="the mod's smooth"
-          hint="Undo, pick shape: smooth under the action row, lock the same T and right-click. Ticks itself from the log."/>
-    <test id="refuse" title="Refuse when the pattern won't fit"
-          passLog="junction build refused %- the"
-          hint="Open advanced and set pattern won't fit to refuse. Clear + build farm junction 101: nothing is built, and the card says why. Ticks itself from the log."/>
-    <test id="drivable" title="Builds come out drivable"
-          passLog="AutoDrive can take through here, all of them turns we meant"
-          failLog="turn%(s%) we laid cannot be driven"
-          hint="Ticks itself on every build: pass on a clean route check, fail if a build says a turn cannot be driven."/>
+          failLog="route we did not lay"
+          hint="Pick clear + build, lock J2 again, right-click: it clears and lays the X again with no route we did not lay. Ticks itself from the log."/>
 </testPlan>
