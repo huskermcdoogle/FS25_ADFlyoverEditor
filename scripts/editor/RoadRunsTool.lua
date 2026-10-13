@@ -161,9 +161,27 @@ local function terrainY(x, z)
     return getTerrainHeightAtWorldPos(terrain, x, 0, z) or 0
 end
 
+-- A number the engine can take: not nil, not NaN, not infinite. A NaN handed to a draw, probe or
+-- waypoint call can take the whole game down rather than raise a Lua error.
+local function finite(v) return type(v) == "number" and v == v and v > -1e7 and v < 1e7 end
+E.roadRunsFinite = finite
+
+--- Heights filled in from the terrain where missing, and any point that is not a real position
+--- dropped (in place, so cached lanes stay clean).
 local function withHeights(pts)
+    local bad = false
     for _, p in ipairs(pts) do
         if p.y == nil then p.y = terrainY(p.x, p.z) end
+        if not (finite(p.x) and finite(p.z) and finite(p.y)) then bad = true end
+    end
+    if bad then
+        local n = 0
+        for i = 1, #pts do
+            local p = pts[i]
+            pts[i] = nil
+            if finite(p.x) and finite(p.z) and finite(p.y) then n = n + 1 pts[n] = p end
+        end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - dropped points with no real position (NaN) from a lane.")
     end
     return pts
 end
@@ -497,6 +515,7 @@ function E:roadRunsClearance(p, rx, rz)
             + (CollisionFlag.TREE or 0) + (CollisionFlag.BUILDING or 0) + (CollisionFlag.ROAD or 0)
     end
     local y = p.y or terrainY(p.x, p.z)
+    if not (finite(p.x) and finite(p.z) and finite(y) and finite(rx) and finite(rz)) then return nil, nil end
     local ry = math.atan2(rz, -rx)        -- heading (rz, -rx): the box's long side runs along the road
     local step = 0.5
     local function room(side)
@@ -666,7 +685,7 @@ function E:commitRoadRuns()
     for _, j in ipairs(pending) do
         local own = ADGraphManager:getWayPointById(j.id)
         local target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS)
-        if target ~= nil and own ~= nil then
+        if target ~= nil and own ~= nil and target ~= own and finite(target.x) and finite(target.z) then
             if j.atStart then
                 ADGraphManager:toggleConnectionBetween(target, own, false, j.dual, false)
             else
@@ -695,13 +714,14 @@ local function drawLine(P, step, lw, r, g, b, lift)
     local prev = nil
     for i = 1, #P, step do
         local p = P[i]
+        if not (finite(p.x) and finite(p.z) and finite(p.y or 0)) then return end
         if prev ~= nil then
             ADDrawingManager:addLineTask(prev.x, (prev.y or 0) + lift, prev.z, p.x, (p.y or 0) + lift, p.z, lw, r, g, b)
         end
         prev = p
     end
     local last = P[#P]
-    if prev ~= nil and prev ~= last then
+    if prev ~= nil and prev ~= last and finite(last.x) and finite(last.z) and finite(last.y or 0) then
         ADDrawingManager:addLineTask(prev.x, (prev.y or 0) + lift, prev.z, last.x, (last.y or 0) + lift, last.z, lw, r, g, b)
     end
 end

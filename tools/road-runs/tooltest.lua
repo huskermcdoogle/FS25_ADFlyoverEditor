@@ -53,6 +53,7 @@ ADGraphManager = {
     getWayPointsCount = function() return count end,
     markChanges = function() end,
     recordWayPoint = function(_, x, y, z, connectPrev, dual, reverse, prevId, flags)
+        chk(x, y, z)
         count = count + 1
         local w = { id = count, x = x, y = y, z = z, out = {}, incoming = {}, flags = flags }
         byId[count] = w
@@ -69,10 +70,13 @@ ADGraphManager = {
 }
 local snapshots = 0
 ADEditorHistory = { snapshot = function() snapshots = snapshots + 1 end, depth = function() return snapshots end }
-local lines, spheres = 0, 0
+local lines, spheres, nans = 0, 0, 0
+local function chk(...)
+    for _, v in ipairs({ ... }) do if type(v) == "number" and v ~= v then nans = nans + 1 end end
+end
 ADDrawingManager = {
-    addLineTask = function(_, ...) lines = lines + 1 end,
-    addSphereTask = function(_, ...) spheres = spheres + 1 end,
+    addLineTask = function(_, ...) chk(...) lines = lines + 1 end,
+    addSphereTask = function(_, ...) chk(...) spheres = spheres + 1 end,
 }
 
 -- ---------------------------------------------------------------- the editor stand-in
@@ -248,3 +252,5 @@ print(string.format("moved 300 m east: %d stretches (%.2fs)", #s.stretches, os.c
 E:roadRunsToggleKind(ADRoadFinder.KIND_DIRT)
 settle(cx + 300, cz)
 print(string.format("dirt off: %d stretches", #s.stretches))
+
+print("NaN values handed to the engine: " .. nans)
