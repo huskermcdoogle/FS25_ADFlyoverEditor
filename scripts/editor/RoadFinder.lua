@@ -40,6 +40,7 @@ RF.CLOSE_RADIUS = { paved = 1, track = 2 }     -- gaps this wide (each side) are
 RF.MIN_TRACK_WIDTH = 2.0         -- narrower track lines are shoulder strips or paint seams
 RF.MIN_PAVED_WIDTH = 3.0         -- narrower paved lines beside a wider paved road are kerbs or seams
 RF.MIN_LANE_WIDTH = 0.9          -- narrower than this is never a road (a 2 m strip reads 1 m: 2 x distance - 1)
+RF.PAVED_EDGE = 2.5              -- gravel/dirt this close to paving is that paved road's edge
 RF.KERB_DIST = 8                 -- a narrow paved line this close to a wider one runs beside it
 RF.SHOULDER_DIST = 3.5           -- a track line this close to paved road is that road's shoulder
 RF.BUBBLE_MAX = 60               -- two lines between the same two forks, both shorter than this, are one road
@@ -1185,9 +1186,24 @@ function RF.buildWindow(kindAt, ix0, iz0, W, H, opts)
         end
         work(W)
     end
+    -- A paved road's own edges belong to it: gravel or dirt within PAVED_EDGE of the paving is read
+    -- as part of the paved road when finding it. An old narrow lane (2 m of ragged asphalt with mossy
+    -- gravel edges) fell apart into scraps with false forks otherwise (2026-10-12); with its edges it
+    -- reads as one road. The line itself is still placed on the paving (the walker reads paving only).
+    local nearPaved = nil
+    do
+        local pm, any = {}, false
+        for i = 1, W * H do
+            if win.kinds[i] == RF.KIND_PAVED then pm[i] = 0 any = true else pm[i] = 1 end
+        end
+        if any then nearPaved = distanceToEdge(pm, W, H) end
+    end
     local paved, pavedMask, pavedDist = newGraph(), nil, nil
     if wanted[RF.KIND_PAVED] then
-        paved, pavedMask, pavedDist = buildClass(win, function(k) return k == RF.KIND_PAVED end, RF.MAX_ROAD_WIDTH.paved, RF.CLOSE_RADIUS.paved)
+        paved, pavedMask, pavedDist = buildClass(win, function(k, i)
+            if k == RF.KIND_PAVED then return true end
+            return (k == RF.KIND_GRAVEL or k == RF.KIND_DIRT) and nearPaved ~= nil and nearPaved[i] <= RF.PAVED_EDGE
+        end, RF.MAX_ROAD_WIDTH.paved, RF.CLOSE_RADIUS.paved)
     end
     local track = newGraph()
     if wanted[RF.KIND_GRAVEL] or wanted[RF.KIND_DIRT] then
