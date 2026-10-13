@@ -2064,7 +2064,8 @@ end
 --- the free walker carries it on. Then straightened. Decks keep the square's line (under a bridge the
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
 RF.SMOOTH_SPAN = 5                -- points (2 m) either side in each averaging pass of the final line
-RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4, mouthWidth = 1.5 }
+RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4, mouthWidth = 1.5, mouthSpread = 3 }
+RF.JUNCTION_HOLD = 12            -- metres either side of a bridged junction where the line holds its course
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
     RF.walkIsField = isField
@@ -2121,6 +2122,21 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         if pick ~= nil then meas[i], widths[i] = pick.mid, pick.w end
         work(40)
     end
+    -- Through a junction the walk bridged, the readings are the junction, not the road: within
+    -- JUNCTION_HOLD of a bridged point the line holds its course (2026-10-12: a 1-2 m dip toward the
+    -- side road at each T the run went through).
+    do
+        local bridges = {}
+        for _, p in ipairs(st.pts) do if p.bridged then bridges[#bridges + 1] = p end end
+        if #bridges > 0 then
+            local r2 = RF.JUNCTION_HOLD * RF.JUNCTION_HOLD
+            for i = 1, n do
+                for _, bp in ipairs(bridges) do
+                    if (G[i].x - bp.x) ^ 2 + (G[i].z - bp.z) ^ 2 < r2 then meas[i] = nil break end
+                end
+            end
+        end
+    end
     -- Readings much wider than the road usually is are a junction's mouth or a patch beside the road:
     -- their middle is pulled toward the side road, so they are left out.
     do
@@ -2129,8 +2145,16 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         table.sort(ws)
         local usual = ws[floor((#ws + 1) / 2)]
         if usual ~= nil then
+            -- a junction widens the road gradually: the readings a few metres either side of a wide
+            -- one lean toward the side road too, so they are left out with it
+            local wide = {}
             for i = 1, n do
-                if widths[i] ~= nil and widths[i] > F.mouthWidth * usual then meas[i] = nil end
+                if widths[i] ~= nil and widths[i] > F.mouthWidth * usual then wide[i] = true end
+            end
+            for i = 1, n do
+                if wide[i] then
+                    for j = max(1, i - F.mouthSpread), min(n, i + F.mouthSpread) do meas[j] = nil end
+                end
             end
         end
     end
@@ -2173,6 +2197,38 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     for i = 1, n do
         local off = (fw[i] + bw[i]) / 2
         R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
+    end
+    -- Across a stretch with no usable readings (a junction held out above, a gap in the paint), the
+    -- line runs straight from the last good point to the next: holding the walked line's own shape
+    -- there kept the walk's dip into the junction (~1 m at three T's, 2026-10-12).
+    do
+        local i = 1
+        while i <= n do
+            if meas[i] == nil then
+                local j = i
+                while j < n and meas[j + 1] == nil do j = j + 1 end
+                if i > 2 and j < n - 1 and j - i + 1 >= 2 then
+                    -- a smooth curve (Hermite) leaving the last good point and reaching the next one
+                    -- along the road's own direction at each: it follows a bend through the zone
+                    local a, a0, b, b1 = R[i - 1], R[i - 2], R[j + 1], R[j + 2]
+                    local L = sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+                    local function unit(px, pz) local l = sqrt(px * px + pz * pz) if l < 1e-6 then return 0, 0 end return px / l, pz / l end
+                    local tax, taz = unit(a.x - a0.x, a.z - a0.z)
+                    local tbx, tbz = unit(b1.x - b.x, b1.z - b.z)
+                    local span = j - i + 2
+                    for k = i, j do
+                        local t = (k - i + 1) / span
+                        local h00, h10 = 2 * t ^ 3 - 3 * t ^ 2 + 1, t ^ 3 - 2 * t ^ 2 + t
+                        local h01, h11 = -2 * t ^ 3 + 3 * t ^ 2, t ^ 3 - t ^ 2
+                        R[k].x = h00 * a.x + h10 * L * tax + h01 * b.x + h11 * L * tbx
+                        R[k].z = h00 * a.z + h10 * L * taz + h01 * b.z + h11 * L * tbz
+                    end
+                end
+                i = j + 1
+            else
+                i = i + 1
+            end
+        end
     end
     -- Both end fixes below carry the line on along the CURVE it is already following (its turn per
     -- metre read over the ~25 m before the anchor), not a straight line: straight tails ran off the
