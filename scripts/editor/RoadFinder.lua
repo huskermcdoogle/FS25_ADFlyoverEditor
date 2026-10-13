@@ -1610,6 +1610,7 @@ RF.WALK = {
     maxTurn = 12,                   -- degrees per step (12 deg / 2 m: bends down to ~10 m radius)
     lookAhead = 6,                  -- metres ahead the walker aims at the road's middle
     settle = 0.5,                   -- how far onto the middle just in front each step settles
+    steerWide = 1.4,                -- readings wider than this x usual (a mouth) hold the course
     gate = 2.5,                     -- a middle further off than this (plus a quarter of the width) is noise
     maxMiss = 6,                    -- steps with no road ahead before the road has ended (12 m)
     widen = 2.0,                    -- the band this many times its usual width: a fork's mouth
@@ -1764,6 +1765,9 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
         if pick == nil then return nil end
         return qx + nx * pick.mid, qz + nz * pick.mid, pick.w
     end
+    -- a reading much wider than the road usually is (a side road's mouth) is not steered by: its
+    -- middle is pulled toward the side road (a 3.5 m swerve at a T, 2026-10-12)
+    local function steerable(w2, usual) return w2 ~= nil and w2 <= max(W.steerWide * usual, usual + 1.5) end
     while len < W.maxLen do
         local nearX, nearZ = px + hx * W.step, pz + hz * W.step
         if isStop ~= nil and isStop(nearX, nearZ) then return pts, "fork", { x = nearX, z = nearZ } end
@@ -1839,7 +1843,10 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             else
                 wideRun = 0
             end
-            local ax, az = fx or cx, fz or cz
+            local ax, az = nil, nil
+            if fx ~= nil and steerable(fw, usual) then ax, az = fx, fz
+            elseif cx ~= nil and steerable(cw, usual) then ax, az = cx, cz end
+            if ax == nil then ax, az = px + hx * W.lookAhead, pz + hz * W.lookAhead end   -- hold course
             local dx, dz = ax - px, az - pz
             local dl = sqrt(dx * dx + dz * dz)
             if dl > 1e-6 then
@@ -1852,8 +1859,8 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             end
             px, pz = px + hx * W.step, pz + hz * W.step
             -- settle onto the middle just in front (re-read along the new heading)
-            local sx, sz = middleAt(0, hx, hz)
-            if sx ~= nil then
+            local sx, sz, sw = middleAt(0, hx, hz)
+            if sx ~= nil and steerable(sw, usual) then
                 px, pz = px + (sx - px) * W.settle, pz + (sz - pz) * W.settle
             end
             if wideRun == 0 then widths[#widths + 1] = w end
@@ -1959,6 +1966,56 @@ end
 --- Follow the road under (x, z) both ways and straighten it. `isRoadOf(cls)` returns the class's
 --- isRoad(x, z). Tries paved first, then track. Returns { pts, class, width, startTag, endTag,
 --- startNode, endNode } (nodes are the fork mouths, for the gap left to the junction tool) or nil.
+--- Walk one way and carry on straight through junctions: where the walk stops at a junction, look
+--- THROUGH_HOPS metres straight on; if the same road carries on there in line (within 35 degrees),
+--- bridge the junction and walk on (user 2026-10-12: through roads go through T's; side roads stop).
+--- Returns the points (with `bridged` marks across junctions), the end tag and the end fork point.
+local W_STEP_BRIDGE = 2
+RF.THROUGH_HOPS = { 15, 25, 35 }
+RF.MAX_THROUGH = 12
+RF.THROUGH_WALK_ANGLE = 20
+local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop)
+    local all = { { x = x, z = z, w = w } }
+    local tag, at = "end", nil
+    for _ = 1, RF.MAX_THROUGH + 1 do
+        local pts
+        pts, tag, at = RF.walkRoad(isRoad, cls, x, z, hx, hz, w, isStop)
+        for i = 2, #pts do all[#all + 1] = pts[i] end
+        if tag ~= "fork" or #all < 3 then break end
+        local q, p = all[#all], all[max(1, #all - 10)]       -- the road's line over the last ~20 m
+        local ux, uz = q.x - p.x, q.z - p.z
+        local ul = sqrt(ux * ux + uz * uz)
+        if ul < 1e-6 then break end
+        ux, uz = ux / ul, uz / ul
+        local found = nil
+        for _, hop in ipairs(RF.THROUGH_HOPS) do
+            local sx, sz, shx, shz, sw = RF.seedRoad(isRoad, q.x + ux * hop, q.z + uz * hop, cls, 3)
+            if sx ~= nil then
+                if shx * ux + shz * uz < 0 then shx, shz = -shx, -shz end
+                -- in line within THROUGH_ANGLE, and the far road's middle no more than 3 m off the
+                -- line carried on (a road crossing at a shallow angle is not the same road)
+                local ox = (sx - q.x) * (-uz) + (sz - q.z) * ux
+                if shx * ux + shz * uz >= cos(math.rad(RF.THROUGH_WALK_ANGLE)) and abs(ox) <= 3 then
+                    found = { x = sx, z = sz, hx = shx, hz = shz, w = sw }
+                    break
+                end
+            end
+        end
+        if found == nil then break end
+        -- bridge the junction in a straight line, then walk on from the far side
+        local dx, dz = found.x - q.x, found.z - q.z
+        local d = sqrt(dx * dx + dz * dz)
+        local k = W_STEP_BRIDGE
+        while k < d do
+            all[#all + 1] = { x = q.x + dx * k / d, z = q.z + dz * k / d, w = q.w, bridged = true }
+            k = k + W_STEP_BRIDGE
+        end
+        x, z, hx, hz, w = found.x, found.z, found.hx, found.hz, found.w
+        all[#all + 1] = { x = x, z = z, w = w }
+    end
+    return all, tag, at
+end
+
 function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
     for _, cls in ipairs(classes or { "paved", "track" }) do
         local isRoad = isRoadOf(cls)
@@ -1969,19 +2026,29 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
             local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls, (cls == "paved") and RF.PAVED_SEED_REACH or 1.5)
             if cx ~= nil then
                 local isStop = isStopOf ~= nil and isStopOf(cls) or nil
-                local fwd, endTag, endAt = RF.walkRoad(isRoad, cls, cx, cz, hx, hz, w, isStop)
-                local back, startTag, startAt = RF.walkRoad(isRoad, cls, cx, cz, -hx, -hz, w, isStop)
+                local fwd, endTag, endAt = walkThrough(isRoad, cls, cx, cz, hx, hz, w, isStop)
+                local back, startTag, startAt = walkThrough(isRoad, cls, cx, cz, -hx, -hz, w, isStop)
                 local P = {}
                 for i = #back, 2, -1 do P[#P + 1] = back[i] end
                 for i = 1, #fwd do P[#P + 1] = fwd[i] end
                 if #P >= 3 then
-                    local S = RF.straighten(P, 0.75)
-                    return {
-                        pts = S, raw = P, class = cls, width = medianWidth(S, 6), len = polylineLength(S),
+                    local st = {
+                        pts = P, class = cls, width = medianWidth(P, 6), len = polylineLength(P),
                         startTag = startTag, endTag = endTag,
                         startNode = startAt and { x = startAt.x, z = startAt.z, tag = "fork" } or nil,
                         endNode = endAt and { x = endAt.x, z = endAt.z, tag = "fork" } or nil,
                     }
+                    -- second pass: the walked line as the guide, the road read straight across it
+                    -- every 2 m and the middle filtered both ways - the walker's steering cuts the
+                    -- inside of bends by ~0.5 m (2026-10-12 log); this centres on the road read
+                    local ok, r = pcall(RF.refineStretchInner, st, isRoadOf, isStopOf)
+                    if ok and r ~= nil and #r.pts >= 3 then
+                        r.raw = P
+                        return r
+                    end
+                    st.pts = RF.straighten(P, 0.75)
+                    st.raw = P
+                    return st
                 end
             end
         end

@@ -38,3 +38,12 @@ end
 local ok = worst <= 1.5   -- the test road stops dead at both ends; along it the line holds within 0.4 m
 print(string.format("%s worst end off the middle %.2f m", ok and "ok  " or "FAIL", worst))
 print(ok and "ALL PASS" or "1 FAILED")
+-- walking from a point on the bend must carry straight through the T (the side road meets it at the
+-- top) and stay in the middle
+local isRoadOf2 = function(cls) if cls == "paved" then return function(x, z) return kind(x, z) == RF.KIND_PAVED end end end
+local w = RF.walkFrom(isRoadOf2, 42, -42, { "paved" }, nil)
+local wworst = 0
+for i = 4, #w.pts - 3 do local p = w.pts[i]; wworst = math.max(wworst, math.abs(math.sqrt(p.x * p.x + p.z * p.z) - R0)) end
+local wok = w.len > 150 and wworst <= 0.8
+print(string.format("%s walked %.0f m along the bend through the T (%s..%s), worst off the middle %.2f m", wok and "ok  " or "FAIL", w.len, w.startTag, w.endTag, wworst))
+print(wok and "WALK PASS" or "WALK FAILED")
