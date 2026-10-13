@@ -98,6 +98,25 @@ for si, st in ipairs(stretches) do
         nLanes = nLanes + 1
     end
 end
+-- WALK=1: also walk each stretch from its middle (the road walker) - "walk" = straightened, "raw" = as walked
+if os.getenv("WALK") then
+    local function isRoadOf(cls)
+        if cls == "paved" then return function(x, z) return RF.groundKindAt(x, z) == RF.KIND_PAVED end end
+        return function(x, z) local k = RF.groundKindAt(x, z) return k == RF.KIND_GRAVEL or k == RF.KIND_DIRT end
+    end
+    local function isStopOf(cls)
+        if cls == "track" then return function(x, z) return RF.groundKindAt(x, z) == RF.KIND_PAVED end end
+    end
+    for si, st in ipairs(stretches) do
+        local w = RF.refineStretch(st, isRoadOf, isStopOf)
+        if w ~= nil then
+            w = RF.keepUncovered(w, RF.indexNetwork(wps, function(id) return byId[id] end, -1100, -1100, 1100, 1100)) or w
+            local b = {}
+            for _, p in ipairs(w.pts) do b[#b + 1] = string.format("%.2f,%.2f", p.x, p.z) end
+            f:write(string.format("walk %d %s %s %.1f %s\n", si, w.startTag, w.endTag, w.width or -1, table.concat(b, " ")))
+        end
+    end
+end
 f:close()
 local live = 0
 for _, n in ipairs(win.nodes) do if n.tag == "fork" then live = live + 1 end end

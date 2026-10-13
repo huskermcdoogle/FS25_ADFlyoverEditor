@@ -36,7 +36,7 @@ def page_for(path):
             info.append(" ".join(p))
         elif p[0] == "k":
             rows.append([c for ch in p[1] for c in KIND_RGB[ch]])
-    ad, edges, nodes, stretches, lanes = [], [], [], [], []
+    ad, edges, nodes, stretches, lanes, walks = [], [], [], [], [], []
     for line in open(path):
         p = line.split()
         if not p:
@@ -56,6 +56,10 @@ def page_for(path):
         elif p[0] == "stretch":
             stretches.append('<polyline class="s" points="%s"><title>stretch %s %s kind %s w %s len %s %s-%s</title></polyline>'
                              % (pts(p[8:], ix0, iz0), p[1], p[2], p[3], p[4], p[5], p[6], p[7]))
+        elif p[0] == "raw":
+            walks.append('<polyline class="wr" points="%s"/>' % pts(p[2:], ix0, iz0))
+        elif p[0] == "walk":
+            walks.append('<polyline class="wk" points="%s"><title>walk %s %s..%s w %s</title></polyline>' % (pts(p[5:], ix0, iz0), p[1], p[2], p[3], p[4]))
         elif p[0] == "lane":
             cls = "l2" if p[2] == "2" else "l1"
             lanes.append('<polyline class="%s" points="%s"/>' % (cls, pts(p[3:], ix0, iz0)))
@@ -64,8 +68,8 @@ def page_for(path):
                 lanes.append('<circle cx="%.1f" cy="%.1f" r="0.6" fill="#4db3ff"/>' % (float(x) - ix0, float(z) - iz0))
     img = base64.b64encode(png(W, H, rows)).decode()
     body = ('<image href="data:image/png;base64,%s" x="0" y="0" width="%d" height="%d" style="image-rendering:pixelated"/>'
-            '<g class="ad">%s</g><g class="st">%s</g><g class="ed">%s</g><g class="ln">%s</g><g>%s</g>'
-            % (img, W, H, "".join(ad), "".join(stretches), "".join(edges), "".join(lanes), "".join(nodes)))
+            '<g class="ad">%s</g><g class="st">%s</g><g class="ed">%s</g><g class="ln">%s</g><g class="wa">%s</g><g>%s</g>'
+            % (img, W, H, "".join(ad), "".join(stretches), "".join(edges), "".join(lanes), "".join(walks), "".join(nodes)))
     return os.path.basename(path), ix0, iz0, W, H, body, info
 
 
@@ -92,6 +96,8 @@ svg.v{width:100%%;height:100%%}
 .s{fill:none;stroke:#ffd34d;stroke-width:5;opacity:.45;stroke-linecap:round}
 .l1{fill:none;stroke:#4db3ff;stroke-width:0.7}
 .l2{fill:none;stroke:#7dffb0;stroke-width:0.9}
+.wr{fill:none;stroke:#ff4d4d;stroke-width:0.4}
+.wk{fill:none;stroke:#ff4dff;stroke-width:1.2}
 label{user-select:none}
 </style>
 <div id="bar"><select id="pick">%s</select>
@@ -99,6 +105,7 @@ label{user-select:none}
 <label><input type="checkbox" data-g="ed" checked> centre lines</label>
 <label><input type="checkbox" data-g="st" checked> stretches (no path)</label>
 <label><input type="checkbox" data-g="ln" checked> lanes</label>
+<label><input type="checkbox" data-g="wa" checked> walker (pink; red = as walked)</label>
 <span>ground: grey paved, tan gravel, brown dirt. lines: cyan paved, orange track. dots: white fork, red end, grey window edge, purple yard</span></div>
 %s
 <div id="wrap">%s</div>

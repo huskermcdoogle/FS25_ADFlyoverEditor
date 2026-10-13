@@ -75,20 +75,83 @@ local function fieldAt(x, z)
     return ok and type(density) == "number" and density ~= 0
 end
 
+-- THE MAP'S EDGE. The game crashed outright (no Lua error) as the read square slid past the map's
+-- north-west corner (2026-10-12): terrain reads outside the terrain are not safe. Every ground read,
+-- ray and probe asks onMap first.
+local mapHalfFor, mapHalfVal = nil, nil
+function RF.mapHalf()
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    if mapHalfVal ~= nil and mapHalfFor == terrain then return mapHalfVal end
+    local size = nil
+    if terrain ~= nil and getTerrainSize ~= nil then
+        local ok, sz = pcall(getTerrainSize, terrain)
+        if ok and type(sz) == "number" and sz > 0 then size = sz end
+    end
+    if size == nil and g_currentMission ~= nil and type(g_currentMission.terrainSize) == "number" then
+        size = g_currentMission.terrainSize
+    end
+    mapHalfFor, mapHalfVal = terrain, (size or 2048) / 2 - 2
+    return mapHalfVal
+end
+
+--- Is (x, z) safely inside the map (2 m in from the edge)?
+function RF.onMap(x, z)
+    local h = RF.mapHalf()
+    return x == x and z == z and x > -h and x < h and z > -h and z < h
+end
+
 RF.noRockCheck = false           -- set when the drive-cost map is missing (not the host): rock reads paved
+
+-- FIELD OUTLINES. The field layer only marks worked ground, so the unworked strip along a fence inside
+-- a field read as a dirt track (2026-10-12 game test). Inside the map's own field outline is never road:
+-- the farmland under the spot, its field, that field's outline (cached per field).
+local fieldOutlines = {}
+local function insideFieldOutline(x, z)
+    local fm = g_farmlandManager
+    if fm == nil or fm.getFarmlandAtWorldPosition == nil then return false end
+    local ok, farmland = pcall(fm.getFarmlandAtWorldPosition, fm, x, z)
+    if not ok or farmland == nil or farmland.getField == nil then return false end
+    local okF, field = pcall(farmland.getField, farmland)
+    if not okF or field == nil then return false end
+    local poly = fieldOutlines[field]
+    if poly == nil then
+        poly = false
+        local okV, verts = pcall(function() return field:getDensityMapPolygon():getVerticesList() end)
+        if okV and type(verts) == "table" and #verts >= 6 then
+            poly = { x0 = math.huge, x1 = -math.huge, z0 = math.huge, z1 = -math.huge }
+            for i = 1, #verts - 1, 2 do
+                poly[#poly + 1] = verts[i]
+                poly[#poly + 1] = verts[i + 1]
+                poly.x0, poly.x1 = min(poly.x0, verts[i]), max(poly.x1, verts[i])
+                poly.z0, poly.z1 = min(poly.z0, verts[i + 1]), max(poly.z1, verts[i + 1])
+            end
+        end
+        fieldOutlines[field] = poly
+    end
+    if not poly or x < poly.x0 or x > poly.x1 or z < poly.z0 or z > poly.z1 then return false end
+    local inside, m = false, #poly
+    local xj, zj = poly[m - 1], poly[m]
+    for n = 1, m, 2 do
+        local xi, zi = poly[n], poly[n + 1]
+        if (zi > z) ~= (zj > z) and x < (xj - xi) * (z - zi) / (zj - zi) + xi then inside = not inside end
+        xj, zj = xi, zi
+    end
+    return inside
+end
+RF.insideFieldOutline = insideFieldOutline
 
 --- The ground kind at (x, z): KIND_PAVED / GRAVEL / DIRT, or KIND_NONE for anything else (grass,
 --- field, rock, sand, water). One paint read, plus a field read on road paint and a drive-cost read
 --- on asphalt-sound paint.
 function RF.groundKindAt(x, z)
     local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
-    if terrain == nil then return RF.KIND_NONE end
+    if terrain == nil or not RF.onMap(x, z) then return RF.KIND_NONE end
     local y = getTerrainHeightAtWorldPos(terrain, x, 0, z) or 0
     local ok, _, _, _, _, mat = pcall(getTerrainAttributesAtWorldPos, terrain, x, y, z, true, true, true, true, false)
     if not ok or type(mat) ~= "number" then return RF.KIND_NONE end
     local kind = MATERIAL_KIND[floor(mat + 0.5)] or RF.KIND_NONE
     if kind == RF.KIND_NONE then return kind end
-    if fieldAt(x, z) then return RF.KIND_NONE end
+    if fieldAt(x, z) or insideFieldOutline(x, z) then return RF.KIND_NONE end
     if kind == RF.KIND_PAVED then
         local cost, blocked, limit = navigationCost(x, y, z)
         if cost == nil then
@@ -125,6 +188,7 @@ end
 function RF.roadMeshAt(x, z)
     local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
     if terrain == nil or raycastClosest == nil or CollisionFlag == nil or CollisionFlag.ROAD == nil then return nil end
+    if not RF.onMap(x, z) then return nil end
     local ty = getTerrainHeightAtWorldPos(terrain, x, 0, z) or 0
     RoadMeshRay.hitY = nil
     local ok = pcall(raycastClosest, x, ty + RF.DECK_RAY_UP, z, 0, -1, 0, RF.DECK_RAY_UP + 5, "cb", RoadMeshRay, CollisionFlag.ROAD)
@@ -1342,6 +1406,374 @@ function RF.networkLaneGap(grid)
     if #gaps < 10 then return nil, #gaps end
     table.sort(gaps)
     return gaps[floor((#gaps + 1) / 2)], #gaps
+end
+
+-- ------------------------------------------------------------------------- walking a road
+
+-- The window above finds every road in a square; this follows ONE road from a point on it, the way a
+-- driver would: step ahead, look straight across the road, steer gently toward its middle. Asked for
+-- 2026-10-12 after the first game test: one rut of a two-rut track read as the track, and paint noise
+-- made bumps that are not there. So:
+--   * a cross-section reads the road as BANDS of road ground; bands closer than joinGap are one road
+--     (two wheel ruts 3-4 m apart with grass between are one track);
+--   * the walker only steers a fraction of the way toward what it sees (gainPos), never turns more than
+--     maxTurn per step, and ignores a reading that jumps too far sideways (gate) - noise is filtered;
+--   * the line is straightened afterwards (RF.straighten).
+RF.WALK = {
+    step = 2,                       -- metres per step
+    half = 9,                       -- how far either side a cross-section looks
+    res = 0.5,                      -- cross-section sample spacing
+    joinGap = { track = 4.0, paved = 1.0 },   -- gaps up to this inside a band are the same road (ruts)
+    tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
+    rutWidth = 2.5,                 -- (a solid track must not swallow the gravel patches beside it)
+    minBand = { track = 1.5, paved = 3.0 },   -- narrower bands are not a road
+    gainPos = 0.3,                  -- how far toward the measured middle the line moves per step
+    maxTurn = 6,                    -- degrees per step (6 deg / 2 m = no bend tighter than ~19 m)
+    gate = 2.5,                     -- a middle further off than this (plus a quarter of the width) is noise
+    maxMiss = 4,                    -- steps with no road ahead before the road has ended
+    widen = 2.0,                    -- the band this many times its usual width: a fork's mouth
+    maxLen = 1200,                  -- metres one walk may cover each way
+}
+
+--- Bands of road across the line at (x, z) with unit normal (nx, nz): list of { lo, hi } offsets,
+--- merged where the gap between them is at most joinGap.
+function RF.crossSection(isRoad, x, z, nx, nz, half, res, joinGap)
+    local bands = {}
+    local cur = nil
+    local lastRoad = nil
+    local o = -half
+    while o <= half + 1e-6 do
+        if isRoad(x + nx * o, z + nz * o) then
+            if cur ~= nil and lastRoad ~= nil and o - lastRoad <= joinGap + res then
+                cur.hi = o
+            else
+                cur = { lo = o, hi = o }
+                bands[#bands + 1] = cur
+            end
+            lastRoad = o
+        end
+        o = o + res
+    end
+    for _, b in ipairs(bands) do
+        b.lo, b.hi = b.lo - res / 2, b.hi + res / 2
+        b.mid, b.w = (b.lo + b.hi) / 2, b.hi - b.lo
+    end
+    return bands
+end
+
+--- The bands across at (x, z): read tightly first; where the band in the middle is only a rut wide,
+--- read again joining across the grass between ruts.
+local function bandsAt(isRoad, x, z, nx, nz, cls)
+    local W = RF.WALK
+    local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, W.tightGap)
+    local wide = W.joinGap[cls] or W.tightGap
+    if wide > W.tightGap then
+        local nearest = nil
+        for _, b in ipairs(bands) do
+            if nearest == nil or abs(b.mid) < abs(nearest.mid) then nearest = b end
+        end
+        if nearest == nil or nearest.w < W.rutWidth then
+            bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, wide)
+        end
+    end
+    return bands
+end
+
+local function rot(hx, hz, deg)
+    local a = math.rad(deg)
+    local c, s = cos(a), sin(a)
+    return hx * c - hz * s, hx * s + hz * c
+end
+
+--- The road under (x, z): its middle and heading, from cross-sections every 10 degrees - the one
+--- across the road is the narrowest. Returns cx, cz, hx, hz, width or nil.
+function RF.seedRoad(isRoad, x, z, cls)
+    local W = RF.WALK
+    local best = nil
+    for a = 0, 170, 10 do
+        local nx, nz = cos(math.rad(a)), sin(math.rad(a))
+        local bands = bandsAt(isRoad, x, z, nx, nz, cls)
+        for _, b in ipairs(bands) do
+            if b.lo <= 1.5 and b.hi >= -1.5 and b.w >= W.minBand[cls] and (best == nil or b.w < best.w) then
+                best = { w = b.w, cx = x + nx * b.mid, cz = z + nz * b.mid, nx = nx, nz = nz }
+            end
+        end
+    end
+    if best == nil then return nil end
+    -- heading along the road: the normal turned a right angle (either way; the walk goes both)
+    return best.cx, best.cz, best.nz, -best.nx, best.w
+end
+
+--- Walk one way from (x, z) heading (hx, hz). Returns the points (x, z, w) and how it ended:
+--- "end" (no road ahead), "fork" (the road widens into a mouth), "limit" (maxLen), "loop".
+function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
+    local W = RF.WALK
+    local hl = sqrt(hx * hx + hz * hz)
+    hx, hz = hx / hl, hz / hl
+    local pts = { { x = x, z = z, w = w0 } }
+    local widths = { w0 }
+    local miss, len, wideRun = 0, 0, 0
+    local px, pz = x, z
+    local maxTurnCos = cos(math.rad(W.maxTurn))
+    while len < W.maxLen do
+        local qx, qz = px + hx * W.step, pz + hz * W.step
+        local nx, nz = -hz, hx
+        if isStop ~= nil and isStop(qx, qz) then return pts, "fork", { x = qx, z = qz } end
+        local bands = bandsAt(isRoad, qx, qz, nx, nz, cls)
+        -- the usual width so far (median of the recent ones)
+        local recent = {}
+        for i = max(1, #widths - 10), #widths do recent[#recent + 1] = widths[i] end
+        table.sort(recent)
+        local usual = recent[floor((#recent + 1) / 2)] or w0
+        local pick = nil
+        for _, b in ipairs(bands) do
+            if b.w >= W.minBand[cls] and abs(b.mid) <= W.gate + 0.25 * b.w then
+                if pick == nil or abs(b.mid) < abs(pick.mid) then pick = b end
+            end
+        end
+        if pick == nil then
+            miss = miss + 1
+            if miss > W.maxMiss then
+                -- drop the steps taken blind
+                for _ = 1, miss - 1 do if #pts > 1 then table.remove(pts) end end
+                return pts, "end"
+            end
+            px, pz = qx, qz
+            pts[#pts + 1] = { x = px, z = pz, w = usual, blind = true }
+        else
+            miss = 0
+            -- a fork's mouth: the road stays much wider than usual for a few steps running (one wide
+            -- reading is a patch or a rut read the other way)
+            if #pts > 4 and pick.w > W.widen * usual then
+                wideRun = wideRun + 1
+                if wideRun >= 3 then
+                    for _ = 1, wideRun - 1 do if #pts > 1 then table.remove(pts) end end
+                    local f = pts[#pts]
+                    return pts, "fork", { x = f.x + hx * W.step, z = f.z + hz * W.step }
+                end
+            else
+                wideRun = 0
+            end
+            -- steer a fraction of the way toward the measured middle, within the turn limit
+            local tx, tz = qx + nx * pick.mid * W.gainPos, qz + nz * pick.mid * W.gainPos
+            local dx, dz = tx - px, tz - pz
+            local dl = sqrt(dx * dx + dz * dz)
+            dx, dz = dx / dl, dz / dl
+            local c = dx * hx + dz * hz
+            if c < maxTurnCos then
+                local side = (hx * dz - hz * dx) >= 0 and 1 or -1
+                dx, dz = rot(hx, hz, side * W.maxTurn)
+            end
+            hx, hz = dx, dz
+            px, pz = px + hx * W.step, pz + hz * W.step
+            if wideRun == 0 then widths[#widths + 1] = pick.w end
+            pts[#pts + 1] = { x = px, z = pz, w = (wideRun == 0) and pick.w or usual }
+        end
+        len = len + W.step
+        -- back where it started (a ring road)
+        if len > 40 and sqrt((px - x) ^ 2 + (pz - z) ^ 2) < W.step then return pts, "loop" end
+        work(40)
+    end
+    return pts, "limit"
+end
+
+--- Douglas-Peucker: the fewest points within tol of the line.
+local function simplifyLine(P, tol)
+    if #P <= 2 then return P end
+    local keep = { [1] = true, [#P] = true }
+    local stack = { { 1, #P } }
+    while #stack > 0 do
+        local seg = table.remove(stack)
+        local a, b = P[seg[1]], P[seg[2]]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l = sqrt(dx * dx + dz * dz)
+        local worst, wi = -1, nil
+        for i = seg[1] + 1, seg[2] - 1 do
+            local d
+            if l < 1e-6 then d = sqrt((P[i].x - a.x) ^ 2 + (P[i].z - a.z) ^ 2)
+            else d = abs((P[i].x - a.x) * dz - (P[i].z - a.z) * dx) / l end
+            if d > worst then worst, wi = d, i end
+        end
+        if wi ~= nil and worst > tol then
+            keep[wi] = true
+            stack[#stack + 1] = { seg[1], wi }
+            stack[#stack + 1] = { wi, seg[2] }
+        end
+    end
+    local out = {}
+    for i = 1, #P do if keep[i] then out[#out + 1] = P[i] end end
+    return out
+end
+RF.simplifyLine = simplifyLine
+
+--- Heavy straightening: the fewest straight pieces within tol of the walked line, then the corners
+--- between them rounded (resample, then smoothing over about ten metres).
+function RF.straighten(P, tol)
+    if #P < 3 then return P end
+    local S = simplifyLine(P, tol or 0.75)
+    local R = resampleFixed(S, 2)
+    R = smoothPts(smoothPts(R, 3), 3)
+    -- widths along the result from the walked line (nearest point)
+    for _, p in ipairs(R) do
+        if p.w == nil then
+            local bd, bw = math.huge, nil
+            for _, q in ipairs(P) do
+                local d = (q.x - p.x) ^ 2 + (q.z - p.z) ^ 2
+                if d < bd then bd, bw = d, q.w end
+            end
+            p.w = bw
+        end
+    end
+    return R
+end
+
+--- Follow the road under (x, z) both ways and straighten it. `isRoadOf(cls)` returns the class's
+--- isRoad(x, z). Tries paved first, then track. Returns { pts, class, width, startTag, endTag,
+--- startNode, endNode } (nodes are the fork mouths, for the gap left to the junction tool) or nil.
+function RF.walkFrom(isRoadOf, x, z, classes)
+    for _, cls in ipairs(classes or { "paved", "track" }) do
+        local isRoad = isRoadOf(cls)
+        if isRoad ~= nil then
+            local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls)
+            if cx ~= nil then
+                local fwd, endTag, endAt = RF.walkRoad(isRoad, cls, cx, cz, hx, hz, w)
+                local back, startTag, startAt = RF.walkRoad(isRoad, cls, cx, cz, -hx, -hz, w)
+                local P = {}
+                for i = #back, 2, -1 do P[#P + 1] = back[i] end
+                for i = 1, #fwd do P[#P + 1] = fwd[i] end
+                if #P >= 3 then
+                    local S = RF.straighten(P, 0.75)
+                    return {
+                        pts = S, raw = P, class = cls, width = medianWidth(S, 6), len = polylineLength(S),
+                        startTag = startTag, endTag = endTag,
+                        startNode = startAt and { x = startAt.x, z = startAt.z, tag = "fork" } or nil,
+                        endNode = endAt and { x = endAt.x, z = endAt.z, tag = "fork" } or nil,
+                    }
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- A found stretch's line redrawn by WALKING it with a filter. The square's centre line is the guide
+--- (it already knows the corners and the forks); every 2 m the road is read straight across the guide,
+--- and the line's offset from the guide is low-pass filtered toward the middle of the band found there:
+--- one-off bumps (a patch of paint, one rut read alone) are gated out, the rest is smoothed, run both
+--- ways and averaged so the line does not lag behind a bend. Where the stretch ran off the read square
+--- the free walker carries it on. Then straightened. Decks keep the square's line (under a bridge the
+--- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
+RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3 }
+function RF.refineStretch(st, isRoadOf, isStopOf)
+    for _, p in ipairs(st.pts) do if p.deck then return nil end end
+    local cls = st.class
+    local isRoad = isRoadOf(cls)
+    if isRoad == nil then return nil end
+    local W, F = RF.WALK, RF.FILTER
+    local G = resampleFixed(st.pts, W.step)
+    local n = #G
+    if n < 4 then return nil end
+    -- the guide's heading at each point, over a few points either side (the square's line steps)
+    local nxs, nzs = {}, {}
+    for i = 1, n do
+        local a, b = G[max(1, i - F.headSpan)], G[min(n, i + F.headSpan)]
+        local hx, hz = b.x - a.x, b.z - a.z
+        local l = sqrt(hx * hx + hz * hz)
+        if l < 1e-6 then hx, hz, l = 1, 0, 1 end
+        nxs[i], nzs[i] = -hz / l, hx / l
+    end
+    -- what each cross-section reads: the band middle nearest the guide, and its width
+    local meas, widths = {}, {}
+    for i = 1, n do
+        local bands = bandsAt(isRoad, G[i].x, G[i].z, nxs[i], nzs[i], cls)
+        local pick = nil
+        for _, b in ipairs(bands) do
+            if b.w >= W.minBand[cls] and abs(b.mid) <= W.half and (pick == nil or abs(b.mid) < abs(pick.mid)) then pick = b end
+        end
+        if pick ~= nil then meas[i], widths[i] = pick.mid, pick.w end
+        work(40)
+    end
+    -- filter forward and backward, each gating readings that jump too far from where it is
+    local function pass(from, to, dir)
+        local out = {}
+        local off = nil
+        for i = from, to, dir do
+            local m = meas[i]
+            if off == nil then
+                off = m or 0
+            elseif m ~= nil and abs(m - off) <= F.gate + 0.25 * (widths[i] or 0) then
+                off = off + F.gain * (m - off)
+            end
+            out[i] = off
+        end
+        return out
+    end
+    local fw, bw = pass(1, n, 1), pass(n, 1, -1)
+    local R = {}
+    for i = 1, n do
+        local off = (fw[i] + bw[i]) / 2
+        R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
+    end
+    local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
+    -- ran off the read square: carry on with the free walker from that end
+    local isStop = isStopOf ~= nil and isStopOf(cls) or nil
+    local function carryOn(atEnd)
+        local p, q
+        if atEnd then p, q = R[max(1, n - 3)], R[n] else p, q = R[min(n, 4)], R[1] end
+        local hx, hz = q.x - p.x, q.z - p.z
+        local more, tag, at = RF.walkRoad(isRoad, cls, q.x, q.z, hx, hz, q.w or st.width or 4, isStop)
+        return more, tag, at
+    end
+    if st.endTag == "edge" then
+        local more, tag, at = carryOn(true)
+        for i = 2, #more do R[#R + 1] = more[i] end
+        out.endTag = tag
+        out.endNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
+    end
+    if st.startTag == "edge" then
+        local more, tag, at = carryOn(false)
+        local front = {}
+        for i = #more, 2, -1 do front[#front + 1] = more[i] end
+        for _, p in ipairs(R) do front[#front + 1] = p end
+        R = front
+        out.startTag = tag
+        out.startNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
+    end
+    local S = RF.straighten(R, 0.75)
+    -- the ends stay where the square put them (forks, paths): straightening must not drift them
+    S[1].x, S[1].z = R[1].x, R[1].z
+    S[#S].x, S[#S].z = R[#R].x, R[#R].z
+    out.pts = S
+    out.class, out.kind, out.edge = st.class, st.kind, st.edge
+    out.width = medianWidth(S, 6) or st.width
+    out.len = polylineLength(S)
+    out.refined = true
+    return out
+end
+
+--- The part of a (walked) stretch with no AutoDrive path along it: the uncovered run through its
+--- middle; an end cut short by a path is tagged "path". nil if its middle is covered.
+function RF.keepUncovered(st, grid)
+    local P = st.pts
+    local n = #P
+    if n < 3 then return st end
+    local half = (st.width or 6) / 2
+    local cov = {}
+    for i = 1, n do cov[i] = coveredAt(grid, P, i, half) end
+    local m = floor(n / 2) + 1
+    if cov[m] then return nil end
+    local i0, i1 = m, m
+    while i0 > 1 and not cov[i0 - 1] do i0 = i0 - 1 end
+    while i1 < n and not cov[i1 + 1] do i1 = i1 + 1 end
+    if i0 == 1 and i1 == n then return st end
+    local out = {}
+    for k, v in pairs(st) do out[k] = v end
+    out.pts = {}
+    for i = i0, i1 do out.pts[#out.pts + 1] = P[i] end
+    if i0 > 1 then out.startTag, out.startNode = "path", nil end
+    if i1 < n then out.endTag, out.endNode = "path", nil end
+    out.len = polylineLength(out.pts)
+    return out
 end
 
 -- ------------------------------------------------------------------------- laying lanes

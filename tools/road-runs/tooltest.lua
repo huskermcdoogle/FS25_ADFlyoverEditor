@@ -25,6 +25,10 @@ Logging = {
 ADFlyoverSettings = { debugLog = function(f, ...) print("[log] " .. string.format(f, ...)) end }
 dofile(HERE .. "terrain.lua")
 
+local lines, spheres, nans = 0, 0, 0
+local function chk(...)
+    for _, v in ipairs({ ... }) do if type(v) == "number" and v ~= v then nans = nans + 1 end end
+end
 -- ---------------------------------------------------------------- AutoDrive graph stand-in
 -- SYNTH=bridge: an empty network on a made-up 5 m bridge (see bridgetest.lua) instead of the map
 local SYNTH = os.getenv("SYNTH")
@@ -70,10 +74,6 @@ ADGraphManager = {
 }
 local snapshots = 0
 ADEditorHistory = { snapshot = function() snapshots = snapshots + 1 end, depth = function() return snapshots end }
-local lines, spheres, nans = 0, 0, 0
-local function chk(...)
-    for _, v in ipairs({ ... }) do if type(v) == "number" and v ~= v then nans = nans + 1 end end
-end
 ADDrawingManager = {
     addLineTask = function(_, ...) chk(...) lines = lines + 1 end,
     addSphereTask = function(_, ...) chk(...) spheres = spheres + 1 end,

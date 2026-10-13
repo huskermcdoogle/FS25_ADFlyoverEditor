@@ -24,8 +24,8 @@ local E = ADFlyoverEditor
 E.TOOL.ROADRUNS = 16
 E.TOOL_NAMES[E.TOOL.ROADRUNS] = "road runs"
 
-E.ROADRUNS_WINDOW = (coroutine ~= nil and coroutine.create ~= nil) and 384 or 288            -- metres a side of the ground read round the mouse
-E.ROADRUNS_RECENTRE = (coroutine ~= nil and coroutine.create ~= nil) and 96 or 72           -- the window moves when the mouse is this far from its middle
+E.ROADRUNS_WINDOW = (coroutine ~= nil and coroutine.create ~= nil) and 288 or 224            -- metres a side of the ground read round the mouse
+E.ROADRUNS_RECENTRE = (coroutine ~= nil and coroutine.create ~= nil) and 72 or 56           -- the window moves when the mouse is this far from its middle
 E.ROADRUNS_SNAP = 32               -- window centres snap to this grid, so a small wobble re-uses it
 E.ROADRUNS_SAMPLES_PER_FRAME = 4000 -- cap; reads stop sooner once the frame's time slice is used
 E.ROADRUNS_RIG_MARGIN = 0.3        -- clearance kept beyond a rig's own width: to the other lane, to a railing
@@ -157,7 +157,7 @@ end
 
 local function terrainY(x, z)
     local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
-    if terrain == nil then return 0 end
+    if terrain == nil or not RF.onMap(x, z) then return 0 end
     return getTerrainHeightAtWorldPos(terrain, x, 0, z) or 0
 end
 
@@ -285,6 +285,12 @@ function E:updateRoadRunsInner(overPanel)
         local snap = self.ROADRUNS_SNAP
         s.centreX = math.floor(cx / snap + 0.5) * snap
         s.centreZ = math.floor(cz / snap + 0.5) * snap
+        -- keep the read square on the map (its edge is not safe to read past)
+        local lim = RF.mapHalf() - self.ROADRUNS_WINDOW / 2
+        if lim > 0 then
+            s.centreX = math.max(-lim, math.min(lim, s.centreX))
+            s.centreZ = math.max(-lim, math.min(lim, s.centreZ))
+        end
         s.job, s.jobKey = nil, nil
     end
     local half = self.ROADRUNS_WINDOW / 2
@@ -371,6 +377,75 @@ function E:updateRoadRunsInner(overPanel)
 end
 
 -- ---------------------------------------------------------------------------------------------
+-- walking the road under the mouse
+
+-- The square read finds roads and forks; the line the tool lays comes from WALKING the road (RoadFinder
+-- RF.walkRoad): it steers gently toward the middle of what it sees, takes two wheel ruts as one track,
+-- ignores one-off bumps, and is straightened afterwards. Ground is read on a 0.5 m grid, remembered.
+local walkMemo, walkMemoN = {}, 0
+local function kindAtWalk(x, z)
+    local key = math.floor(x * 2) * 1000003 + math.floor(z * 2)
+    local k = walkMemo[key]
+    if k == nil then
+        if walkMemoN > 400000 then walkMemo, walkMemoN = {}, 0 end
+        k = RF.groundKindAt(math.floor(x * 2) / 2 + 0.25, math.floor(z * 2) / 2 + 0.25)
+        walkMemo[key] = k
+        walkMemoN = walkMemoN + 1
+    end
+    return k
+end
+
+function E:roadRunsWalkTests()
+    local editor = self
+    local function isRoadOf(cls)
+        if cls == "paved" then
+            return function(x, z) return kindAtWalk(x, z) == RF.KIND_PAVED end
+        end
+        return function(x, z)
+            local k = kindAtWalk(x, z)
+            return (k == RF.KIND_GRAVEL and editor.roadKinds[RF.KIND_GRAVEL]) or (k == RF.KIND_DIRT and editor.roadKinds[RF.KIND_DIRT])
+        end
+    end
+    local function isStopOf(cls)
+        -- a track walked onto a paved road has met it: a fork for the junction tool
+        if cls == "track" then return function(x, z) return kindAtWalk(x, z) == RF.KIND_PAVED end end
+        return nil
+    end
+    return isRoadOf, isStopOf
+end
+
+--- The stretch as it will be laid: walked, straightened, cut to its ends, and (where the walk ran past
+--- the read square) stopped at the first AutoDrive path. Worked out once per stretch.
+function E:roadRunsRefined(st)
+    if st == nil then return nil end
+    if st.refinedTo ~= nil then return st.refinedTo end
+    local isRoadOf, isStopOf = self:roadRunsWalkTests()
+    local ok, r = pcall(RF.refineStretch, st, isRoadOf, isStopOf)
+    if not ok then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walking the road failed (%s); using the square's line.", tostring(r))
+        r = nil
+    end
+    if r ~= nil then
+        local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
+        for _, p in ipairs(r.pts) do
+            x0, z0, x1, z1 = math.min(x0, p.x), math.min(z0, p.z), math.max(x1, p.x), math.max(z1, p.z)
+        end
+        local grid = RF.indexNetwork(ADGraphManager:getWayPoints(), function(id) return ADGraphManager:getWayPointById(id) end,
+            x0 - 10, z0 - 10, x1 + 10, z1 + 10)
+        r = RF.keepUncovered(r, grid)
+    end
+    if r == nil or #r.pts < 3 then
+        r = st
+    else
+        withHeights(r.pts)
+        r.id = st.id
+        r.refinedTo = r
+    end
+    st.refinedTo = r
+    return r
+end
+
+-- ---------------------------------------------------------------------------------------------
 -- picking
 
 --- Following the road straight on through a fork: from the node a stretch ends at, the stretch on the
@@ -426,7 +501,7 @@ function E:roadRunsClick()
                 local nxt = continueThrough(s, cur, curAtEnd)
                 if nxt == nil then break end
                 local already = false
-                for _, pk in ipairs(s.picks) do if pk.st == nxt.st then already = true end end
+                for _, pk in ipairs(s.picks) do if pk.st == nxt.st or pk.st == nxt.st.refinedTo then already = true end end
                 if already then break end
                 -- one-way: keep the same direction of travel along the chain
                 local dir = last.pick.dir
@@ -434,7 +509,7 @@ function E:roadRunsClick()
                 local cdir = (cur == last.pick.st) and dir or (s.chainDir[cur] or dir)
                 local ndir = sameOrder and cdir or -cdir
                 s.chainDir[nxt.st] = ndir
-                addPick(s, nxt.st, ndir)
+                addPick(s, self:roadRunsRefined(nxt.st), ndir)
                 count = count + 1
                 cur, curAtEnd = nxt.st, nxt.forward
             end
@@ -446,6 +521,7 @@ function E:roadRunsClick()
 
     if s.hover ~= nil then
         local st = s.hover
+        st = self:roadRunsRefined(st)
         if #self:roadRunsLanesFor(st, s.hoverSide or 1, true) == 0 then
             self:warnPlayer(string.format("This stretch is too short to lay with %d m left at its forks - lower the fork gap.",
                 self.roadForkGap))
@@ -521,6 +597,7 @@ function E:roadRunsClearance(p, rx, rz)
     local function room(side)
         for d = step, self.ROADRUNS_PROBE_REACH, step do
             local x, z = p.x + side * rx * d, p.z + side * rz * d
+            if not RF.onMap(x, z) then return d - step end
             local blocked = false
             if p.deck then
                 -- still on the deck: a road mesh under the wheel within 0.6 m of the deck's height
@@ -815,7 +892,7 @@ function E:drawRoadRunsInner(lw)
         end
     end
     -- the hovered stretch: bright, with its lanes previewed and the forks it stops short of
-    local st = s.hover
+    local st = s.hover and self:roadRunsRefined(s.hover) or nil
     if st ~= nil then
         drawLine(st.pts, 1, lw * 1.5, 1, 0.69, 0.13, 0.4)
         self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1, true), lw, 1, 0.85, 0.5)
@@ -864,7 +941,7 @@ function E:roadRunsCard(kit)
         editor:roadRunsSaveSettings()
     end)
     kit.numberAfter("lane gap")
-    local st = s.hover or (s.picks[#s.picks] ~= nil and s.picks[#s.picks].st) or nil
+    local st = (s.hover and self:roadRunsRefined(s.hover)) or (s.picks[#s.picks] ~= nil and s.picks[#s.picks].st) or nil
     if st ~= nil and st.width ~= nil then
         kit.add("cursor", "this road", string.format("%.1f m wide, lanes %.1f m apart", st.width, self:roadGapFor(st)))
     end
@@ -880,7 +957,8 @@ function E:roadRunsCard(kit)
     end)
     kit.numberAfter("rig width")
     kit.add("hint", "lanes come in from railings and banks; too narrow = one two-way line")
-    local lanes = st ~= nil and self:roadRunsLanesFor(st, (st == s.hover and s.hoverSide) or 1, st == s.hover) or nil
+    local hovering = s.hover ~= nil and st == s.hover.refinedTo
+    local lanes = st ~= nil and self:roadRunsLanesFor(st, (hovering and s.hoverSide) or 1, hovering) or nil
     if lanes ~= nil and (lanes.collapsed or 0) > 0 then
         kit.add("cursor", "too narrow for two", string.format("%.0f m as one two-way line", lanes.collapsed))
     elseif lanes ~= nil and lanes.pulled then
