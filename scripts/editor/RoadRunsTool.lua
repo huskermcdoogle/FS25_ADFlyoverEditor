@@ -337,7 +337,7 @@ function E:roadRunsWalkAtCursor(cx, cz)
     local mi = math.max(1, math.floor(#r.pts / 2))
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walked a %s road from the mouse at (%.1f, %.1f): %.0f m, %.1f m wide (%s to %s); across its middle (%.1f, %.1f): %s",
         r.class, cx, cz, r.len or 0, r.width or -1, r.startTag, r.endTag, r.pts[mi].x, r.pts[mi].z,
-        RF.crossText(kindAtWalk, r.pts, mi, fieldAtWalk))
+        RF.crossText(E.roadRunsKindAt, r.pts, mi, E.roadRunsFieldAt))
     return r
 end
 
@@ -508,6 +508,9 @@ local function nearPavedWalk(x, z)
     end
     return v
 end
+
+-- for code above this point in the file (the locals are not visible there)
+E.roadRunsKindAt, E.roadRunsFieldAt = kindAtWalk, fieldAtWalk
 
 function E:roadRunsWalkTests()
     local editor = self
