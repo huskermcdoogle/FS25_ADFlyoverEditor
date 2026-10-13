@@ -40,6 +40,7 @@ RF.CLOSE_RADIUS = { paved = 1, track = 2 }     -- gaps this wide (each side) are
 RF.MIN_TRACK_WIDTH = 2.0         -- narrower track lines are shoulder strips or paint seams
 RF.MIN_PAVED_WIDTH = 3.0         -- narrower paved lines beside a wider paved road are kerbs or seams
 RF.MIN_LANE_WIDTH = 0.9          -- narrower than this is never a road (a 2 m strip reads 1 m: 2 x distance - 1)
+RF.PAVED_SEED_REACH = 4         -- paving this close to the mouse is the road meant
 RF.PAVED_EDGE = 2.5              -- gravel/dirt this close to paving is that paved road's edge
 RF.KERB_DIST = 8                 -- a narrow paved line this close to a wider one runs beside it
 RF.SHOULDER_DIST = 3.5           -- a track line this close to paved road is that road's shoulder
@@ -1701,14 +1702,16 @@ end
 
 --- The road under (x, z): its middle and heading, from cross-sections every 10 degrees - the one
 --- across the road is the narrowest. Returns cx, cz, hx, hz, width or nil.
-function RF.seedRoad(isRoad, x, z, cls)
+function RF.seedRoad(isRoad, x, z, cls, reach)
     local W = RF.WALK
+    reach = reach or 1.5
     local best = nil
     for a = 0, 170, 10 do
         local nx, nz = cos(math.rad(a)), sin(math.rad(a))
         local bands = bandsAt(isRoad, x, z, nx, nz, cls)
         for _, b in ipairs(bands) do
-            if b.lo <= 1.5 and b.hi >= -1.5 and b.w >= W.minBand[cls] and (best == nil or b.w < best.w) then
+            if b.lo <= reach and b.hi >= -reach and b.w >= W.minBand[cls] and b.w <= (RF.MAX_ROAD_WIDTH[cls] or 16)
+                and (best == nil or b.w < best.w) then
                 best = { w = b.w, cx = x + nx * b.mid, cz = z + nz * b.mid, nx = nx, nz = nz }
             end
         end
@@ -1745,8 +1748,10 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
         local nx, nz = -hz2, hx2
         local bands = bandsAt(isRoad, qx, qz, nx, nz, cls)
         local pick = nil
+        local maxW = RF.MAX_ROAD_WIDTH[cls] or 16
         for _, b in ipairs(bands) do
-            if b.w >= W.minBand[cls] and abs(b.mid) <= W.gate + 0.25 * b.w then
+            -- wider than a road can be is a yard or a muddy patch: not road to walk along
+            if b.w >= W.minBand[cls] and b.w <= maxW and abs(b.mid) <= W.gate + 0.25 * b.w then
                 if pick == nil or abs(b.mid) < abs(pick.mid) then pick = b end
             end
         end
@@ -1958,7 +1963,10 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
     for _, cls in ipairs(classes or { "paved", "track" }) do
         local isRoad = isRoadOf(cls)
         if isRoad ~= nil then
-            local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls)
+            -- paving within 4 m of the mouse wins: on an old lane (2 m of asphalt in a 6 m road with
+            -- gravel edges) the mouse is usually on the edge, and the edge walked as a track gave odd
+            -- short bits (2026-10-12)
+            local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls, (cls == "paved") and RF.PAVED_SEED_REACH or 1.5)
             if cx ~= nil then
                 local isStop = isStopOf ~= nil and isStopOf(cls) or nil
                 local fwd, endTag, endAt = RF.walkRoad(isRoad, cls, cx, cz, hx, hz, w, isStop)

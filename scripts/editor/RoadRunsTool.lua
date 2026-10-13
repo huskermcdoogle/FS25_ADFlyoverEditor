@@ -264,6 +264,12 @@ function E:roadRunsHover(overPanel)
     local st = self:roadRunsWalkAtCursor(cx, cz)
     if st == nil then
         st = RF.stretchNear(s.stretches, cx, cz, 3)
+        -- a square line the walk can hardly read as road (under 30% of its cross-sections) is a
+        -- phantom - a kerb, a patch's edge - and is not offered
+        if st ~= nil then
+            local r = self:roadRunsRefined(st)
+            if r ~= nil and r.walk ~= nil and r.walk.read < 0.3 * r.walk.sections then st = nil end
+        end
     end
     s.hover = st
     if st ~= nil then s.hoverSide = RF.sideOf(st, cx, cz) end
@@ -582,6 +588,12 @@ function E:roadRunsClick()
     if isDouble and last.pick ~= nil then
         -- double-click: the stretch the first click picked, carried on through forks both ways
         local count = 0
+        if last.pick.st.pointWalk then
+            count = self:roadRunsWalkThrough(last.pick)
+            self:roadRunsRefreshStretches()
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - double-click walked on through %d junction(s).", count)
+            return
+        end
         for _, atEnd in ipairs({ true, false }) do
             local cur, curAtEnd = last.pick.st, atEnd
             for _ = 1, 40 do
@@ -643,6 +655,82 @@ function E:roadRunsClick()
         s.hoverPick = nil
         self:roadRunsRefreshStretches()
     end
+end
+
+--- Double-click on a road walked from the mouse: from each end that stopped at a junction, hop
+--- straight on past it (WALK_THROUGH: the hop lengths tried) and walk the same road on the far side (it must line up
+--- within 35 degrees), again and again. Each piece is its own pick, so each keeps the gap at the
+--- junction for the junction tool. Returns how many pieces were added.
+E.ROADRUNS_WALK_THROUGH = { 15, 25, 35 }
+function E:roadRunsWalkThrough(pick)
+    local s = roadState(self)
+    local isRoadOf, isStopOf = self:roadRunsWalkTests()
+    local added = 0
+    for _, atEnd in ipairs({ true, false }) do
+        local cur = pick.st
+        local dir = pick.dir
+        for _ = 1, 12 do
+            local tag = atEnd and cur.endTag or cur.startTag
+            if tag ~= "fork" then break end
+            local P = cur.pts
+            local n = #P
+            if n < 4 then break end
+            local a, b
+            if atEnd then a, b = P[math.max(1, n - 4)], P[n] else a, b = P[math.min(n, 5)], P[1] end
+            local hx, hz = b.x - a.x, b.z - a.z
+            local hl = math.sqrt(hx * hx + hz * hz)
+            if hl < 1e-6 then break end
+            hx, hz = hx / hl, hz / hl
+            -- hop over the junction: try a few distances (a short hop can land in the junction's own
+            -- wide paving, where no road reads)
+            local r, jx, jz = nil, nil, nil
+            for _, hop in ipairs(self.ROADRUNS_WALK_THROUGH) do
+                jx, jz = b.x + hx * hop, b.z + hz * hop
+                local keep = RF.WALK.maxLen
+                RF.WALK.maxLen = self.ROADRUNS_POINT_WALK
+                local ok, got = pcall(RF.walkFrom, isRoadOf, jx, jz, { cur.class }, isStopOf)
+                RF.WALK.maxLen = keep
+                if ok and got ~= nil and #got.pts >= 4 then r = got break end
+            end
+            if r == nil then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - no road found past the junction at (%.1f, %.1f).", b.x, b.z)
+                break
+            end
+            -- the far road must carry on the same way; orient it to run away from the junction
+            local Q = r.pts
+            local d1 = (Q[1].x - b.x) ^ 2 + (Q[1].z - b.z) ^ 2
+            local d2 = (Q[#Q].x - b.x) ^ 2 + (Q[#Q].z - b.z) ^ 2
+            local away = d1 <= d2
+            local c, d
+            if away then c, d = Q[1], Q[math.min(#Q, 5)] else c, d = Q[#Q], Q[math.max(1, #Q - 4)] end
+            local qx, qz = d.x - c.x, d.z - c.z
+            local ql = math.sqrt(qx * qx + qz * qz)
+            if ql < 1e-6 or (qx * hx + qz * hz) / ql < math.cos(math.rad(35)) then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - the road past the junction at (%.1f, %.1f) turns away; not carried on.", b.x, b.z)
+                break
+            end
+            local grid = RF.indexNetwork(ADGraphManager:getWayPoints(), function(id) return ADGraphManager:getWayPointById(id) end,
+                jx - 450, jz - 450, jx + 450, jz + 450)
+            r = RF.keepUncovered(r, grid)
+            if r == nil or #r.pts < 4 then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - the road past the junction at (%.1f, %.1f) already has a path.", b.x, b.z)
+                break
+            end
+            withHeights(r.pts)
+            r.refinedTo, r.pointWalk = r, true
+            r.kind = cur.kind
+            r.id = string.format("walk:%d:%d", math.floor(r.pts[1].x), math.floor(r.pts[1].z))
+            -- one-way: keep the direction of travel: same point order as the chain's run -> same dir
+            local sameOrder = (atEnd and away) or ((not atEnd) and not away)
+            local ndir = sameOrder and dir or -dir
+            addPick(s, r, ndir)
+            added = added + 1
+            cur, dir = r, ndir
+            -- walk on from the new piece's far end (its end away from the junction)
+            atEnd = away
+        end
+    end
+    return added
 end
 
 function E:roadRunsClearPicks()
