@@ -334,8 +334,10 @@ function E:roadRunsWalkAtCursor(cx, cz)
     r.refinedTo = r
     r.pointWalk = true
     s.walked = r
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walked a %s road from the mouse: %.0f m, %.1f m wide (%s to %s).",
-        r.class, r.len or 0, r.width or -1, r.startTag, r.endTag)
+    local mi = math.max(1, math.floor(#r.pts / 2))
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walked a %s road from the mouse at (%.1f, %.1f): %.0f m, %.1f m wide (%s to %s); across its middle (%.1f, %.1f): %s",
+        r.class, cx, cz, r.len or 0, r.width or -1, r.startTag, r.endTag, r.pts[mi].x, r.pts[mi].z,
+        RF.crossText(kindAtWalk, r.pts, mi, fieldAtWalk))
     return r
 end
 
@@ -488,6 +490,25 @@ local function fieldAtWalk(x, z)
     return f
 end
 
+-- Is there paving within PAVED_EDGE of (x, z)? Eight looks round, remembered on the 0.25 m grid.
+local nearMemo, nearMemoN = {}, 0
+local function nearPavedWalk(x, z)
+    local key = math.floor(x * 4) * 1000003 + math.floor(z * 4)
+    local v = nearMemo[key]
+    if v == nil then
+        if nearMemoN > 800000 then nearMemo, nearMemoN = {}, 0 end
+        v = false
+        local d = RF.PAVED_EDGE
+        for k = 0, 7 do
+            local a = k * math.pi / 4
+            if kindAtWalk(x + math.cos(a) * d, z + math.sin(a) * d) == RF.KIND_PAVED then v = true break end
+        end
+        nearMemo[key] = v
+        nearMemoN = nearMemoN + 1
+    end
+    return v
+end
+
 function E:roadRunsWalkTests()
     local editor = self
     local function isRoadOf(cls)
@@ -496,7 +517,11 @@ function E:roadRunsWalkTests()
         end
         return function(x, z)
             local k = kindAtWalk(x, z)
-            return (k == RF.KIND_GRAVEL and editor.roadKinds[RF.KIND_GRAVEL]) or (k == RF.KIND_DIRT and editor.roadKinds[RF.KIND_DIRT])
+            if not ((k == RF.KIND_GRAVEL and editor.roadKinds[RF.KIND_GRAVEL]) or (k == RF.KIND_DIRT and editor.roadKinds[RF.KIND_DIRT])) then
+                return false
+            end
+            -- a paved road's verge is not a track (a 255 m walk along a road's gravel verge, 2026-10-12)
+            return not nearPavedWalk(x, z)
         end
     end
     local function isStopOf(cls)
