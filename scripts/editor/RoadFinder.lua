@@ -1780,9 +1780,20 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             local groups = {}
             for _, h in ipairs(hits) do
                 local g = groups[#groups]
-                if g ~= nil and h.a - g.last <= 10 then g.last = h.a g.n = g.n + 1 g.sum = g.sum + h.a
+                -- readings up to 30 degrees apart are one road (a lane seen at -20 and +10 with a failed
+                -- reading between is still one lane, not a junction)
+                if g ~= nil and h.a - g.last <= 30 then g.last = h.a g.n = g.n + 1 g.sum = g.sum + h.a
                 else groups[#groups + 1] = { first = h.a, last = h.a, n = 1, sum = h.a, hit = h } end
             end
+            -- groups whose middles are under 45 degrees apart are one road too
+            local merged = {}
+            for _, g in ipairs(groups) do
+                local m = merged[#merged]
+                if m ~= nil and (g.sum / g.n) - (m.sum / m.n) < 45 then
+                    m.last, m.n, m.sum = g.last, m.n + g.n, m.sum + g.sum
+                else merged[#merged + 1] = g end
+            end
+            groups = merged
             if #groups == 1 then
                 local g = groups[1]
                 local best = nil
@@ -1792,6 +1803,11 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
                 hx, hz = best.hx, best.hz
                 fx, fz, fw = best.x, best.z, best.w
             elseif #groups > 1 then
+                if RF.TRACE then
+                    local t = {}
+                    for _, g in ipairs(groups) do t[#t + 1] = string.format("%d..%d", g.first, g.last) end
+                    print("  junction: road at angles " .. table.concat(t, ", "))
+                end
                 return pts, "fork", { x = px + hx * W.step, z = pz + hz * W.step }
             end
         end
@@ -1810,6 +1826,7 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             if (#pts > 4 or w0 ~= nil) and w > max(W.widen * usual, usual + W.widenMin) then
                 wideRun = wideRun + 1
                 if wideRun >= 3 then
+                    if RF.TRACE then print(string.format("  mouth: width %.1f vs usual %.1f", w, usual)) end
                     for _ = 1, wideRun - 1 do if #pts > 1 then table.remove(pts) end end
                     local f = pts[#pts]
                     return pts, "fork", { x = f.x + hx * W.step, z = f.z + hz * W.step }
