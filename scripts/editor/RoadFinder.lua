@@ -2622,6 +2622,74 @@ function RF.trimGhosts(st, isRoad, cls, x, z)
     return out
 end
 
+RF.HOOK_SPAN = 20        -- a track end's last metres looked at for a hook
+RF.HOOK_TURN = 45        -- bending more than this there, next to paving, is the track meeting the road
+RF.HOOK_PAVED = 12       -- paving this close to the bend
+
+--- A track that comes to a paved road and then bends to run along its verge (2026-10-13: a hook ~10 m
+--- along the gravel at (-390,-616)) has met the road at the bend: cut there, that end a fork.
+--- isPaved(x, z) says paving. Paved stretches are left as they are.
+function RF.cutEndHooks(st, isPaved)
+    if st.class == "paved" or isPaved == nil or #st.pts < 6 then return st end
+    local cosTurn = math.cos(math.rad(RF.HOOK_TURN))
+    local function pavedNear(x, z)
+        for a = 0, 7 do
+            local dx, dz = math.cos(a * math.pi / 4), math.sin(a * math.pi / 4)
+            for r = 1, RF.HOOK_PAVED do
+                if isPaved(x + dx * r, z + dz * r) then return true end
+            end
+        end
+        return false
+    end
+    -- P runs toward the end being looked at; returns the index (in P) to cut at, or nil
+    local function hookIn(P)
+        local n = #P
+        local acc = { 0 }
+        for i = 2, n do acc[i] = acc[i - 1] + sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+        local L = acc[n]
+        if L < RF.HOOK_SPAN + 10 then return nil end
+        -- the approach: the 10 m before the span
+        local a0, a1 = n, n
+        while a1 > 1 and L - acc[a1] < RF.HOOK_SPAN do a1 = a1 - 1 end
+        a0 = a1
+        while a0 > 1 and acc[a1] - acc[a0] < 10 do a0 = a0 - 1 end
+        local hx, hz = P[a1].x - P[a0].x, P[a1].z - P[a0].z
+        local hl = sqrt(hx * hx + hz * hz)
+        if hl < 1e-6 then return nil end
+        hx, hz = hx / hl, hz / hl
+        -- the first point in the span after which the line runs off that heading
+        for i = a1, n - 1 do
+            local b = i
+            while b < n and acc[b] - acc[i] < 4 do b = b + 1 end
+            local dx, dz = P[b].x - P[i].x, P[b].z - P[i].z
+            local dl = sqrt(dx * dx + dz * dz)
+            if dl > 1 and (dx * hx + dz * hz) / dl < cosTurn then
+                if pavedNear(P[i].x, P[i].z) then return i end
+                return nil
+            end
+        end
+        return nil
+    end
+    local P = st.pts
+    local out = st
+    local iEnd = hookIn(P)
+    local R = {}
+    for k = #P, 1, -1 do R[#R + 1] = P[k] end
+    local iStart = hookIn(R)
+    if iEnd == nil and iStart == nil then return st end
+    local i0 = iStart and (#P - iStart + 1) or 1
+    local i1 = iEnd or #P
+    if i1 - i0 < 3 then return st end
+    out = {}
+    for k, v in pairs(st) do if k ~= "hairpinPieces" and k ~= "refinedTo" then out[k] = v end end
+    out.pts = {}
+    for k = i0, i1 do out.pts[#out.pts + 1] = P[k] end
+    if iStart then out.startTag, out.startNode = "fork", { x = P[i0].x, z = P[i0].z, tag = "fork" } end
+    if iEnd then out.endTag, out.endNode = "fork", { x = P[i1].x, z = P[i1].z, tag = "fork" } end
+    out.len = polylineLength(out.pts)
+    return out
+end
+
 --- How far a walked line runs from the map's own road line, as a score for the walker: over the walk's
 --- points within `reach` of the same centre spline, the mean offset (+ = right of the way the walk
 --- goes: a steady lean to one side), the mean size, the worst, how many points, and the spline.

@@ -440,6 +440,7 @@ function E:roadRunsWalkAtCursor(cx, cz)
     end
     r = RF.keepUncovered(r, grid)
     if r ~= nil then r = RF.cutHairpins(r, cx, cz) end
+    if r ~= nil then r = RF.cutEndHooks(r, function(x, z) return E.roadRunsKindAt(x, z) == RF.KIND_PAVED end) end
     if r ~= nil then r = RF.trimGhosts(r, isRoadOf(r.class), r.class, cx, cz) end
     if r == nil or #r.pts < 4 then
         s.walked = nil
@@ -686,6 +687,7 @@ function E:roadRunsRefined(st)
         if r ~= nil then
             local m = st.pts[math.floor(#st.pts / 2) + 1]
             r = RF.cutHairpins(r, m.x, m.z)
+            r = RF.cutEndHooks(r, function(x, z) return E.roadRunsKindAt(x, z) == RF.KIND_PAVED end)
             -- and no line where there is no road under it (dirt patches in grass read as a track)
             local isRoad = isRoadOf(r.class or st.class)
             r = RF.trimGhosts(r, isRoad, r.class or st.class, m.x, m.z)
