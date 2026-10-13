@@ -164,6 +164,12 @@ local function insideFieldOutline(x, z)
 end
 RF.insideFieldOutline = insideFieldOutline
 
+--- Field ground: worked ground in the field layer, or inside a map field outline.
+function RF.isFieldAt(x, z)
+    if not RF.onMap(x, z) then return false end
+    return fieldAt(x, z) or insideFieldOutline(x, z)
+end
+
 --- The ground kind at (x, z): KIND_PAVED / GRAVEL / DIRT, or KIND_NONE for anything else (grass,
 --- field, rock, sand, water). One paint read, plus a field read on road paint and a drive-cost read
 --- on asphalt-sound paint.
@@ -1449,7 +1455,8 @@ RF.WALK = {
     res = 0.5,                      -- cross-section sample spacing
     joinGap = { track = 4.0, paved = 1.0 },   -- gaps up to this inside a band are the same road (ruts)
     tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
-    rutWidth = 2.5,                 -- (a solid track must not swallow the gravel patches beside it)
+    rutWidth = 2.5,
+    fieldSnap = 3.0,                -- a field edge this close beside a track's dirt is the track's edge                 -- (a solid track must not swallow the gravel patches beside it)
     minBand = { track = 1.5, paved = 3.0 },   -- narrower bands are not a road
     gainPos = 0.3,                  -- how far toward the measured middle the line moves per step
     maxTurn = 6,                    -- degrees per step (6 deg / 2 m = no bend tighter than ~19 m)
@@ -1498,6 +1505,28 @@ local function bandsAt(isRoad, x, z, nx, nz, cls)
         end
         if nearest == nil or nearest.w < W.rutWidth then
             bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, wide)
+        end
+    end
+    -- A farm track is paint the game cannot tell apart: mud gravel reads as dirt, but the stony track
+    -- surface beside it (grassDirtStones) is a GRASS layer, colour and all - only half the track shows.
+    -- What does show is where the fields start: a field edge within fieldSnap of the dirt is the
+    -- track's edge on that side (2026-10-12 game test: the line sat a metre off the middle).
+    local isField = RF.walkIsField
+    if cls == "track" and isField ~= nil then
+        for _, b in ipairs(bands) do
+            for _, side in ipairs({ -1, 1 }) do
+                local edge = (side < 0) and b.lo or b.hi
+                local o = edge + side * W.res / 2
+                while abs(o - edge) <= W.fieldSnap do
+                    if isField(x + nx * o, z + nz * o) then
+                        local to = o - side * W.res / 2
+                        if side < 0 then b.lo = min(b.lo, to) else b.hi = max(b.hi, to) end
+                        break
+                    end
+                    o = o + side * W.res
+                end
+            end
+            b.mid, b.w = (b.lo + b.hi) / 2, b.hi - b.lo
         end
     end
     return bands
@@ -1689,7 +1718,15 @@ end
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
 RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3 }
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
-function RF.refineStretch(st, isRoadOf, isStopOf)
+function RF.refineStretch(st, isRoadOf, isStopOf, isField)
+    RF.walkIsField = isField
+    local ok, out = pcall(RF.refineStretchInner, st, isRoadOf, isStopOf)
+    RF.walkIsField = nil
+    if not ok then error(out, 0) end
+    return out
+end
+
+function RF.refineStretchInner(st, isRoadOf, isStopOf)
     for _, p in ipairs(st.pts) do if p.deck then return nil end end
     local cls = st.class
     local isRoad = isRoadOf(cls)
@@ -1811,8 +1848,8 @@ function RF.refineStretch(st, isRoadOf, isStopOf)
 end
 
 --- The ground straight across a line at its point i, as text for the log: one character per 0.5 m
---- from 8 m left to 8 m right ('.' nothing, 'd' dirt, 'g' gravel, 'p' paved, '|' the line itself).
-function RF.crossText(kindAt, P, i)
+--- from 8 m left to 8 m right ('.' nothing, 'F' field, 'd' dirt, 'g' gravel, 'p' paved, '|' the line).
+function RF.crossText(kindAt, P, i, isField)
     local a, b = P[max(1, i - 2)], P[min(#P, i + 2)]
     local hx, hz = b.x - a.x, b.z - a.z
     local l = sqrt(hx * hx + hz * hz)
@@ -1822,7 +1859,9 @@ function RF.crossText(kindAt, P, i)
     local t = {}
     for o = -8, 8, 0.5 do
         if abs(o) < 0.01 then t[#t + 1] = "|" end
-        t[#t + 1] = chars[kindAt(P[i].x + nx * o, P[i].z + nz * o)] or "?"
+        local x, z = P[i].x + nx * o, P[i].z + nz * o
+        local k = kindAt(x, z)
+        if k == 0 and isField ~= nil and isField(x, z) then t[#t + 1] = "F" else t[#t + 1] = chars[k] or "?" end
     end
     return table.concat(t)
 end

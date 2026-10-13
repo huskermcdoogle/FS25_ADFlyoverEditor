@@ -395,6 +395,19 @@ local function kindAtWalk(x, z)
     return k
 end
 
+local fieldMemo, fieldMemoN = {}, 0
+local function fieldAtWalk(x, z)
+    local key = math.floor(x * 2) * 1000003 + math.floor(z * 2)
+    local f = fieldMemo[key]
+    if f == nil then
+        if fieldMemoN > 400000 then fieldMemo, fieldMemoN = {}, 0 end
+        f = RF.isFieldAt(math.floor(x * 2) / 2 + 0.25, math.floor(z * 2) / 2 + 0.25)
+        fieldMemo[key] = f
+        fieldMemoN = fieldMemoN + 1
+    end
+    return f
+end
+
 function E:roadRunsWalkTests()
     local editor = self
     local function isRoadOf(cls)
@@ -420,7 +433,7 @@ function E:roadRunsRefined(st)
     if st == nil then return nil end
     if st.refinedTo ~= nil then return st.refinedTo end
     local isRoadOf, isStopOf = self:roadRunsWalkTests()
-    local ok, r = pcall(RF.refineStretch, st, isRoadOf, isStopOf)
+    local ok, r = pcall(RF.refineStretch, st, isRoadOf, isStopOf, fieldAtWalk)
     if not ok then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walking the road failed (%s); using the square's line.", tostring(r))
         r = nil
@@ -540,7 +553,7 @@ function E:roadRunsClick()
             local i = math.max(1, math.min(#st.pts, math.floor(#st.pts * f)))
             local p = st.pts[i]
             ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - across at (%.1f, %.1f): %s", p.x, p.z,
-                RF.crossText(kindAtWalk, st.pts, i))
+                RF.crossText(kindAtWalk, st.pts, i, fieldAtWalk))
         end
         self:roadRunsRefreshStretches()
     elseif s.hoverPick ~= nil then
