@@ -1456,7 +1456,9 @@ RF.WALK = {
     joinGap = { track = 4.0, paved = 1.0 },   -- gaps up to this inside a band are the same road (ruts)
     tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
     rutWidth = 2.5,
-    fieldSnap = 3.0,                -- a field edge this close beside a track's dirt is the track's edge                 -- (a solid track must not swallow the gravel patches beside it)
+    rutMax = 2.0,                   -- a wheel rut is at most this wide
+    rutGapMin = 0.4,                -- the grass strip between two ruts: at least ...
+    rutGapMax = 3.0,                -- ... and at most this wide                 -- (a solid track must not swallow the gravel patches beside it)
     minBand = { track = 1.5, paved = 3.0 },   -- narrower bands are not a road
     gainPos = 0.3,                  -- how far toward the measured middle the line moves per step
     maxTurn = 6,                    -- degrees per step (6 deg / 2 m = no bend tighter than ~19 m)
@@ -1500,6 +1502,33 @@ end
 function RF.bandsAt(isRoad, x, z, nx, nz, cls)
     local W = RF.WALK
     local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, W.tightGap)
+    -- A farm track is TWO RUTS with a strip of grass between them (2026-10-12 screenshots): the middle
+    -- of the track is halfway between the ruts. Find the pair of narrow dirt strips with a grass gap
+    -- between them nearest the line, and read the track as that pair - stray mud beside the track (a
+    -- headland, a puddle) is left out. (A field-edge rule tried before this pulled the line onto a rut:
+    -- the grass between a field and a track is not track.)
+    if cls == "track" then
+        -- read finely for this: only single-sample holes closed, so a 1 m grass strip stays a gap
+        local fine = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, W.res)
+        local best = nil
+        for k = 1, #fine - 1 do
+            local a, b = fine[k], fine[k + 1]
+            local gap = b.lo - a.hi
+            if a.w <= W.rutMax and b.w <= W.rutMax and gap >= W.rutGapMin and gap <= W.rutGapMax then
+                local mid = (a.mid + b.mid) / 2
+                if best == nil or abs(mid) < abs(best.mid) then
+                    best = { lo = a.lo, hi = b.hi, mid = mid, w = b.hi - a.lo, ruts = true }
+                end
+            end
+        end
+        if best ~= nil then
+            local out = { best }
+            for _, b in ipairs(fine) do
+                if b.w > W.rutWidth and (b.hi < best.lo or b.lo > best.hi) then out[#out + 1] = b end
+            end
+            return out
+        end
+    end
     local wide = W.joinGap[cls] or W.tightGap
     if wide > W.tightGap then
         local nearest = nil
@@ -1508,28 +1537,6 @@ function RF.bandsAt(isRoad, x, z, nx, nz, cls)
         end
         if nearest == nil or nearest.w < W.rutWidth then
             bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, wide)
-        end
-    end
-    -- A farm track is paint the game cannot tell apart: mud gravel reads as dirt, but the stony track
-    -- surface beside it (grassDirtStones) is a GRASS layer, colour and all - only half the track shows.
-    -- What does show is where the fields start: a field edge within fieldSnap of the dirt is the
-    -- track's edge on that side (2026-10-12 game test: the line sat a metre off the middle).
-    local isField = RF.walkIsField
-    if cls == "track" and isField ~= nil then
-        for _, b in ipairs(bands) do
-            for _, side in ipairs({ -1, 1 }) do
-                local edge = (side < 0) and b.lo or b.hi
-                local o = edge + side * W.res / 2
-                while abs(o - edge) <= W.fieldSnap do
-                    if isField(x + nx * o, z + nz * o) then
-                        local to = o - side * W.res / 2
-                        if side < 0 then b.lo = min(b.lo, to) else b.hi = max(b.hi, to) end
-                        break
-                    end
-                    o = o + side * W.res
-                end
-            end
-            b.mid, b.w = (b.lo + b.hi) / 2, b.hi - b.lo
         end
     end
     return bands
