@@ -269,7 +269,7 @@ local function work(n)
     workDone = workDone + n
     if workDone > 2000 then
         workDone = 0
-        if RF.yielding and coroutine.running() ~= nil then
+        if RF.yielding and coroutine ~= nil and coroutine.running() ~= nil then
             local now = clock()
             if now == nil or RF.sliceStart == nil or now - RF.sliceStart >= RF.SLICE then
                 coroutine.yield()

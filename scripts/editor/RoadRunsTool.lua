@@ -12,7 +12,7 @@ lane gap and the gap left at forks for the junction tool. Where a picked road ru
 existing AutoDrive path it joins it; at forks it stops short.
 
 The ground is read in a square window round the mouse, a few thousand spots per frame, and the road
-lines are worked out in a coroutine so a big window never stalls a frame. The window follows the
+lines are worked out in a coroutine where the engine has one (FS25 does not: there in one go, per window). The window follows the
 mouse; picks are kept as their own copies, so they survive the window moving.
 
 Loaded after FlyoverEditor.lua (it adds to ADFlyoverEditor), see Prelude.EDITOR_FILES.
@@ -24,8 +24,8 @@ local E = ADFlyoverEditor
 E.TOOL.ROADRUNS = 16
 E.TOOL_NAMES[E.TOOL.ROADRUNS] = "road runs"
 
-E.ROADRUNS_WINDOW = 384            -- metres a side of the ground read round the mouse
-E.ROADRUNS_RECENTRE = 96           -- the window moves when the mouse is this far from its middle
+E.ROADRUNS_WINDOW = (coroutine ~= nil and coroutine.create ~= nil) and 384 or 288            -- metres a side of the ground read round the mouse
+E.ROADRUNS_RECENTRE = (coroutine ~= nil and coroutine.create ~= nil) and 96 or 72           -- the window moves when the mouse is this far from its middle
 E.ROADRUNS_SNAP = 32               -- window centres snap to this grid, so a small wobble re-uses it
 E.ROADRUNS_SAMPLES_PER_FRAME = 4000 -- cap; reads stop sooner once the frame's time slice is used
 E.ROADRUNS_RIG_MARGIN = 0.3        -- clearance kept beyond a rig's own width: to the other lane, to a railing
@@ -241,8 +241,20 @@ function E:roadRunsHover(overPanel)
     end
 end
 
---- Per frame: keep the window round the mouse, sample a budget of ground, run the road-line job.
+--- Per frame, guarded: an error in the tool is logged once and the tool stops reading, but the
+--- editor's own update (camera keys, edge scroll) always carries on.
 function E:updateRoadRuns(overPanel)
+    if self.roadRunsBroken then return end
+    local ok, err = pcall(self.updateRoadRunsInner, self, overPanel)
+    if not ok then
+        self.roadRunsBroken = true
+        Logging.error("[FlyoverEditor]: road runs stopped after an error: %s", tostring(err))
+        if self.warnPlayer ~= nil then pcall(self.warnPlayer, self, "Road runs hit an error and stopped - see log.txt.") end
+    end
+end
+
+--- Per frame: keep the window round the mouse, sample a budget of ground, run the road-line job.
+function E:updateRoadRunsInner(overPanel)
     local s = roadState(self)
     local cx, cz = self.cursorX, self.cursorZ
     if cx == nil then return end
@@ -287,19 +299,34 @@ function E:updateRoadRuns(overPanel)
         for k, v in pairs(self.roadKinds) do kinds[k] = v end
         local cache = s.cache
         s.jobKey = jobKey
-        s.job = coroutine.create(function()
+        local function build()
             RF.yielding = true
             local win = RF.buildWindow(function(ix, iz) return RF.cacheKind(cache, ix, iz) end,
                 ix0, iz0, self.ROADRUNS_WINDOW, self.ROADRUNS_WINDOW,
                 { kinds = kinds, deckAt = function(ix, iz) return RF.cacheDeck(cache, ix, iz) end })
             RF.yielding = false
             return win
-        end)
+        end
+        -- FS25's script environment has no coroutine library (2026-10-12 log: "attempt to index nil
+        -- with 'create'"); there the road lines are worked out in one go, a short pause per new window
+        if coroutine ~= nil and coroutine.create ~= nil then
+            s.job = coroutine.create(build)
+        else
+            s.job = { sync = build }
+        end
         s.progress = 0.85
     end
     if s.job ~= nil then
         RF.sliceStart = RF.clock()
-        local ok, result = coroutine.resume(s.job)
+        local ok, result, done
+        if type(s.job) == "table" then
+            RF.yielding = false
+            ok, result = pcall(s.job.sync)
+            done = true
+        else
+            ok, result = coroutine.resume(s.job)
+            done = ok and coroutine.status(s.job) == "dead"
+        end
         if not ok then
             Logging.error("[FlyoverEditor]: road runs - reading the roads failed: %s", tostring(result))
             s.job, s.jobKey = nil, nil
@@ -308,7 +335,7 @@ function E:updateRoadRuns(overPanel)
             s.stretches = {}
             return
         end
-        if coroutine.status(s.job) == "dead" then
+        if done then
             s.win = result
             s.win.key = s.jobKey
             s.builds = (s.builds or 0) + 1
@@ -731,6 +758,15 @@ function E:drawRoadRunLanes(lanes, lw, r, g, b)
 end
 
 function E:drawRoadRuns(lw)
+    if self.roadRunsBroken then return end
+    local ok, err = pcall(self.drawRoadRunsInner, self, lw)
+    if not ok then
+        self.roadRunsBroken = true
+        Logging.error("[FlyoverEditor]: road runs stopped after an error while drawing: %s", tostring(err))
+    end
+end
+
+function E:drawRoadRunsInner(lw)
     local s = self.roadRuns
     if s == nil then return end
     local cx, cz = self.cursorX, self.cursorZ

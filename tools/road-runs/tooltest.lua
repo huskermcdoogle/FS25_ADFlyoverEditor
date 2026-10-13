@@ -13,6 +13,7 @@ if os.getenv("TERRAIN_DIR") == nil then
     os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 end
 
+if os.getenv("NOCO") then coroutine = nil end   -- as in FS25: no coroutine library
 g_currentMission = { terrainRootNode = 1 }
 AutoDrive = { FLAG_NONE = 0, FLAG_SUBPRIO = 1, FLYOVER_DRAW_RADIUS = 200 }
 CollisionFlag = {}
