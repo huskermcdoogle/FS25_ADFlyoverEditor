@@ -40,6 +40,7 @@ RF.CLOSE_RADIUS = { paved = 1, track = 2 }     -- gaps this wide (each side) are
 RF.MIN_TRACK_WIDTH = 2.0         -- narrower track lines are shoulder strips or paint seams
 RF.MIN_PAVED_WIDTH = 3.0         -- narrower paved lines are kerbs, footpaths or paint seams
 RF.SHOULDER_DIST = 3.5           -- a track line this close to paved road is that road's shoulder
+RF.BUBBLE_MAX = 60               -- two lines between the same two forks, both shorter than this, are one road
 RF.SPUR_MIN = 10                 -- dead-end spurs shorter than this (or the road's width) are noise
 RF.MIN_STRETCH = 15              -- uncovered stretches shorter than this are not offered
 RF.MIN_LOOSE = 40                -- a line with no fork at either end shorter than this is a paint scrap
@@ -811,6 +812,34 @@ local function simplify(G)
                 end
             end
         end
+        -- BUBBLES: two forks joined by two short lines side by side are one road passing a patch (bare
+        -- ground at a tree's foot reads as the same dirt as the track; 2026-10-12 screenshots - the run
+        -- broke there and detoured round the patch). Keep the straighter line, drop the other. A short
+        -- loop that leaves a fork and comes back to it is the same thing.
+        for _, e in ipairs(G.edges) do
+            if not e.dead and e.a == e.b and polylineLength(e.pts) < RF.BUBBLE_MAX then
+                removeEdge(G, e)
+                changed = true
+            end
+        end
+        for _, e in ipairs(G.edges) do
+            if not e.dead and e.a ~= e.b then
+                for _, f in ipairs(e.a.edges) do
+                    if f ~= e and not f.dead and f.a ~= f.b
+                        and ((f.a == e.a and f.b == e.b) or (f.a == e.b and f.b == e.a)) then
+                        local le, lf = polylineLength(e.pts), polylineLength(f.pts)
+                        if max(le, lf) < RF.BUBBLE_MAX then
+                            -- the straighter line is the one closest to the straight distance
+                            local d = sqrt((e.a.x - e.b.x) ^ 2 + (e.a.z - e.b.z) ^ 2)
+                            local drop = (le - d > lf - d) and e or f
+                            removeEdge(G, drop)
+                            changed = true
+                            break
+                        end
+                    end
+                end
+            end
+        end
         -- forks joined by a short edge: collapse into one (a crossing thins to two forks a few
         -- metres apart, a Y mouth sometimes too)
         for _, e in ipairs(G.edges) do
@@ -1073,6 +1102,71 @@ local function joinDecks(D, paved, track)
     return joined
 end
 
+-- ------------------------------------------------------------------------- through roads at forks
+
+--- The road that carries straight on through a fork is ONE line through it (user, 2026-10-12: "through
+--- tracks at T's should go through"): at each fork the two arms that line up best - within THROUGH_ANGLE
+--- of straight on - are joined into one line passing the fork; the other arms still end there (and
+--- stop short for the junction tool). One through pair per fork: at a crossing the straighter road
+--- goes through.
+RF.THROUGH_ANGLE = 35
+local function armHeading(e, n)
+    local P = ptsFrom(e, n)
+    local far = P[#P]
+    local acc = 0
+    for i = 2, #P do
+        acc = acc + sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2)
+        if acc >= 12 then far = P[i] break end
+    end
+    local hx, hz = far.x - n.x, far.z - n.z
+    local l = sqrt(hx * hx + hz * hz)
+    if l < 1e-6 then return nil end
+    return hx / l, hz / l
+end
+
+local function throughForks(G)
+    local joined = 0
+    local cosMax = -cos(math.rad(RF.THROUGH_ANGLE))     -- arms pointing nearly opposite ways
+    for _, n in ipairs(G.nodes) do
+        if not n.dead and #n.edges >= 3 then
+            local best, bi, bj = cosMax, nil, nil
+            for i = 1, #n.edges do
+                for j = i + 1, #n.edges do
+                    local e1, e2 = n.edges[i], n.edges[j]
+                    if e1 ~= e2 and not e1.dead and not e2.dead and e1.a ~= e1.b and e2.a ~= e2.b then
+                        local ax, az = armHeading(e1, n)
+                        local bx, bz = armHeading(e2, n)
+                        if ax ~= nil and bx ~= nil then
+                            local c = ax * bx + az * bz
+                            if c < best then best, bi, bj = c, e1, e2 end
+                        end
+                    end
+                end
+            end
+            if bi ~= nil then
+                local a, b = otherEnd(bi, n), otherEnd(bj, n)
+                if a ~= b then
+                    local p1, p2 = ptsFrom(bi, a), ptsFrom(bj, n)
+                    local pts = {}
+                    for k = 1, #p1 do pts[#pts + 1] = p1[k] end
+                    for k = 2, #p2 do pts[#pts + 1] = p2[k] end
+                    removeEdge(G, bi)
+                    removeEdge(G, bj)
+                    local e = { id = #G.edges + 1, a = a, b = b, pts = pts, through = n, class = bi.class }
+                    G.edges[#G.edges + 1] = e
+                    a.edges[#a.edges + 1] = e
+                    b.edges[#b.edges + 1] = e
+                    e.width = medianWidth(pts, 6)
+                    e.len = polylineLength(pts)
+                    for _, p in ipairs(pts) do if p.deck then e.deck = true break end end
+                    joined = joined + 1
+                end
+            end
+        end
+    end
+    return joined
+end
+
 -- ------------------------------------------------------------------------- the window
 
 --- Build everything for the window of cells [ix0, ix0 + W) x [iz0, iz0 + H). `kindAt(ix, iz)`
@@ -1217,7 +1311,9 @@ function RF.buildWindow(kindAt, ix0, iz0, W, H, opts)
         end
     end
 
-    local out = { paved = paved, track = track, ix0 = ix0, iz0 = iz0, W = W, H = H, edges = {}, nodes = {}, decks = win.decks }
+    local throughs = throughForks(paved) + throughForks(track)
+    local out = { paved = paved, track = track, ix0 = ix0, iz0 = iz0, W = W, H = H, edges = {}, nodes = {}, decks = win.decks,
+        throughs = throughs }
     for _, G in ipairs({ paved, track }) do
         -- a short line joined to nothing (no fork, not running off the window) is a scrap of paint
         -- along a stream or in a yard, not a road

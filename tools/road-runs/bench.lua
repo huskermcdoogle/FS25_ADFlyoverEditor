@@ -23,6 +23,9 @@ CollisionFlag = {}
 dofile(HERE .. "terrain.lua")
 dofile(HERE .. "../../scripts/editor/RoadFinder.lua")
 local RF = ADRoadFinder
+-- switches to compare rules: NOBUB=1 (no bubble removal), NOTHRU=1 (no through roads at forks)
+if os.getenv("NOBUB") then RF.BUBBLE_MAX = 0 end
+if os.getenv("NOTHRU") then RF.THROUGH_ANGLE = -1 end
 
 local cx, cz = tonumber(arg[1] or "0"), tonumber(arg[2] or "0")
 local size = tonumber(arg[3] or "384")

@@ -34,6 +34,9 @@ Agreed with you on 2026-10-12: P/S = primary/secondary; stop short at forks; joi
 - Rock and fields don't count as road. This uses the junction branch's fixes. The rock check needs the host. If you're not the host, the card says so.
 - Farm tracks painted as two wheel ruts are read as one track.
 - Each road is thinned down to its middle line. Forks are found where lines meet.
+- **At a fork the road that carries straight on goes straight through** (one run); only the side road stops short. At a crossing the straighter road goes through.
+- A patch beside a track (bare ground at a tree's foot) no longer splits it into a loop with two false forks.
+- Farm tracks are two ruts with grass between: the line runs halfway between the ruts.
 - Yards, parking lots, short scraps and kerb strips are dropped.
 
 ## Bridges and ramps (added 2026-10-12, your ask)
