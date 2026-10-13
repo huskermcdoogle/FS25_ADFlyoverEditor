@@ -42,7 +42,7 @@ E.roadKinds = { [RF.KIND_PAVED] = true, [RF.KIND_GRAVEL] = true, [RF.KIND_DIRT] 
 E.roadShowAll = true               -- light up every unpathed road nearby, faintly
 E.roadGapAuto = true               -- lane gap from the road's width
 E.roadLaneGap = 4.0
-E.roadForkGap = 15
+E.roadForkGap = 7.5                -- room left at forks; the junction tool's clear trims or extends to its own box
 E.roadRigWidth = 3.0               -- the widest rig the lanes must pass; sets the minimum lane gap and side room
 E.roadFitEverywhere = false        -- the side check on every road, not only bridges and ramps
 
@@ -50,7 +50,7 @@ E.roadFitEverywhere = false        -- the side check on every road, not only bri
 -- first used, written whenever one changes.
 local SAVED = {
     { "roadRunsMode", "roadMode" }, { "roadRunsLaneGap", "roadLaneGap" }, { "roadRunsRigWidth", "roadRigWidth" },
-    { "roadRunsForkGap", "roadForkGap" },
+    { "roadRunsForkGapM", "roadForkGap" },
 }
 local SAVED_FLAGS = {
     { "roadRunsSubPrio", "roadSubPrio" }, { "roadRunsShowAll", "roadShowAll" }, { "roadRunsGapAuto", "roadGapAuto" },
@@ -523,7 +523,7 @@ function E:roadRunsClick()
         local st = s.hover
         st = self:roadRunsRefined(st)
         if #self:roadRunsLanesFor(st, s.hoverSide or 1, true) == 0 then
-            self:warnPlayer(string.format("This stretch is too short to lay with %d m left at its forks - lower the fork gap.",
+            self:warnPlayer(string.format("This stretch is too short to lay with %.1f m left at its forks - lower the fork gap.",
                 self.roadForkGap))
             return
         end
@@ -820,7 +820,7 @@ function E:roadRunsLanesFor(st, dir, hover)
     local mode = self:roadModeFor(st)
     local gap = self:roadGapFor(st)
     local everywhere = self.roadFitEverywhere and not hover
-    local key = string.format("%s:%d:%.2f:%d:%.1f:%s", mode, dir or 1, gap, self.roadForkGap, self.roadRigWidth,
+    local key = string.format("%s:%d:%.2f:%.1f:%.1f:%s", mode, dir or 1, gap, self.roadForkGap, self.roadRigWidth,
         tostring(everywhere))
     st.laneCache = st.laneCache or {}
     local lanes = st.laneCache[key]
@@ -1011,7 +1011,7 @@ function E:roadRunsNumbers(fieldEntry)
         list[#list + 1] = fieldEntry("lane gap", "m", 1, "roadLaneGap", 2.5, 8, 0.1, false, save)
     end
     list[#list + 1] = fieldEntry("rig width", "m", 1, "roadRigWidth", 2.0, 5.0, 0.1, false, save)
-    list[#list + 1] = fieldEntry("fork gap", "m", 0, "roadForkGap", 0, 40, 1, true, save)
+    list[#list + 1] = fieldEntry("fork gap", "m", 1, "roadForkGap", 0, 40, 0.5, false, save)
     return list
 end
 

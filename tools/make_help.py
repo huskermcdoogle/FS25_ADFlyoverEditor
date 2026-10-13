@@ -184,7 +184,7 @@ TOOLS = [
                            "also keep clear of walls, posts, trees and banks on every road."),
             ("rig width", "the widest rig the lanes must pass (3.0 m). Lanes are never closer than this "
                           "plus 0.3 m, and keep half of it plus 0.3 m from a railing."),
-            ("fork gap", "how far back from a fork the run stops, leaving room for the junction tool."),
+            ("fork gap", "how far back from a fork the run stops (7.5 m), leaving room for the junction tool."),
         ],
     },
     {

@@ -329,7 +329,8 @@ T["road runs"] = {
     "  0.3 m, and keep half of it plus 0.3 m from a",
     "  railing.",
     "fork gap: how far back from a fork the run",
-    "  stops, leaving room for the junction tool.",
+    "  stops (7.5 m), leaving room for the junction",
+    "  tool.",
   },
 }
 

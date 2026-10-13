@@ -23,7 +23,7 @@ Lays AutoDrive runs along map roads and farm tracks that have no path yet.
 | lane gap | **from road** / set (typed). The card shows this road's width and the map's own lane gap |
 | side check | **bridges** / everywhere: lanes move in to clear railings (and walls, posts, trees, banks) |
 | rig width | 3.0 m: the widest rig to pass. Lanes stay at least this + 0.3 m apart |
-| fork gap | 15 m, the room left at forks for the junction tool |
+| fork gap | 7.5 m, the room left at forks for the junction tool (its clear trims or extends to its own box) |
 
 Agreed with you on 2026-10-12: P/S = primary/secondary; stop short at forks; join a path the road runs into; click and double-click (no box); highlight toggle; all three road kinds on.
 

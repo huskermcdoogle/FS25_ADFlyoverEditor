@@ -205,7 +205,7 @@ Road runs reads the ground paint round the mouse - asphalt and concrete, gravel,
 - **lane gap** — from road: 0.6 x the road's measured width, as the map's own two-lane roads are laid (never under the rig width + 0.3 m); set: type your own. The card shows this road's width and how far apart the map's own lanes are.
 - **side check** — bridges: fit the lanes between the railings on bridges and ramps; everywhere: also keep clear of walls, posts, trees and banks on every road.
 - **rig width** — the widest rig the lanes must pass (3.0 m). Lanes are never closer than this plus 0.3 m, and keep half of it plus 0.3 m from a railing.
-- **fork gap** — how far back from a fork the run stops, leaving room for the junction tool.
+- **fork gap** — how far back from a fork the run stops (7.5 m), leaving room for the junction tool.
 
 <a id="move"></a>
 ## Move

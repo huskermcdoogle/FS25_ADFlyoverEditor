@@ -84,7 +84,8 @@ S.settings.roadRunsShowAll = { range = { min = 0, max = 1, step = 1 }, value = 1
 S.settings.roadRunsGapAuto = { range = { min = 0, max = 1, step = 1 }, value = 1 }
 S.settings.roadRunsLaneGap = { range = { min = 2.5, max = 8, step = 0.1 }, value = 4.0 }
 S.settings.roadRunsRigWidth = { range = { min = 2.0, max = 5.0, step = 0.1 }, value = 3.0 }
-S.settings.roadRunsForkGap = { range = { min = 0, max = 40, step = 1 }, value = 15 }
+-- (renamed from roadRunsForkGap when the default went 15 -> 7.5 m, so an old saved 15 is not kept)
+S.settings.roadRunsForkGapM = { range = { min = 0, max = 40, step = 0.5 }, value = 7.5 }
 S.settings.roadRunsFitEverywhere = { range = { min = 0, max = 1, step = 1 }, value = 0 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
