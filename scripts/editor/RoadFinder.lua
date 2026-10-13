@@ -1452,7 +1452,7 @@ end
 RF.WALK = {
     step = 2,                       -- metres per step
     half = 9,                       -- how far either side a cross-section looks
-    res = 0.5,                      -- cross-section sample spacing
+    res = 0.25,                     -- cross-section sample spacing
     joinGap = { track = 4.0, paved = 1.0 },   -- gaps up to this inside a band are the same road (ruts)
     tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
     rutWidth = 2.5,
@@ -1833,6 +1833,29 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     end
     extend(false, cutStart)
     extend(true, cutEnd)
+    -- Steady ends: the last metres are read with fewer points either side and drift. Carry the line's
+    -- own straight course (read 8-20 m in) out over its last 8 m, unless the road bends there.
+    local function steady(atEnd)
+        local m = #R
+        if m < 12 then return end
+        local function at(k) if atEnd then return R[m + 1 - k] else return R[k] end end
+        local a, b = at(5), at(11)                      -- 8 m and 20 m in (2 m steps)
+        local tip = at(1)
+        local ux, uz = a.x - b.x, a.z - b.z              -- outward along the course
+        local ul = sqrt(ux * ux + uz * uz)
+        local vx, vz = tip.x - a.x, tip.z - a.z
+        local vl = sqrt(vx * vx + vz * vz)
+        if ul < 1e-6 or vl < 1e-6 then return end
+        ux, uz = ux / ul, uz / ul
+        if (ux * vx + uz * vz) / vl < cos(math.rad(20)) then return end   -- a real bend at the end
+        for k = 1, 4 do
+            local p = at(k)
+            local d = (5 - k) * W.step
+            p.x, p.z = a.x + ux * d, a.z + uz * d
+        end
+    end
+    steady(false)
+    steady(true)
     local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
     -- ran off the read square: carry on with the free walker from that end
     local isStop = isStopOf ~= nil and isStopOf(cls) or nil

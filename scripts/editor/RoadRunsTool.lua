@@ -381,14 +381,14 @@ end
 
 -- The square read finds roads and forks; the line the tool lays comes from WALKING the road (RoadFinder
 -- RF.walkRoad): it steers gently toward the middle of what it sees, takes two wheel ruts as one track,
--- ignores one-off bumps, and is straightened afterwards. Ground is read on a 0.5 m grid, remembered.
+-- ignores one-off bumps, and is straightened afterwards. Ground is read on a 0.25 m grid, remembered.
 local walkMemo, walkMemoN = {}, 0
 local function kindAtWalk(x, z)
-    local key = math.floor(x * 2) * 1000003 + math.floor(z * 2)
+    local key = math.floor(x * 4) * 1000003 + math.floor(z * 4)
     local k = walkMemo[key]
     if k == nil then
-        if walkMemoN > 400000 then walkMemo, walkMemoN = {}, 0 end
-        k = RF.groundKindAt(math.floor(x * 2) / 2 + 0.25, math.floor(z * 2) / 2 + 0.25)
+        if walkMemoN > 800000 then walkMemo, walkMemoN = {}, 0 end
+        k = RF.groundKindAt(math.floor(x * 4) / 4 + 0.125, math.floor(z * 4) / 4 + 0.125)
         walkMemo[key] = k
         walkMemoN = walkMemoN + 1
     end
@@ -397,11 +397,11 @@ end
 
 local fieldMemo, fieldMemoN = {}, 0
 local function fieldAtWalk(x, z)
-    local key = math.floor(x * 2) * 1000003 + math.floor(z * 2)
+    local key = math.floor(x * 4) * 1000003 + math.floor(z * 4)
     local f = fieldMemo[key]
     if f == nil then
-        if fieldMemoN > 400000 then fieldMemo, fieldMemoN = {}, 0 end
-        f = RF.isFieldAt(math.floor(x * 2) / 2 + 0.25, math.floor(z * 2) / 2 + 0.25)
+        if fieldMemoN > 800000 then fieldMemo, fieldMemoN = {}, 0 end
+        f = RF.isFieldAt(math.floor(x * 4) / 4 + 0.125, math.floor(z * 4) / 4 + 0.125)
         fieldMemo[key] = f
         fieldMemoN = fieldMemoN + 1
     end
