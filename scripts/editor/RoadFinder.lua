@@ -105,38 +105,62 @@ RF.noRockCheck = false           -- set when the drive-cost map is missing (not 
 -- FIELD OUTLINES. The field layer only marks worked ground, so the unworked strip along a fence inside
 -- a field read as a dirt track (2026-10-12 game test). Inside the map's own field outline is never road:
 -- the farmland under the spot, its field, that field's outline (cached per field).
-local fieldOutlines = {}
-local function insideFieldOutline(x, z)
-    local fm = g_farmlandManager
-    if fm == nil or fm.getFarmlandAtWorldPosition == nil then return false end
-    local ok, farmland = pcall(fm.getFarmlandAtWorldPosition, fm, x, z)
-    if not ok or farmland == nil or farmland.getField == nil then return false end
-    local okF, field = pcall(farmland.getField, farmland)
-    if not okF or field == nil then return false end
-    local poly = fieldOutlines[field]
-    if poly == nil then
-        poly = false
-        local okV, verts = pcall(function() return field:getDensityMapPolygon():getVerticesList() end)
-        if okV and type(verts) == "table" and #verts >= 6 then
-            poly = { x0 = math.huge, x1 = -math.huge, z0 = math.huge, z1 = -math.huge }
-            for i = 1, #verts - 1, 2 do
-                poly[#poly + 1] = verts[i]
-                poly[#poly + 1] = verts[i + 1]
-                poly.x0, poly.x1 = min(poly.x0, verts[i]), max(poly.x1, verts[i])
-                poly.z0, poly.z1 = min(poly.z0, verts[i + 1]), max(poly.z1, verts[i + 1])
+-- The outlines come from g_fieldManager.fields: each field's polygonPoints are nodes on the map
+-- (Field.lua:75-86). Read once, indexed in 64 m squares. (The first try went through
+-- farmland:getField(), which FS25 does not have - the check silently did nothing in game.)
+local fieldIndex, fieldIndexFor = nil, nil
+local FIELD_CELL = 64
+local function buildFieldIndex()
+    local fm = g_fieldManager
+    fieldIndex = {}
+    if fm == nil or type(fm.fields) ~= "table" or getWorldTranslation == nil then return end
+    for _, field in pairs(fm.fields) do
+        local nodes = type(field) == "table" and field.polygonPoints or nil
+        if type(nodes) == "table" and #nodes >= 3 then
+            local poly = { x0 = math.huge, x1 = -math.huge, z0 = math.huge, z1 = -math.huge }
+            for _, node in ipairs(nodes) do
+                local ok, x, _, z = pcall(getWorldTranslation, node)
+                if ok and type(x) == "number" and type(z) == "number" then
+                    poly[#poly + 1] = x
+                    poly[#poly + 1] = z
+                    poly.x0, poly.x1 = min(poly.x0, x), max(poly.x1, x)
+                    poly.z0, poly.z1 = min(poly.z0, z), max(poly.z1, z)
+                end
+            end
+            if #poly >= 6 then
+                for gx = floor(poly.x0 / FIELD_CELL), floor(poly.x1 / FIELD_CELL) do
+                    for gz = floor(poly.z0 / FIELD_CELL), floor(poly.z1 / FIELD_CELL) do
+                        local k = gx * 100003 + gz
+                        fieldIndex[k] = fieldIndex[k] or {}
+                        table.insert(fieldIndex[k], poly)
+                    end
+                end
             end
         end
-        fieldOutlines[field] = poly
     end
-    if not poly or x < poly.x0 or x > poly.x1 or z < poly.z0 or z > poly.z1 then return false end
-    local inside, m = false, #poly
-    local xj, zj = poly[m - 1], poly[m]
-    for n = 1, m, 2 do
-        local xi, zi = poly[n], poly[n + 1]
-        if (zi > z) ~= (zj > z) and x < (xj - xi) * (z - zi) / (zj - zi) + xi then inside = not inside end
-        xj, zj = xi, zi
+end
+local function insideFieldOutline(x, z)
+    local fm = g_fieldManager
+    if fieldIndex == nil or fieldIndexFor ~= fm then
+        fieldIndexFor = fm
+        local ok = pcall(buildFieldIndex)
+        if not ok then fieldIndex = {} end
     end
-    return inside
+    local list = fieldIndex[floor(x / FIELD_CELL) * 100003 + floor(z / FIELD_CELL)]
+    if list == nil then return false end
+    for _, poly in ipairs(list) do
+        if x >= poly.x0 and x <= poly.x1 and z >= poly.z0 and z <= poly.z1 then
+            local inside, m = false, #poly
+            local xj, zj = poly[m - 1], poly[m]
+            for n = 1, m, 2 do
+                local xi, zi = poly[n], poly[n + 1]
+                if (zi > z) ~= (zj > z) and x < (xj - xi) * (z - zi) / (zj - zi) + xi then inside = not inside end
+                xj, zj = xi, zi
+            end
+            if inside then return true end
+        end
+    end
+    return false
 end
 RF.insideFieldOutline = insideFieldOutline
 
@@ -1664,6 +1688,7 @@ end
 --- the free walker carries it on. Then straightened. Decks keep the square's line (under a bridge the
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
 RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3 }
+RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 function RF.refineStretch(st, isRoadOf, isStopOf)
     for _, p in ipairs(st.pts) do if p.deck then return nil end end
     local cls = st.class
@@ -1671,6 +1696,23 @@ function RF.refineStretch(st, isRoadOf, isStopOf)
     if isRoad == nil then return nil end
     local W, F = RF.WALK, RF.FILTER
     local G = resampleFixed(st.pts, W.step)
+    -- Near a fork the square's centre line bends toward the fork's middle. Leave out the guide within
+    -- FORK_BEND (or 1.5 road widths) of a fork and carry the walked line on straight there instead.
+    local bend = max(RF.FORK_BEND, 1.5 * (st.width or 4))
+    local cutStart, cutEnd = 0, 0
+    local function nearFork(tag, node) return (tag == "fork" or tag == "wide") and node ~= nil end
+    if nearFork(st.startTag, st.startNode) then
+        while #G > 6 and sqrt((G[1].x - st.startNode.x) ^ 2 + (G[1].z - st.startNode.z) ^ 2) < bend do
+            table.remove(G, 1)
+            cutStart = cutStart + W.step
+        end
+    end
+    if nearFork(st.endTag, st.endNode) then
+        while #G > 6 and sqrt((G[#G].x - st.endNode.x) ^ 2 + (G[#G].z - st.endNode.z) ^ 2) < bend do
+            table.remove(G)
+            cutEnd = cutEnd + W.step
+        end
+    end
     local n = #G
     if n < 4 then return nil end
     -- the guide's heading at each point, over a few points either side (the square's line steps)
@@ -1714,6 +1756,24 @@ function RF.refineStretch(st, isRoadOf, isStopOf)
         local off = (fw[i] + bw[i]) / 2
         R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
     end
+    -- carry the line on straight over the part left out near a fork, along its own last heading
+    local function extend(atEnd, length)
+        if length <= 0 or #R < 4 then return end
+        local p, q
+        if atEnd then p, q = R[#R - 3], R[#R] else p, q = R[4], R[1] end
+        local hx, hz = q.x - p.x, q.z - p.z
+        local l = sqrt(hx * hx + hz * hz)
+        if l < 1e-6 then return end
+        hx, hz = hx / l, hz / l
+        local d = W.step
+        while d <= length + 1e-6 do
+            local e = { x = q.x + hx * d, z = q.z + hz * d, w = q.w }
+            if atEnd then R[#R + 1] = e else table.insert(R, 1, e) end
+            d = d + W.step
+        end
+    end
+    extend(false, cutStart)
+    extend(true, cutEnd)
     local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
     -- ran off the read square: carry on with the free walker from that end
     local isStop = isStopOf ~= nil and isStopOf(cls) or nil
@@ -1740,15 +1800,31 @@ function RF.refineStretch(st, isRoadOf, isStopOf)
         out.startNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
     end
     local S = RF.straighten(R, 0.75)
-    -- the ends stay where the square put them (forks, paths): straightening must not drift them
-    S[1].x, S[1].z = R[1].x, R[1].z
-    S[#S].x, S[#S].z = R[#R].x, R[#R].z
     out.pts = S
+    out.walk = { sections = n, read = 0, ruts = 0 }
+    for i = 1, n do if meas[i] ~= nil then out.walk.read = out.walk.read + 1 end end
     out.class, out.kind, out.edge = st.class, st.kind, st.edge
     out.width = medianWidth(S, 6) or st.width
     out.len = polylineLength(S)
     out.refined = true
     return out
+end
+
+--- The ground straight across a line at its point i, as text for the log: one character per 0.5 m
+--- from 8 m left to 8 m right ('.' nothing, 'd' dirt, 'g' gravel, 'p' paved, '|' the line itself).
+function RF.crossText(kindAt, P, i)
+    local a, b = P[max(1, i - 2)], P[min(#P, i + 2)]
+    local hx, hz = b.x - a.x, b.z - a.z
+    local l = sqrt(hx * hx + hz * hz)
+    if l < 1e-6 then return "" end
+    local nx, nz = -hz / l, hx / l
+    local chars = { [0] = ".", [1] = "d", [2] = "g", [3] = "p" }
+    local t = {}
+    for o = -8, 8, 0.5 do
+        if abs(o) < 0.01 then t[#t + 1] = "|" end
+        t[#t + 1] = chars[kindAt(P[i].x + nx * o, P[i].z + nz * o)] or "?"
+    end
+    return table.concat(t)
 end
 
 --- The part of a (walked) stretch with no AutoDrive path along it: the uncovered run through its

@@ -531,8 +531,17 @@ function E:roadRunsClick()
         s.picks[#s.picks + 1] = pick
         s.chainDir = {}
         s.lastClick.pick = pick
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - picked a %s stretch, %.0f m, %.1f m wide (%s to %s).",
-            RF.KIND_NAMES[st.kind] or "?", st.len, st.width or -1, st.startTag, st.endTag)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - picked a %s stretch, %.0f m, %.1f m wide (%s to %s), %s.",
+            RF.KIND_NAMES[st.kind] or "?", st.len, st.width or -1, st.startTag, st.endTag,
+            st.walk ~= nil and string.format("walked: road read across it at %d of %d points", st.walk.read, st.walk.sections)
+                or "NOT walked (square's line)")
+        -- what the ground looks like straight across the laid line, a quarter, half and three quarters along
+        for _, f in ipairs({ 0.25, 0.5, 0.75 }) do
+            local i = math.max(1, math.min(#st.pts, math.floor(#st.pts * f)))
+            local p = st.pts[i]
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - across at (%.1f, %.1f): %s", p.x, p.z,
+                RF.crossText(kindAtWalk, st.pts, i))
+        end
         self:roadRunsRefreshStretches()
     elseif s.hoverPick ~= nil then
         for k, pk in ipairs(s.picks) do
