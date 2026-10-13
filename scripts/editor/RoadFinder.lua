@@ -46,6 +46,7 @@ RF.MIN_STRETCH = 15              -- uncovered stretches shorter than this are no
 RF.MIN_LOOSE = 40                -- a line with no fork at either end shorter than this is a paint scrap
 RF.COVER_SMOOTH = 8              -- covered/uncovered runs shorter than this take their neighbours' side
 RF.COVER_ANGLE = 35              -- a path within this many degrees of the road's line counts as along it
+RF.TRACK_REACH = 10              -- a track ending this close to a paved road meets it (the mouth is often all mud)
 RF.TRACK_JOIN = 4                -- a track end this far past a paved road's edge makes a fork on it
 
 -- --------------------------------------------------------------------------------- ground kinds
@@ -1230,9 +1231,9 @@ function RF.buildWindow(kindAt, ix0, iz0, W, H, opts)
     end
     -- a track ending at a paved road makes a fork on the paved road
     for _, n in ipairs(track.nodes) do
-        if not n.dead and #n.edges == 1 and distPaved(n.x, n.z) <= RF.SHOULDER_DIST + 1 then
+        if not n.dead and #n.edges == 1 and distPaved(n.x, n.z) <= RF.TRACK_REACH then
             local e, i, dd, px, pz = nearestOnGraph(paved, n.x, n.z, nil)
-            if e ~= nil and dd <= (e.width or 6) / 2 + RF.TRACK_JOIN then
+            if e ~= nil and dd <= (e.width or 6) / 2 + RF.TRACK_REACH then
                 -- reuse a fork already close by, else split the paved line there
                 local f = nil
                 for _, m in ipairs({ e.a, e.b }) do
@@ -1838,6 +1839,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     local isRoad = isRoadOf(cls)
     if isRoad == nil then return nil end
     local W, F = RF.WALK, RF.FILTER
+    local isStop = isStopOf ~= nil and isStopOf(cls) or nil
     local G = resampleFixed(st.pts, W.step)
     -- Near a fork the square's centre line bends toward the fork's middle. Leave out the guide within
     -- FORK_BEND (or 1.5 road widths) of a fork and carry the walked line on straight there instead.
@@ -1936,13 +1938,14 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     end
     extend(false, cutStart)
     extend(true, cutEnd)
-    -- Steady ends: the last metres are read with fewer points either side and drift. Carry the line's
-    -- own straight course (read 8-20 m in) out over its last 8 m, unless the road bends there.
+    -- Steady ends: the last metres are read with fewer points either side and drift, or hook into a
+    -- yard or a junction's mud. Carry the line's own course (read 10-24 m in) out over its last 10 m,
+    -- unless the road really turns there (over 45 degrees).
     local function steady(atEnd)
         local m = #R
-        if m < 12 then return end
+        if m < 14 then return end
         local function at(k) if atEnd then return R[m + 1 - k] else return R[k] end end
-        local a, b = at(5), at(11)                      -- 8 m and 20 m in (2 m steps)
+        local a, b = at(6), at(13)                      -- 10 m and 24 m in (2 m steps)
         local tip = at(1)
         local ux, uz = a.x - b.x, a.z - b.z              -- outward along the course
         local ul = sqrt(ux * ux + uz * uz)
@@ -1950,18 +1953,26 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         local vl = sqrt(vx * vx + vz * vz)
         if ul < 1e-6 or vl < 1e-6 then return end
         ux, uz = ux / ul, uz / ul
-        if (ux * vx + uz * vz) / vl < cos(math.rad(20)) then return end   -- a real bend at the end
-        for k = 1, 4 do
+        if (ux * vx + uz * vz) / vl < cos(math.rad(45)) then return end   -- the road really turns there
+        for k = 1, 5 do
             local p = at(k)
-            local d = (5 - k) * W.step
+            local d = (6 - k) * W.step
             p.x, p.z = a.x + ux * d, a.z + uz * d
         end
     end
     steady(false)
     steady(true)
+    -- A track's line never runs onto a paved road (2026-10-12: one crossed both lanes of a road): cut
+    -- each end back to where the paving starts, and that end has met the road - a fork, with its gap.
+    local metStart, metEnd = nil, nil
+    if isStop ~= nil then
+        while #R > 4 and isStop(R[1].x, R[1].z) do metStart = table.remove(R, 1) end
+        while #R > 4 and isStop(R[#R].x, R[#R].z) do metEnd = table.remove(R) end
+    end
     local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
+    if metStart ~= nil then out.startTag, out.startNode = "fork", { x = metStart.x, z = metStart.z, tag = "fork" } end
+    if metEnd ~= nil then out.endTag, out.endNode = "fork", { x = metEnd.x, z = metEnd.z, tag = "fork" } end
     -- ran off the read square: carry on with the free walker from that end
-    local isStop = isStopOf ~= nil and isStopOf(cls) or nil
     local function carryOn(atEnd)
         local p, q
         if atEnd then p, q = R[max(1, n - 3)], R[n] else p, q = R[min(n, 4)], R[1] end
