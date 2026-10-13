@@ -1606,10 +1606,13 @@ RF.WALK = {
     rutGapMax = 3.0,                -- ... and at most this wide                 -- (a solid track must not swallow the gravel patches beside it)
     minBand = { track = 1.5, paved = 1.5 },   -- narrower bands are not a road (old lanes are 2-3 m)
     gainPos = 0.3,                  -- how far toward the measured middle the line moves per step
-    maxTurn = 6,                    -- degrees per step (6 deg / 2 m = no bend tighter than ~19 m)
+    maxTurn = 12,                   -- degrees per step (12 deg / 2 m: bends down to ~10 m radius)
+    lookAhead = 6,                  -- metres ahead the walker aims at the road's middle
+    settle = 0.5,                   -- how far onto the middle just in front each step settles
     gate = 2.5,                     -- a middle further off than this (plus a quarter of the width) is noise
-    maxMiss = 4,                    -- steps with no road ahead before the road has ended
+    maxMiss = 6,                    -- steps with no road ahead before the road has ended (12 m)
     widen = 2.0,                    -- the band this many times its usual width: a fork's mouth
+    widenMin = 4.0,                 -- ... and at least this much wider (a 2 m lane's 4 m patch is no mouth)
     maxLen = 1200,                  -- metres one walk may cover each way
 }
 
@@ -1718,47 +1721,93 @@ end
 --- Walk one way from (x, z) heading (hx, hz). Returns the points (x, z, w) and how it ended:
 --- "end" (no road ahead), "fork" (the road widens into a mouth), "limit" (maxLen), "loop".
 function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
+    -- Steered like a driver (pure pursuit): look `lookAhead` metres on, aim at the middle of the road
+    -- there; then step and settle onto the middle just in front. An earlier walker turned a fraction of
+    -- the way toward the middle each step and expected bends to carry on: it over-steered, weaved, ran
+    -- alongside a 2 m lane 3.5 m off and gave up (2026-10-12 trace).
     local W = RF.WALK
     local hl = sqrt(hx * hx + hz * hz)
     hx, hz = hx / hl, hz / hl
     local pts = { { x = x, z = z, w = w0 } }
     local widths = { w0 }
-    local miss, len, wideRun, lastTurn = 0, 0, 0, 0
+    local miss, len, wideRun = 0, 0, 0
     local px, pz = x, z
     local maxTurnCos = cos(math.rad(W.maxTurn))
-    while len < W.maxLen do
-        -- expect the bend to go on as it has: turn by the last step's turn before looking (no lag
-        -- toward the outside of a long bend)
-        if lastTurn ~= 0 then hx, hz = rot(hx, hz, lastTurn) end
-        local qx, qz = px + hx * W.step, pz + hz * W.step
-        local nx, nz = -hz, hx
-        if isStop ~= nil and isStop(qx, qz) then return pts, "fork", { x = qx, z = qz } end
-        local bands = bandsAt(isRoad, qx, qz, nx, nz, cls)
-        -- the usual width so far (median of the recent ones)
+    local function usualWidth()
         local recent = {}
         for i = max(1, #widths - 10), #widths do recent[#recent + 1] = widths[i] end
         table.sort(recent)
-        local usual = recent[floor((#recent + 1) / 2)] or w0
+        return recent[floor((#recent + 1) / 2)] or w0
+    end
+    -- the middle of the road across the line at distance d ahead: offset along the normal, width
+    local function middleAt(d, hx2, hz2)
+        local qx, qz = px + hx2 * d, pz + hz2 * d
+        local nx, nz = -hz2, hx2
+        local bands = bandsAt(isRoad, qx, qz, nx, nz, cls)
         local pick = nil
         for _, b in ipairs(bands) do
             if b.w >= W.minBand[cls] and abs(b.mid) <= W.gate + 0.25 * b.w then
                 if pick == nil or abs(b.mid) < abs(pick.mid) then pick = b end
             end
         end
-        if pick == nil then
+        if RF.TRACE then
+            local t = {}
+            for _, b in ipairs(bands) do t[#t + 1] = string.format("%+.1f/%.1f", b.mid, b.w) end
+            print(string.format("  look %d m at (%.1f,%.1f) heading %.0f: bands %s -> %s", d, qx, qz,
+                math.deg(atan2(hz2, hx2)), table.concat(t, " "), pick and string.format("%+.1f", pick.mid) or "none"))
+        end
+        if pick == nil then return nil end
+        return qx + nx * pick.mid, qz + nz * pick.mid, pick.w
+    end
+    while len < W.maxLen do
+        local nearX, nearZ = px + hx * W.step, pz + hz * W.step
+        if isStop ~= nil and isStop(nearX, nearZ) then return pts, "fork", { x = nearX, z = nearZ } end
+        local usual = usualWidth()
+        -- aim: the middle a look-ahead on (fall back to the middle just in front)
+        local fx, fz, fw = middleAt(W.lookAhead, hx, hz)
+        local cx, cz, cw = middleAt(W.step, hx, hz)
+        if fx == nil and cx == nil then
+            -- nothing straight on: look round. Road in ONE direction is a corner: take it. Road in
+            -- more than one direction is a junction: the run ends there, as a fork.
+            local hits = {}
+            for a = -80, 80, 10 do
+                if a ~= 0 then
+                    local rx, rz = rot(hx, hz, a)
+                    local tx, tz, tw = middleAt(W.lookAhead, rx, rz)
+                    if tx ~= nil then hits[#hits + 1] = { a = a, x = tx, z = tz, w = tw, hx = rx, hz = rz } end
+                end
+            end
+            local groups = {}
+            for _, h in ipairs(hits) do
+                local g = groups[#groups]
+                if g ~= nil and h.a - g.last <= 10 then g.last = h.a g.n = g.n + 1 g.sum = g.sum + h.a
+                else groups[#groups + 1] = { first = h.a, last = h.a, n = 1, sum = h.a, hit = h } end
+            end
+            if #groups == 1 then
+                local g = groups[1]
+                local best = nil
+                for _, h in ipairs(hits) do
+                    if best == nil or abs(h.a - g.sum / g.n) < abs(best.a - g.sum / g.n) then best = h end
+                end
+                hx, hz = best.hx, best.hz
+                fx, fz, fw = best.x, best.z, best.w
+            elseif #groups > 1 then
+                return pts, "fork", { x = px + hx * W.step, z = pz + hz * W.step }
+            end
+        end
+        if fx == nil and cx == nil then
             miss = miss + 1
             if miss > W.maxMiss then
-                -- drop the steps taken blind
                 for _ = 1, miss - 1 do if #pts > 1 then table.remove(pts) end end
                 return pts, "end"
             end
-            px, pz = qx, qz
+            px, pz = nearX, nearZ
             pts[#pts + 1] = { x = px, z = pz, w = usual, blind = true }
         else
             miss = 0
-            -- a fork's mouth: the road stays much wider than usual for a few steps running (one wide
-            -- reading is a patch or a rut read the other way)
-            if (#pts > 4 or w0 ~= nil) and pick.w > W.widen * usual then
+            local w = cw or fw
+            -- a fork's mouth: the road stays much wider than usual for a few steps running
+            if (#pts > 4 or w0 ~= nil) and w > max(W.widen * usual, usual + W.widenMin) then
                 wideRun = wideRun + 1
                 if wideRun >= 3 then
                     for _ = 1, wideRun - 1 do if #pts > 1 then table.remove(pts) end end
@@ -1768,28 +1817,29 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             else
                 wideRun = 0
             end
-            -- steer a fraction of the way toward the measured middle, within the turn limit
-            local tx, tz = qx + nx * pick.mid * W.gainPos, qz + nz * pick.mid * W.gainPos
-            local dx, dz = tx - px, tz - pz
+            local ax, az = fx or cx, fz or cz
+            local dx, dz = ax - px, az - pz
             local dl = sqrt(dx * dx + dz * dz)
-            dx, dz = dx / dl, dz / dl
-            local c = dx * hx + dz * hz
-            if c < maxTurnCos then
-                local side = (hx * dz - hz * dx) >= 0 and 1 or -1
-                dx, dz = rot(hx, hz, side * W.maxTurn)
+            if dl > 1e-6 then
+                dx, dz = dx / dl, dz / dl
+                if dx * hx + dz * hz < maxTurnCos then
+                    local side = (hx * dz - hz * dx) >= 0 and 1 or -1
+                    dx, dz = rot(hx, hz, side * W.maxTurn)
+                end
+                hx, hz = dx, dz
             end
-            -- the turn this step made, counting the bend expected before it, for the next step
-            local turned = math.deg(atan2(hx * dz - hz * dx, hx * dx + hz * dz)) + lastTurn
-            lastTurn = max(-W.maxTurn, min(W.maxTurn, turned))
-            hx, hz = dx, dz
             px, pz = px + hx * W.step, pz + hz * W.step
-            if wideRun == 0 then widths[#widths + 1] = pick.w end
-            pts[#pts + 1] = { x = px, z = pz, w = (wideRun == 0) and pick.w or usual }
+            -- settle onto the middle just in front (re-read along the new heading)
+            local sx, sz = middleAt(0, hx, hz)
+            if sx ~= nil then
+                px, pz = px + (sx - px) * W.settle, pz + (sz - pz) * W.settle
+            end
+            if wideRun == 0 then widths[#widths + 1] = w end
+            pts[#pts + 1] = { x = px, z = pz, w = (wideRun == 0) and w or usual }
         end
         len = len + W.step
-        -- back where it started (a ring road)
         if len > 40 and sqrt((px - x) ^ 2 + (pz - z) ^ 2) < W.step then return pts, "loop" end
-        work(40)
+        work(80)
     end
     return pts, "limit"
 end
@@ -1887,14 +1937,15 @@ end
 --- Follow the road under (x, z) both ways and straighten it. `isRoadOf(cls)` returns the class's
 --- isRoad(x, z). Tries paved first, then track. Returns { pts, class, width, startTag, endTag,
 --- startNode, endNode } (nodes are the fork mouths, for the gap left to the junction tool) or nil.
-function RF.walkFrom(isRoadOf, x, z, classes)
+function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
     for _, cls in ipairs(classes or { "paved", "track" }) do
         local isRoad = isRoadOf(cls)
         if isRoad ~= nil then
             local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls)
             if cx ~= nil then
-                local fwd, endTag, endAt = RF.walkRoad(isRoad, cls, cx, cz, hx, hz, w)
-                local back, startTag, startAt = RF.walkRoad(isRoad, cls, cx, cz, -hx, -hz, w)
+                local isStop = isStopOf ~= nil and isStopOf(cls) or nil
+                local fwd, endTag, endAt = RF.walkRoad(isRoad, cls, cx, cz, hx, hz, w, isStop)
+                local back, startTag, startAt = RF.walkRoad(isRoad, cls, cx, cz, -hx, -hz, w, isStop)
                 local P = {}
                 for i = #back, 2, -1 do P[#P + 1] = back[i] end
                 for i = 1, #fwd do P[#P + 1] = fwd[i] end

@@ -233,6 +233,7 @@ function E:roadRunsRefreshStretches()
     end
     s.stretches = kept
     s.hover = nil
+    s.walked = nil
 end
 
 --- What is under the mouse: a stretch with no path, or a picked one. Works on whatever stretches the
@@ -240,23 +241,96 @@ end
 function E:roadRunsHover(overPanel)
     local s = roadState(self)
     local cx, cz = self.cursorX, self.cursorZ
+    s.hoverPick = nil
     if overPanel then
         s.hover = nil
-    else
-        local st = RF.stretchNear(s.stretches, cx, cz, 3)
-        s.hover = st
-        if st ~= nil then s.hoverSide = RF.sideOf(st, cx, cz) end
-        s.hoverPick = nil
-        if st == nil then
-            -- over a picked stretch?
-            local best, bd = nil, math.huge
-            for _, pk in ipairs(s.picks) do
-                local p, d = RF.stretchNear({ pk.st }, cx, cz, 3)
-                if p ~= nil and d < bd then best, bd = pk, d end
-            end
-            s.hoverPick = best
+        return
+    end
+    -- over a picked stretch? (a click there drops it)
+    local best, bd = nil, math.huge
+    for _, pk in ipairs(s.picks) do
+        local p, d = RF.stretchNear({ pk.st }, cx, cz, 3)
+        if p ~= nil and d < bd then best, bd = pk, d end
+    end
+    if best ~= nil then
+        s.hoverPick = best
+        s.hover = nil
+        return
+    end
+    -- The road under the mouse: walked from the mouse first (it follows the road's own middle, round
+    -- corners, and stops at junctions - 2026-10-12: on a ragged old lane the square read gave chunks
+    -- joined off the centre line, the walk kept within ~0.5 m of the old path). The square's stretches
+    -- are the fallback.
+    local st = self:roadRunsWalkAtCursor(cx, cz)
+    if st == nil then
+        st = RF.stretchNear(s.stretches, cx, cz, 3)
+    end
+    s.hover = st
+    if st ~= nil then s.hoverSide = RF.sideOf(st, cx, cz) end
+end
+
+--- The road under the mouse, walked from the mouse (RF.walkFrom), for roads the square read missed
+--- (user 2026-10-12: "this should be an easy one" - point at a road, get the road). Up to 400 m each
+--- way, stopping at forks, paved/track changes and the road's end, cut at the first AutoDrive path.
+--- Tried again only when the mouse has moved off the last result, at most four times a second.
+E.ROADRUNS_POINT_WALK = 400
+function E:roadRunsWalkAtCursor(cx, cz)
+    local s = roadState(self)
+    local w = s.walked
+    if w ~= nil and RF.stretchNear({ w }, cx, cz, 3) ~= nil then return w end
+    local now = self:nowMs()
+    local last = s.walkTry
+    if last ~= nil and now - last.at < 250 and math.abs(cx - last.x) < 1.5 and math.abs(cz - last.z) < 1.5 then
+        return nil
+    end
+    s.walkTry = { at = now, x = cx, z = cz }
+    local classes = {}
+    if self.roadKinds[RF.KIND_PAVED] then classes[#classes + 1] = "paved" end
+    if self.roadKinds[RF.KIND_GRAVEL] or self.roadKinds[RF.KIND_DIRT] then classes[#classes + 1] = "track" end
+    local isRoadOf, isStopOf = self:roadRunsWalkTests()
+    local keep = RF.WALK.maxLen
+    RF.WALK.maxLen = self.ROADRUNS_POINT_WALK
+    local ok, r = pcall(RF.walkFrom, isRoadOf, cx, cz, classes, isStopOf)
+    RF.WALK.maxLen = keep
+    if not ok or r == nil or #r.pts < 4 then
+        s.walked = nil
+        return nil
+    end
+    local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(r.pts) do
+        x0, z0, x1, z1 = math.min(x0, p.x), math.min(z0, p.z), math.max(x1, p.x), math.max(z1, p.z)
+    end
+    local grid = RF.indexNetwork(ADGraphManager:getWayPoints(), function(id) return ADGraphManager:getWayPointById(id) end,
+        x0 - 10, z0 - 10, x1 + 10, z1 + 10)
+    -- picked stretches count as covered too
+    for _, pk in ipairs(s.picks) do
+        local P = pk.st.pts
+        local pseudo = {}
+        for i = 1, #P do pseudo[i] = { x = P[i].x, z = P[i].z, out = {} } end
+        for i = 1, #P - 1 do pseudo[i].out[1] = pseudo[i + 1] end
+        local extra = RF.indexNetwork(pseudo, function() return nil end, x0 - 10, z0 - 10, x1 + 10, z1 + 10)
+        for k, list in pairs(extra.cells) do
+            local into = grid.cells[k]
+            if into == nil then grid.cells[k] = list else for _, sg in ipairs(list) do into[#into + 1] = sg end end
         end
     end
+    r = RF.keepUncovered(r, grid)
+    if r == nil or #r.pts < 4 then
+        s.walked = nil
+        return nil
+    end
+    local k = RF.groundKindAt(cx, cz)
+    if r.class == "paved" then r.kind = RF.KIND_PAVED
+    elseif k == RF.KIND_DIRT or k == RF.KIND_GRAVEL then r.kind = k
+    else r.kind = RF.KIND_GRAVEL end
+    withHeights(r.pts)
+    r.id = string.format("walk:%d:%d", math.floor(r.pts[1].x), math.floor(r.pts[1].z))
+    r.refinedTo = r
+    r.pointWalk = true
+    s.walked = r
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walked a %s road from the mouse: %.0f m, %.1f m wide (%s to %s).",
+        r.class, r.len or 0, r.width or -1, r.startTag, r.endTag)
+    return r
 end
 
 --- Per frame, guarded: an error in the tool is logged once and the tool stops reading, but the
@@ -546,7 +620,8 @@ function E:roadRunsClick()
         s.lastClick.pick = pick
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - picked a %s stretch, %.0f m, %.1f m wide (%s to %s), %s.",
             RF.KIND_NAMES[st.kind] or "?", st.len, st.width or -1, st.startTag, st.endTag,
-            st.walk ~= nil and string.format("walked: road read across it at %d of %d points", st.walk.read, st.walk.sections)
+            st.pointWalk and "walked from the mouse"
+                or (st.walk ~= nil and string.format("walked: road read across it at %d of %d points", st.walk.read, st.walk.sections))
                 or "NOT walked (square's line)")
         -- what the ground looks like straight across the laid line, a quarter, half and three quarters along
         for _, f in ipairs({ 0.25, 0.5, 0.75 }) do
