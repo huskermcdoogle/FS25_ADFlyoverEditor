@@ -2415,6 +2415,115 @@ function RF.crossDetail(isRoadOf, st, i)
     return { strips = (#t > 0) and table.concat(t, " ") or "none", mid = pick and pick.mid or 0 }
 end
 
+-- ------------------------------------------------------------------------- the map's road splines
+
+--- Sort the map's splines: a two-way farm way is a spline with a reversed twin on the same line (or a
+--- group named ...TwoDirections / ...OneDirection) - a CENTRE line. Traffic lanes (one per direction,
+--- a lane apart, no twin on the line) are not. Returns { all, centre, ends } with a 32 m grid of the
+--- centre lines' points for lookups.
+function RF.indexSplines(list)
+    local function dist(a, b) return sqrt((a.x - b.x) ^ 2 + (a.z - b.z) ^ 2) end
+    local out = { all = list, centre = {}, grid = {} }
+    local used = {}
+    for i, a in ipairs(list) do
+        if not used[a] and #a.pts >= 2 then
+            local isCentre = a.group:find("TwoDirections") ~= nil or a.group:find("OneDirection") ~= nil
+            for j = i + 1, #list do
+                local b = list[j]
+                if not used[b] and #b.pts >= 2 and abs(a.len - b.len) < 2
+                    and dist(a.pts[1], b.pts[#b.pts]) < 1.5 and dist(a.pts[#a.pts], b.pts[1]) < 1.5 then
+                    used[b] = true                       -- the reversed twin: the same line
+                    isCentre = true
+                    break
+                end
+            end
+            if isCentre then
+                used[a] = true
+                out.centre[#out.centre + 1] = a
+                for k, p in ipairs(a.pts) do
+                    local key = floor(p.x / 32) * 100003 + floor(p.z / 32)
+                    out.grid[key] = out.grid[key] or {}
+                    table.insert(out.grid[key], { sp = a, i = k })
+                end
+            end
+        end
+    end
+    return out
+end
+
+--- The centre spline nearest (x, z) within reach, or nil.
+function RF.splineNear(S, x, z, reach)
+    local best, bd = nil, reach
+    for gx = floor((x - reach) / 32), floor((x + reach) / 32) do
+        for gz = floor((z - reach) / 32), floor((z + reach) / 32) do
+            for _, e in ipairs(S.grid[gx * 100003 + gz] or {}) do
+                local P = e.sp.pts
+                local i = e.i
+                if i < #P then
+                    local a, b = P[i], P[i + 1]
+                    local dx, dz = b.x - a.x, b.z - a.z
+                    local l2 = dx * dx + dz * dz
+                    local t = l2 > 0 and max(0, min(1, ((x - a.x) * dx + (z - a.z) * dz) / l2)) or 0
+                    local d = sqrt((x - a.x - dx * t) ^ 2 + (z - a.z - dz * t) ^ 2)
+                    if d < bd then best, bd = e.sp, d end
+                end
+            end
+        end
+    end
+    return best
+end
+
+--- A centre spline as a stretch: its points, and at each end "fork" if another spline's end or line
+--- comes within `junction` metres (the AI network's splines meet at junctions), else "end".
+function RF.splineStretch(S, sp, junction)
+    local P = {}
+    for _, p in ipairs(sp.pts) do P[#P + 1] = { x = p.x, z = p.z, y = p.y } end
+    local function meets(q)
+        for _, o in ipairs(S.all) do
+            if o ~= sp and not (abs(o.len - sp.len) < 2 and #o.pts > 1
+                and sqrt((o.pts[1].x - sp.pts[#sp.pts].x) ^ 2 + (o.pts[1].z - sp.pts[#sp.pts].z) ^ 2) < 1.5) then
+                for k = 1, #o.pts do
+                    local p = o.pts[k]
+                    if (p.x - q.x) ^ 2 + (p.z - q.z) ^ 2 < junction * junction then return true end
+                end
+            end
+        end
+        return false
+    end
+    local st = { pts = P, len = polylineLength(P), width = 4 }
+    st.startTag = meets(P[1]) and "fork" or "end"
+    st.endTag = meets(P[#P]) and "fork" or "end"
+    if st.startTag == "fork" then st.startNode = { x = P[1].x, z = P[1].z, tag = "fork" } end
+    if st.endTag == "fork" then st.endNode = { x = P[#P].x, z = P[#P].z, tag = "fork" } end
+    return st
+end
+
+--- Like keepUncovered, but the uncovered run that holds the point nearest (x, z).
+function RF.keepUncoveredNear(st, grid, x, z)
+    local P = st.pts
+    local n = #P
+    local m, bd = 1, math.huge
+    for i = 1, n do
+        local d = (P[i].x - x) ^ 2 + (P[i].z - z) ^ 2
+        if d < bd then m, bd = i, d end
+    end
+    local half = (st.width or 6) / 2
+    local cov = {}
+    for i = 1, n do cov[i] = coveredAt(grid, P, i, half) end
+    if cov[m] then return nil end
+    local i0, i1 = m, m
+    while i0 > 1 and not cov[i0 - 1] do i0 = i0 - 1 end
+    while i1 < n and not cov[i1 + 1] do i1 = i1 + 1 end
+    local out = {}
+    for k, v in pairs(st) do out[k] = v end
+    out.pts = {}
+    for i = i0, i1 do out.pts[#out.pts + 1] = P[i] end
+    if i0 > 1 then out.startTag, out.startNode = "path", nil end
+    if i1 < n then out.endTag, out.endNode = "path", nil end
+    out.len = polylineLength(out.pts)
+    return out
+end
+
 --- The part of a (walked) stretch with no AutoDrive path along it: the uncovered run through its
 --- middle; an end cut short by a path is tagged "path". nil if its middle is covered.
 function RF.keepUncovered(st, grid)

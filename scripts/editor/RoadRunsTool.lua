@@ -234,6 +234,7 @@ function E:roadRunsRefreshStretches()
     s.stretches = kept
     s.hover = nil
     s.walked = nil
+    s.splineHover = nil
 end
 
 --- What is under the mouse: a stretch with no path, or a picked one. Works on whatever stretches the
@@ -261,7 +262,8 @@ function E:roadRunsHover(overPanel)
     -- corners, and stops at junctions - 2026-10-12: on a ragged old lane the square read gave chunks
     -- joined off the centre line, the walk kept within ~0.5 m of the old path). The square's stretches
     -- are the fallback.
-    local st = self:roadRunsWalkAtCursor(cx, cz)
+    local st = self:roadRunsSplineAtCursor(cx, cz)
+    if st == nil then st = self:roadRunsWalkAtCursor(cx, cz) end
     if st == nil then
         st = RF.stretchNear(s.stretches, cx, cz, 3)
         -- a square line the walk can hardly read as road (under 30% of its cross-sections) is a
@@ -273,6 +275,107 @@ function E:roadRunsHover(overPanel)
     end
     s.hover = st
     if st ~= nil then s.hoverSide = RF.sideOf(st, cx, cz) end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- the map's own road lines (AI splines)
+
+-- The map maker's road splines (the game's AI road network: farm ways like "dirtwaysSawmillTwoDirections",
+-- "fieldsNorthTwoDirections", and the traffic lanes) are the exact middle of the road where they exist:
+-- the old lane's spline993 runs within 0.3-1.4 m of its old AutoDrive path the whole 327 m (2026-10-13).
+-- A two-way farm way is a spline and its reversed twin ("993" and "993R") on the same line; those are
+-- used as centre lines. Traffic lanes (one per direction, a lane apart) are left to the ground reading.
+E.ROADRUNS_SPLINE_REACH = 4            -- the mouse within this of a spline picks it
+E.ROADRUNS_SPLINE_JUNCTION = 15        -- another spline's end or line this close to an end: a junction
+
+local function splineRoot()
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    if terrain == nil or getParent == nil then return nil end
+    return getParent(terrain)
+end
+
+--- The map's splines, sampled every 2 m, indexed in 32 m squares. Read once.
+function E:roadRunsSplines()
+    if self.roadRunsSplineOverride ~= nil then return self.roadRunsSplineOverride end
+    local s = roadState(self)
+    if s.splines ~= nil then return s.splines end
+    local list = {}
+    local nodes = {}
+    local ai = g_currentMission ~= nil and g_currentMission.aiSystem or nil
+    if ai ~= nil and type(ai.roadSplines) == "table" and #ai.roadSplines > 0 then
+        for _, sp in ipairs(ai.roadSplines) do nodes[#nodes + 1] = sp end
+    else
+        -- not the host (the game fills its list there only): look for the map's "splines" group
+        local root = splineRoot()
+        if root ~= nil and I3DUtil ~= nil and I3DUtil.iterateRecursively ~= nil then
+            pcall(I3DUtil.iterateRecursively, root, function(node)
+                if getName(node) == "splines" then
+                    I3DUtil.iterateRecursively(node, function(sub)
+                        if I3DUtil.getIsSpline(sub) then nodes[#nodes + 1] = sub end
+                    end, true)
+                end
+            end, true)
+        end
+    end
+    for _, sp in ipairs(nodes) do
+        local ok, len = pcall(getSplineLength, sp)
+        if ok and type(len) == "number" and len > 4 then
+            local P, k = {}, math.max(2, math.floor(len / 2))
+            for i = 0, k do
+                local x, y, z = getSplinePosition(sp, i / k)
+                if x ~= nil then P[#P + 1] = { x = x, y = y, z = z } end
+            end
+            local parent = getParent(sp)
+            list[#list + 1] = { node = sp, name = tostring(getName(sp) or ""), group = parent and tostring(getName(parent) or "") or "",
+                pts = P, len = len }
+        end
+    end
+    s.splines = RF.indexSplines(list)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - read %d map road spline(s), %d usable as centre lines.",
+        #list, #s.splines.centre)
+    return s.splines
+end
+
+--- A map spline under the mouse with no AutoDrive path along it, as a stretch; nil if none.
+function E:roadRunsSplineAtCursor(cx, cz)
+    local S = self:roadRunsSplines()
+    if S == nil or #S.centre == 0 then return nil end
+    local s = roadState(self)
+    local sp = RF.splineNear(S, cx, cz, self.ROADRUNS_SPLINE_REACH)
+    if sp == nil then return nil end
+    if s.splineHover ~= nil and s.splineHover.src == sp then return s.splineHover end
+    local st = RF.splineStretch(S, sp, self.ROADRUNS_SPLINE_JUNCTION)
+    local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(st.pts) do
+        x0, z0, x1, z1 = math.min(x0, p.x), math.min(z0, p.z), math.max(x1, p.x), math.max(z1, p.z)
+    end
+    local grid = RF.indexNetwork(ADGraphManager:getWayPoints(), function(id) return ADGraphManager:getWayPointById(id) end,
+        x0 - 10, z0 - 10, x1 + 10, z1 + 10)
+    for _, pk in ipairs(s.picks) do
+        local P = pk.st.pts
+        local pseudo = {}
+        for i = 1, #P do pseudo[i] = { x = P[i].x, z = P[i].z, out = {} } end
+        for i = 1, #P - 1 do pseudo[i].out[1] = pseudo[i + 1] end
+        local extra = RF.indexNetwork(pseudo, function() return nil end, x0 - 10, z0 - 10, x1 + 10, z1 + 10)
+        for k, l in pairs(extra.cells) do
+            local into = grid.cells[k]
+            if into == nil then grid.cells[k] = l else for _, sg in ipairs(l) do into[#into + 1] = sg end end
+        end
+    end
+    -- the uncovered run nearest the mouse
+    local cut = RF.keepUncoveredNear(st, grid, cx, cz)
+    if cut == nil or #cut.pts < 3 then return nil end
+    local k = RF.groundKindAt(cut.pts[math.floor(#cut.pts / 2) + 1].x, cut.pts[math.floor(#cut.pts / 2) + 1].z)
+    cut.class = (k == RF.KIND_PAVED) and "paved" or "track"
+    cut.kind = (k ~= RF.KIND_NONE) and k or RF.KIND_DIRT
+    cut.width = cut.width or 4
+    withHeights(cut.pts)
+    cut.id = "spline:" .. sp.name
+    cut.refinedTo, cut.fromSpline, cut.src = cut, true, sp
+    s.splineHover = cut
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - the map's road line %s (%s) under the mouse: %.0f m with no path (%s to %s).",
+        sp.name, sp.group, cut.len or 0, cut.startTag, cut.endTag)
+    return cut
 end
 
 --- The road under the mouse, walked from the mouse (RF.walkFrom), for roads the square read missed
@@ -660,7 +763,7 @@ function E:roadRunsClick()
         s.lastClick.pick = pick
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - picked a %s stretch, %.0f m, %.1f m wide (%s to %s), %s.",
             RF.KIND_NAMES[st.kind] or "?", st.len, st.width or -1, st.startTag, st.endTag,
-            st.pointWalk and "walked from the mouse"
+            st.fromSpline and "the map's own road line" or st.pointWalk and "walked from the mouse"
                 or (st.walk ~= nil and string.format("walked: road read across it at %d of %d points", st.walk.read, st.walk.sections))
                 or "NOT walked (square's line)")
         -- what the ground looks like straight across the laid line, a quarter, half and three quarters along

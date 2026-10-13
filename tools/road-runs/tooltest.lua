@@ -101,6 +101,18 @@ dofile(HERE .. "../../scripts/editor/RoadFinder.lua")
 dofile(HERE .. "../../scripts/editor/RoadRunsTool.lua")
 local E = ADFlyoverEditor
 if DBGFILE then dofile(DBGFILE) end
+-- SPLINES=<roadSplines.xml> (FlyoverRoadSplines dump): the map's road splines, as in game
+if os.getenv("SPLINES") then
+    local f = assert(io.open(os.getenv("SPLINES"), "rb")); local xml = f:read("*a"); f:close()
+    local list = {}
+    for name, len, pts in xml:gmatch('<spline name="([^"]*)" length="([^"]*)" points="([^"]*)"') do
+        local P = {}
+        for x, z in pts:gmatch("(-?[%d%.]+),(-?[%d%.]+)") do P[#P + 1] = { x = tonumber(x), z = tonumber(z) } end
+        list[#list + 1] = { name = name, group = "", len = tonumber(len), pts = P }
+    end
+    E.roadRunsSplineOverride = ADRoadFinder.indexSplines(list)
+    print(string.format("splines: %d read, %d centre lines", #list, #E.roadRunsSplineOverride.centre))
+end
 if SYNTH == "bridge" then
     local RF = ADRoadFinder
     local deckHalf = tonumber(os.getenv("DECK_HALF") or "2.5")
