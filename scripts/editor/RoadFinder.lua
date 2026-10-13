@@ -2540,6 +2540,88 @@ function RF.cutHairpins(st, x, z)
     return out
 end
 
+RF.GHOST_GAP = 8        -- metres in a row with no road band under the line: the line has left the road
+RF.GHOST_KEEP = 0.6     -- a line with road under less than this share of its points is a ghost
+
+--- Is there road under point i of P: a band of road at least a track's width (minBand), its middle
+--- within reach of the line?
+local function roadUnder(isRoad, cls, P, i)
+    local a, b = P[max(1, i - 1)], P[min(#P, i + 1)]
+    local hx, hz = b.x - a.x, b.z - a.z
+    local l = sqrt(hx * hx + hz * hz)
+    if l < 1e-6 then return false end
+    local nx, nz = -hz / l, hx / l
+    local need = RF.WALK.minBand[cls] or 1.5
+    for _, bd in ipairs(RF.bandsAt(isRoad, P[i].x, P[i].z, nx, nz, cls)) do
+        if bd.w >= need and abs(bd.mid) <= 0.5 * bd.w + 1 then return true end
+    end
+    return false
+end
+
+--- A line laid where there is no road (dirt patches in grass joined into a "track" - 2026-10-13 ghost
+--- by the road at (-410,-640)): cut where the road is missing for GHOST_GAP metres or more, keep the
+--- piece nearest (x, z) trimmed to road at both ends, and nil if that piece is mostly not road, or
+--- the point nearest (x, z) is in a gap. Cut ends are "end" (nothing to join).
+function RF.trimGhosts(st, isRoad, cls, x, z)
+    local P = st.pts
+    local n = #P
+    if n < 3 or isRoad == nil then return st end
+    local on, acc = {}, { 0 }
+    for i = 1, n do
+        on[i] = roadUnder(isRoad, cls, P, i)
+        if i > 1 then acc[i] = acc[i - 1] + sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+    end
+    -- the gaps: runs of no road at least GHOST_GAP long (shorter ones - a fork's mouth, a puddle - stay)
+    local bad = {}
+    local i = 1
+    while i <= n do
+        if not on[i] then
+            local j = i
+            while j < n and not on[j + 1] do j = j + 1 end
+            local from = (i > 1) and acc[i - 1] or acc[1]
+            local to = (j < n) and acc[j + 1] or acc[n]
+            if to - from >= RF.GHOST_GAP then
+                for k = i, j do bad[k] = true end
+            end
+            i = j + 1
+        else
+            i = i + 1
+        end
+    end
+    local m, bd = 1, math.huge
+    for k = 1, n do
+        local d = (P[k].x - x) ^ 2 + (P[k].z - z) ^ 2
+        if d < bd then m, bd = k, d end
+    end
+    -- the mouse in a gap: take the nearest good point instead, if one is close
+    if bad[m] then
+        local best, bdist = nil, math.huge
+        for k = 1, n do
+            if not bad[k] then
+                local d = abs(acc[k] - acc[m])
+                if d < bdist then best, bdist = k, d end
+            end
+        end
+        if best == nil or bdist > 4 then return nil end
+        m = best
+    end
+    local i0, i1 = m, m
+    while i0 > 1 and not bad[i0 - 1] do i0 = i0 - 1 end
+    while i1 < n and not bad[i1 + 1] do i1 = i1 + 1 end
+    local good = 0
+    for k = i0, i1 do if on[k] then good = good + 1 end end
+    if good < RF.GHOST_KEEP * (i1 - i0 + 1) or i1 - i0 < 2 then return nil end
+    if i0 == 1 and i1 == n then return st end
+    local out = {}
+    for k, v in pairs(st) do if k ~= "hairpinPieces" and k ~= "refinedTo" then out[k] = v end end
+    out.pts = {}
+    for k = i0, i1 do out.pts[#out.pts + 1] = P[k] end
+    if i0 > 1 then out.startTag, out.startNode = "end", nil end
+    if i1 < n then out.endTag, out.endNode = "end", nil end
+    out.len = polylineLength(out.pts)
+    return out
+end
+
 --- How far a walked line runs from the map's own road line, as a score for the walker: over the walk's
 --- points within `reach` of the same centre spline, the mean offset (+ = right of the way the walk
 --- goes: a steady lean to one side), the mean size, the worst, how many points, and the spline.

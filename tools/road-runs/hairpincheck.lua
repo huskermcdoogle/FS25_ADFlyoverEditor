@@ -39,7 +39,33 @@ for _, st in ipairs(stretches) do
             local m = P[math.floor(#P / 2) + 1]
             local c = RF.cutHairpins(r, m.x, m.z)
             if RF.cutHairpins(c, m.x, m.z) ~= c then left = left + 1 end
+            -- each piece through the ghost check
+            for _, q in ipairs({ P[2], P[#P - 1] }) do
+                local piece = RF.cutHairpins(r, q.x, q.z)
+                local g = RF.trimGhosts(piece, isRoadOf(r.class), r.class, q.x, q.z)
+                print(string.format("    piece from (%.0f,%.0f): %.0f m -> %s", q.x, q.z, piece.len or 0,
+                    g and string.format("kept %.0f m", g.len or 0) or "GHOST, dropped"))
+            end
         end
     end
 end
 print(string.format("%d stretches: %d turn back as read, %d after the walk; %d still turn back after the cut", #stretches, raw, ref, left))
+-- the ghost check over every line in the window: how many dropped, how much trimmed
+local dropped, trimmed, total = 0, 0, 0
+for _, st in ipairs(stretches) do
+    local r = RF.refineStretch(st, isRoadOf, isStopOf)
+    if r ~= nil and #r.pts >= 3 then
+        local m = st.pts[math.floor(#st.pts / 2) + 1]
+        local c = RF.cutHairpins(r, m.x, m.z)
+        local g = RF.trimGhosts(c, isRoadOf(r.class), r.class, m.x, m.z)
+        total = total + (c.len or 0)
+        if g == nil then
+            dropped = dropped + 1
+            print(string.format("  ghost: %s %.0f m from (%.0f,%.0f) to (%.0f,%.0f)", r.class, c.len or 0, c.pts[1].x, c.pts[1].z, c.pts[#c.pts].x, c.pts[#c.pts].z))
+        elseif g ~= c then
+            trimmed = trimmed + (c.len or 0) - (g.len or 0)
+            print(string.format("  trimmed %s %.0f -> %.0f m near (%.0f,%.0f)", r.class, c.len or 0, g.len or 0, m.x, m.z))
+        end
+    end
+end
+print(string.format("ghost check: %d dropped, %.0f m trimmed of %.0f m", dropped, trimmed, total))

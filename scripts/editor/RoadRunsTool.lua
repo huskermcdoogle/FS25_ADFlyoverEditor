@@ -274,7 +274,7 @@ function E:roadRunsHover(overPanel)
         -- phantom - a kerb, a patch's edge - and is not offered
         if st ~= nil then
             local r = self:roadRunsRefined(st)
-            if r ~= nil and r.walk ~= nil and r.walk.read < 0.3 * r.walk.sections then st = nil end
+            if st.ghost or (r ~= nil and r.walk ~= nil and r.walk.read < 0.3 * r.walk.sections) then st = nil end
         end
     end
     s.hover = st
@@ -440,6 +440,7 @@ function E:roadRunsWalkAtCursor(cx, cz)
     end
     r = RF.keepUncovered(r, grid)
     if r ~= nil then r = RF.cutHairpins(r, cx, cz) end
+    if r ~= nil then r = RF.trimGhosts(r, isRoadOf(r.class), r.class, cx, cz) end
     if r == nil or #r.pts < 4 then
         s.walked = nil
         return nil
@@ -685,6 +686,13 @@ function E:roadRunsRefined(st)
         if r ~= nil then
             local m = st.pts[math.floor(#st.pts / 2) + 1]
             r = RF.cutHairpins(r, m.x, m.z)
+            -- and no line where there is no road under it (dirt patches in grass read as a track)
+            local isRoad = isRoadOf(r.class or st.class)
+            r = RF.trimGhosts(r, isRoad, r.class or st.class, m.x, m.z)
+            if r == nil then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - the line round (%.1f, %.1f) has too little road under it; not offered.", m.x, m.z)
+                st.ghost = true
+            end
         end
     end
     if r == nil or #r.pts < 3 then
