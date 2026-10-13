@@ -1267,9 +1267,18 @@ function RF.buildWindow(kindAt, ix0, iz0, W, H, opts)
             end
         end
     end
+    -- Only a real track makes a fork where it meets a paved road: one at least MIN_LOOSE long, or
+    -- joined to another road at its far end. Dirt scraps beside a road (a patch of mud, forest floor)
+    -- cut a narrow lane into 10 m pieces otherwise (2026-10-12).
+    local function isRealTrack(n)
+        local e = n.edges[1]
+        if e == nil then return false end
+        local far = otherEnd(e, n)
+        return (e.len or polylineLength(e.pts)) >= RF.MIN_LOOSE or (far ~= nil and #far.edges >= 2)
+    end
     -- a track ending at a paved road makes a fork on the paved road
     for _, n in ipairs(track.nodes) do
-        if not n.dead and #n.edges == 1 and distPaved(n.x, n.z) <= RF.TRACK_REACH then
+        if not n.dead and #n.edges == 1 and distPaved(n.x, n.z) <= RF.TRACK_REACH and isRealTrack(n) then
             local e, i, dd, px, pz = nearestOnGraph(paved, n.x, n.z, nil)
             if e ~= nil and dd <= (e.width or 6) / 2 + RF.TRACK_REACH then
                 -- reuse a fork already close by, else split the paved line there
