@@ -1495,6 +1495,9 @@ end
 --- The bands across at (x, z): read tightly first; where the band in the middle is only a rut wide,
 --- read again joining across the grass between ruts.
 local function bandsAt(isRoad, x, z, nx, nz, cls)
+    return RF.bandsAt(isRoad, x, z, nx, nz, cls)
+end
+function RF.bandsAt(isRoad, x, z, nx, nz, cls)
     local W = RF.WALK
     local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, W.tightGap)
     local wide = W.joinGap[cls] or W.tightGap
@@ -1716,7 +1719,7 @@ end
 --- ways and averaged so the line does not lag behind a bend. Where the stretch ran off the read square
 --- the free walker carries it on. Then straightened. Decks keep the square's line (under a bridge the
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
-RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3 }
+RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4 }
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
     RF.walkIsField = isField
@@ -1772,16 +1775,35 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         if pick ~= nil then meas[i], widths[i] = pick.mid, pick.w end
         work(40)
     end
-    -- filter forward and backward, each gating readings that jump too far from where it is
+    -- filter forward and backward, each gating readings that jump too far from where it is. It starts
+    -- from the MEDIAN of the first readings (one bad first reading - a yard at the track's end - used
+    -- to lock the filter on the wrong side, rejecting every good reading after it: 2026-10-12 game
+    -- test), and if several readings in a row agree with each other but not with it, it moves to them.
     local function pass(from, to, dir)
         local out = {}
-        local off = nil
+        local first = {}
+        for i = from, to, dir do
+            if meas[i] ~= nil then first[#first + 1] = meas[i] end
+            if #first >= 10 then break end
+        end
+        table.sort(first)
+        local off = first[floor((#first + 1) / 2)] or 0
+        local held = {}
         for i = from, to, dir do
             local m = meas[i]
-            if off == nil then
-                off = m or 0
-            elseif m ~= nil and abs(m - off) <= F.gate + 0.25 * (widths[i] or 0) then
-                off = off + F.gain * (m - off)
+            if m ~= nil then
+                if abs(m - off) <= F.gate + 0.25 * (widths[i] or 0) then
+                    off = off + F.gain * (m - off)
+                    held = {}
+                else
+                    held[#held + 1] = m
+                    if #held >= F.reacquire then
+                        local lo, hi, sum = math.huge, -math.huge, 0
+                        for _, v in ipairs(held) do lo, hi, sum = min(lo, v), max(hi, v), sum + v end
+                        if hi - lo <= 1.0 then off = sum / #held end
+                        held = {}
+                    end
+                end
             end
             out[i] = off
         end
@@ -1836,7 +1858,26 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         out.startTag = tag
         out.startNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
     end
-    local S = RF.straighten(R, 0.75)
+    -- straighten, but never so far that the line leaves the middle it read: on a narrow road a bend
+    -- cut by straightening put the line half off the paving (2026-10-12 game test)
+    local w = medianWidth(R, 0) or st.width or 4
+    local S = RF.straighten(R, min(0.75, 0.15 * w))
+    local limit = max(0.4, 0.2 * w)
+    local worst = 0
+    for _, q in ipairs(R) do
+        local bd = math.huge
+        for k = 1, #S - 1 do
+            local a, b = S[k], S[k + 1]
+            local dx, dz = b.x - a.x, b.z - a.z
+            local l2 = dx * dx + dz * dz
+            local t = 0
+            if l2 > 0 then t = max(0, min(1, ((q.x - a.x) * dx + (q.z - a.z) * dz) / l2)) end
+            local d = sqrt((q.x - a.x - dx * t) ^ 2 + (q.z - a.z - dz * t) ^ 2)
+            if d < bd then bd = d end
+        end
+        if bd > worst then worst = bd end
+    end
+    if worst > limit then S = resampleFixed(smoothPts(R, 2), 2) end
     out.pts = S
     out.walk = { sections = n, read = 0, ruts = 0 }
     for i = 1, n do if meas[i] ~= nil then out.walk.read = out.walk.read + 1 end end

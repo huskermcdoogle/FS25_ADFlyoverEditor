@@ -100,6 +100,7 @@ end
 dofile(HERE .. "../../scripts/editor/RoadFinder.lua")
 dofile(HERE .. "../../scripts/editor/RoadRunsTool.lua")
 local E = ADFlyoverEditor
+if DBGFILE then dofile(DBGFILE) end
 if SYNTH == "bridge" then
     local RF = ADRoadFinder
     local deckHalf = tonumber(os.getenv("DECK_HALF") or "2.5")
