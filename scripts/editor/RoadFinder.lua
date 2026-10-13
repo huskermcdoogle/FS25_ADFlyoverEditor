@@ -38,7 +38,9 @@ RF.MAX_HOLE = 30                 -- holes in road paint up to this many cells ar
 RF.MAX_ROAD_WIDTH = { paved = 16, track = 11 }   -- wider than this is a yard or a lot, not a road
 RF.CLOSE_RADIUS = { paved = 1, track = 2 }     -- gaps this wide (each side) are closed: wheel ruts, seams
 RF.MIN_TRACK_WIDTH = 2.0         -- narrower track lines are shoulder strips or paint seams
-RF.MIN_PAVED_WIDTH = 3.0         -- narrower paved lines are kerbs, footpaths or paint seams
+RF.MIN_PAVED_WIDTH = 3.0         -- narrower paved lines beside a wider paved road are kerbs or seams
+RF.MIN_LANE_WIDTH = 0.9          -- narrower than this is never a road (a 2 m strip reads 1 m: 2 x distance - 1)
+RF.KERB_DIST = 8                 -- a narrow paved line this close to a wider one runs beside it
 RF.SHOULDER_DIST = 3.5           -- a track line this close to paved road is that road's shoulder
 RF.BUBBLE_MAX = 60               -- two lines between the same two forks, both shorter than this, are one road
 RF.SPUR_MIN = 10                 -- dead-end spurs shorter than this (or the road's width) are noise
@@ -1193,9 +1195,29 @@ function RF.buildWindow(kindAt, ix0, iz0, W, H, opts)
             return (k == RF.KIND_GRAVEL and wanted[RF.KIND_GRAVEL]) or (k == RF.KIND_DIRT and wanted[RF.KIND_DIRT])
         end, RF.MAX_ROAD_WIDTH.track, RF.CLOSE_RADIUS.track)
     end
+    -- Narrow paved lines: a kerb or a paint seam runs right alongside a wider paved road and is dropped;
+    -- one on its own is a narrow lane (an old 2-3 m asphalt track with mossy gravel edges, which looks
+    -- like a dirt road - 2026-10-12: it was never found) and is kept.
+    for _, e in ipairs(paved.edges) do e.class = "paved" end
     for _, e in ipairs(paved.edges) do
-        e.class = "paved"
-        if not e.dead and (e.width or 0) < RF.MIN_PAVED_WIDTH then removeEdge(paved, e) end
+        if not e.dead and (e.width or 0) < RF.MIN_PAVED_WIDTH then
+            local beside, probes = 0, 0
+            for k = 1, #e.pts, 4 do
+                probes = probes + 1
+                local p = e.pts[k]
+                local near = false
+                for _, f in ipairs(paved.edges) do
+                    if f ~= e and not f.dead and (f.width or 0) >= RF.MIN_PAVED_WIDTH then
+                        for q = 1, #f.pts, 2 do
+                            if (f.pts[q].x - p.x) ^ 2 + (f.pts[q].z - p.z) ^ 2 < RF.KERB_DIST ^ 2 then near = true break end
+                        end
+                    end
+                    if near then break end
+                end
+                if near then beside = beside + 1 end
+            end
+            if (e.width or 0) < RF.MIN_LANE_WIDTH or (probes > 0 and beside / probes > 0.5) then removeEdge(paved, e) end
+        end
     end
     for _, e in ipairs(track.edges) do e.class = "track" end
 
@@ -1557,7 +1579,7 @@ RF.WALK = {
     rutMax = 2.0,                   -- a wheel rut is at most this wide
     rutGapMin = 0.4,                -- the grass strip between two ruts: at least ...
     rutGapMax = 3.0,                -- ... and at most this wide                 -- (a solid track must not swallow the gravel patches beside it)
-    minBand = { track = 1.5, paved = 3.0 },   -- narrower bands are not a road
+    minBand = { track = 1.5, paved = 1.5 },   -- narrower bands are not a road (old lanes are 2-3 m)
     gainPos = 0.3,                  -- how far toward the measured middle the line moves per step
     maxTurn = 6,                    -- degrees per step (6 deg / 2 m = no bend tighter than ~19 m)
     gate = 2.5,                     -- a middle further off than this (plus a quarter of the width) is noise
