@@ -195,6 +195,12 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     local need = self:junctionMovementsAt15(jp, click.cx, click.cz)
     if need ~= ((res.kind == "X") and 12 or 6) then
         local atCentre = self:junctionMovementsAt15(jp, res.ox, res.oz)
+        -- Both counts in the log when neither will do: in game (build 548) 1w read 7 from a click 5 m up its
+        -- side road where offline both read 6, and the log could not say which count it was.
+        if atCentre ~= ((res.kind == "X") and 12 or 6) then
+            Logging.info("[FlyoverEditor]: junction build - the %s's count: %d movement(s) from the click at %.1f, %.1f, %d from its centre at %.1f, %.1f, %d at the search radius (%.0f m).",
+                tostring(res.kind), need, click.cx, click.cz, atCentre, res.ox, res.oz, #(jp.movements or {}), self:junctionRadiusValue())
+        end
         if atCentre == ((res.kind == "X") and 12 or 6) then need = atCentre end
     end
     local lays = (res.kind == "X") and 12 or 6

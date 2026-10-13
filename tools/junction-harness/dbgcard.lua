@@ -70,7 +70,7 @@ if os.getenv("CLICK") == "1" then
         E.junctionPreview, E.junctionPreviewKey = nil, nil
     end
     for _, l in ipairs(LOG) do
-        if l:find("clear %+ build") or l:find("refused") or l:find("laid as the pattern") or l:find("junction placed") or l:find("did not lay") or l:find("cannot be driven") or l:find("frame:") or l:find("by way of") or l:find("placed plain because") then print("  log: " .. l) end
+        if l:find("clear %+ build") or l:find("refused") or l:find("laid as the pattern") or l:find("junction placed") or l:find("did not lay") or l:find("cannot be driven") or l:find("frame:") or l:find("by way of") or l:find("placed plain because") or l:find("count: ") then print("  log: " .. l) end
     end
     print(string.format("undo entries added: %d", #ADEditorHistory.stack - before))
     if E.junctionLastPatternWhy ~= nil then print("pattern did not fit: " .. tostring(E.junctionLastPatternWhy)) end
