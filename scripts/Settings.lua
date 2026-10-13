@@ -73,6 +73,19 @@ S.settings.fieldLoopMaxGap = { range = { min = 0, max = 50, step = 1 }, value = 
 -- ring - no point ever survives closer than this to its neighbour, corners included (reported
 -- live 2026-09-22: two very close, sharply-angled points at a tight corner). Default 1.0m.
 S.settings.fieldLoopMinPointSpacing = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 }, default = 3, current = 3 }
+-- Road runs (RoadRunsTool.lua): the card's choices, kept between sessions. Plain numbers (on/off as
+-- 0/1, "lay as" as its index) so each is one #value; read and written only by that tool.
+S.settings.roadRunsMode = { range = { min = 1, max = 4, step = 1 }, value = 1 }
+S.settings.roadRunsSubPrio = { range = { min = 0, max = 1, step = 1 }, value = 0 }
+S.settings.roadRunsPaved = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsGravel = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsDirt = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsShowAll = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsGapAuto = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsLaneGap = { range = { min = 2.5, max = 8, step = 0.1 }, value = 4.0 }
+S.settings.roadRunsRigWidth = { range = { min = 2.0, max = 5.0, step = 0.1 }, value = 3.0 }
+S.settings.roadRunsForkGap = { range = { min = 0, max = 40, step = 1 }, value = 15 }
+S.settings.roadRunsFitEverywhere = { range = { min = 0, max = 1, step = 1 }, value = 0 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }

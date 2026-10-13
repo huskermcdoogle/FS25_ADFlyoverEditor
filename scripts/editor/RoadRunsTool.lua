@@ -46,7 +46,55 @@ E.roadForkGap = 15
 E.roadRigWidth = 3.0               -- the widest rig the lanes must pass; sets the minimum lane gap and side room
 E.roadFitEverywhere = false        -- the side check on every road, not only bridges and ramps
 
+-- The card's choices persist in ADFlyoverSettings (Settings.lua, roadRuns*): read once when the tool is
+-- first used, written whenever one changes.
+local SAVED = {
+    { "roadRunsMode", "roadMode" }, { "roadRunsLaneGap", "roadLaneGap" }, { "roadRunsRigWidth", "roadRigWidth" },
+    { "roadRunsForkGap", "roadForkGap" },
+}
+local SAVED_FLAGS = {
+    { "roadRunsSubPrio", "roadSubPrio" }, { "roadRunsShowAll", "roadShowAll" }, { "roadRunsGapAuto", "roadGapAuto" },
+    { "roadRunsFitEverywhere", "roadFitEverywhere" },
+}
+local SAVED_KINDS = { { "roadRunsPaved", RF.KIND_PAVED }, { "roadRunsGravel", RF.KIND_GRAVEL }, { "roadRunsDirt", RF.KIND_DIRT } }
+
+function E:roadRunsLoadSettings()
+    local S = ADFlyoverSettings
+    if S == nil or S.settings == nil then return end
+    for _, k in ipairs(SAVED) do
+        local v = S.settings[k[1]] ~= nil and S.get(k[1]) or nil
+        if type(v) == "number" then self[k[2]] = v end
+    end
+    self.roadMode = math.floor((self.roadMode or 1) + 0.5)
+    for _, k in ipairs(SAVED_FLAGS) do
+        local v = S.settings[k[1]] ~= nil and S.get(k[1]) or nil
+        if type(v) == "number" then self[k[2]] = v >= 0.5 end
+    end
+    for _, k in ipairs(SAVED_KINDS) do
+        local v = S.settings[k[1]] ~= nil and S.get(k[1]) or nil
+        if type(v) == "number" then self.roadKinds[k[2]] = v >= 0.5 end
+    end
+end
+
+function E:roadRunsSaveSettings()
+    local S = ADFlyoverSettings
+    if S == nil or S.settings == nil or S.save == nil then return end
+    local function put(name, v)
+        local st = S.settings[name]
+        if st ~= nil and st.range ~= nil then st.value = math.max(st.range.min, math.min(st.range.max, v)) end
+    end
+    for _, k in ipairs(SAVED) do put(k[1], self[k[2]]) end
+    for _, k in ipairs(SAVED_FLAGS) do put(k[1], self[k[2]] and 1 or 0) end
+    for _, k in ipairs(SAVED_KINDS) do put(k[1], self.roadKinds[k[2]] and 1 or 0) end
+    pcall(S.save)
+end
+
 local function roadState(self)
+    if not self.roadRunsLoaded then
+        -- before anything reads or changes a setting, so a change is never overwritten by the load
+        self.roadRunsLoaded = true
+        self:roadRunsLoadSettings()
+    end
     local s = self.roadRuns
     if s == nil then
         s = { cache = nil, win = nil, stretches = {}, picks = {}, job = nil, jobKey = nil,
@@ -66,7 +114,12 @@ end
 function E:roadModeFor(st)
     local key = self.ROADRUNS_MODE_KEYS[self.roadMode] or "auto"
     if key == "auto" then
-        return (st ~= nil and st.class == "paved") and "lanes" or "two"
+        -- two lanes only on a paved road wide enough for two rigs side by side; else one two-way line
+        -- (the map's own two-lane roads start about 5 m wide in paint: widthstudy.lua)
+        if st ~= nil and st.class == "paved" and (st.width == nil or st.width >= self:roadMinGap() + 1.2) then
+            return "lanes"
+        end
+        return "two"
     end
     return key
 end
@@ -348,7 +401,7 @@ function E:roadRunsClick()
 
     if s.hover ~= nil then
         local st = s.hover
-        if #self:roadRunsLanesFor(st, s.hoverSide or 1) == 0 then
+        if #self:roadRunsLanesFor(st, s.hoverSide or 1, true) == 0 then
             self:warnPlayer(string.format("This stretch is too short to lay with %d m left at its forks - lower the fork gap.",
                 self.roadForkGap))
             return
@@ -627,15 +680,21 @@ local function drawLine(P, step, lw, r, g, b, lift)
 end
 
 --- The lanes a stretch would get, with heights, as drawn (cached per stretch and settings).
-function E:roadRunsLanesFor(st, dir)
+--- `hover`: the stretch is only under the mouse. Its side check then runs on bridges only, even with
+--- "everywhere" set: probing a whole long road every time the mouse crosses it could stutter. Picked
+--- stretches get the full check.
+function E:roadRunsLanesFor(st, dir, hover)
     local mode = self:roadModeFor(st)
     local gap = self:roadGapFor(st)
+    local everywhere = self.roadFitEverywhere and not hover
     local key = string.format("%s:%d:%.2f:%d:%.1f:%s", mode, dir or 1, gap, self.roadForkGap, self.roadRigWidth,
-        tostring(self.roadFitEverywhere))
+        tostring(everywhere))
     st.laneCache = st.laneCache or {}
     local lanes = st.laneCache[key]
     if lanes == nil then
-        lanes = RF.planLanes(st, mode, dir, gap, self.roadForkGap, self:roadRunsFit()) or { links = {} }
+        local fit = self:roadRunsFit()
+        fit.everywhere = everywhere
+        lanes = RF.planLanes(st, mode, dir, gap, self.roadForkGap, fit) or { links = {} }
         for _, ln in ipairs(lanes) do withHeights(ln.pts) end
         st.laneCache[key] = lanes
     end
@@ -703,7 +762,7 @@ function E:drawRoadRuns(lw)
     local st = s.hover
     if st ~= nil then
         drawLine(st.pts, 1, lw * 1.5, 1, 0.69, 0.13, 0.4)
-        self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1), lw, 1, 0.85, 0.5)
+        self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1, true), lw, 1, 0.85, 0.5)
         for _, n in ipairs({ st.startNode, st.endNode }) do
             if n ~= nil and n.tag == "fork" then
                 ADDrawingManager:addSphereTask(n.x, terrainY(n.x, n.z) + 0.8, n.z, 3, 1, 1, 1, 0.15)
@@ -723,6 +782,7 @@ function E:roadRunsCard(kit)
     for i, name in ipairs(self.ROADRUNS_MODE_NAMES) do
         opts[i] = { label = name, active = self.roadMode == i, action = function()
             editor.roadMode = i
+            editor:roadRunsSaveSettings()
         end }
     end
     kit.seg("lay as", opts)
@@ -731,6 +791,7 @@ function E:roadRunsCard(kit)
     end
     kit.segFlip("priority", "primary", "secondary", self.roadSubPrio, function()
         editor.roadSubPrio = not editor.roadSubPrio
+        editor:roadRunsSaveSettings()
     end)
     kit.seg("roads to find", {
         { label = "paved", active = self.roadKinds[RF.KIND_PAVED], action = function() editor:roadRunsToggleKind(RF.KIND_PAVED) end },
@@ -739,10 +800,12 @@ function E:roadRunsCard(kit)
     })
     kit.segFlip("light up", "under mouse", "all nearby", self.roadShowAll, function()
         editor.roadShowAll = not editor.roadShowAll
+        editor:roadRunsSaveSettings()
     end)
 
     kit.segFlip("lane gap", "from road", "set", not self.roadGapAuto, function()
         editor.roadGapAuto = not editor.roadGapAuto
+        editor:roadRunsSaveSettings()
     end)
     kit.numberAfter("lane gap")
     local st = s.hover or (s.picks[#s.picks] ~= nil and s.picks[#s.picks].st) or nil
@@ -757,10 +820,11 @@ function E:roadRunsCard(kit)
     end
     kit.segFlip("side check", "bridges", "everywhere", self.roadFitEverywhere, function()
         editor.roadFitEverywhere = not editor.roadFitEverywhere
+        editor:roadRunsSaveSettings()
     end)
     kit.numberAfter("rig width")
     kit.add("hint", "lanes come in from railings and banks; too narrow = one two-way line")
-    local lanes = st ~= nil and self:roadRunsLanesFor(st, (st == s.hover and s.hoverSide) or 1) or nil
+    local lanes = st ~= nil and self:roadRunsLanesFor(st, (st == s.hover and s.hoverSide) or 1, st == s.hover) or nil
     if lanes ~= nil and (lanes.collapsed or 0) > 0 then
         kit.add("cursor", "too narrow for two", string.format("%.0f m as one two-way line", lanes.collapsed))
     elseif lanes ~= nil and lanes.pulled then
@@ -787,20 +851,24 @@ function E:roadRunsCard(kit)
 end
 
 function E:roadRunsToggleKind(kind)
-    self.roadKinds[kind] = not self.roadKinds[kind]
     local s = roadState(self)
+    self.roadKinds[kind] = not self.roadKinds[kind]
+    self:roadRunsSaveSettings()
     -- the road lines depend on the kinds (they are thinned per class): read the window again
     s.win, s.job, s.jobKey = nil, nil, nil
 end
 
 --- Typed numbers on the card (getEditableNumbers hands over its fieldEntry builder).
 function E:roadRunsNumbers(fieldEntry)
+    roadState(self)
+    local editor = self
+    local function save() editor:roadRunsSaveSettings() end
     local list = {}
     if not self.roadGapAuto then
-        list[#list + 1] = fieldEntry("lane gap", "m", 1, "roadLaneGap", 2.5, 8, 0.1, false)
+        list[#list + 1] = fieldEntry("lane gap", "m", 1, "roadLaneGap", 2.5, 8, 0.1, false, save)
     end
-    list[#list + 1] = fieldEntry("rig width", "m", 1, "roadRigWidth", 2.0, 5.0, 0.1, false)
-    list[#list + 1] = fieldEntry("fork gap", "m", 0, "roadForkGap", 0, 40, 1, true)
+    list[#list + 1] = fieldEntry("rig width", "m", 1, "roadRigWidth", 2.0, 5.0, 0.1, false, save)
+    list[#list + 1] = fieldEntry("fork gap", "m", 0, "roadForkGap", 0, 40, 1, true, save)
     return list
 end
 

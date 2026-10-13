@@ -16,7 +16,7 @@ Lays AutoDrive runs along map roads and farm tracks that have no path yet.
 
 | Row | Choices |
 |---|---|
-| lay as | **auto** (two lanes on paved, one two-way line on tracks), one-way, two-way, two lanes |
+| lay as | **auto** (two lanes on paved roads 4.5 m+ wide, else one two-way line), one-way, two-way, two lanes |
 | priority | primary / secondary |
 | roads to find | paved, gravel, dirt (all on) |
 | light up | under mouse / **all nearby** (faint) |
@@ -78,9 +78,9 @@ Agreed with you on 2026-10-12: P/S = primary/secondary; stop short at forks; joi
 
 ## Not done or known limits
 
-- The side check runs when you hover. With "everywhere" on a long road, that may cause a short stutter.
+- While you only hover, the side check runs on bridges only. The full "everywhere" check runs once you pick the road, to avoid stutter.
+- Card settings are saved between sessions.
 - No **icon** yet. The icon sheet is full, so it shows as text only.
-- The card settings last only for the session (not saved).
 - When the junction builder ties these runs in automatically later, it will need the run ends marked. That isn't recorded yet.
 
 ## Files
