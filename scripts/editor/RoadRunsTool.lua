@@ -411,6 +411,50 @@ end
 --- way, stopping at forks, paved/track changes and the road's end, cut at the first AutoDrive path.
 --- Tried again only when the mouse has moved off the last result, at most four times a second.
 E.ROADRUNS_POINT_WALK = 400
+E.ROADRUNS_COVER_REACH = 2.5        -- a path this close along the road: the walk has run onto it
+
+--- One index of the whole network plus the picks (they count as covered too), kept a few seconds.
+function E:roadRunsCoverGrid()
+    local s = roadState(self)
+    local now = self:nowMs()
+    local wps = ADGraphManager:getWayPoints()
+    local key = tostring(#s.picks) .. ":" .. tostring(s.builds or 0) .. ":" .. tostring(wps ~= nil and #wps or 0)
+    local c = s.coverGrid
+    if c ~= nil and c.key == key and now - c.at < 5000 then return c.grid end
+    local H = RF.mapHalf() or 1100
+    local grid = RF.indexNetwork(wps, function(id) return ADGraphManager:getWayPointById(id) end, -H, -H, H, H)
+    for _, pk in ipairs(s.picks) do
+        local P = pk.st.pts
+        local pseudo = {}
+        for i = 1, #P do pseudo[i] = { x = P[i].x, z = P[i].z, out = {} } end
+        for i = 1, #P - 1 do pseudo[i].out[1] = pseudo[i + 1] end
+        local extra = RF.indexNetwork(pseudo, function() return nil end, -H, -H, H, H)
+        for k, list in pairs(extra.cells) do
+            local into = grid.cells[k]
+            if into == nil then grid.cells[k] = list else for _, sg in ipairs(list) do into[#into + 1] = sg end end
+        end
+    end
+    s.coverGrid = { key = key, at = now, grid = grid }
+    return grid
+end
+
+--- RF.walkFrom with the hover walk's limits: at most ROADRUNS_POINT_WALK each way, and ending where
+--- it runs onto an existing path or a pick.
+function E:roadRunsWalkFrom(isRoadOf, x, z, classes, isStopOf)
+    local grid = self:roadRunsCoverGrid()
+    local reach = self.ROADRUNS_COVER_REACH
+    local keepLen, keepCov = RF.WALK.maxLen, RF.walkCovered
+    RF.WALK.maxLen = self.ROADRUNS_POINT_WALK
+    RF.walkCovered = function(px, pz, hx, hz) return RF.coveredHere(grid, px, pz, hx, hz, reach) end
+    local ok, r = pcall(RF.walkFrom, isRoadOf, x, z, classes, isStopOf)
+    RF.WALK.maxLen, RF.walkCovered = keepLen, keepCov
+    if not ok then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walking from (%.1f, %.1f) failed: %s", x, z, tostring(r))
+        return nil
+    end
+    return r
+end
+
 function E:roadRunsWalkAtCursor(cx, cz)
     local s = roadState(self)
     local w = s.walked
@@ -425,32 +469,12 @@ function E:roadRunsWalkAtCursor(cx, cz)
     if self.roadKinds[RF.KIND_PAVED] then classes[#classes + 1] = "paved" end
     if self.roadKinds[RF.KIND_GRAVEL] or self.roadKinds[RF.KIND_DIRT] then classes[#classes + 1] = "track" end
     local isRoadOf, isStopOf = self:roadRunsWalkTests()
-    local keep = RF.WALK.maxLen
-    RF.WALK.maxLen = self.ROADRUNS_POINT_WALK
-    local ok, r = pcall(RF.walkFrom, isRoadOf, cx, cz, classes, isStopOf)
-    RF.WALK.maxLen = keep
-    if not ok or r == nil or #r.pts < 4 then
+    local r = self:roadRunsWalkFrom(isRoadOf, cx, cz, classes, isStopOf)
+    if r == nil or #r.pts < 4 then
         s.walked = nil
         return nil
     end
-    local x0, z0, x1, z1 = math.huge, math.huge, -math.huge, -math.huge
-    for _, p in ipairs(r.pts) do
-        x0, z0, x1, z1 = math.min(x0, p.x), math.min(z0, p.z), math.max(x1, p.x), math.max(z1, p.z)
-    end
-    local grid = RF.indexNetwork(ADGraphManager:getWayPoints(), function(id) return ADGraphManager:getWayPointById(id) end,
-        x0 - 10, z0 - 10, x1 + 10, z1 + 10)
-    -- picked stretches count as covered too
-    for _, pk in ipairs(s.picks) do
-        local P = pk.st.pts
-        local pseudo = {}
-        for i = 1, #P do pseudo[i] = { x = P[i].x, z = P[i].z, out = {} } end
-        for i = 1, #P - 1 do pseudo[i].out[1] = pseudo[i + 1] end
-        local extra = RF.indexNetwork(pseudo, function() return nil end, x0 - 10, z0 - 10, x1 + 10, z1 + 10)
-        for k, list in pairs(extra.cells) do
-            local into = grid.cells[k]
-            if into == nil then grid.cells[k] = list else for _, sg in ipairs(list) do into[#into + 1] = sg end end
-        end
-    end
+    local grid = self:roadRunsCoverGrid()
     r = RF.keepUncovered(r, grid)
     if r ~= nil then r = RF.cutHairpins(r, cx, cz) end
     if r ~= nil then r = RF.cutEndHooks(r, function(x, z) return E.roadRunsKindAt(x, z) == RF.KIND_PAVED end) end
@@ -650,8 +674,12 @@ local function nearPavedWalk(x, z)
     return v
 end
 
+-- the paved roads' shoulders and aprons (gravel/dirt joined to asphalt): not track, and a track walked
+-- into one has met the road
+local shoulderAtWalk = RF.newShoulderMap(kindAtWalk)
+
 -- for code above this point in the file (the locals are not visible there)
-E.roadRunsKindAt, E.roadRunsFieldAt = kindAtWalk, fieldAtWalk
+E.roadRunsKindAt, E.roadRunsFieldAt, E.roadRunsShoulderAt = kindAtWalk, fieldAtWalk, shoulderAtWalk
 
 function E:roadRunsWalkTests()
     local editor = self
@@ -664,13 +692,14 @@ function E:roadRunsWalkTests()
             if not ((k == RF.KIND_GRAVEL and editor.roadKinds[RF.KIND_GRAVEL]) or (k == RF.KIND_DIRT and editor.roadKinds[RF.KIND_DIRT])) then
                 return false
             end
-            -- a paved road's verge is not a track (a 255 m walk along a road's gravel verge, 2026-10-12)
-            return not nearPavedWalk(x, z)
+            -- a paved road's verge is not a track (a 255 m walk along a road's gravel verge, 2026-10-12),
+            -- nor its wider shoulder or apron (2026-10-13)
+            return not nearPavedWalk(x, z) and not shoulderAtWalk(x, z)
         end
     end
     local function isStopOf(cls)
         -- a track walked onto a paved road has met it: a fork for the junction tool
-        if cls == "track" then return function(x, z) return kindAtWalk(x, z) == RF.KIND_PAVED end end
+        if cls == "track" then return function(x, z) return kindAtWalk(x, z) == RF.KIND_PAVED or shoulderAtWalk(x, z) end end
         return nil
     end
     return isRoadOf, isStopOf
@@ -869,11 +898,8 @@ function E:roadRunsWalkThrough(pick)
             local r, jx, jz = nil, nil, nil
             for _, hop in ipairs(self.ROADRUNS_WALK_THROUGH) do
                 jx, jz = b.x + hx * hop, b.z + hz * hop
-                local keep = RF.WALK.maxLen
-                RF.WALK.maxLen = self.ROADRUNS_POINT_WALK
-                local ok, got = pcall(RF.walkFrom, isRoadOf, jx, jz, { cur.class }, isStopOf)
-                RF.WALK.maxLen = keep
-                if ok and got ~= nil and #got.pts >= 4 then r = got break end
+                local got = self:roadRunsWalkFrom(isRoadOf, jx, jz, { cur.class }, isStopOf)
+                if got ~= nil and #got.pts >= 4 then r = got break end
             end
             if r == nil then
                 ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - no road found past the junction at (%.1f, %.1f).", b.x, b.z)
@@ -1262,6 +1288,7 @@ function E:drawRoadView(lw)
                         local k = kindAtWalk(x, z)
                         local col = nil
                         if k == RF.KIND_PAVED then col = { 0.85, 0.85, 0.85 }
+                        elseif (k == RF.KIND_GRAVEL or k == RF.KIND_DIRT) and shoulderAtWalk(x, z) then col = { 0.45, 0.7, 1 }
                         elseif k == RF.KIND_GRAVEL then col = { 1, 0.85, 0.2 }
                         elseif k == RF.KIND_DIRT then col = { 0.6, 0.35, 0.1 }
                         elseif fieldAtWalk(x, z) then col = { 0.9, 0.2, 0.2 } end

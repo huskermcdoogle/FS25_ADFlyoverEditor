@@ -29,6 +29,13 @@ local isRoadOf = function(cls)
 end
 local isStopOf = function(cls) if cls == "track" then return function(x,z) return RF.groundKindAt(x,z) == 3 end end end
 RF.WALK.maxLen = 400
+-- as in game, a walk ends where it runs onto a path: every path but the deleted lane's own
+do
+  local keep = {}
+  for _, w in ipairs(wps) do if w.id < 9195 or w.id > 9270 then keep[#keep + 1] = w end end
+  local grid = RF.indexNetwork(keep, function(id) if id >= 9195 and id <= 9270 then return nil end return byId[id] end, -1100, -1100, 1100, 1100)
+  RF.walkCovered = function(x, z, hx, hz) return RF.coveredHere(grid, x, z, hx, hz, 2.5) end
+end
 local function distAny(x, z)
   local bd = math.huge
   for _, w in ipairs(wps) do for _, o in ipairs(w.out or {}) do local b = byId[o]; if b then

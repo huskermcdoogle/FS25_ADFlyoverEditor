@@ -1470,6 +1470,15 @@ local function coveredAt(grid, P, i, halfWidth)
     return hit
 end
 
+--- Does an AutoDrive path run along a road heading (hx, hz) within r of (x, z)?
+function RF.coveredHere(grid, x, z, hx, hz, r)
+    local hit = false
+    RF.networkNear(grid, x, z, r, function(sg)
+        if not hit and headingDiff(hx, hz, sg.bx - sg.ax, sg.bz - sg.az) <= RF.COVER_ANGLE then hit = true end
+    end)
+    return hit
+end
+
 --- Split the window's edges into stretches: the uncovered parts, long enough to offer. Each stretch:
 --- { pts, kind, class, width, len, startTag, endTag, startNode, endNode, edge, i0, i1 }.
 --- Tags: "fork" (a fork node), "end" (the road ends), "edge" (runs out of the window), "wide" (into a
@@ -1724,6 +1733,89 @@ end
 
 --- Walk one way from (x, z) heading (hx, hz). Returns the points (x, z, w) and how it ended:
 --- "end" (no road ahead), "fork" (the road widens into a mouth), "limit" (maxLen), "loop".
+--- SHOULDERS. Gravel or dirt joined to asphalt with no grass between, within SHOULDER_REACH of it, is
+--- the paved road's shoulder or apron, not a track (2026-10-13: a 460 m "track" was the gravel shoulder
+--- of the road at z -657, and tracks meeting that road bent along its 8 m apron). Worked out per
+--- SHOULDER_TILE square at 1 m: a spread outward from every paved cell through gravel and dirt.
+RF.SHOULDER_REACH = 10
+RF.SHOULDER_TILE = 32
+
+--- A shoulder test over kindAt(x, z): returns shoulderAt(x, z) -> true/false, filled in lazily per tile.
+function RF.newShoulderMap(kindAt)
+    local tiles, nTiles = {}, 0
+    local T, R = RF.SHOULDER_TILE, RF.SHOULDER_REACH
+    local function build(tx, tz)
+        local x0, z0 = tx * T - R, tz * T - R       -- the tile with a margin: shoulders reach in from outside
+        local n = T + 2 * R
+        local dist, queue, qh = {}, {}, 1
+        local roadish = {}
+        for j = 0, n - 1 do
+            for i = 0, n - 1 do
+                local x, z = x0 + i + 0.5, z0 + j + 0.5
+                local k = RF.onMap(x, z) and kindAt(x, z) or RF.KIND_NONE
+                local c = j * n + i
+                if k == RF.KIND_PAVED then
+                    dist[c] = 0
+                    queue[#queue + 1] = c
+                elseif k == RF.KIND_GRAVEL or k == RF.KIND_DIRT then
+                    roadish[c] = true
+                end
+            end
+        end
+        -- spread through gravel/dirt, 8 neighbours (diagonals 1.41), up to R
+        while qh <= #queue do
+            local c = queue[qh]
+            qh = qh + 1
+            local i, j = c % n, floor(c / n)
+            local d0 = dist[c]
+            for dj = -1, 1 do
+                for di = -1, 1 do
+                    if di ~= 0 or dj ~= 0 then
+                        local ii, jj = i + di, j + dj
+                        if ii >= 0 and ii < n and jj >= 0 and jj < n then
+                            local cc = jj * n + ii
+                            if roadish[cc] then
+                                local d = d0 + ((di ~= 0 and dj ~= 0) and 1.41 or 1)
+                                if d <= R and (dist[cc] == nil or d < dist[cc]) then
+                                    dist[cc] = d
+                                    queue[#queue + 1] = cc
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        local tile = {}
+        for j = 0, T - 1 do
+            for i = 0, T - 1 do
+                local c = (j + R) * n + (i + R)
+                if roadish[c] and dist[c] ~= nil then tile[j * T + i] = true end
+            end
+        end
+        return tile
+    end
+    return function(x, z)
+        local tx, tz = floor(x / T), floor(z / T)
+        local key = tx * 100003 + tz
+        local tile = tiles[key]
+        if tile == nil then
+            if nTiles > 400 then tiles, nTiles = {}, 0 end
+            tile = build(tx, tz)
+            tiles[key] = tile
+            nTiles = nTiles + 1
+        end
+        local i, j = floor(x) - tx * T, floor(z) - tz * T
+        return tile[j * T + i] == true
+    end
+end
+
+--- RF.walkCovered(x, z, hx, hz), when set, says an AutoDrive path already runs along the road here:
+--- a walk that has run along one for COVER_STOP_STEPS steps ends there ("path"), so where a walk ends
+--- does not depend on where it started (2026-10-13: walks through every junction ran on along pathed
+--- roads for a kilometre).
+RF.walkCovered = nil
+RF.COVER_STOP_STEPS = 3
 function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
     -- Steered like a driver (pure pursuit): look `lookAhead` metres on, aim at the middle of the road
     -- there; then step and settle onto the middle just in front. An earlier walker turned a fraction of
@@ -1735,6 +1827,7 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
     local pts = { { x = x, z = z, w = w0 } }
     local widths = { w0 }
     local miss, len, wideRun = 0, 0, 0
+    local covRun = 0
     local px, pz = x, z
     local maxTurnCos = cos(math.rad(W.maxTurn))
     local function usualWidth()
@@ -1770,7 +1863,7 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
     local function steerable(w2, usual) return w2 ~= nil and w2 <= max(W.steerWide * usual, usual + 1.5) end
     while len < W.maxLen do
         local nearX, nearZ = px + hx * W.step, pz + hz * W.step
-        if isStop ~= nil and isStop(nearX, nearZ) then return pts, "fork", { x = nearX, z = nearZ } end
+        if isStop ~= nil and isStop(nearX, nearZ) then return pts, "fork", { x = nearX, z = nearZ, met = true } end
         local usual = usualWidth()
         -- aim: the middle a look-ahead on (fall back to the middle just in front)
         local fx, fz, fw = middleAt(W.lookAhead, hx, hz)
@@ -1868,6 +1961,16 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
         end
         len = len + W.step
         if len > 40 and sqrt((px - x) ^ 2 + (pz - z) ^ 2) < W.step then return pts, "loop" end
+        -- run onto an existing path: end there, at the first covered point
+        if RF.walkCovered ~= nil and RF.walkCovered(px, pz, hx, hz) then
+            covRun = covRun + 1
+            if covRun >= RF.COVER_STOP_STEPS then
+                for _ = 1, covRun - 1 do if #pts > 1 then table.remove(pts) end end
+                return pts, "path"
+            end
+        else
+            covRun = 0
+        end
         work(80)
     end
     return pts, "limit"
@@ -1974,6 +2077,69 @@ local W_STEP_BRIDGE = 2
 RF.THROUGH_HOPS = { 15, 25, 35 }
 RF.MAX_THROUGH = 12
 RF.THROUGH_WALK_ANGLE = 20
+--- The road carrying on through a junction from (x, z) arriving along (ux, uz), or nil. At each hop
+--- distance an arc THROUGH_ARC either side of straight on is swept for road; each run of road found is
+--- seeded, and taken if that road runs within THROUGH_ARC of the arriving line. The arm nearest
+--- straight on wins. (A straight-on look only lost the lane at both its junctions on bends - ~30
+--- degrees at (-807,341), a Y at (-645,402) - so the same road was stopped at or walked through
+--- depending on which way it was walked, 2026-10-13.) A side road meeting a T finds nothing in line:
+--- the cross road runs across it.
+RF.THROUGH_ARC = 45              -- the road carried on into lies within this of straight on
+RF.THROUGH_BEND = 75             -- and runs within this of the arriving line (a lane bending 60 degrees
+                                 -- through a junction at (-645,402) is still the same lane)
+RF.THROUGH_ARC_HOPS = { 15, 22, 30, 38 }
+function RF.throughArm(isRoad, cls, x, z, ux, uz)
+    local cosArc = cos(math.rad(RF.THROUGH_ARC))
+    local cosBend = cos(math.rad(RF.THROUGH_BEND))
+    local best, bestA = nil, math.huge
+    for _, d in ipairs(RF.THROUGH_ARC_HOPS) do
+        -- runs of road along the arc, 1.5-degree steps
+        local runs, inRun = {}, nil
+        local step = 1.5
+        for a = -RF.THROUGH_ARC, RF.THROUGH_ARC + 0.01, step do
+            local ca, sa = cos(math.rad(a)), math.sin(math.rad(a))
+            local dx, dz = ux * ca - uz * sa, ux * sa + uz * ca
+            local on = isRoad(x + dx * d, z + dz * d)
+            if on and inRun == nil then inRun = { a0 = a, a1 = a }
+            elseif on then inRun.a1 = a
+            elseif inRun ~= nil then runs[#runs + 1] = inRun; inRun = nil end
+        end
+        if inRun ~= nil then runs[#runs + 1] = inRun end
+        if RF.TRACE then
+            local t = {}
+            for _, r in ipairs(runs) do t[#t + 1] = string.format("%.0f..%.0f", r.a0, r.a1) end
+            print(string.format("  through arc %d m from (%.1f,%.1f) heading %.0f: road at %s", d, x, z,
+                math.deg(math.atan2(uz, ux)), table.concat(t, ", ")))
+        end
+        for _, r in ipairs(runs) do
+            local width = d * math.rad(r.a1 - r.a0 + step)
+            if width >= (RF.WALK.minBand[cls] or 1.5) then
+                local a = (r.a0 + r.a1) / 2
+                local ca, sa = cos(math.rad(a)), math.sin(math.rad(a))
+                local dx, dz = ux * ca - uz * sa, ux * sa + uz * ca
+                local sx, sz, shx, shz, sw = RF.seedRoad(isRoad, x + dx * d, z + dz * d, cls, 3)
+                if sx ~= nil then
+                    if shx * ux + shz * uz < 0 then shx, shz = -shx, -shz end
+                    -- the road there runs in line with the arriving road, and points away from here
+                    local cx, cz = sx - x, sz - z
+                    local cl = sqrt(cx * cx + cz * cz)
+                    if RF.TRACE then
+                        print(string.format("  through from (%.1f,%.1f): %d m, arc %.0f..%.0f, road there heads %.0f deg off, lies %.0f deg off",
+                            x, z, d, r.a0, r.a1, math.deg(math.acos(max(-1, min(1, shx * ux + shz * uz)))),
+                            cl > 1e-6 and math.deg(math.acos(max(-1, min(1, (cx * ux + cz * uz) / cl)))) or 0))
+                    end
+                    if cl > 1e-6 and shx * ux + shz * uz >= cosBend and (cx * ux + cz * uz) / cl >= cosArc
+                        and abs(a) < bestA then
+                        best, bestA = { x = sx, z = sz, hx = shx, hz = shz, w = sw }, abs(a)
+                    end
+                end
+            end
+        end
+        if best ~= nil then return best end
+    end
+    return nil
+end
+
 local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop)
     local all = { { x = x, z = z, w = w } }
     local tag, at = "end", nil
@@ -1982,25 +2148,20 @@ local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop)
         pts, tag, at = RF.walkRoad(isRoad, cls, x, z, hx, hz, w, isStop)
         for i = 2, #pts do all[#all + 1] = pts[i] end
         if tag ~= "fork" or #all < 3 then break end
-        local q, p = all[#all], all[max(1, #all - 10)]       -- the road's line over the last ~20 m
-        local ux, uz = q.x - p.x, q.z - p.z
+        -- a track that has met a paved road stops there: the junction tool ties it in (it never hops
+        -- across or on along the road's verge - 2026-10-13 apron walk ran 500 m along a shoulder)
+        if at ~= nil and at.met then break end
+        if #all * RF.WALK.step > RF.WALK.maxLen then tag = "limit" break end
+        -- the road's line before the junction (30 to 8 m back): at the junction itself the walker
+        -- has already begun to turn toward a side road (65 degrees read at (-647,404) where the lane
+        -- runs at 34, 2026-10-13)
+        local q = all[#all]
+        local p1, p0 = all[max(1, #all - 4)], all[max(1, #all - 15)]
+        local ux, uz = p1.x - p0.x, p1.z - p0.z
         local ul = sqrt(ux * ux + uz * uz)
         if ul < 1e-6 then break end
         ux, uz = ux / ul, uz / ul
-        local found = nil
-        for _, hop in ipairs(RF.THROUGH_HOPS) do
-            local sx, sz, shx, shz, sw = RF.seedRoad(isRoad, q.x + ux * hop, q.z + uz * hop, cls, 3)
-            if sx ~= nil then
-                if shx * ux + shz * uz < 0 then shx, shz = -shx, -shz end
-                -- in line within THROUGH_ANGLE, and the far road's middle no more than 3 m off the
-                -- line carried on (a road crossing at a shallow angle is not the same road)
-                local ox = (sx - q.x) * (-uz) + (sz - q.z) * ux
-                if shx * ux + shz * uz >= cos(math.rad(RF.THROUGH_WALK_ANGLE)) and abs(ox) <= 3 then
-                    found = { x = sx, z = sz, hx = shx, hz = shz, w = sw }
-                    break
-                end
-            end
-        end
+        local found = RF.throughArm(isRoad, cls, q.x, q.z, ux, uz)
         if found == nil then break end
         -- bridge the junction in a straight line, then walk on from the far side
         local dx, dz = found.x - q.x, found.z - q.z

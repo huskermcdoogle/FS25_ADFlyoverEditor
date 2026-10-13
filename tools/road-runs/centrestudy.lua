@@ -56,6 +56,8 @@ local function asphaltMid(x, z, nx, nz)
 end
 
 local isRoadOf = function(cls)
+    -- SURFACE=1: a paved road is all its road paint (asphalt, gravel, mud), not the asphalt alone
+    if cls == "paved" and os.getenv("SURFACE") then return function(x, z) return RF.groundKindAt(x, z) ~= RF.KIND_NONE end end
     if cls == "paved" then return function(x, z) return RF.groundKindAt(x, z) == RF.KIND_PAVED end end
     return function(x, z) local k = RF.groundKindAt(x, z) return k == RF.KIND_GRAVEL or k == RF.KIND_DIRT end
 end

@@ -205,10 +205,11 @@ end
 for k, st in ipairs(targets) do
     local mid = st.pts[math.floor(#st.pts / 2) + 1]
     E.cursorX, E.cursorZ = mid.x + 1, mid.z + 1
+    local h0 = os.clock()
     frames(1)
-    print(string.format("hover %d: %s, %s %.0f m, %.1f m wide, %s..%s; draw %d lines %d spheres",
+    print(string.format("hover %d: %s, %s %.0f m, %.1f m wide, %s..%s; draw %d lines %d spheres; frame %.0f ms",
         k, s.hover and "found" or "NOTHING", RF and "" or (ADRoadFinder.KIND_NAMES[st.kind] or "?"), st.len, st.width or -1,
-        st.startTag, st.endTag, lines, spheres))
+        st.startTag, st.endTag, lines, spheres, (os.clock() - h0) * 1000))
     E:roadRunsClick()
     now = now + 1000
     frames(1)
