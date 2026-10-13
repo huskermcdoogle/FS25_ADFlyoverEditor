@@ -268,6 +268,8 @@ function E:roadRunsHover(overPanel)
     if st == nil then st = self:roadRunsWalkAtCursor(cx, cz) end
     if st == nil then
         st = RF.stretchNear(s.stretches, cx, cz, 3)
+        -- a line that turns back on itself is two roads: keep the one under the mouse
+        if st ~= nil then st = RF.cutHairpins(st, cx, cz) end
         -- a square line the walk can hardly read as road (under 30% of its cross-sections) is a
         -- phantom - a kerb, a patch's edge - and is not offered
         if st ~= nil then
@@ -437,6 +439,7 @@ function E:roadRunsWalkAtCursor(cx, cz)
         end
     end
     r = RF.keepUncovered(r, grid)
+    if r ~= nil then r = RF.cutHairpins(r, cx, cz) end
     if r == nil or #r.pts < 4 then
         s.walked = nil
         return nil
@@ -677,6 +680,12 @@ function E:roadRunsRefined(st)
         local grid = RF.indexNetwork(ADGraphManager:getWayPoints(), function(id) return ADGraphManager:getWayPointById(id) end,
             x0 - 10, z0 - 10, x1 + 10, z1 + 10)
         r = RF.keepUncovered(r, grid)
+        -- the walk can run down one track and back up its neighbour (2026-10-13): keep the piece
+        -- around the stretch it was walked from
+        if r ~= nil then
+            local m = st.pts[math.floor(#st.pts / 2) + 1]
+            r = RF.cutHairpins(r, m.x, m.z)
+        end
     end
     if r == nil or #r.pts < 3 then
         r = st

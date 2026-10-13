@@ -2473,6 +2473,73 @@ function RF.splineNear(S, x, z, reach)
     return best
 end
 
+RF.HAIRPIN_TURN = 100   -- a line turning back more than this within HAIRPIN_SPAN either side is two roads
+RF.HAIRPIN_SPAN = 6
+
+--- A stretch that doubles back on itself (two tracks meeting a road side by side, joined along its
+--- verge: down one, back up the other - 2026-10-13) is cut at each turn-back; the piece nearest (x, z)
+--- is kept, its cut ends tagged "fork". Returns the stretch itself when it has no turn-back.
+function RF.cutHairpins(st, x, z)
+    local P = st.pts
+    local n = #P
+    if n < 5 then return st end
+    local acc = { 0 }
+    for i = 2, n do acc[i] = acc[i - 1] + sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+    local cosMax = math.cos(math.rad(RF.HAIRPIN_TURN))
+    local cuts = {}
+    local i = 2
+    while i < n do
+        local a, b = i, i
+        while a > 1 and acc[i] - acc[a] < RF.HAIRPIN_SPAN do a = a - 1 end
+        while b < n and acc[b] - acc[i] < RF.HAIRPIN_SPAN do b = b + 1 end
+        local ix, iz = P[i].x - P[a].x, P[i].z - P[a].z
+        local ox, oz = P[b].x - P[i].x, P[b].z - P[i].z
+        local il, ol = sqrt(ix * ix + iz * iz), sqrt(ox * ox + oz * oz)
+        if il > 1 and ol > 1 and (ix * ox + iz * oz) / (il * ol) < cosMax then
+            -- the sharpest point of this turn
+            local best, bc = i, 2
+            for k = a + 1, b - 1 do
+                local px, pz = P[k].x - P[k - 1].x, P[k].z - P[k - 1].z
+                local qx, qz = P[k + 1].x - P[k].x, P[k + 1].z - P[k].z
+                local pl, ql = sqrt(px * px + pz * pz), sqrt(qx * qx + qz * qz)
+                if pl > 1e-6 and ql > 1e-6 then
+                    local c = (px * qx + pz * qz) / (pl * ql)
+                    if c < bc then best, bc = k, c end
+                end
+            end
+            cuts[#cuts + 1] = best
+            i = b
+        else
+            i = i + 1
+        end
+    end
+    if #cuts == 0 then return st end
+    local m, bd = 1, math.huge
+    for k = 1, n do
+        local d = (P[k].x - x) ^ 2 + (P[k].z - z) ^ 2
+        if d < bd then m, bd = k, d end
+    end
+    local i0, i1 = 1, n
+    for _, c in ipairs(cuts) do
+        if c <= m and c > i0 then i0 = c end
+        if c > m and c < i1 then i1 = c end
+    end
+    -- the same piece is the same table each time (its refined line is kept on it)
+    st.hairpinPieces = st.hairpinPieces or {}
+    local key = i0 .. ":" .. i1
+    if st.hairpinPieces[key] ~= nil then return st.hairpinPieces[key] end
+    local out = {}
+    for k, v in pairs(st) do if k ~= "hairpinPieces" and k ~= "refinedTo" then out[k] = v end end
+    st.hairpinPieces[key] = out
+    out.pts = {}
+    for k = i0, i1 do out.pts[#out.pts + 1] = P[k] end
+    if i0 > 1 then out.startTag, out.startNode = "fork", { x = P[i0].x, z = P[i0].z, tag = "fork" } end
+    if i1 < n then out.endTag, out.endNode = "fork", { x = P[i1].x, z = P[i1].z, tag = "fork" } end
+    out.len = polylineLength(out.pts)
+    out.cutFrom = st
+    return out
+end
+
 --- How far a walked line runs from the map's own road line, as a score for the walker: over the walk's
 --- points within `reach` of the same centre spline, the mean offset (+ = right of the way the walk
 --- goes: a steady lean to one side), the mean size, the worst, how many points, and the spline.
