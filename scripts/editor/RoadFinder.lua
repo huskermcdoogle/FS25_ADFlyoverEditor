@@ -2513,13 +2513,73 @@ end
 
 --- A centre spline as a stretch: its points, and at each end "fork" if another spline's end or line
 --- comes within `junction` metres (the AI network's splines meet at junctions), else "end".
+RF.SPLINE_THROUGH_ANGLE = 35      -- a road line carrying on within this of straight at a meeting is the same road
+RF.SPLINE_MEET = 3                -- line ends this close meet
+
+--- Heading (unit) of the first `span` metres of P from its start.
+local function headingFrom(P, span)
+    local a = P[1]
+    for k = 2, #P do
+        local b = P[k]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l = sqrt(dx * dx + dz * dz)
+        if l >= span or k == #P then if l < 1e-6 then return nil end return dx / l, dz / l end
+    end
+    return nil
+end
+
+--- The centre line carrying straight on from the end `q` (arriving heading hx,hz), as points running
+--- away from q, or nil. Only a line within RF.SPLINE_THROUGH_ANGLE of straight, and the straightest.
+local function carryOn(S, used, q, hx, hz)
+    local best, bestCos, bestPts = nil, math.cos(math.rad(RF.SPLINE_THROUGH_ANGLE)), nil
+    for _, o in ipairs(S.centre) do
+        if not used[o] and #o.pts >= 2 then
+            local P = nil
+            local a, b = o.pts[1], o.pts[#o.pts]
+            if (a.x - q.x) ^ 2 + (a.z - q.z) ^ 2 < RF.SPLINE_MEET ^ 2 then P = o.pts
+            elseif (b.x - q.x) ^ 2 + (b.z - q.z) ^ 2 < RF.SPLINE_MEET ^ 2 then
+                P = {}
+                for k = #o.pts, 1, -1 do P[#P + 1] = o.pts[k] end
+            end
+            if P ~= nil then
+                local dx, dz = headingFrom(P, 10)
+                if dx ~= nil and dx * hx + dz * hz > bestCos then best, bestCos, bestPts = o, dx * hx + dz * hz, P end
+            end
+        end
+    end
+    return best, bestPts
+end
+
 function RF.splineStretch(S, sp, junction)
+    -- the line itself, then on through every meeting where another line carries straight on (the
+    -- through road at a T is one road - 2026-10-13: spline993 stopped where 991 carried it on)
+    local used = { [sp] = true }
     local P = {}
     for _, p in ipairs(sp.pts) do P[#P + 1] = { x = p.x, z = p.z, y = p.y } end
+    for _ = 1, 2 do
+        for _ = 1, 20 do
+            local n = #P
+            local back = {}
+            for k = n, 1, -1 do back[#back + 1] = P[k] end
+            local hx, hz = headingFrom(back, 10)
+            if hx == nil then break end
+            local o, Q = carryOn(S, used, P[n], -hx, -hz)
+            if o == nil then break end
+            used[o] = true
+            for k = 2, #Q do P[#P + 1] = { x = Q[k].x, z = Q[k].z, y = Q[k].y } end
+        end
+        local R = {}
+        for k = #P, 1, -1 do R[#R + 1] = P[k] end
+        P = R
+    end
     local function meets(q)
         for _, o in ipairs(S.all) do
-            if o ~= sp and not (abs(o.len - sp.len) < 2 and #o.pts > 1
-                and sqrt((o.pts[1].x - sp.pts[#sp.pts].x) ^ 2 + (o.pts[1].z - sp.pts[#sp.pts].z) ^ 2) < 1.5) then
+            local twin = false
+            for u in pairs(used) do
+                if o == u or (abs(o.len - u.len) < 2 and #o.pts > 1
+                    and sqrt((o.pts[1].x - u.pts[#u.pts].x) ^ 2 + (o.pts[1].z - u.pts[#u.pts].z) ^ 2) < 1.5) then twin = true end
+            end
+            if not twin then
                 for k = 1, #o.pts do
                     local p = o.pts[k]
                     if (p.x - q.x) ^ 2 + (p.z - q.z) ^ 2 < junction * junction then return true end
