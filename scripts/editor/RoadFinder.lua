@@ -1672,10 +1672,13 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
     hx, hz = hx / hl, hz / hl
     local pts = { { x = x, z = z, w = w0 } }
     local widths = { w0 }
-    local miss, len, wideRun = 0, 0, 0
+    local miss, len, wideRun, lastTurn = 0, 0, 0, 0
     local px, pz = x, z
     local maxTurnCos = cos(math.rad(W.maxTurn))
     while len < W.maxLen do
+        -- expect the bend to go on as it has: turn by the last step's turn before looking (no lag
+        -- toward the outside of a long bend)
+        if lastTurn ~= 0 then hx, hz = rot(hx, hz, lastTurn) end
         local qx, qz = px + hx * W.step, pz + hz * W.step
         local nx, nz = -hz, hx
         if isStop ~= nil and isStop(qx, qz) then return pts, "fork", { x = qx, z = qz } end
@@ -1724,6 +1727,9 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
                 local side = (hx * dz - hz * dx) >= 0 and 1 or -1
                 dx, dz = rot(hx, hz, side * W.maxTurn)
             end
+            -- the turn this step made, counting the bend expected before it, for the next step
+            local turned = math.deg(atan2(hx * dz - hz * dx, hx * dx + hz * dz)) + lastTurn
+            lastTurn = max(-W.maxTurn, min(W.maxTurn, turned))
             hx, hz = dx, dz
             px, pz = px + hx * W.step, pz + hz * W.step
             if wideRun == 0 then widths[#widths + 1] = pick.w end
@@ -1768,11 +1774,37 @@ RF.simplifyLine = simplifyLine
 
 --- Heavy straightening: the fewest straight pieces within tol of the walked line, then the corners
 --- between them rounded (resample, then smoothing over about ten metres).
+--- Smoothing that takes out wiggles without pulling bends inward (Taubin: a smoothing step, then a
+--- slightly larger step back). A plain moving average shrank a 60 m bend by about 0.4 m - the line
+--- sat inside the curve. Ends held.
+function RF.smoothKeepBends(P, passes)
+    local n = #P
+    if n < 3 then return P end
+    local out = {}
+    for i = 1, n do out[i] = copyPt(P[i]) end
+    local function step(f)
+        local dx, dz = {}, {}
+        for i = 2, n - 1 do
+            dx[i] = (out[i - 1].x + out[i + 1].x) / 2 - out[i].x
+            dz[i] = (out[i - 1].z + out[i + 1].z) / 2 - out[i].z
+        end
+        for i = 2, n - 1 do
+            out[i].x = out[i].x + f * dx[i]
+            out[i].z = out[i].z + f * dz[i]
+        end
+    end
+    for _ = 1, passes do
+        step(0.5)
+        step(-0.53)
+    end
+    return out
+end
+
 function RF.straighten(P, tol)
     if #P < 3 then return P end
     local S = simplifyLine(P, tol or 0.75)
     local R = resampleFixed(S, 2)
-    R = smoothPts(smoothPts(R, 3), 3)
+    R = RF.smoothKeepBends(R, 12)
     -- widths along the result from the walked line (nearest point)
     for _, p in ipairs(R) do
         if p.w == nil then
@@ -1823,7 +1855,7 @@ end
 --- ways and averaged so the line does not lag behind a bend. Where the stretch ran off the read square
 --- the free walker carries it on. Then straightened. Decks keep the square's line (under a bridge the
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
-RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4 }
+RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4, mouthWidth = 1.5 }
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
     RF.walkIsField = isField
@@ -1880,6 +1912,19 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         if pick ~= nil then meas[i], widths[i] = pick.mid, pick.w end
         work(40)
     end
+    -- Readings much wider than the road usually is are a junction's mouth or a patch beside the road:
+    -- their middle is pulled toward the side road, so they are left out.
+    do
+        local ws = {}
+        for i = 1, n do if widths[i] ~= nil then ws[#ws + 1] = widths[i] end end
+        table.sort(ws)
+        local usual = ws[floor((#ws + 1) / 2)]
+        if usual ~= nil then
+            for i = 1, n do
+                if widths[i] ~= nil and widths[i] > F.mouthWidth * usual then meas[i] = nil end
+            end
+        end
+    end
     -- filter forward and backward, each gating readings that jump too far from where it is. It starts
     -- from the MEDIAN of the first readings (one bad first reading - a yard at the track's end - used
     -- to lock the filter on the wrong side, rejecting every good reading after it: 2026-10-12 game
@@ -1920,18 +1965,48 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         local off = (fw[i] + bw[i]) / 2
         R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
     end
-    -- carry the line on straight over the part left out near a fork, along its own last heading
+    -- Both end fixes below carry the line on along the CURVE it is already following (its turn per
+    -- metre read over the ~25 m before the anchor), not a straight line: straight tails ran off the
+    -- middle of a curving road (2026-10-12 screenshot). On a straight road the curve is straight.
+    local function at(atEnd, k) if atEnd then return R[#R + 1 - k] else return R[k] end end
+    local function course(atEnd, k0)
+        -- heading outward at anchor k0, and its turn per metre (from the two 14 m pieces behind it)
+        local a, b, c = at(atEnd, k0), at(atEnd, k0 + 7), at(atEnd, k0 + 14)
+        if a == nil or b == nil then return nil end
+        local h1 = atan2(a.z - b.z, a.x - b.x)
+        local rate = 0
+        if c ~= nil then
+            local h0 = atan2(b.z - c.z, b.x - c.x)
+            local dh = h1 - h0
+            if dh > pi then dh = dh - 2 * pi elseif dh < -pi then dh = dh + 2 * pi end
+            rate = dh / (7 * W.step)
+            local cap = math.rad(3)                      -- at most 3 degrees a metre (radius ~19 m)
+            if rate > cap then rate = cap elseif rate < -cap then rate = -cap end
+        end
+        return h1, rate
+    end
+    local function along(x, z, h, rate, d)
+        -- the point d metres on from (x, z) heading h, turning `rate` per metre
+        local px, pz, hh, done = x, z, h, 0
+        while done < d - 1e-6 do
+            local s1 = min(0.5, d - done)
+            hh = hh + rate * s1 / 2
+            px, pz = px + cos(hh) * s1, pz + sin(hh) * s1
+            hh = hh + rate * s1 / 2
+            done = done + s1
+        end
+        return px, pz
+    end
+    -- carry the line on over the part left out near a fork
     local function extend(atEnd, length)
         if length <= 0 or #R < 4 then return end
-        local p, q
-        if atEnd then p, q = R[#R - 3], R[#R] else p, q = R[4], R[1] end
-        local hx, hz = q.x - p.x, q.z - p.z
-        local l = sqrt(hx * hx + hz * hz)
-        if l < 1e-6 then return end
-        hx, hz = hx / l, hz / l
+        local h, rate = course(atEnd, 1)
+        if h == nil then return end
+        local q = at(atEnd, 1)
         local d = W.step
         while d <= length + 1e-6 do
-            local e = { x = q.x + hx * d, z = q.z + hz * d, w = q.w }
+            local x, z = along(q.x, q.z, h, rate, d)
+            local e = { x = x, z = z, w = q.w }
             if atEnd then R[#R + 1] = e else table.insert(R, 1, e) end
             d = d + W.step
         end
@@ -1939,25 +2014,22 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     extend(false, cutStart)
     extend(true, cutEnd)
     -- Steady ends: the last metres are read with fewer points either side and drift, or hook into a
-    -- yard or a junction's mud. Carry the line's own course (read 10-24 m in) out over its last 10 m,
-    -- unless the road really turns there (over 45 degrees).
+    -- yard or a junction's mud. Carry the line's own course (read from 10 m in) out over its last
+    -- 10 m, unless the road really turns there (the tip over 45 degrees off that course).
     local function steady(atEnd)
-        local m = #R
-        if m < 14 then return end
-        local function at(k) if atEnd then return R[m + 1 - k] else return R[k] end end
-        local a, b = at(6), at(13)                      -- 10 m and 24 m in (2 m steps)
-        local tip = at(1)
-        local ux, uz = a.x - b.x, a.z - b.z              -- outward along the course
-        local ul = sqrt(ux * ux + uz * uz)
+        if #R < 14 then return end
+        local h, rate = course(atEnd, 6)
+        if h == nil then return end
+        local a, tip = at(atEnd, 6), at(atEnd, 1)
+        local ex, ez = along(a.x, a.z, h, rate, 5 * W.step)
         local vx, vz = tip.x - a.x, tip.z - a.z
-        local vl = sqrt(vx * vx + vz * vz)
-        if ul < 1e-6 or vl < 1e-6 then return end
-        ux, uz = ux / ul, uz / ul
-        if (ux * vx + uz * vz) / vl < cos(math.rad(45)) then return end   -- the road really turns there
+        local ux, uz = ex - a.x, ez - a.z
+        local vl, ul = sqrt(vx * vx + vz * vz), sqrt(ux * ux + uz * uz)
+        if vl < 1e-6 or ul < 1e-6 then return end
+        if (ux * vx + uz * vz) / (ul * vl) < cos(math.rad(45)) then return end
         for k = 1, 5 do
-            local p = at(k)
-            local d = (6 - k) * W.step
-            p.x, p.z = a.x + ux * d, a.z + uz * d
+            local p = at(atEnd, k)
+            p.x, p.z = along(a.x, a.z, h, rate, (6 - k) * W.step)
         end
     end
     steady(false)
@@ -1972,33 +2044,43 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
     if metStart ~= nil then out.startTag, out.startNode = "fork", { x = metStart.x, z = metStart.z, tag = "fork" } end
     if metEnd ~= nil then out.endTag, out.endNode = "fork", { x = metEnd.x, z = metEnd.z, tag = "fork" } end
-    -- ran off the read square: carry on with the free walker from that end
+    -- Ran off the read square, or the square lost the road ("end": a break in the paint - a muddy
+    -- patch, another paint, a shadow - where the road plainly carries on): keep walking from that end.
+    -- The walker bridges gaps up to 8 m and stops at a real fork, a change between paved and track,
+    -- or the road's true end; what it adds is cut at the first AutoDrive path later. (2026-10-12: a
+    -- paved road's run stopped mid-road and the end fixes only patched over the stop.)
     local function carryOn(atEnd)
+        local m = #R
         local p, q
-        if atEnd then p, q = R[max(1, n - 3)], R[n] else p, q = R[min(n, 4)], R[1] end
+        if atEnd then p, q = R[max(1, m - 3)], R[m] else p, q = R[min(m, 4)], R[1] end
         local hx, hz = q.x - p.x, q.z - p.z
         local more, tag, at = RF.walkRoad(isRoad, cls, q.x, q.z, hx, hz, q.w or st.width or 4, isStop)
         return more, tag, at
     end
-    if st.endTag == "edge" then
+    local function carries(tag) return tag == "edge" or tag == "end" end
+    if carries(out.endTag) and metEnd == nil then
         local more, tag, at = carryOn(true)
-        for i = 2, #more do R[#R + 1] = more[i] end
-        out.endTag = tag
-        out.endNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
+        if #more > 1 or out.endTag == "edge" then
+            for i = 2, #more do R[#R + 1] = more[i] end
+            out.endTag = tag
+            out.endNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
+        end
     end
-    if st.startTag == "edge" then
+    if carries(out.startTag) and metStart == nil then
         local more, tag, at = carryOn(false)
-        local front = {}
-        for i = #more, 2, -1 do front[#front + 1] = more[i] end
-        for _, p in ipairs(R) do front[#front + 1] = p end
-        R = front
-        out.startTag = tag
-        out.startNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
+        if #more > 1 or out.startTag == "edge" then
+            local front = {}
+            for i = #more, 2, -1 do front[#front + 1] = more[i] end
+            for _, p in ipairs(R) do front[#front + 1] = p end
+            R = front
+            out.startTag = tag
+            out.startNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
+        end
     end
     -- straighten, but never so far that the line leaves the middle it read: on a narrow road a bend
     -- cut by straightening put the line half off the paving (2026-10-12 game test)
     local w = medianWidth(R, 0) or st.width or 4
-    local S = RF.straighten(R, min(0.75, 0.15 * w))
+    local S = RF.straighten(R, min(0.4, 0.1 * w))      -- (0.75 cut the inside of long bends by 0.5 m)
     local limit = max(0.4, 0.2 * w)
     local worst = 0
     for _, q in ipairs(R) do
