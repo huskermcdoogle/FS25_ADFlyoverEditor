@@ -2473,6 +2473,44 @@ function RF.splineNear(S, x, z, reach)
     return best
 end
 
+--- How far a walked line runs from the map's own road line, as a score for the walker: over the walk's
+--- points within `reach` of the same centre spline, the mean offset (+ = right of the way the walk
+--- goes: a steady lean to one side), the mean size, the worst, how many points, and the spline.
+function RF.splineScore(S, pts, reach)
+    local best, votes = nil, {}
+    for i = 1, #pts, 3 do
+        local sp = RF.splineNear(S, pts[i].x, pts[i].z, reach)
+        if sp ~= nil then votes[sp] = (votes[sp] or 0) + 1; if best == nil or votes[sp] > votes[best] then best = sp end end
+    end
+    if best == nil then return nil end
+    local P = best.pts
+    local sum, sumAbs, worst, n = 0, 0, 0, 0
+    for i = 1, #pts do
+        local q = pts[i]
+        local bd, bx, bz = reach * reach, nil, nil
+        for k = 1, #P - 1 do
+            local a, b = P[k], P[k + 1]
+            local dx, dz = b.x - a.x, b.z - a.z
+            local l2 = dx * dx + dz * dz
+            local t = l2 > 0 and max(0, min(1, ((q.x - a.x) * dx + (q.z - a.z) * dz) / l2)) or 0
+            local qx, qz = a.x + dx * t, a.z + dz * t
+            local d = (q.x - qx) ^ 2 + (q.z - qz) ^ 2
+            if d < bd then bd, bx, bz = d, qx, qz end
+        end
+        if bx ~= nil then
+            local a, b = pts[max(1, i - 1)], pts[min(#pts, i + 1)]
+            local hx, hz = b.x - a.x, b.z - a.z
+            local hl = sqrt(hx * hx + hz * hz)
+            if hl > 1e-6 then
+                local off = ((q.x - bx) * -hz + (q.z - bz) * hx) / hl
+                sum, sumAbs, worst, n = sum + off, sumAbs + abs(off), max(worst, abs(off)), n + 1
+            end
+        end
+    end
+    if n == 0 then return nil end
+    return { lean = sum / n, mean = sumAbs / n, worst = worst, n = n, sp = best }
+end
+
 --- A centre spline as a stretch: its points, and at each end "fork" if another spline's end or line
 --- comes within `junction` metres (the AI network's splines meet at junctions), else "end".
 function RF.splineStretch(S, sp, junction)

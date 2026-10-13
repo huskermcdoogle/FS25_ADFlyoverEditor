@@ -263,6 +263,8 @@ function E:roadRunsHover(overPanel)
     -- joined off the centre line, the walk kept within ~0.5 m of the old path). The square's stretches
     -- are the fallback.
     local st = self:roadRunsSplineAtCursor(cx, cz)
+    -- on a road the map maker drew, walk it anyway (not shown) so the log scores the walker against it
+    if st ~= nil and st ~= s.hover then self:roadRunsWalkAtCursor(cx, cz) end
     if st == nil then st = self:roadRunsWalkAtCursor(cx, cz) end
     if st == nil then
         st = RF.stretchNear(s.stretches, cx, cz, 3)
@@ -441,6 +443,13 @@ function E:roadRunsWalkAtCursor(cx, cz)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walked a %s road from the mouse at (%.1f, %.1f): %.0f m, %.1f m wide (%s to %s); across its middle (%.1f, %.1f): %s",
         r.class, cx, cz, r.len or 0, r.width or -1, r.startTag, r.endTag, r.pts[mi].x, r.pts[mi].z,
         RF.crossText(E.roadRunsKindAt, r.pts, mi, E.roadRunsFieldAt))
+    -- where the map maker drew this road, score the walk against it (+ = right of the way it walks)
+    local S = self:roadRunsSplines()
+    local sc = (S ~= nil and #S.centre > 0) and RF.splineScore(S, r.pts, 4) or nil
+    if sc ~= nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walk vs the map's line %s: leans %+.2f m (+ = right), off %.2f m on average, worst %.2f m, over %d of %d points.",
+            sc.sp.name, sc.lean, sc.mean, sc.worst, sc.n, #r.pts)
+    end
     return r
 end
 
