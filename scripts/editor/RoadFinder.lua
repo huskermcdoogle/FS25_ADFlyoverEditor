@@ -1551,6 +1551,7 @@ RF.WALK = {
     half = 9,                       -- how far either side a cross-section looks
     res = 0.25,                     -- cross-section sample spacing
     joinGap = { track = 4.0, paved = 1.0 },   -- gaps up to this inside a band are the same road (ruts)
+    pavedGap = 2.5,                 -- gaps bridged across a paved road
     tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
     rutWidth = 2.5,
     rutMax = 2.0,                   -- a wheel rut is at most this wide
@@ -1598,7 +1599,10 @@ local function bandsAt(isRoad, x, z, nx, nz, cls)
 end
 function RF.bandsAt(isRoad, x, z, nx, nz, cls)
     local W = RF.WALK
-    local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, W.tightGap)
+    -- paved: patches of other paint across a road (wet-look, gravel, shadow) are bridged up to
+    -- pavedGap, or a patch in the middle splits the road and the line jumps to one half (wavy lanes,
+    -- 2026-10-12)
+    local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, (cls == "paved") and W.pavedGap or W.tightGap)
     -- A farm track is TWO RUTS with a strip of grass between them (2026-10-12 screenshots): the middle
     -- of the track is halfway between the ruts. Find the pair of narrow dirt strips with a grass gap
     -- between them nearest the line, and read the track as that pair - stray mud beside the track (a
@@ -1707,7 +1711,7 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             miss = 0
             -- a fork's mouth: the road stays much wider than usual for a few steps running (one wide
             -- reading is a patch or a rut read the other way)
-            if #pts > 4 and pick.w > W.widen * usual then
+            if (#pts > 4 or w0 ~= nil) and pick.w > W.widen * usual then
                 wideRun = wideRun + 1
                 if wideRun >= 3 then
                     for _ = 1, wideRun - 1 do if #pts > 1 then table.remove(pts) end end
@@ -1801,12 +1805,26 @@ function RF.smoothKeepBends(P, passes)
 end
 
 function RF.straighten(P, tol)
+    -- Low-pass with bias correction ("twicing"): A = average over about +-10 m, B = A averaged again,
+    -- line = 2A - B. Wiggles shorter than ~20 m (patchy paint, a rut read alone) are taken out; a long
+    -- bend keeps its place (a plain average pulled a 60 m bend 0.4 m in; the Taubin step that fixed
+    -- that let 10 m waves through on a patchy road, and simplifying first kept the waves' peaks -
+    -- 2026-10-12). `tol` is no longer used.
     if #P < 3 then return P end
-    local S = simplifyLine(P, tol or 0.75)
-    local R = resampleFixed(S, 2)
-    R = RF.smoothKeepBends(R, 12)
+    local R = resampleFixed(P, 2)
+    local r = RF.SMOOTH_SPAN
+    local A = smoothPts(smoothPts(R, r), r)
+    local B = smoothPts(smoothPts(A, r), r)
+    local out = {}
+    for i = 1, #R do
+        out[i] = copyPt(A[i])
+        out[i].x = 2 * A[i].x - B[i].x
+        out[i].z = 2 * A[i].z - B[i].z
+    end
+    out[1].x, out[1].z = R[1].x, R[1].z
+    out[#out].x, out[#out].z = R[#R].x, R[#R].z
     -- widths along the result from the walked line (nearest point)
-    for _, p in ipairs(R) do
+    for _, p in ipairs(out) do
         if p.w == nil then
             local bd, bw = math.huge, nil
             for _, q in ipairs(P) do
@@ -1816,7 +1834,7 @@ function RF.straighten(P, tol)
             p.w = bw
         end
     end
-    return R
+    return out
 end
 
 --- Follow the road under (x, z) both ways and straighten it. `isRoadOf(cls)` returns the class's
@@ -1855,6 +1873,7 @@ end
 --- ways and averaged so the line does not lag behind a bend. Where the stretch ran off the read square
 --- the free walker carries it on. Then straightened. Decks keep the square's line (under a bridge the
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
+RF.SMOOTH_SPAN = 5                -- points (2 m) either side in each averaging pass of the final line
 RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4, mouthWidth = 1.5 }
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
@@ -2060,7 +2079,8 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     local function carries(tag) return tag == "edge" or tag == "end" end
     if carries(out.endTag) and metEnd == nil then
         local more, tag, at = carryOn(true)
-        if #more > 1 or out.endTag == "edge" then
+        -- (a walk that meets a junction's mouth at once still tells us the end is a fork: gap it)
+        if #more > 1 or out.endTag == "edge" or tag == "fork" then
             for i = 2, #more do R[#R + 1] = more[i] end
             out.endTag = tag
             out.endNode = at and { x = at.x, z = at.z, tag = "fork" } or nil
@@ -2068,7 +2088,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     end
     if carries(out.startTag) and metStart == nil then
         local more, tag, at = carryOn(false)
-        if #more > 1 or out.startTag == "edge" then
+        if #more > 1 or out.startTag == "edge" or tag == "fork" then
             local front = {}
             for i = #more, 2, -1 do front[#front + 1] = more[i] end
             for _, p in ipairs(R) do front[#front + 1] = p end
