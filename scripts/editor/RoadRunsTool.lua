@@ -288,6 +288,7 @@ end
 -- A two-way farm way is a spline and its reversed twin ("993" and "993R") on the same line; those are
 -- used as centre lines. Traffic lanes (one per direction, a lane apart) are left to the ground reading.
 E.ROADRUNS_SPLINE_REACH = 4            -- the mouse within this of a spline picks it
+E.ROADRUNS_SPLINE_PATH_END = 10      -- an existing path this close to a line's end: the run joins it there
 E.ROADRUNS_SPLINE_JUNCTION = 15        -- another spline's end or line this close to an end: a junction
 
 local function splineRoot()
@@ -367,6 +368,16 @@ function E:roadRunsSplineAtCursor(cx, cz)
     -- the uncovered run nearest the mouse
     local cut = RF.keepUncoveredNear(st, grid, cx, cz)
     if cut == nil or #cut.pts < 3 then return nil end
+    -- an end where the map's lines meet but an existing path is right there: the road runs into that
+    -- path, so it joins it rather than stopping short (2026-10-13: the old lane's south end, where the
+    -- path carries on, was left 7.5 m short and joined by hand)
+    for _, e in ipairs({ { tag = "startTag", node = "startNode", p = cut.pts[1] }, { tag = "endTag", node = "endNode", p = cut.pts[#cut.pts] } }) do
+        if cut[e.tag] ~= "path" then
+            local near = false
+            RF.networkNear(grid, e.p.x, e.p.z, self.ROADRUNS_SPLINE_PATH_END, function() near = true end)
+            if near then cut[e.tag], cut[e.node] = "path", nil end
+        end
+    end
     local k = RF.groundKindAt(cut.pts[math.floor(#cut.pts / 2) + 1].x, cut.pts[math.floor(#cut.pts / 2) + 1].z)
     cut.class = (k == RF.KIND_PAVED) and "paved" or "track"
     cut.kind = (k ~= RF.KIND_NONE) and k or RF.KIND_DIRT

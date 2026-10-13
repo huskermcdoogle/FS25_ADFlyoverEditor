@@ -196,6 +196,11 @@ for _, st in ipairs(s.stretches) do
     if math.abs(mid.x - cx) < 120 and math.abs(mid.z - cz) < 120 then targets[#targets + 1] = st end
     if #targets >= 3 then break end
 end
+-- AT=x,z: hover and pick exactly there instead (one target)
+if os.getenv("AT") then
+    local ax, az = os.getenv("AT"):match("(-?[%d%.]+),(-?[%d%.]+)")
+    targets = { { pts = { { x = tonumber(ax) - 1, z = tonumber(az) - 1 } }, len = 0, startTag = "-", endTag = "-" } }
+end
 for k, st in ipairs(targets) do
     local mid = st.pts[math.floor(#st.pts / 2) + 1]
     E.cursorX, E.cursorZ = mid.x + 1, mid.z + 1
