@@ -554,6 +554,11 @@ function E:roadRunsClick()
             local p = st.pts[i]
             ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - across at (%.1f, %.1f): %s", p.x, p.z,
                 RF.crossText(kindAtWalk, st.pts, i, fieldAtWalk))
+            -- the same, exactly: every strip of road ground (0.25 m), and the middle the walk reads there
+            local detail = RF.crossDetail(function(cls) return self:roadRunsWalkTests()(cls) end, st, i)
+            if detail ~= nil then
+                ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs -    strips %s; read middle %+.2f m from the line", detail.strips, detail.mid)
+            end
         end
         self:roadRunsRefreshStretches()
     elseif s.hoverPick ~= nil then

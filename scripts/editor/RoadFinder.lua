@@ -2126,6 +2126,29 @@ function RF.crossText(kindAt, P, i, isField)
     return table.concat(t)
 end
 
+--- For the log: the strips of road ground straight across a line at point i, as offsets from the line
+--- (left negative), to 0.25 m, and the middle the walk would read there.
+function RF.crossDetail(isRoadOf, st, i)
+    local P = st.pts
+    local a, b = P[max(1, i - 2)], P[min(#P, i + 2)]
+    local hx, hz = b.x - a.x, b.z - a.z
+    local l = sqrt(hx * hx + hz * hz)
+    if l < 1e-6 then return nil end
+    local nx, nz = -hz / l, hx / l
+    local isRoad = isRoadOf(st.class)
+    if isRoad == nil then return nil end
+    local W = RF.WALK
+    local fine = RF.crossSection(isRoad, P[i].x, P[i].z, nx, nz, W.half, W.res, W.res)
+    local t = {}
+    for _, f in ipairs(fine) do t[#t + 1] = string.format("[%+.2f..%+.2f]", f.lo, f.hi) end
+    local bands = RF.bandsAt(isRoad, P[i].x, P[i].z, nx, nz, st.class)
+    local pick = nil
+    for _, bd in ipairs(bands) do
+        if bd.w >= W.minBand[st.class] and (pick == nil or abs(bd.mid) < abs(pick.mid)) then pick = bd end
+    end
+    return { strips = (#t > 0) and table.concat(t, " ") or "none", mid = pick and pick.mid or 0 }
+end
+
 --- The part of a (walked) stretch with no AutoDrive path along it: the uncovered run through its
 --- middle; an end cut short by a path is tagged "path". nil if its middle is covered.
 function RF.keepUncovered(st, grid)
