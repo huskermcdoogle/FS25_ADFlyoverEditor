@@ -45,6 +45,19 @@ E.roadLaneGap = 4.0
 E.roadForkGap = 7.5                -- room left at forks; the junction tool's clear trims or extends to its own box
 E.roadRigWidth = 3.0               -- the widest rig the lanes must pass; sets the minimum lane gap and side room
 E.roadFitEverywhere = false        -- the side check on every road, not only bridges and ramps
+-- Detection view (2026-10-13, the user: "a tool that just focuses on detection methods and overlay the
+-- different layers"): instead of the lane preview, the ground under the mouse is drawn layer by layer,
+-- flat on the ground, so what the tool reads can be checked against what is there. Not saved.
+E.roadView = false
+E.roadLayers = { paint = true, read = true, lines = true, splines = true }
+E.ROADVIEW_HALF = 15               -- the paint layer covers this far round the mouse (m)
+E.ROADVIEW_STEP = 0.5              -- one paint mark per this (m)
+E.ROADVIEW_WHY = {                 -- the colour of a reading left out, by why
+    none = { 0.35, 0.35, 0.35 },   -- no road band found across here
+    junction = { 0.75, 0.3, 1 },   -- held out: a junction the walk went through
+    wide = { 1, 0.55, 0.1 },       -- much wider than the road usually is: a mouth or a patch beside it
+    jumped = { 1, 0.15, 0.15 },    -- too far from where the line was: the filter did not trust it
+}
 
 -- The card's choices persist in ADFlyoverSettings (Settings.lua, roadRuns*): read once when the tool is
 -- first used, written whenever one changes.
@@ -1223,9 +1236,122 @@ function E:drawRoadRuns(lw)
     end
 end
 
+--- The detection view: ground paint round the mouse, what the walker read across the hovered road
+--- and why it left readings out, the line before and after smoothing, and the map's own line.
+function E:drawRoadView(lw)
+    local s = self.roadRuns
+    local cx, cz = self.cursorX, self.cursorZ
+    if s == nil or cx == nil or not finite(cx) or not finite(cz) then return end
+    local L = self.roadLayers
+    local lift = 0.06
+    local function seg(ax, az, bx, bz, w, r, g, b)
+        if not (finite(ax) and finite(az) and finite(bx) and finite(bz)) then return end
+        ADDrawingManager:addLineTask(ax, terrainY(ax, az) + lift, az, bx, terrainY(bx, bz) + lift, bz, w, r, g, b)
+    end
+    -- ground paint: a short mark per cell (paved light grey, gravel yellow, dirt brown, field red)
+    if L.paint then
+        local st = self.ROADVIEW_STEP
+        local gx, gz = math.floor(cx / 2) * 2, math.floor(cz / 2) * 2
+        local cache = s.viewCells
+        if cache == nil or cache.x ~= gx or cache.z ~= gz then
+            cache = { x = gx, z = gz, cells = {} }
+            local H = self.ROADVIEW_HALF
+            for x = gx - H, gx + H, st do
+                for z = gz - H, gz + H, st do
+                    if RF.onMap(x, z) then
+                        local k = kindAtWalk(x, z)
+                        local col = nil
+                        if k == RF.KIND_PAVED then col = { 0.85, 0.85, 0.85 }
+                        elseif k == RF.KIND_GRAVEL then col = { 1, 0.85, 0.2 }
+                        elseif k == RF.KIND_DIRT then col = { 0.6, 0.35, 0.1 }
+                        elseif fieldAtWalk(x, z) then col = { 0.9, 0.2, 0.2 } end
+                        if col ~= nil then
+                            cache.cells[#cache.cells + 1] = { x = x, y = terrainY(x, z) + lift, z = z, c = col }
+                        end
+                    end
+                end
+            end
+            s.viewCells = cache
+        end
+        local h = st * 0.35
+        for _, c in ipairs(cache.cells) do
+            ADDrawingManager:addLineTask(c.x - h, c.y, c.z, c.x + h, c.y, c.z, lw, c.c[1], c.c[2], c.c[3])
+        end
+    end
+    local hov = s.hover and self:roadRunsRefined(s.hover) or nil
+    local D = hov ~= nil and hov.debug or nil
+    -- what the walker read across the road: each band of road, the one it took green (or coloured by
+    -- why it was left out), the others thin grey; a white post where the filtered line crossed
+    if L.read and D ~= nil then
+        for _, sc in ipairs(D.sections) do
+            for _, b in ipairs(sc.bands) do
+                local r, g, bl, w = 0.5, 0.5, 0.5, lw * 0.5
+                if b.picked then
+                    w = lw * 1.2
+                    if sc.why ~= nil then
+                        local c = self.ROADVIEW_WHY[sc.why] or { 1, 1, 1 }
+                        r, g, bl = c[1], c[2], c[3]
+                    else
+                        r, g, bl = 0.2, 1, 0.3
+                    end
+                end
+                seg(sc.x + sc.nx * b.lo, sc.z + sc.nz * b.lo, sc.x + sc.nx * b.hi, sc.z + sc.nz * b.hi, w, r, g, bl)
+            end
+            if #sc.bands == 0 then
+                local c = self.ROADVIEW_WHY.none
+                seg(sc.x - sc.nx * 0.3, sc.z - sc.nz * 0.3, sc.x + sc.nx * 0.3, sc.z + sc.nz * 0.3, lw, c[1], c[2], c[3])
+            end
+            if sc.off ~= nil then
+                local px, pz = sc.x + sc.nx * sc.off, sc.z + sc.nz * sc.off
+                if finite(px) and finite(pz) then
+                    local y = terrainY(px, pz)
+                    ADDrawingManager:addLineTask(px, y, pz, px, y + 0.6, pz, lw, 1, 1, 1)
+                end
+            end
+        end
+    end
+    -- lines: filtered (white), as laid (orange), both on the ground
+    if L.lines and hov ~= nil then
+        if D ~= nil and D.filtered ~= nil then
+            for i = 2, #D.filtered do
+                local a, b = D.filtered[i - 1], D.filtered[i]
+                seg(a.x, a.z, b.x, b.z, lw * 0.7, 1, 1, 1)
+            end
+        end
+        for i = 2, #hov.pts do
+            local a, b = hov.pts[i - 1], hov.pts[i]
+            seg(a.x, a.z, b.x, b.z, lw * 1.2, 1, 0.55, 0.1)
+        end
+    end
+    -- the map maker's road lines near the mouse (cyan)
+    if L.splines then
+        local S = self:roadRunsSplines()
+        if S ~= nil then
+            local R = 60
+            local seen = {}
+            for gx = math.floor((cx - R) / 32), math.floor((cx + R) / 32) do
+                for gz = math.floor((cz - R) / 32), math.floor((cz + R) / 32) do
+                    for _, e in ipairs(S.grid[gx * 100003 + gz] or {}) do
+                        local P = e.sp.pts
+                        local key = e.sp.name .. ":" .. e.i
+                        if e.i < #P and not seen[key] then
+                            seen[key] = true
+                            seg(P[e.i].x, P[e.i].z, P[e.i + 1].x, P[e.i + 1].z, lw, 0.2, 0.9, 1)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 function E:drawRoadRunsInner(lw)
     local s = self.roadRuns
     if s == nil then return end
+    if self.roadView then
+        self:drawRoadView(lw)
+        return
+    end
     local cx, cz = self.cursorX, self.cursorZ
     local radius = AutoDrive.FLYOVER_DRAW_RADIUS or 200
     local pr, pg, pb = 0.3, 0.7, 1
@@ -1291,6 +1417,31 @@ function E:roadRunsCard(kit)
         { label = "gravel", active = self.roadKinds[RF.KIND_GRAVEL], action = function() editor:roadRunsToggleKind(RF.KIND_GRAVEL) end },
         { label = "dirt", active = self.roadKinds[RF.KIND_DIRT], action = function() editor:roadRunsToggleKind(RF.KIND_DIRT) end },
     })
+    kit.segFlip("view", "build", "detection", self.roadView, function()
+        editor.roadView = not editor.roadView
+    end)
+    if self.roadView then
+        local L = self.roadLayers
+        kit.tgl("ground paint", L.paint, function() L.paint = not L.paint end)
+        kit.tgl("road read", L.read, function() L.read = not L.read end)
+        kit.tgl("lines", L.lines, function() L.lines = not L.lines end)
+        kit.tgl("map lines", L.splines, function() L.splines = not L.splines end)
+        local hov = s.hover and self:roadRunsRefined(s.hover) or nil
+        if hov ~= nil and hov.debug ~= nil then
+            local c = { used = 0, none = 0, junction = 0, wide = 0, jumped = 0 }
+            for _, sc in ipairs(hov.debug.sections) do
+                local k = sc.why or "used"
+                c[k] = (c[k] or 0) + 1
+            end
+            kit.add("cursor", "read across", string.format("%d used of %d", c.used, #hov.debug.sections))
+            kit.add("cursor", "left out", string.format("no road %d, junction %d, too wide %d, jumped %d",
+                c.none, c.junction, c.wide, c.jumped))
+        elseif hov ~= nil then
+            kit.add("cursor", "read across", hov.fromSpline and "the map's own line: nothing read" or "no readings kept")
+        end
+        kit.add("hint", "green used; grey no road; purple junction; orange too wide; red jumped; white post = filtered middle")
+        return
+    end
     kit.segFlip("light up", "under mouse", "all nearby", self.roadShowAll, function()
         editor.roadShowAll = not editor.roadShowAll
         editor:roadRunsSaveSettings()

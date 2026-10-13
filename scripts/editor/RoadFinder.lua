@@ -2113,6 +2113,9 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     end
     -- what each cross-section reads: the band middle nearest the guide, and its width
     local meas, widths = {}, {}
+    -- what was read and why a reading was left out, for the "road area" view (2026-10-13: the user
+    -- wants to see the road the tool reads and take the rules one at a time)
+    local dbg = {}
     for i = 1, n do
         local bands = bandsAt(isRoad, G[i].x, G[i].z, nxs[i], nzs[i], cls)
         local pick = nil
@@ -2120,6 +2123,9 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             if b.w >= W.minBand[cls] and abs(b.mid) <= W.half and (pick == nil or abs(b.mid) < abs(pick.mid)) then pick = b end
         end
         if pick ~= nil then meas[i], widths[i] = pick.mid, pick.w end
+        local bl = {}
+        for _, b in ipairs(bands) do bl[#bl + 1] = { lo = b.mid - b.w / 2, hi = b.mid + b.w / 2, picked = (b == pick) } end
+        dbg[i] = { x = G[i].x, z = G[i].z, nx = nxs[i], nz = nzs[i], bands = bl, why = (pick == nil) and "none" or nil }
         work(40)
     end
     -- Through a junction the walk bridged, the readings are the junction, not the road: within
@@ -2132,7 +2138,11 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             local r2 = RF.JUNCTION_HOLD * RF.JUNCTION_HOLD
             for i = 1, n do
                 for _, bp in ipairs(bridges) do
-                    if (G[i].x - bp.x) ^ 2 + (G[i].z - bp.z) ^ 2 < r2 then meas[i] = nil break end
+                    if (G[i].x - bp.x) ^ 2 + (G[i].z - bp.z) ^ 2 < r2 then
+                        if meas[i] ~= nil then dbg[i].why = "junction" end
+                        meas[i] = nil
+                        break
+                    end
                 end
             end
         end
@@ -2153,7 +2163,10 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             end
             for i = 1, n do
                 if wide[i] then
-                    for j = max(1, i - F.mouthSpread), min(n, i + F.mouthSpread) do meas[j] = nil end
+                    for j = max(1, i - F.mouthSpread), min(n, i + F.mouthSpread) do
+                        if meas[j] ~= nil then dbg[j].why = "wide" end
+                        meas[j] = nil
+                    end
                 end
             end
         end
@@ -2179,6 +2192,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
                     off = off + F.gain * (m - off)
                     held = {}
                 else
+                    if dir == 1 then dbg[i].why = "jumped" end
                     held[#held + 1] = m
                     if #held >= F.reacquire then
                         local lo, hi, sum = math.huge, -math.huge, 0
@@ -2197,6 +2211,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     for i = 1, n do
         local off = (fw[i] + bw[i]) / 2
         R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
+        dbg[i].off = off
     end
     -- Across a stretch with no usable readings (a junction held out above, a gap in the paint), the
     -- line runs straight from the last good point to the next: holding the walked line's own shape
@@ -2364,6 +2379,9 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     end
     if worst > limit then S = resampleFixed(smoothPts(R, 2), 2) end
     out.pts = S
+    local filtered = {}
+    for i = 1, #R do filtered[i] = { x = R[i].x, z = R[i].z } end
+    out.debug = { sections = dbg, filtered = filtered }
     out.walk = { sections = n, read = 0, ruts = 0 }
     for i = 1, n do if meas[i] ~= nil then out.walk.read = out.walk.read + 1 end end
     out.class, out.kind, out.edge = st.class, st.kind, st.edge

@@ -139,6 +139,7 @@ if SYNTH == "bridge" then
     end
 end
 E.ROADRUNS_SAMPLES_PER_FRAME = 50000
+if os.getenv("VIEW") then E.roadView = true end   -- VIEW=1: the detection view instead of the lane preview
 
 local function frames(n)
     for _ = 1, n do
