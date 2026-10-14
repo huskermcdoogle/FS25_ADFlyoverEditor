@@ -921,6 +921,9 @@ local function resampleFixed(P, step)
     for i = 2, #P do
         local a, b = P[i - 1], P[i]
         local seg = sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)
+        -- a piece that is not a real length (NaN, or a blown-up point far off) is not cut up: cutting
+        -- one 1e30 m long ran out of memory (2026-10-13)
+        if not (seg == seg) or seg > 1e5 then seg = -1 end
         local t = step - carry
         while t <= seg do
             out[#out + 1] = lerpPt(a, b, t / seg)
@@ -1763,9 +1766,11 @@ function RF.seedRoad(isRoad, x, z, cls, reach)
         local hx, hz = cos(math.rad(a)), sin(math.rad(a))
         local nx, nz = -hz, hx
         local hits = 0
+        -- every side offset counts (a muddy field entrance reads road along two ways; along the
+        -- track itself all five offsets hit, on a slant only some - 2026-10-13 tie went to the slant)
         for d = -RF.SEED_RUN, RF.SEED_RUN do
             for _, o in ipairs(RF.SEED_SIDE) do
-                if isRoad(x + hx * d + nx * o, z + hz * d + nz * o) then hits = hits + 1 break end
+                if isRoad(x + hx * d + nx * o, z + hz * d + nz * o) then hits = hits + 1 end
             end
         end
         if hits > bestHits then bestA, second, bestHits = a, bestHits, hits
@@ -1782,7 +1787,7 @@ function RF.seedRoad(isRoad, x, z, cls, reach)
                 local hits = 0
                 for d = -RF.SEED_RUN, RF.SEED_RUN do
                     for _, o in ipairs(RF.SEED_SIDE) do
-                        if isRoad(x + ux * d + nx * o, z + uz * d + nz * o) then hits = hits + 1 break end
+                        if isRoad(x + ux * d + nx * o, z + uz * d + nz * o) then hits = hits + 1 end
                     end
                 end
                 if hits > fineHits then fineA, fineHits = a, hits end
@@ -2602,7 +2607,11 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
                 local sorted = {}
                 for k = 1, #vs do sorted[k] = vs[k] end
                 table.sort(sorted)
-                local c0, c1, c2 = sorted[floor((#sorted + 1) / 2)], 0, 0
+                local med = sorted[floor((#sorted + 1) / 2)]
+                local c0, c1, c2 = med, 0, 0
+                local uLo, uHi = math.huge, -math.huge
+                for k = 1, #us do uLo, uHi = min(uLo, us[k]), max(uHi, us[k]) end
+                local curve = uHi - uLo >= 6          -- a curve only over readings spread along the road
                 local keep = {}
                 for _ = 1, 3 do
                     local m = 0
@@ -2621,7 +2630,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
                             b[1], b[2], b[3] = b[1] + vs[k], b[2] + u * vs[k], b[3] + u * u * vs[k]
                         end
                     end
-                    local x = solve3({ { S[1], S[2], S[3] }, { S[2], S[3], S[4] }, { S[3], S[4], S[5] } }, b)
+                    local x = curve and solve3({ { S[1], S[2], S[3] }, { S[2], S[3], S[4] }, { S[3], S[4], S[5] } }, b) or nil
                     if x == nil then
                         -- too few distinct points for a curve: a straight line
                         local den = S[1] * S[3] - S[2] * S[2]
@@ -2631,6 +2640,8 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
                         c0, c1, c2 = x[1], x[2], x[3]
                     end
                 end
+                -- a fit that runs away from the readings (near-singular) is not trusted: the median is
+                if not (c0 == c0) or abs(c0 - med) > 2 then c0 = med end
                 offs[i] = c0
                 for k = 1, #us do if js[k] == i and not keep[k] then outlier[i] = true end end
             end
