@@ -41,6 +41,7 @@ RF.MIN_TRACK_WIDTH = 2.0         -- narrower track lines are shoulder strips or 
 RF.MIN_PAVED_WIDTH = 3.0         -- narrower paved lines beside a wider paved road are kerbs or seams
 RF.MIN_LANE_WIDTH = 0.9          -- narrower than this is never a road (a 2 m strip reads 1 m: 2 x distance - 1)
 RF.PAVED_SEED_REACH = 4         -- paving this close to the mouse is the road meant
+RF.TRACK_SEED_REACH = 3          -- a track within this of the mouse (a mouse on the strip beside it, 2026-10-13)
 RF.PAVED_EDGE = 2.5              -- gravel/dirt this close to paving is that paved road's edge
 RF.KERB_DIST = 8                 -- a narrow paved line this close to a wider one runs beside it
 RF.SHOULDER_DIST = 3.5           -- a track line this close to paved road is that road's shoulder
@@ -1708,8 +1709,12 @@ function RF.bandsAt(isRoad, x, z, nx, nz, cls)
             local gap = b.lo - a.hi
             if a.w <= W.rutMax and b.w <= W.rutMax and gap >= W.rutGapMin and gap <= W.rutGapMax then
                 local mid = (a.mid + b.mid) / 2
-                if best == nil or abs(mid) < abs(best.mid) then
-                    best = { lo = a.lo, hi = b.hi, mid = mid, w = b.hi - a.lo, ruts = true }
+                -- a pair of wheel ruts is two strips of a like width; a rut and a narrow strip along a
+                -- field's edge is not (2026-10-13: the walk locked onto a 2 m rut + 1 m edge strip and
+                -- ran 3.2 m off a straight field track for 40 m)
+                local score = abs(mid) + RF.RUT_UNLIKE * abs(a.w - b.w)
+                if best == nil or score < best.score then
+                    best = { lo = a.lo, hi = b.hi, mid = mid, w = b.hi - a.lo, ruts = true, score = score }
                 end
             end
         end
@@ -1742,9 +1747,58 @@ end
 
 --- The road under (x, z): its middle and heading, from cross-sections every 10 degrees - the one
 --- across the road is the narrowest. Returns cx, cz, hx, hz, width or nil.
+RF.SEED_RUN = 12                 -- metres each way a seed looks along each heading for road
+RF.RUT_UNLIKE = 4                -- metres of distance a rut pair's width mismatch counts as
+RF.SEED_SIDE = { 0, 0.75, -0.75, 1.5, -1.5 }   -- and this far to each side (a seed between two ruts)
+
 function RF.seedRoad(isRoad, x, z, cls, reach)
     local W = RF.WALK
     reach = reach or 1.5
+    -- The heading: the way road runs on furthest through here. (The narrowest crossing, used before,
+    -- is fooled by a two-rut track: a slanting line crosses ONE rut, narrower than the true crossing
+    -- of both, so the walk set off 40 degrees wrong, read the track diagonally as 8-11 m wide and
+    -- stopped - 2026-10-13, a straight field track gave runs of 8 to 257 m by the mouse's spot.)
+    local bestA, bestHits, second = nil, -1, -1
+    for a = 0, 170, 10 do
+        local hx, hz = cos(math.rad(a)), sin(math.rad(a))
+        local nx, nz = -hz, hx
+        local hits = 0
+        for d = -RF.SEED_RUN, RF.SEED_RUN do
+            for _, o in ipairs(RF.SEED_SIDE) do
+                if isRoad(x + hx * d + nx * o, z + hz * d + nz * o) then hits = hits + 1 break end
+            end
+        end
+        if hits > bestHits then bestA, second, bestHits = a, bestHits, hits
+        elseif hits > second then second = hits end
+    end
+    if bestA ~= nil and bestHits >= RF.SEED_RUN then
+        local hx, hz = cos(math.rad(bestA)), sin(math.rad(bestA))
+        -- refine to 2-degree steps within 10 either side
+        local fineA, fineHits = bestA, bestHits
+        for a = bestA - 8, bestA + 8, 2 do
+            if a ~= bestA then
+                local ux, uz = cos(math.rad(a)), sin(math.rad(a))
+                local nx, nz = -uz, ux
+                local hits = 0
+                for d = -RF.SEED_RUN, RF.SEED_RUN do
+                    for _, o in ipairs(RF.SEED_SIDE) do
+                        if isRoad(x + ux * d + nx * o, z + uz * d + nz * o) then hits = hits + 1 break end
+                    end
+                end
+                if hits > fineHits then fineA, fineHits = a, hits end
+            end
+        end
+        hx, hz = cos(math.rad(fineA)), sin(math.rad(fineA))
+        local nx, nz = -hz, hx
+        local pick = nil
+        for _, b in ipairs(bandsAt(isRoad, x, z, nx, nz, cls)) do
+            if b.lo <= reach and b.hi >= -reach and b.w >= W.minBand[cls] and b.w <= (RF.MAX_ROAD_WIDTH[cls] or 16)
+                and (pick == nil or abs(b.mid) < abs(pick.mid)) then pick = b end
+        end
+        if pick ~= nil then
+            return x + nx * pick.mid, z + nz * pick.mid, hx, hz, pick.w
+        end
+    end
     local best = nil
     for a = 0, 170, 10 do
         local nx, nz = cos(math.rad(a)), sin(math.rad(a))
@@ -2214,7 +2268,7 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
             -- paving within 4 m of the mouse wins: on an old lane (2 m of asphalt in a 6 m road with
             -- gravel edges) the mouse is usually on the edge, and the edge walked as a track gave odd
             -- short bits (2026-10-12)
-            local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls, (cls == "paved") and RF.PAVED_SEED_REACH or 1.5)
+            local cx, cz, hx, hz, w = RF.seedRoad(isRoad, x, z, cls, (cls == "paved") and RF.PAVED_SEED_REACH or RF.TRACK_SEED_REACH)
             if cx ~= nil then
                 local isStop = isStopOf ~= nil and isStopOf(cls) or nil
                 local fwd, endTag, endAt = walkThrough(isRoad, cls, cx, cz, hx, hz, w, isStop)
@@ -2257,7 +2311,19 @@ end
 --- paint is the river). Returns a new stretch with the same tags and nodes, or nil (keep the old).
 RF.SMOOTH_SPAN = 5                -- points (2 m) either side in each averaging pass of the final line
 RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4, mouthWidth = 1.5, mouthSpread = 3 }
+RF.SUSPECT_WIDTH = 1.2           -- a reading wider than this x usual is checked edge by edge
 RF.JUNCTION_HOLD = 12            -- metres either side of a bridged junction where the line holds its course
+-- Per road class, from tools/road-runs/sweep.lua (2026-10-13): on tracks the smoothed guide and the
+-- trimmed fit took a straight field track from 0.30 to 0.13 m off its middle; on paved roads both made
+-- the old lane and the town road worse (lane worst 0.8 -> 1.7 m), so paved keeps the gated filter.
+RF.GUIDE_SMOOTH = { paved = 0, track = 5 }   -- points (2 m) either side the guide is averaged over before reading
+RF.EDGE_TOL = 0.75               -- an edge within this of where its neighbours put it has held its line
+RF.EDGE_REACH = 30               -- sections (2 m) either side searched for good readings to draw an edge from
+RF.EDGE_FOLLOW = true            -- suspect readings kept where one edge holds its line (false: all dropped)
+RF.ROBUST_FIT = { paved = false, track = true }   -- the middle fitted over FIT_SPAN either side (false: the gated filter)
+RF.FIT_SPAN = 8                  -- sections (2 m) either side in each fit
+RF.FIT_TRIM = 1.0                -- readings further than this off the fit are left out of it
+RF.FIT_MIN = 5                   -- fewer readings than this in reach: no fit there
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 RF.WALKED_FORK_BEND = 4          -- the same for a walked line (it does not bend into the fork)
 RF.END_TURN_CAP = 1.5            -- degrees a metre at most when a line's end is carried on along its curve
@@ -2300,6 +2366,22 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     end
     local n = #G
     if n < 4 then return nil end
+    -- Read across a SMOOTHED guide (10 m either side): the walker swerves toward a side track or a
+    -- field entrance by up to 5 m, and read across that swerve the true middle looked like a jump the
+    -- filter would not trust (2026-10-13 field track). Smoothing cuts a bend's inside by ~0.5 m; the
+    -- readings put that back.
+    do
+        local S = {}
+        local span = RF.GUIDE_SMOOTH
+        if type(span) == "table" then span = span[cls] or 0 end
+        for i = 1, n do
+            local sx, sz, c = 0, 0, 0
+            for j = max(1, i - span), min(n, i + span) do sx, sz, c = sx + G[j].x, sz + G[j].z, c + 1 end
+            S[i] = { x = sx / c, z = sz / c, w = G[i].w }
+        end
+        S[1], S[n] = { x = G[1].x, z = G[1].z, w = G[1].w }, { x = G[n].x, z = G[n].z, w = G[n].w }
+        G = S
+    end
     -- the guide's heading at each point, over a few points either side (the square's line steps)
     local nxs, nzs = {}, {}
     for i = 1, n do
@@ -2329,6 +2411,9 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     -- Through a junction the walk bridged, the readings are the junction, not the road: within
     -- JUNCTION_HOLD of a bridged point the line holds its course (2026-10-12: a 1-2 m dip toward the
     -- side road at each T the run went through).
+    -- (they are kept only where an edge holds its line - see below; 2026-10-13 dropping them all
+    -- left the line on the walker's swerve where the readings were good)
+    local nearJunction = {}
     do
         local bridges = {}
         for _, p in ipairs(st.pts) do if p.bridged then bridges[#bridges + 1] = p end end
@@ -2336,11 +2421,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             local r2 = RF.JUNCTION_HOLD * RF.JUNCTION_HOLD
             for i = 1, n do
                 for _, bp in ipairs(bridges) do
-                    if (G[i].x - bp.x) ^ 2 + (G[i].z - bp.z) ^ 2 < r2 then
-                        if meas[i] ~= nil then dbg[i].why = "junction" end
-                        meas[i] = nil
-                        break
-                    end
+                    if (G[i].x - bp.x) ^ 2 + (G[i].z - bp.z) ^ 2 < r2 then nearJunction[i] = true break end
                 end
             end
         end
@@ -2354,17 +2435,84 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         local usual = ws[floor((#ws + 1) / 2)]
         if usual ~= nil then
             -- a junction widens the road gradually: the readings a few metres either side of a wide
-            -- one lean toward the side road too, so they are left out with it
-            local wide = {}
+            -- one lean toward the side road too
+            local wide, suspect = {}, {}
             for i = 1, n do
-                if widths[i] ~= nil and widths[i] > F.mouthWidth * usual then wide[i] = true end
+                if widths[i] ~= nil and widths[i] > RF.SUSPECT_WIDTH * usual then wide[i] = true end
+                if nearJunction[i] then suspect[i] = true end
             end
             for i = 1, n do
                 if wide[i] then
-                    for j = max(1, i - F.mouthSpread), min(n, i + F.mouthSpread) do
-                        if meas[j] ~= nil then dbg[j].why = "wide" end
-                        meas[j] = nil
+                    for j = max(1, i - F.mouthSpread), min(n, i + F.mouthSpread) do suspect[j] = true end
+                end
+            end
+            -- ... but only ONE edge moves there: the side road leaves from one side and the far edge
+            -- carries straight on. Where one edge of a band lies where the good readings either side
+            -- put that edge, the middle is half the road's width in from it - a reading, not a guess
+            -- (2026-10-13: dropped readings left the line on the walker's 5 m swerve at two field
+            -- entrances).
+            local EL, ER = {}, {}
+            for i = 1, n do
+                if meas[i] ~= nil and not suspect[i] then
+                    local lo, hi = meas[i] - widths[i] / 2, meas[i] + widths[i] / 2
+                    EL[i] = { x = G[i].x + nxs[i] * lo, z = G[i].z + nzs[i] * lo }
+                    ER[i] = { x = G[i].x + nxs[i] * hi, z = G[i].z + nzs[i] * hi }
+                end
+            end
+            -- where the edge's own line (through the good readings either side, or the two before or
+            -- after) crosses section i's reading line, as an offset along it. (Projecting one edge point
+            -- straight onto a slanted reading line added the distance along the road to the offset.)
+            local function expected(E, i)
+                local a, a2, b, b2 = nil, nil, nil, nil
+                local R = RF.EDGE_REACH
+                for k = i - 1, max(1, i - R), -1 do if E[k] ~= nil then if a == nil then a = k elseif k <= a - 8 then a2 = k break end end end
+                for k = i + 1, min(n, i + R) do if E[k] ~= nil then if b == nil then b = k elseif k >= b + 8 then b2 = k break end end end
+                local A, B
+                if a ~= nil and b ~= nil then A, B = E[a], E[b]
+                elseif a ~= nil and a2 ~= nil then A, B = E[a2], E[a]
+                elseif b ~= nil and b2 ~= nil then A, B = E[b], E[b2]
+                else return nil end
+                local hx, hz = nzs[i], -nxs[i]               -- along the reading's road direction
+                local dx, dz = B.x - A.x, B.z - A.z
+                local den = dx * hx + dz * hz
+                if abs(den) < 1e-6 then return nil end
+                local t = ((G[i].x - A.x) * hx + (G[i].z - A.z) * hz) / den
+                local px, pz = A.x + dx * t, A.z + dz * t
+                return (px - G[i].x) * nxs[i] + (pz - G[i].z) * nzs[i]
+            end
+            for i = 1, n do
+                if suspect[i] and meas[i] ~= nil and RF.EDGE_FOLLOW then
+                    local eL, eR = expected(EL, i), expected(ER, i)
+                    dbg[i].eL, dbg[i].eR = eL, eR
+                    local done = false
+                    if eL ~= nil and eR ~= nil and eR > eL then
+                        local wExp = eR - eL
+                        local bestB, bestD, side = nil, math.huge, nil
+                        for _, b in ipairs(dbg[i].bands) do
+                            local dL, dR = abs(b.lo - eL), abs(b.hi - eR)
+                            if dL <= RF.EDGE_TOL and dR <= RF.EDGE_TOL then
+                                if dL + dR < bestD then bestB, bestD, side = b, dL + dR, "both" end
+                            elseif dL <= RF.EDGE_TOL and dL < bestD and b.hi > eL + 0.5 * wExp then
+                                bestB, bestD, side = b, dL, "left"
+                            elseif dR <= RF.EDGE_TOL and dR < bestD and b.lo < eR - 0.5 * wExp then
+                                bestB, bestD, side = b, dR, "right"
+                            end
+                        end
+                        if bestB ~= nil then
+                            if side == "both" then meas[i], widths[i] = (bestB.lo + bestB.hi) / 2, bestB.hi - bestB.lo
+                            elseif side == "left" then meas[i], widths[i] = bestB.lo + wExp / 2, wExp
+                            else meas[i], widths[i] = bestB.hi - wExp / 2, wExp end
+                            dbg[i].edge = side
+                            done = true
+                        end
                     end
+                    if not done then
+                        dbg[i].why = nearJunction[i] and "junction" or "wide"
+                        meas[i] = nil
+                    end
+                elseif suspect[i] and meas[i] ~= nil then
+                    dbg[i].why = nearJunction[i] and "junction" or "wide"
+                    meas[i] = nil
                 end
             end
         end
@@ -2404,10 +2552,106 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         end
         return out
     end
-    local fw, bw = pass(1, n, 1), pass(n, 1, -1)
+    -- The middle at each section: a curve (quadratic) fitted to the readings FIT_SPAN sections either
+    -- side, readings more than FIT_TRIM off it left out and the fit redone. A run of wrong readings
+    -- shorter than the good ones around it (a field entrance merged with a rut, a side track's mouth)
+    -- is outvoted, whatever made it wrong (2026-10-13: the gated filter followed a 2 m-wrong run for
+    -- 15 m on a straight field track). Fitted in section i's own frame, so bends are fitted, not cut.
+    local offs = {}
+    local outlier = {}
+    local robust = RF.ROBUST_FIT
+    if type(robust) == "table" then robust = robust[cls] end
+    if robust then
+        local T = {}
+        for j = 1, n do
+            if meas[j] ~= nil then T[j] = { x = G[j].x + nxs[j] * meas[j], z = G[j].z + nzs[j] * meas[j] } end
+        end
+        local function solve3(A, b)
+            -- Gaussian elimination, 3x3; nil if singular
+            for c = 1, 3 do
+                local piv = c
+                for r = c + 1, 3 do if abs(A[r][c]) > abs(A[piv][c]) then piv = r end end
+                if abs(A[piv][c]) < 1e-9 then return nil end
+                A[c], A[piv] = A[piv], A[c]
+                b[c], b[piv] = b[piv], b[c]
+                for r = c + 1, 3 do
+                    local f = A[r][c] / A[c][c]
+                    for k = c, 3 do A[r][k] = A[r][k] - f * A[c][k] end
+                    b[r] = b[r] - f * b[c]
+                end
+            end
+            local x = {}
+            for r = 3, 1, -1 do
+                local sum = b[r]
+                for k = r + 1, 3 do sum = sum - A[r][k] * x[k] end
+                x[r] = sum / A[r][r]
+            end
+            return x
+        end
+        for i = 1, n do
+            local hx, hz = nzs[i], -nxs[i]
+            local us, vs, js = {}, {}, {}
+            for j = max(1, i - RF.FIT_SPAN), min(n, i + RF.FIT_SPAN) do
+                if T[j] ~= nil then
+                    local dx, dz = T[j].x - G[i].x, T[j].z - G[i].z
+                    us[#us + 1], vs[#vs + 1], js[#js + 1] = dx * hx + dz * hz, dx * nxs[i] + dz * nzs[i], j
+                end
+            end
+            if #us >= RF.FIT_MIN then
+                -- start from the median (a constant), then trim and fit, three times
+                local sorted = {}
+                for k = 1, #vs do sorted[k] = vs[k] end
+                table.sort(sorted)
+                local c0, c1, c2 = sorted[floor((#sorted + 1) / 2)], 0, 0
+                local keep = {}
+                for _ = 1, 3 do
+                    local m = 0
+                    for k = 1, #us do
+                        local res = vs[k] - (c0 + c1 * us[k] + c2 * us[k] * us[k])
+                        keep[k] = abs(res) <= RF.FIT_TRIM
+                        if keep[k] then m = m + 1 end
+                    end
+                    if m < RF.FIT_MIN then break end
+                    local S = { 0, 0, 0, 0, 0 }
+                    local b = { 0, 0, 0 }
+                    for k = 1, #us do
+                        if keep[k] then
+                            local u = us[k]
+                            S[1], S[2], S[3], S[4], S[5] = S[1] + 1, S[2] + u, S[3] + u * u, S[4] + u * u * u, S[5] + u * u * u * u
+                            b[1], b[2], b[3] = b[1] + vs[k], b[2] + u * vs[k], b[3] + u * u * vs[k]
+                        end
+                    end
+                    local x = solve3({ { S[1], S[2], S[3] }, { S[2], S[3], S[4] }, { S[3], S[4], S[5] } }, b)
+                    if x == nil then
+                        -- too few distinct points for a curve: a straight line
+                        local den = S[1] * S[3] - S[2] * S[2]
+                        if abs(den) < 1e-9 then c0, c1, c2 = b[1] / S[1], 0, 0
+                        else c0, c1, c2 = (S[3] * b[1] - S[2] * b[2]) / den, (S[1] * b[2] - S[2] * b[1]) / den, 0 end
+                    else
+                        c0, c1, c2 = x[1], x[2], x[3]
+                    end
+                end
+                offs[i] = c0
+                for k = 1, #us do if js[k] == i and not keep[k] then outlier[i] = true end end
+            end
+        end
+        for i = 1, n do
+            if outlier[i] and meas[i] ~= nil then dbg[i].why = "jumped"; meas[i] = nil end
+        end
+        -- sections with no fit (a long gap) hold the nearest fitted middle; the gap bridge below
+        -- redraws runs of them
+        local last = nil
+        for i = 1, n do if offs[i] ~= nil then last = offs[i] elseif last ~= nil then offs[i] = last end end
+        last = nil
+        for i = n, 1, -1 do if offs[i] ~= nil then last = offs[i] elseif last ~= nil then offs[i] = last end end
+        for i = 1, n do offs[i] = offs[i] or 0 end
+    else
+        local fw, bw = pass(1, n, 1), pass(n, 1, -1)
+        for i = 1, n do offs[i] = (fw[i] + bw[i]) / 2 end
+    end
     local R = {}
     for i = 1, n do
-        local off = (fw[i] + bw[i]) / 2
+        local off = offs[i]
         R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
         dbg[i].off = off
     end
@@ -3393,5 +3637,8 @@ function RF.planLanes(st, mode, dir, gap, forkGap, fit)
     end
     return lanes
 end
+
+-- offline tuning only: tools/road-runs/sweep.lua sets RF_OVERRIDES before loading this file
+if RF_OVERRIDES ~= nil then for k, v in pairs(RF_OVERRIDES) do RF[k] = v end end
 
 return RF
