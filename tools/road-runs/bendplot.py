@@ -18,7 +18,9 @@ for ln in open(src):
         line.append((float(p[1]), float(p[2])))
 x0, x1 = min(c[0] for c in cells), max(c[0] for c in cells)
 z0, z1 = min(c[1] for c in cells), max(c[1] for c in cells)
-S = 14  # pixels per metre
+import os
+S = float(os.environ.get("SCALE", "14"))  # pixels per metre
+CELL = float(os.environ.get("STEP", "0.5"))
 W, H = (x1 - x0 + 0.5) * S, (z1 - z0 + 0.5) * S
 pad, legend = 40, 150
 def px(x): return pad + (x - x0) * S
@@ -29,7 +31,7 @@ o.append('<rect width="100%" height="100%" fill="#2f4a2a"/>')
 o.append(f'<text x="{pad}" y="24" fill="white" font-size="15">{title}</text>')
 for x, z, c in cells:
     if c in col:
-        o.append(f'<rect x="{px(x) - S / 4:.1f}" y="{pz(z) - S / 4:.1f}" width="{S / 2:.1f}" height="{S / 2:.1f}" fill="{col[c]}"/>')
+        o.append(f'<rect x="{px(x) - S * CELL / 2:.1f}" y="{pz(z) - S * CELL / 2:.1f}" width="{S * CELL:.1f}" height="{S * CELL:.1f}" fill="{col[c]}"/>')
 def inbox(P): return [p for p in P if x0 - 1 <= p[0] <= x1 + 1 and z0 - 1 <= p[1] <= z1 + 1]
 def poly(P, colour, w, dots):
     if len(P) < 2:
@@ -38,15 +40,16 @@ def poly(P, colour, w, dots):
     o.append(f'<polyline points="{pts}" fill="none" stroke="{colour}" stroke-width="{w}"/>')
     if dots:
         for x, z in P:
-            o.append(f'<circle cx="{px(x):.1f}" cy="{pz(z):.1f}" r="2.5" fill="{colour}"/>')
+            o.append(f'<circle cx="{px(x):.1f}" cy="{pz(z):.1f}" r="{min(2.5, S / 4):.1f}" fill="{colour}"/>')
 poly(inbox(walk), "#ff9f1c", 2, False)
 poly(inbox(line), "#3050ff", 3, True)
 # grid every 5 m
-for gx in range(int(x0 // 5 * 5), int(x1) + 1, 5):
+G = 5 if S >= 8 else 20
+for gx in range(int(x0 // G * G), int(x1) + 1, G):
     if gx >= x0:
         o.append(f'<line x1="{px(gx):.1f}" y1="{pz(z0) - 6}" x2="{px(gx):.1f}" y2="{pz(z1) + 6}" stroke="white" stroke-opacity="0.15"/>')
         o.append(f'<text x="{px(gx) - 10:.1f}" y="{pz(z1) + 22}" fill="#ddd" font-size="10">{gx}</text>')
-for gz in range(int(z0 // 5 * 5), int(z1) + 1, 5):
+for gz in range(int(z0 // G * G), int(z1) + 1, G):
     if gz >= z0:
         o.append(f'<line x1="{px(x0) - 6}" y1="{pz(gz):.1f}" x2="{px(x1) + 6}" y2="{pz(gz):.1f}" stroke="white" stroke-opacity="0.15"/>')
         o.append(f'<text x="2" y="{pz(gz) + 4:.1f}" fill="#ddd" font-size="10">{gz}</text>')

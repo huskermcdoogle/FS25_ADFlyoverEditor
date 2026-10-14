@@ -10,7 +10,7 @@ local CASES = {
     { file = "cases/track579_bend.xml", spots = { { 579.5, -500 }, { 579.5, -650 }, { 579.6, -420 } },
       straight = { x = 579.5, z0 = -690, z1 = -410, mean = 0.2, worst = 0.5 },
       bend = { { -400, 575.0, 578.0 }, { -398.5, 574.5, 577.5 } },   -- z, the strip's x range: the line within it
-      ends = { -397.5, 1.5 } },                                     -- the line reaches z -397.5 within 1.5 m
+      ends = { -389, 1.5 } },                                       -- the line reaches the asphalt (z ~-389) across the shoulder
 }
 local fails = 0
 for _, c in ipairs(CASES) do
@@ -41,7 +41,7 @@ for _, c in ipairs(CASES) do
         local reach = false
         for _, q in ipairs(line) do if math.abs(q.z - c.ends[1]) <= c.ends[2] then reach = true end end
         ok = ok and reach
-        notes[#notes + 1] = reach and "reaches the road" or "STOPS SHORT"
+        notes[#notes + 1] = reach and "reaches the asphalt" or "STOPS SHORT"
         print(string.format("%s %s from (%.1f,%.1f): %s", ok and "ok  " or "FAIL", c.file, sp[1], sp[2], table.concat(notes, ", ")))
         if not ok then fails = fails + 1 end
     end

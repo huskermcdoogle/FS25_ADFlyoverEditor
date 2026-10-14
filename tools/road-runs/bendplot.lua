@@ -13,8 +13,10 @@ local isRoadOf = function(cls) if cls == "paved" then return function(x,z) retur
 local isStopOf = function(cls) if cls == "track" then return function(x,z) return RF.groundKindAt(x,z) == 3 or sh(x, z) end end end
 RF.WALK.maxLen = 400
 local mx, mz, x0, x1, z0, z1 = tonumber(arg[1]), tonumber(arg[2]), tonumber(arg[3]), tonumber(arg[4]), tonumber(arg[5]), tonumber(arg[6])
-for z = z0, z1, 0.5 do for x = x0, x1, 0.5 do
+local STEP = tonumber(os.getenv("STEP") or "0.5")
+for z = z0, z1, STEP do for x = x0, x1, STEP do
   local k = RF.groundKindAt(x, z); local c = k
+  if TERRAIN.areaChar ~= nil and TERRAIN.areaChar(x, z) == nil and os.getenv("ONLYAREA") then c = -1 end
   if (k == 1 or k == 2) and sh(x, z) then c = 4 elseif k == 0 and RF.isFieldAt(x, z) then c = 5 end
   print(string.format("c %.2f %.2f %d", x, z, c)) end end
 local r = RF.walkFrom(isRoadOf, mx, mz, { "track" }, isStopOf)

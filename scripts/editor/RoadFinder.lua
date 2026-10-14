@@ -2355,6 +2355,58 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
                 local isStop = isStopOf ~= nil and isStopOf(cls) or nil
                 local fwd, endTag, endAt = walkThrough(isRoad, cls, cx, cz, hx, hz, w, isStop)
                 local back, startTag, startAt = walkThrough(isRoad, cls, cx, cz, -hx, -hz, w, isStop)
+                -- an end that met a road's shoulder carries on straight across it to the asphalt's
+                -- edge (2026-10-13 user: the line stopped a few metres short, where the gravel began)
+                local function toAsphalt(P, at)
+                    if at == nil or not at.met or #P < 3 then return at, nil end
+                    local kindAt = RF.kindReader or RF.groundKindAt
+                    local q, p = P[#P], P[max(1, #P - 3)]
+                    local dx, dz = q.x - p.x, q.z - p.z
+                    local l = sqrt(dx * dx + dz * dz)
+                    if l < 1e-6 then return at, nil end
+                    dx, dz = dx / l, dz / l
+                    local off = 0
+                    local ext = {}
+                    for d = 0.5, RF.TO_ASPHALT, 0.5 do
+                        local x, z = q.x + dx * d, q.z + dz * d
+                        if kindAt(x, z) == RF.KIND_PAVED then
+                            ext[#ext + 1] = { x = x - dx * 0.5, z = z - dz * 0.5, w = q.w }
+                            return at, ext                   -- added after the centring pass
+                        end
+                        if d % 2 == 0 then ext[#ext + 1] = { x = x, z = z, w = q.w } end
+                        -- off the shoulder for more than a small hole: not heading for the road
+                        if isStop(x, z) then off = 0 else off = off + 0.5 end
+                        if off > 1.5 then return at, nil end
+                    end
+                    return at, nil
+                end
+                local extEnd, extStart = nil, nil
+                if isStop ~= nil then
+                    endAt, extEnd = toAsphalt(fwd, endAt)
+                    startAt, extStart = toAsphalt(back, startAt)
+                end
+                -- the shoulder crossings join the finished line's ends
+                local function withCrossings(res)
+                    if extEnd ~= nil and #extEnd > 0 then
+                        for _, q in ipairs(extEnd) do
+                            local e = res.pts[#res.pts]
+                            if (q.x - e.x) ^ 2 + (q.z - e.z) ^ 2 > 0.09 then res.pts[#res.pts + 1] = q end
+                        end
+                        if res.endNode ~= nil then res.endNode = { x = extEnd[#extEnd].x, z = extEnd[#extEnd].z, tag = "fork" } end
+                    end
+                    if extStart ~= nil and #extStart > 0 then
+                        local front = {}
+                        for k = #extStart, 1, -1 do front[#front + 1] = extStart[k] end
+                        for _, q in ipairs(res.pts) do
+                            local e = front[#front]
+                            if e == nil or (q.x - e.x) ^ 2 + (q.z - e.z) ^ 2 > 0.09 then front[#front + 1] = q end
+                        end
+                        res.pts = front
+                        if res.startNode ~= nil then res.startNode = { x = extStart[#extStart].x, z = extStart[#extStart].z, tag = "fork" } end
+                    end
+                    res.len = polylineLength(res.pts)
+                    return res
+                end
                 local P = {}
                 for i = #back, 2, -1 do P[#P + 1] = back[i] end
                 for i = 1, #fwd do P[#P + 1] = fwd[i] end
@@ -2374,11 +2426,11 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
                     local ok, r = pcall(RF.refineStretchInner, st, isRoadOf, isStopOf)
                     if ok and r ~= nil and #r.pts >= 3 then
                         r.raw = P
-                        return r
+                        return withCrossings(r)
                     end
                     st.pts = RF.straighten(P, 0.75)
                     st.raw = P
-                    return st
+                    return withCrossings(st)
                 end
             end
         end
@@ -2409,6 +2461,7 @@ RF.FIT_SPAN = 8                  -- sections (2 m) either side in each fit
 RF.FIT_TRIM = 1.0                -- readings further than this off the fit are left out of it
 RF.FIT_MIN = 5                   -- fewer readings than this in reach: no fit there
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
+RF.TO_ASPHALT = 12               -- a track end on a road's shoulder carries on this far at most to the asphalt
 RF.MEET_TAIL = 12                -- metres of a met end laid on the walker's own path
 RF.WALKED_FORK_BEND = 4          -- the same for a walked line (it does not bend into the fork)
 RF.END_TURN_CAP = 1.5            -- degrees a metre at most when a line's end is carried on along its curve
@@ -2953,8 +3006,13 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     -- each end back to where the paving starts, and that end has met the road - a fork, with its gap.
     local metStart, metEnd = nil, nil
     if isStop ~= nil then
-        while #R > 4 and isStop(R[1].x, R[1].z) do metStart = table.remove(R, 1) end
-        while #R > 4 and isStop(R[#R].x, R[#R].z) do metEnd = table.remove(R) end
+        -- (cut at the asphalt only: the shoulder may be crossed to meet it - 2026-10-13)
+        local kindAt = RF.kindReader or RF.groundKindAt
+        local function onAsphalt(x, z) return kindAt(x, z) == RF.KIND_PAVED end
+        while #R > 4 and onAsphalt(R[1].x, R[1].z) do metStart = table.remove(R, 1) end
+        while #R > 4 and onAsphalt(R[#R].x, R[#R].z) do metEnd = table.remove(R) end
+        if st.startMet and metStart == nil then metStart = R[1] end
+        if st.endMet and metEnd == nil then metEnd = R[#R] end
     end
     local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
     if metStart ~= nil then out.startTag, out.startNode = "fork", { x = metStart.x, z = metStart.z, tag = "fork" } end
