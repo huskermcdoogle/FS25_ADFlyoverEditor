@@ -2050,6 +2050,20 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             -- too wide to steer by, with the road it meets close ahead (a track widening as it bends
             -- down to meet a road - 2026-10-13 the walk held its course past the bend into the grass):
             -- head for the nearest of that road within 12 m and 60 degrees
+            -- first: the track itself carrying on at its usual width, turned up to 60 degrees (a bend
+            -- reads wide straight across; turned with the bend it reads its normal width)
+            if ax == nil and cls == "track" then
+                for k = 1, 6 do
+                    for _, sgn in ipairs({ 1, -1 }) do
+                        if ax == nil then
+                            local rx, rz = rot(hx, hz, sgn * k * 10)
+                            local tx, tz, tw = middleAt(W.lookAhead, rx, rz)
+                            if tx ~= nil and steerable(tw, usual) then ax, az = tx, tz end
+                        end
+                    end
+                    if ax ~= nil then break end
+                end
+            end
             if ax == nil and isStop ~= nil then
                 local bestD = math.huge
                 for a = -60, 60, 10 do
