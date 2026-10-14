@@ -1615,7 +1615,7 @@ RF.WALK = {
     pavedGap = 2.5,                 -- gaps bridged across a paved road
     tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
     rutWidth = 2.5,
-    rutMax = 2.0,                   -- a wheel rut is at most this wide
+    rutMax = 3.5,                   -- a wheel rut is at most this wide (muddy ruts reach 3 m, 2026-10-13)
     rutGapMin = 0.4,                -- the grass strip between two ruts: at least ...
     rutGapMax = 3.0,                -- ... and at most this wide                 -- (a solid track must not swallow the gravel patches beside it)
     minBand = { track = 1.5, paved = 1.5 },   -- narrower bands are not a road (old lanes are 2-3 m)
@@ -1710,12 +1710,15 @@ function RF.bandsAt(isRoad, x, z, nx, nz, cls)
         for k = 1, #fine - 1 do
             local a, b = fine[k], fine[k + 1]
             local gap = b.lo - a.hi
-            if a.w <= W.rutMax and b.w <= W.rutMax and gap >= W.rutGapMin and gap <= W.rutGapMax then
+            if a.w <= W.rutMax and b.w <= W.rutMax and gap >= W.rutGapMin and gap <= W.rutGapMax
+                and min(a.w, b.w) >= RF.RUT_LIKE * max(a.w, b.w) then
                 local mid = (a.mid + b.mid) / 2
                 -- a pair of wheel ruts is two strips of a like width; a rut and a narrow strip along a
                 -- field's edge is not (2026-10-13: the walk locked onto a 2 m rut + 1 m edge strip and
                 -- ran 3.2 m off a straight field track for 40 m)
-                local score = abs(mid) + RF.RUT_UNLIKE * abs(a.w - b.w)
+                -- (by ratio: a 3 m muddy rut and a 2 m one are a pair - 2026-10-13 (580,-548) - a 2 m rut
+                -- and a 1 m field-edge strip are not)
+                local score = abs(mid) + RF.RUT_UNLIKE * abs(a.w - b.w) / max(a.w, b.w)
                 if best == nil or score < best.score then
                     best = { lo = a.lo, hi = b.hi, mid = mid, w = b.hi - a.lo, ruts = true, score = score }
                 end
@@ -1751,7 +1754,9 @@ end
 --- The road under (x, z): its middle and heading, from cross-sections every 10 degrees - the one
 --- across the road is the narrowest. Returns cx, cz, hx, hz, width or nil.
 RF.SEED_RUN = 12                 -- metres each way a seed looks along each heading for road
-RF.RUT_UNLIKE = 4                -- metres of distance a rut pair's width mismatch counts as
+RF.SEED_START_WIDTH = { paved = 6, track = 4 }   -- a walk started where no width reads (a field entrance)
+RF.RUT_LIKE = 0.55               -- the narrower rut of a pair is at least this share of the wider
+RF.RUT_UNLIKE = 8                -- metres of distance a rut pair's width mismatch (as a share of the wider) counts as
 RF.SEED_SIDE = { 0, 0.75, -0.75, 1.5, -1.5 }   -- and this far to each side (a seed between two ruts)
 
 function RF.seedRoad(isRoad, x, z, cls, reach)
@@ -1768,15 +1773,19 @@ function RF.seedRoad(isRoad, x, z, cls, reach)
         local hits = 0
         -- every side offset counts (a muddy field entrance reads road along two ways; along the
         -- track itself all five offsets hit, on a slant only some - 2026-10-13 tie went to the slant)
+        -- ranked by how many steps along have road at all (an unbroken run), then by how much road
+        -- (a slant into a big bare-dirt patch beside a track gathered more road than the track itself)
         for d = -RF.SEED_RUN, RF.SEED_RUN do
+            local any = false
             for _, o in ipairs(RF.SEED_SIDE) do
-                if isRoad(x + hx * d + nx * o, z + hz * d + nz * o) then hits = hits + 1 end
+                if isRoad(x + hx * d + nx * o, z + hz * d + nz * o) then hits = hits + 1 any = true end
             end
+            if any then hits = hits + 100 end
         end
         if hits > bestHits then bestA, second, bestHits = a, bestHits, hits
         elseif hits > second then second = hits end
     end
-    if bestA ~= nil and bestHits >= RF.SEED_RUN then
+    if bestA ~= nil and bestHits >= 100 * RF.SEED_RUN then
         local hx, hz = cos(math.rad(bestA)), sin(math.rad(bestA))
         -- refine to 2-degree steps within 10 either side
         local fineA, fineHits = bestA, bestHits
@@ -1786,9 +1795,11 @@ function RF.seedRoad(isRoad, x, z, cls, reach)
                 local nx, nz = -uz, ux
                 local hits = 0
                 for d = -RF.SEED_RUN, RF.SEED_RUN do
+                    local any = false
                     for _, o in ipairs(RF.SEED_SIDE) do
-                        if isRoad(x + ux * d + nx * o, z + uz * d + nz * o) then hits = hits + 1 end
+                        if isRoad(x + ux * d + nx * o, z + uz * d + nz * o) then hits = hits + 1 any = true end
                     end
+                    if any then hits = hits + 100 end
                 end
                 if hits > fineHits then fineA, fineHits = a, hits end
             end
@@ -1803,6 +1814,11 @@ function RF.seedRoad(isRoad, x, z, cls, reach)
         if pick ~= nil then
             return x + nx * pick.mid, z + nz * pick.mid, hx, hz, pick.w
         end
+        -- road all round but no band of a road's width (the mouse on a field entrance, where track,
+        -- ruts and a dirt patch read as one 12 m strip): keep the heading - it is the good part - and
+        -- start from the mouse; the walk centres itself within a few metres (the narrowest-crossing
+        -- fallback below set off 40 degrees wrong there, 2026-10-13)
+        if isRoad(x, z) then return x, z, hx, hz, RF.SEED_START_WIDTH[cls] or 4 end
     end
     local best = nil
     for a = 0, 170, 10 do
