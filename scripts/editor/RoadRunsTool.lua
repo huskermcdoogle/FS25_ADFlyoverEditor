@@ -50,6 +50,9 @@ E.roadFitEverywhere = false        -- the side check on every road, not only bri
 -- flat on the ground, so what the tool reads can be checked against what is there. Not saved.
 E.roadView = false
 E.roadLayers = { paint = true, read = true, lines = true, splines = true }
+E.roadPaint = false                -- detection view: left-drag paints squares to save (no picking)
+E.ROADVIEW_TILE = 8                -- painted squares (m)
+E.ROADVIEW_BRUSH = 6               -- the brush reaches this far round the mouse (m)
 E.ROADVIEW_HALF = 15               -- the paint layer covers this far round the mouse (m)
 E.ROADVIEW_STEP = 0.5              -- one paint mark per this (m)
 E.ROADVIEW_WHY = {                 -- the colour of a reading left out, by why
@@ -521,7 +524,26 @@ function E:updateRoadRuns(overPanel)
 end
 
 --- Per frame: keep the window round the mouse, sample a budget of ground, run the road-line job.
+--- Paint the squares round the mouse (detection view, paint on, left button held on the map).
+function E:roadRunsPaintAt(cx, cz)
+    local s = roadState(self)
+    s.painted = s.painted or {}
+    local T, B = self.ROADVIEW_TILE, self.ROADVIEW_BRUSH
+    for tx = math.floor((cx - B) / T), math.floor((cx + B) / T) do
+        for tz = math.floor((cz - B) / T), math.floor((cz + B) / T) do
+            local key = tx * 100003 + tz
+            if s.painted[key] == nil and RF.onMap(tx * T + T / 2, tz * T + T / 2) then
+                s.painted[key] = { tx = tx, tz = tz }
+                s.paintedN = (s.paintedN or 0) + 1
+            end
+        end
+    end
+end
+
 function E:updateRoadRunsInner(overPanel)
+    if self.roadView and self.roadPaint and self.leftDown and not overPanel and self.cursorX ~= nil then
+        self:roadRunsPaintAt(self.cursorX, self.cursorZ)
+    end
     local s = roadState(self)
     local cx, cz = self.cursorX, self.cursorZ
     if cx == nil then return end
@@ -795,6 +817,7 @@ local function addPick(s, st, dir)
 end
 
 function E:roadRunsClick()
+    if self.roadView and self.roadPaint then return end      -- painting: the drag paints, see update
     local s = roadState(self)
     local now = self:nowMs()
     local last = s.lastClick
@@ -1309,6 +1332,19 @@ function E:drawRoadView(lw)
             ADDrawingManager:addLineTask(c.x - h, c.y, c.z, c.x + h, c.y, c.z, lw, c.c[1], c.c[2], c.c[3])
         end
     end
+    -- painted squares (to save): outlined in cyan
+    if s.painted ~= nil then
+        local T = self.ROADVIEW_TILE
+        for _, t in pairs(s.painted) do
+            local x0, z0 = t.tx * T, t.tz * T
+            if math.abs(x0 - cx) < 150 and math.abs(z0 - cz) < 150 then
+                seg(x0, z0, x0 + T, z0, lw, 0.2, 0.9, 1)
+                seg(x0 + T, z0, x0 + T, z0 + T, lw, 0.2, 0.9, 1)
+                seg(x0 + T, z0 + T, x0, z0 + T, lw, 0.2, 0.9, 1)
+                seg(x0, z0 + T, x0, z0, lw, 0.2, 0.9, 1)
+            end
+        end
+    end
     local hov = s.hover and self:roadRunsRefined(s.hover) or nil
     local D = hov ~= nil and hov.debug or nil
     -- what the walker read across the road: each band of road, the one it took green (or coloured by
@@ -1435,6 +1471,51 @@ function E:roadRunsSaveArea()
     if self.warnPlayer ~= nil then pcall(self.warnPlayer, self, "Saved this area for Claude: " .. path) end
 end
 
+--- Save every painted square: the ground the game reads every 0.25 m ('.', d, g, p, F), one tile
+--- element per square, to modSettings/FS25_ADFlyoverEditor/roadPaint_N.xml.
+function E:roadRunsSavePainted()
+    local s = roadState(self)
+    if s.painted == nil or getUserProfileAppPath == nil or createXMLFile == nil then return end
+    local folder = getUserProfileAppPath() .. "modSettings/FS25_ADFlyoverEditor/"
+    createFolder(getUserProfileAppPath() .. "modSettings/")
+    createFolder(folder)
+    local n = 1
+    while fileExists ~= nil and fileExists(string.format("%sroadPaint_%d.xml", folder, n)) do n = n + 1 end
+    local path = string.format("%sroadPaint_%d.xml", folder, n)
+    local xml = createXMLFile("ADFlyoverRoadPaint", path, "roadArea")
+    if xml == nil or xml == 0 then return end
+    local T, st = self.ROADVIEW_TILE, 0.25
+    local per = math.floor(T / st)
+    setXMLFloat(xml, "roadArea#step", st)
+    setXMLFloat(xml, "roadArea#tile", T)
+    local chars = { [RF.KIND_NONE] = ".", [RF.KIND_DIRT] = "d", [RF.KIND_GRAVEL] = "g", [RF.KIND_PAVED] = "p" }
+    local keys = {}
+    for k in pairs(s.painted) do keys[#keys + 1] = k end
+    table.sort(keys)
+    for i, k in ipairs(keys) do
+        local t = s.painted[k]
+        local x0, z0 = t.tx * T, t.tz * T
+        local cells = {}
+        for j = 0, per - 1 do
+            local z = z0 + j * st + st / 2
+            for c = 0, per - 1 do
+                local x = x0 + c * st + st / 2
+                local ch = chars[kindAtWalk(x, z)] or "."
+                if ch == "." and fieldAtWalk(x, z) then ch = "F" end
+                cells[#cells + 1] = ch
+            end
+        end
+        local base = string.format("roadArea.tile(%d)", i - 1)
+        setXMLFloat(xml, base .. "#x0", x0)
+        setXMLFloat(xml, base .. "#z0", z0)
+        setXMLString(xml, base .. "#k", table.concat(cells))
+    end
+    saveXMLFile(xml)
+    delete(xml)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - saved %d painted squares to %s", #keys, path)
+    if self.warnPlayer ~= nil then pcall(self.warnPlayer, self, string.format("Saved %d painted squares: %s", #keys, path)) end
+end
+
 function E:drawRoadRunsInner(lw)
     local s = self.roadRuns
     if s == nil then return end
@@ -1530,6 +1611,12 @@ function E:roadRunsCard(kit)
             kit.add("cursor", "read across", hov.fromSpline and "the map's own line: nothing read" or "no readings kept")
         end
         kit.add("hint", "green used; grey no road; purple junction; orange too wide; red jumped; white post = filtered middle")
+        kit.tgl("paint area (left-drag)", self.roadPaint, function() editor.roadPaint = not editor.roadPaint end)
+        if (s.paintedN or 0) > 0 then
+            kit.add("cursor", "painted", string.format("%d squares of %d m", s.paintedN, self.ROADVIEW_TILE))
+            kit.btn("save painted", function() editor:roadRunsSavePainted() end)
+            kit.btn("clear painted", function() s.painted, s.paintedN = nil, 0 end)
+        end
         kit.btn("save this area (for offline tests)", function() editor:roadRunsSaveArea() end)
         return
     end

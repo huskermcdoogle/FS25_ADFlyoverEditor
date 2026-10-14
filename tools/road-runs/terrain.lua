@@ -214,13 +214,35 @@ if os.getenv("AREA") then
     T.area.mouse = { x = tonumber(xml:match('<mouse x="([^"]+)"')), z = tonumber(xml:match('<mouse [^>]*z="([^"]+)"')) }
     T.area.line = xml:match('<line pts="([^"]*)"')
     T.area.walk = xml:match('<walk pts="([^"]*)"')
+    -- painted saves (roadPaint_N.xml): one <tile x0 z0 k> per painted square, k row by row
+    local tileSize = tonumber(xml:match('tile="([^"]+)"'))
+    local tiles = {}
+    if tileSize ~= nil then
+        ast = ast or 0.25
+        for tx0, tz0, k in xml:gmatch('<tile x0="([^"]+)" z0="([^"]+)" k="([^"]*)"') do
+            tiles[math.floor(tonumber(tx0) / tileSize + 0.5) * 100003 + math.floor(tonumber(tz0) / tileSize + 0.5)] =
+                { x0 = tonumber(tx0), z0 = tonumber(tz0), k = k }
+        end
+        local count = 0
+        for _ in pairs(tiles) do count = count + 1 end
+        print(string.format("area: %d painted squares of %g m at %.2f m", count, tileSize, ast))
+    end
+    local per = tileSize and math.floor(tileSize / ast + 0.5) or nil
     local function areaChar(x, z)
+        if tileSize ~= nil then
+            local t = tiles[math.floor(x / tileSize) * 100003 + math.floor(z / tileSize)]
+            if t == nil then return nil end
+            local i, j = math.floor((x - t.x0) / ast), math.floor((z - t.z0) / ast)
+            if i < 0 or j < 0 or i >= per or j >= per then return nil end
+            return t.k:sub(j * per + i + 1, j * per + i + 1)
+        end
         local i = math.floor((x - ax0) / ast)
         local j = math.floor((z - az0) / ast)
         if i < 0 or j < 0 or i >= an or j >= an then return nil end
         local row = rows[j + 1]
         return row and row:sub(i + 1, i + 1) or nil
     end
+    T.areaChar = areaChar
     local MAT = { d = 1, g = 6, p = 7 }
     local baseAttr, baseDensity, baseCost = getTerrainAttributesAtWorldPos, getDensityAtWorldPos, getVehicleNavigationMapCostAtWorldPos
     function getTerrainAttributesAtWorldPos(t, x, y, z, ...)
@@ -238,7 +260,7 @@ if os.getenv("AREA") then
         if c == nil then return baseCost(map, x, y, z) end
         return 0, false                        -- the game already left rock out of 'p'
     end
-    print(string.format("area: %d x %d at %.2f m from (%.0f, %.0f)", an, an, ast, ax0, az0))
+    if an ~= nil then print(string.format("area: %d x %d at %.2f m from (%.0f, %.0f)", an, an, ast, ax0, az0)) end
 end
 
 TERRAIN = T
