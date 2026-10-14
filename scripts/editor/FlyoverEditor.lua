@@ -1431,6 +1431,8 @@ function ADFlyoverEditor:cancelPendingAction()
         self:cancelStraighten()
     elseif t == T.SMOOTH and (self.smoothFromId ~= nil or self.smoothToId ~= nil) then
         self:cancelSmooth()
+    elseif t == T.SPLINE and self:multiSplinePending() then
+        self:cancelMultiSpline()
     elseif t == T.SPLINE and (self.splineFromId ~= nil or self.splineToId ~= nil) then
         self:cancelSplinePreview()
     elseif t == T.DIVIDE and (self.divideFromId ~= nil or self.divideToId ~= nil) then
@@ -1771,7 +1773,11 @@ function ADFlyoverEditor:update(dt)
     self:updateFieldUnderCursor()
 
     if self.tool == self.TOOL.SPLINE then
-        self:updateSplinePreview()
+        if self:splineIsMultiPoint() then
+            self:updateMultiSpline()
+        else
+            self:updateSplinePreview()
+        end
     elseif self.tool == self.TOOL.MERGE then
         self:updateMergePreview()
     elseif self.tool == self.TOOL.DIVIDE then
@@ -2316,6 +2322,14 @@ function ADFlyoverEditor:menuArmSpline()
     local id = self:menuTarget()
     if id == nil then return end
     self:setTool(self.TOOL.SPLINE)
+    if self:splineIsMultiPoint() then
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            self:multiSplineAdd({ x = wp.x, y = wp.y, z = wp.z, wpId = wp.id })
+        end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: spline armed from id=%s; click on to add points.", tostring(id))
+        return
+    end
     self.splineFromId = id
     ADFlyoverSettings.debugLog("[FlyoverEditor]: spline armed from id=%s; click the waypoint to curve to.", tostring(id))
 end
@@ -2466,6 +2480,7 @@ function ADFlyoverEditor:setTool(tool)
     if self.splineFromId ~= nil or self.splineToId ~= nil then
         self:cancelSplinePreview()
     end
+    self:cancelMultiSpline()
     self.mergeFromId = nil
     self.mergeToId = nil
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
@@ -3385,6 +3400,10 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() then
+        self:drawMultiSpline(lw)
+    end
+
     if self.tool == self.TOOL.DIVIDE and self.dividePreview ~= nil then
         local cursorGroundY = AutoDrive:getTerrainHeightAtWorldPos(self.cursorX, self.cursorZ)
         for i = 1, #self.dividePreview do
@@ -3736,7 +3755,7 @@ function ADFlyoverEditor:toolHasPendingStart()
     elseif t == self.TOOL.GROUND then return self.groundFromId ~= nil
     elseif t == self.TOOL.PARALLEL then return self.offsetFromId ~= nil
     elseif t == self.TOOL.SIDING then return self.sidingAnchorId ~= nil
-    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil
+    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil or self:multiSplinePending()
     elseif t == self.TOOL.MERGE then return self.mergeFromId ~= nil
     elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
     elseif t == self.TOOL.JUNCTION then return self.junctionArmed ~= nil
@@ -3807,6 +3826,12 @@ function ADFlyoverEditor:onLeftPress()
     -- picking its two ends (and later replacing one) is a plain click, not a drag, so it is left
     -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
     -- exists AND the hovered point is actually a member of it.
+    -- Multi-point spline: a press on one of its points may become a drag of that point.
+    if self.tool == self.TOOL.SPLINE and self.splineHoverIdx ~= nil and self:splineIsMultiPoint() then
+        self:multiSplinePress()
+        return
+    end
+
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
         -- An offset already awaiting its right-click commit owns this press: resume cursor-driven
         -- adjustment if the point is part of that SAME chain, otherwise ignore the press entirely
@@ -3989,6 +4014,10 @@ function ADFlyoverEditor:onLeftRelease()
     -- leaving the tool you are working with.
     if self.ctrlToggleArmed then
         self.ctrlToggleArmed = false
+        -- On a multi-point spline's own point, Ctrl-click removes the point instead of selecting.
+        if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() and self:multiSplineRemoveAtCursor() then
+            return
+        end
         if self:chainToggleSelected(self.hoverId) then
             return
         end
@@ -4057,7 +4086,11 @@ function ADFlyoverEditor:onLeftRelease()
     elseif self.tool == self.TOOL.NAME then
         self:nameAtCursor()
     elseif self.tool == self.TOOL.SPLINE then
-        self:splineClick()
+        if self:splineIsMultiPoint() then
+            self:multiSplineRelease()
+        else
+            self:splineClick()
+        end
     elseif self.tool == self.TOOL.MERGE then
         self:mergeClick()
     elseif self.tool == self.TOOL.FIELDLOOP then
@@ -4205,6 +4238,13 @@ function ADFlyoverEditor:stopCurrentAction()
             self:cancelSmooth()
             return true
         end
+    elseif tool == self.TOOL.SPLINE and self:multiSplinePending() then
+        if #self.splinePoints >= 2 then
+            self:commitMultiSpline()
+        else
+            self:cancelMultiSpline()
+        end
+        return true
     elseif tool == self.TOOL.SPLINE then
         if self.splineToId ~= nil then
             self:commitSplinePreview()
@@ -6242,6 +6282,10 @@ function ADFlyoverEditor:getEditableNumbers()
         return { fieldEntry("strength", "", 0, "smoothStrength", 0, AD.FLYOVER_SMOOTH_MAX, 1, true) }
     end
 
+    if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() then
+        return { settingEntry("spacing", "splineSpacing") }
+    end
+
     if self.tool == self.TOOL.SIDING then
         -- Both persist, so a siding shape settled on once stays settled. The wheel drives the
         -- length because that is what changes per site; the offset is typed here.
@@ -7581,6 +7625,15 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span.")
     elseif self.tool == t.NAME then
         return L("Click a waypoint to name it.")
+    elseif self.tool == t.SPLINE and self:splineIsMultiPoint() then
+        local n = self.splinePoints ~= nil and #self.splinePoints or 0
+        if n >= 2 then
+            return L("Click to add a point, drag one to move it, Ctrl-click one to remove it. Right-click lays it.")
+        end
+        if n == 1 then
+            return L("Click the next point. On a waypoint it joins the road there.")
+        end
+        return L("Click the first point - on a waypoint to start from the road, or on the ground.")
     elseif self.tool == t.SPLINE then
         if self.splineToId ~= nil then
             return L("Wheel adjusts the curve. Right-click places it.")
@@ -7927,6 +7980,429 @@ function ADFlyoverEditor:commitSplinePreview()
     clearSplineState()
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Multi-point spline - the spline tool's own curve, with no AutoDrive spline code behind it.
+--
+-- Click any number of points (on the ground, or on a waypoint to join the road there), drag one
+-- to move it, Ctrl-click one to remove it, right-click to lay it. The curve passes through every
+-- point (ADSplinePath); the waypoints it lays are evenly spaced along it at the spacing setting.
+-- An end clicked on a waypoint joins that waypoint and leaves along its road's heading (the start
+-- / end tangent flips turn that heading round); an end on the ground gets a new waypoint. The
+-- whole thing is one undo step. The old two-point AutoDrive spline stays behind the "curve by"
+-- toggle (splineMode setting).
+-- ---------------------------------------------------------------------------------------------
+
+--- True when the spline tool is drawing its own multi-point curve rather than AutoDrive's.
+function ADFlyoverEditor:splineIsMultiPoint()
+    return ADFlyoverSettings.get("splineMode") ~= "autodrive"
+end
+
+function ADFlyoverEditor:toggleSplineMode()
+    ADFlyoverSettings.cycle("splineMode", 1)
+    -- Each mode keeps its own half-done state; neither means anything to the other.
+    self:cancelSplinePreview()
+    self:cancelMultiSpline()
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline curve by %s.", tostring(ADFlyoverSettings.get("splineMode")))
+end
+
+function ADFlyoverEditor:cancelMultiSpline()
+    if self.splinePoints ~= nil and #self.splinePoints > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: multi-point spline discarded (%d point(s)).", #self.splinePoints)
+    end
+    self.splinePoints = {}
+    self.splineHoverIdx, self.splinePressIdx, self.splineDragIdx = nil, nil, nil
+    self.splineCurve, self.splineLaid, self.splineLaidKey, self.splineLength = nil, nil, nil, nil
+end
+
+--- Is a multi-point spline being drawn (at least one point down)?
+function ADFlyoverEditor:multiSplinePending()
+    return self.splinePoints ~= nil and #self.splinePoints > 0
+end
+
+--- The waypoint a snapped spline point sits on, or nil. Checked by position as well as id: an undo
+--- or a delete renumbers waypoints while a spline is being drawn, and a stale id must never join
+--- the curve onto some other point across the map.
+function ADFlyoverEditor:splineSnapNode(p)
+    if p == nil or p.wpId == nil then
+        return nil
+    end
+    local wp = ADGraphManager:getWayPointById(p.wpId)
+    if wp ~= nil and math.abs(wp.x - p.x) < 0.05 and math.abs(wp.z - p.z) < 0.05 then
+        return wp
+    end
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if math.abs(w.x - p.x) < 0.05 and math.abs(w.z - p.z) < 0.05 then
+            p.wpId = w.id
+            return w
+        end
+    end
+    p.wpId = nil
+    return nil
+end
+
+--- The road's heading at a waypoint, pointing the way the curve goes on (toward tx, tz), as a unit
+--- {x, z}; nil when the waypoint has no road through it. With a road on both sides it is the line
+--- through its two neighbours; at a dead end, the line along its one road.
+function ADFlyoverEditor:splineRoadHeading(node, tx, tz)
+    local seen, sx, sz, count = {}, 0, 0, 0
+    for _, listName in ipairs({ "out", "incoming" }) do
+        for _, id in pairs(node[listName] or {}) do
+            if not seen[id] then
+                seen[id] = true
+                local n = ADGraphManager:getWayPointById(id)
+                if n ~= nil then
+                    local dx, dz = node.x - n.x, node.z - n.z
+                    local len = math.sqrt(dx * dx + dz * dz)
+                    if len > 0.01 then
+                        -- Every neighbour is folded onto one side, so a road through the node adds up
+                        -- instead of cancelling out.
+                        dx, dz = dx / len, dz / len
+                        if count > 0 and dx * sx + dz * sz < 0 then
+                            dx, dz = -dx, -dz
+                        end
+                        sx, sz, count = sx + dx, sz + dz, count + 1
+                    end
+                end
+            end
+        end
+    end
+    local len = math.sqrt(sx * sx + sz * sz)
+    if count == 0 or len < 1e-6 then
+        return nil
+    end
+    sx, sz = sx / len, sz / len
+    if sx * (tx - node.x) + sz * (tz - node.z) < 0 then
+        sx, sz = -sx, -sz
+    end
+    return { x = sx, z = sz }
+end
+
+--- The two end headings for the current points: a snapped end follows its road (flipped on
+--- request), a free end is left to the curve.
+function ADFlyoverEditor:splineEndHeadings()
+    local pts = self.splinePoints
+    local n = #pts
+    local startDir, endDir = nil, nil
+    local a = self:splineSnapNode(pts[1])
+    if a ~= nil then
+        startDir = self:splineRoadHeading(a, pts[2].x, pts[2].z)
+        if startDir ~= nil and self.splineFlipStartTangent then
+            startDir = { x = -startDir.x, z = -startDir.z }
+        end
+    end
+    local b = self:splineSnapNode(pts[n])
+    if b ~= nil then
+        -- The arrival heading points INTO the end, i.e. away from the point before it.
+        local h = self:splineRoadHeading(b, 2 * b.x - pts[n - 1].x, 2 * b.z - pts[n - 1].z)
+        if h ~= nil then
+            endDir = self.splineFlipEndTangent and { x = -h.x, z = -h.z } or h
+        end
+    end
+    return startDir, endDir
+end
+
+--- Which spline point is under the mouse, by screen distance like waypoint picking. nil if none.
+function ADFlyoverEditor:splinePointNearCursor()
+    local pts = self.splinePoints
+    if pts == nil or #pts == 0 or self.cursorX == nil then
+        return nil
+    end
+    local best, bestD = nil, nil
+    if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
+        bestD = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS * AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
+        for i, p in ipairs(pts) do
+            local ok, sx, sy, depth = pcall(project, p.x, (p.y or 0) + 0.5, p.z)
+            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+                local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
+                if dx * dx + dy * dy < bestD then
+                    best, bestD = i, dx * dx + dy * dy
+                end
+            end
+        end
+        return best
+    end
+    bestD = AutoDrive.FLYOVER_PICK_RADIUS * AutoDrive.FLYOVER_PICK_RADIUS
+    for i, p in ipairs(pts) do
+        local dx, dz = p.x - self.cursorX, p.z - self.cursorZ
+        if dx * dx + dz * dz < bestD then
+            best, bestD = i, dx * dx + dz * dz
+        end
+    end
+    return best
+end
+
+--- Where a point goes for the cursor right now: onto the hovered waypoint (snapped), else the
+--- ground under the cursor.
+function ADFlyoverEditor:splinePointAtCursor()
+    if self.hoverId ~= nil then
+        local wp = ADGraphManager:getWayPointById(self.hoverId)
+        if wp ~= nil then
+            return { x = wp.x, y = wp.y, z = wp.z, wpId = wp.id }
+        end
+    end
+    if self.cursorX == nil then
+        return nil
+    end
+    local y = self:resolveHeightAt(self.cursorX, self.cursorZ, self.cursorY, self.cursorY)
+    return { x = self.cursorX, y = y, z = self.cursorZ }
+end
+
+--- Put a point in. Near the curve between two points it goes in between them; anywhere else it
+--- goes on the end.
+function ADFlyoverEditor:multiSplineAdd(p)
+    if self.splinePoints == nil then
+        self.splinePoints = {}
+    end
+    local pts = self.splinePoints
+    local last = pts[#pts]
+    if last ~= nil and math.abs(last.x - p.x) < 0.1 and math.abs(last.z - p.z) < 0.1 then
+        return
+    end
+    local at = #pts + 1
+    if self.splineCurve ~= nil and #pts >= 2 then
+        local seg, dist = ADSplinePath.nearestPiece(self.splineCurve, p.x, p.z)
+        if seg ~= nil and dist <= AutoDrive.FLYOVER_PICK_RADIUS then
+            at = seg + 1
+        end
+    end
+    table.insert(pts, at, p)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline point %d of %d at x=%.1f z=%.1f%s.", at, #pts, p.x, p.z,
+        p.wpId ~= nil and string.format(" (on waypoint id=%d)", p.wpId) or "")
+end
+
+--- A plain click: add a point. A click on an existing spline point adds nothing.
+function ADFlyoverEditor:multiSplineClick()
+    if self.splineHoverIdx ~= nil then
+        return
+    end
+    local p = self:splinePointAtCursor()
+    if p ~= nil then
+        self:multiSplineAdd(p)
+    end
+end
+
+--- Ctrl-click on a spline point removes it. Returns true when it took the click.
+function ADFlyoverEditor:multiSplineRemoveAtCursor()
+    local idx = self.splineHoverIdx
+    if idx == nil or self.splinePoints == nil or self.splinePoints[idx] == nil then
+        return false
+    end
+    table.remove(self.splinePoints, idx)
+    self.splineHoverIdx = nil
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline point %d removed (%d left).", idx, #self.splinePoints)
+    return true
+end
+
+--- A press on a spline point: remember it; moving past the drag threshold while held drags it.
+function ADFlyoverEditor:multiSplinePress()
+    self.splinePressIdx = self.splineHoverIdx
+    self.splinePressMX, self.splinePressMY = self.mouseX, self.mouseY
+end
+
+--- Release: ends a drag, or (no drag) is a click.
+function ADFlyoverEditor:multiSplineRelease()
+    if self.splineDragIdx ~= nil then
+        local p = self.splinePoints[self.splineDragIdx]
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: spline point %d moved to x=%.1f z=%.1f%s.", self.splineDragIdx,
+            p ~= nil and p.x or 0, p ~= nil and p.z or 0,
+            (p ~= nil and p.wpId ~= nil) and string.format(" (on waypoint id=%d)", p.wpId) or "")
+        self.splineDragIdx, self.splinePressIdx = nil, nil
+        return
+    end
+    self.splinePressIdx = nil
+    self:multiSplineClick()
+end
+
+--- Per frame: hover, drag, and the preview of what would be laid.
+function ADFlyoverEditor:updateMultiSpline()
+    if self.splinePoints == nil then
+        self.splinePoints = {}
+    end
+    local pts = self.splinePoints
+
+    if self.splinePressIdx ~= nil and self.splineDragIdx == nil and self.leftDown
+        and self.mouseX ~= nil and self.splinePressMX ~= nil then
+        local dx, dy = self.mouseX - self.splinePressMX, self.mouseY - self.splinePressMY
+        if math.sqrt(dx * dx + dy * dy) > self.MOVE_DRAG_THRESHOLD then
+            self.splineDragIdx = self.splinePressIdx
+        end
+    end
+    if self.splineDragIdx ~= nil then
+        if not self.leftDown or pts[self.splineDragIdx] == nil then
+            self.splineDragIdx, self.splinePressIdx = nil, nil
+        else
+            local p = self:splinePointAtCursor()
+            if p ~= nil then
+                pts[self.splineDragIdx] = p
+            end
+        end
+    end
+
+    -- No hover highlight on the point being dragged: it is under the cursor by definition.
+    self.splineHoverIdx = (self.splineDragIdx == nil) and self:splinePointNearCursor() or nil
+
+    if #pts < 2 then
+        self.splineCurve, self.splineLaid, self.splineLaidKey, self.splineLength = nil, nil, nil, nil
+        return
+    end
+
+    -- The curve only changes when a point, the spacing or a flip does, so it is rebuilt then and
+    -- not every frame - the heights along it are ground lookups.
+    local spacing = ADFlyoverSettings.get("splineSpacing") or 4
+    local parts = { string.format("%.2f", spacing), tostring(self.splineFlipStartTangent), tostring(self.splineFlipEndTangent),
+        tostring(self.snapToTerrain), tostring(ADGraphManager:getWayPointsCount()) }
+    for _, p in ipairs(pts) do
+        parts[#parts + 1] = string.format("%.2f_%.2f_%s", p.x, p.z, tostring(p.wpId))
+    end
+    local key = table.concat(parts, "|")
+    if key == self.splineLaidKey then
+        return
+    end
+    self.splineLaidKey = key
+
+    local startDir, endDir = self:splineEndHeadings()
+    local curve = ADSplinePath.build(pts, startDir, endDir)
+    local inner, total = ADSplinePath.resample(curve, spacing)
+    local laid = { { x = pts[1].x, y = pts[1].y, z = pts[1].z } }
+    local lastY = pts[1].y
+    for _, q in ipairs(inner) do
+        -- The height from the ground, with the clicked points' heights as the reference so a curve
+        -- across a bridge stays on it. A jump of more than a metre from the last point is held
+        -- level, as the AutoDrive spline did (Hud.lua) - it stops points diving into a dip.
+        local y = self:resolveHeightAt(q.x, q.z, q.y or lastY)
+        if lastY ~= nil and math.abs(y - lastY) > 1 then
+            y = lastY
+        end
+        laid[#laid + 1] = { x = q.x, y = y, z = q.z }
+        lastY = y
+    end
+    laid[#laid + 1] = { x = pts[#pts].x, y = pts[#pts].y, z = pts[#pts].z }
+    self.splineCurve, self.splineLaid, self.splineLength = curve, laid, total
+end
+
+--- Right-click: lay the previewed curve as waypoints, as one undo step.
+function ADFlyoverEditor:commitMultiSpline()
+    local pts = self.splinePoints
+    if pts == nil or #pts < 2 then
+        self:cancelMultiSpline()
+        return
+    end
+    if g_server == nil then
+        self:warnPlayer("Waypoints can only be placed on the server (host/singleplayer).")
+        return
+    end
+    -- Make sure the preview is for exactly these points before laying it.
+    self.splineLaidKey = nil
+    self:updateMultiSpline()
+    local laid = self.splineLaid
+    if laid == nil or #laid < 2 then
+        return
+    end
+
+    local reverse, dual, flags = self:getConnectionOptions()
+    local pointFlags = ADFlyoverEditor.fieldFlags(flags, nil)
+
+    local startNode = self:splineSnapNode(pts[1])
+    local endNode = self:splineSnapNode(pts[#pts])
+    if startNode ~= nil and startNode == endNode and #laid <= 2 then
+        self:warnPlayer("The spline starts and ends on the same waypoint.")
+        return
+    end
+
+    ADEditorHistory:snapshot("spline")
+    local created = 0
+    local function newPoint(p)
+        local wp = ADGraphManager:recordWayPoint(p.x, p.y, p.z, false, false, false, 0, pointFlags, false)
+        if wp ~= nil then
+            created = created + 1
+        end
+        return wp
+    end
+    -- Set links, not toggles: an existing link between the two is left as it is rather than
+    -- flipped off. Reverse is AutoDrive's reverse road (an out link with no matching incoming).
+    local function link(a, b)
+        if a == nil or b == nil or a.id == b.id then
+            return
+        end
+        if not table.contains(a.out, b.id) then table.insert(a.out, b.id) end
+        if reverse then
+            return
+        end
+        if not table.contains(b.incoming, a.id) then table.insert(b.incoming, a.id) end
+        if dual then
+            if not table.contains(b.out, a.id) then table.insert(b.out, a.id) end
+            if not table.contains(a.incoming, b.id) then table.insert(a.incoming, b.id) end
+        end
+    end
+
+    local chain = { startNode or newPoint(laid[1]) }
+    for i = 2, #laid - 1 do
+        chain[#chain + 1] = newPoint(laid[i]) or false
+    end
+    chain[#chain + 1] = endNode or newPoint(laid[#laid]) or false
+    for i = 1, #chain do
+        if not chain[i] then
+            Logging.warning("[FlyoverEditor]: spline - a waypoint could not be created; %d of %d laid. Undo to remove them.",
+                created, #laid)
+            self:cancelMultiSpline()
+            self:invalidateIdReferences()
+            ADGraphManager:markChanges()
+            return
+        end
+    end
+    for i = 1, #chain - 1 do
+        link(chain[i], chain[i + 1])
+    end
+
+    local joined = ""
+    if startNode ~= nil or endNode ~= nil then
+        joined = string.format(" (joined %s)", (startNode ~= nil and endNode ~= nil) and "both ends"
+            or (startNode ~= nil and "start" or "end"))
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: placed multi-point spline id=%d -> id=%d from %d clicked point(s): %d new waypoint(s), %.1f m, %s%s%s.",
+        chain[1].id, chain[#chain].id, #pts, created, self.splineLength or 0,
+        dual and "two-way" or (reverse and "reverse" or "one-way"),
+        flags ~= AutoDrive.FLAG_NONE and " secondary" or "", joined)
+
+    self.splinePoints = {}
+    self:cancelMultiSpline()
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+end
+
+--- The preview: the clicked points large (orange; one joined to a waypoint yellow), the waypoints
+--- that would be laid small along the curve, and a line from the last point to the cursor.
+function ADFlyoverEditor:drawMultiSpline(lw)
+    local pts = self.splinePoints
+    if pts == nil or #pts == 0 then
+        return
+    end
+    local laid = self.splineLaid or {}
+    for i, q in ipairs(laid) do
+        if i > 1 then
+            local a = laid[i - 1]
+            ADDrawingManager:addLineTask(a.x, a.y + 0.6, a.z, q.x, q.y + 0.6, q.z, lw, 0.2, 0.8, 1)
+            if i < #laid then
+                ADDrawingManager:addSphereTask(q.x, q.y + 0.6, q.z, 2, 0.2, 0.8, 1, 0.15)
+            end
+        end
+    end
+    for i, p in ipairs(pts) do
+        local y = (p.y or 0) + 0.8
+        local size = ((i == self.splineHoverIdx) or (i == self.splineDragIdx)) and 5 or 4
+        if p.wpId ~= nil then
+            ADDrawingManager:addSphereTask(p.x, y, p.z, size, 1, 0.9, 0.1, 0.20)
+        else
+            ADDrawingManager:addSphereTask(p.x, y, p.z, size, 1, 0.5, 0, 0.20)
+        end
+    end
+    if self.splineDragIdx == nil and self.splineHoverIdx == nil and self.cursorX ~= nil then
+        local last = pts[#pts]
+        local cy = AutoDrive:getTerrainHeightAtWorldPos(self.cursorX, self.cursorZ)
+        ADDrawingManager:addLineTask(last.x, (last.y or cy) + 0.6, last.z, self.cursorX, cy + 0.6, self.cursorZ, lw, 1, 1, 1)
+    end
 end
 
 -- ---------------------------------------------------------------------------------------------

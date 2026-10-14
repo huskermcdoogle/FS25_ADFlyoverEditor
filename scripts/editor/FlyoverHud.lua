@@ -635,6 +635,27 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.SPLINE then
+        segFlip("curve by", "multi-point", "AutoDrive", not editor:splineIsMultiPoint(), function() editor:toggleSplineMode() end)
+    end
+    if editor.tool == editor.TOOL.SPLINE and editor:splineIsMultiPoint() then
+        numberAfter("spacing")
+        local pts = editor.splinePoints or {}
+        -- The flips only mean something on an end that is joined to a road; on a free end the curve
+        -- picks its own heading, so they grey out there.
+        local startJoined = pts[1] ~= nil and pts[1].wpId ~= nil
+        local endJoined = #pts >= 2 and pts[#pts].wpId ~= nil
+        segFlip("start heading", "auto", "flipped", editor.splineFlipStartTangent,
+            function() editor:toggleSplineStartTangent() end, not startJoined)
+        segFlip("end heading", "auto", "flipped", editor.splineFlipEndTangent,
+            function() editor:toggleSplineEndTangent() end, not endJoined)
+        if #pts > 0 then
+            local laid = editor.splineLaid
+            add("cursor", "points", tostring(#pts))
+            if laid ~= nil then
+                add("cursor", "waypoints", string.format("%d, %.0f m", #laid, editor.splineLength or 0))
+            end
+        end
+    elseif editor.tool == editor.TOOL.SPLINE then
         -- Read-only: the wheel drives this while a preview is up, and the mod clamps it to
         -- 0.49-3.5. Showing the live value beats a list of preset steps.
         local c = AutoDrive.splineInterpolationUserCurvature

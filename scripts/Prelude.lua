@@ -98,6 +98,7 @@ P.MAX_ATTEMPTS = 300
 P.EDITOR_FILES = {
     "scripts/editor/PolygonUtils.lua",
     "scripts/editor/OffsetGeometry.lua",
+    "scripts/editor/SplinePath.lua",
     "scripts/editor/FieldLoopGenerator.lua",
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/Theme.lua",
