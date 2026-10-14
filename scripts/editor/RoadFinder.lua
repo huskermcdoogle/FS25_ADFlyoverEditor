@@ -1615,7 +1615,10 @@ RF.WALK = {
     pavedGap = 2.5,                 -- gaps bridged across a paved road
     tightGap = 1.0,                 -- tried first: only a band narrower than rutWidth is read again with joinGap
     rutWidth = 2.5,
-    rutMax = 3.5,                   -- a wheel rut is at most this wide (muddy ruts reach 3 m, 2026-10-13)
+    trackJoin = 0.5,                -- holes this wide across a track are joined
+    rutMax = 2.0,                   -- a wheel rut is at most this wide (a 3 m strip is a whole double track
+                                    -- painted as one: pairing it with the next track's strip ran the line
+                                    -- between two tracks, 2026-10-13)
     rutGapMin = 0.4,                -- the grass strip between two ruts: at least ...
     rutGapMax = 3.0,                -- ... and at most this wide                 -- (a solid track must not swallow the gravel patches beside it)
     minBand = { track = 1.5, paved = 1.5 },   -- narrower bands are not a road (old lanes are 2-3 m)
@@ -1671,7 +1674,10 @@ function RF.bandsAt(isRoad, x, z, nx, nz, cls)
     -- paved: patches of other paint across a road (wet-look, gravel, shadow) are bridged up to
     -- pavedGap, or a patch in the middle splits the road and the line jumps to one half (wavy lanes,
     -- 2026-10-12)
-    local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, (cls == "paved") and W.pavedGap or W.tightGap)
+    -- (a track joins only small holes: a 1 m strip along a field edge 1 m from a painted double track
+    -- is not part of it - joined, it moved the line 1.4 m, 2026-10-13; wheel ruts with grass between
+    -- are read as a pair below)
+    local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, (cls == "paved") and W.pavedGap or W.trackJoin)
     -- and wider patches of mud or gravel INSIDE the asphalt (asphalt on both sides, no grass between)
     -- are road too: 2-4 m mud-gravel patches split the town road at (190,100) and the line wiggled
     -- from half to half (2026-10-13). A grass strip still keeps two roads apart.
@@ -1762,6 +1768,8 @@ end
 --- across the road is the narrowest. Returns cx, cz, hx, hz, width or nil.
 RF.SEED_RUN = 12                 -- metres each way a seed looks along each heading for road
 RF.SEED_START_WIDTH = { paved = 6, track = 4 }   -- a walk started where no width reads (a field entrance)
+RF.CORRIDOR = false              -- OFF (2026-10-13 user: the line belongs on the painted strip - each double
+                                 -- track is painted as one ~3 m strip - not between the fields)
 RF.CORRIDOR_MAX = 10             -- a field edge this close each side makes a corridor (tracks)
 RF.CORRIDOR_MIN = 3              -- and at least this wide
 RF.fieldReader = nil             -- the tool sets its memoised field test
@@ -2059,7 +2067,19 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             -- head for the nearest of that road within 12 m and 60 degrees
             -- first: the track itself carrying on at its usual width, turned up to 60 degrees (a bend
             -- reads wide straight across; turned with the bend it reads its normal width)
-            if ax == nil and cls == "track" then
+            -- (only with the road it meets close ahead: elsewhere a widening is a junction and the
+            -- walk holds its course - turned anywhere, it took a side track at a field crossing)
+            local roadNear = false
+            if ax == nil and cls == "track" and isStop ~= nil then
+                for a = -60, 60, 15 do
+                    local rx, rz = rot(hx, hz, a)
+                    for d = 3, 15, 3 do
+                        if isStop(px + rx * d, pz + rz * d) then roadNear = true break end
+                    end
+                    if roadNear then break end
+                end
+            end
+            if ax == nil and roadNear then
                 for k = 1, 6 do
                     for _, sgn in ipairs({ 1, -1 }) do
                         if ax == nil then
@@ -2071,7 +2091,7 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
                     if ax ~= nil then break end
                 end
             end
-            if ax == nil and isStop ~= nil then
+            if ax == nil and roadNear then
                 local bestD = math.huge
                 for a = -60, 60, 10 do
                     local rx, rz = rot(hx, hz, a)
@@ -2469,7 +2489,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         -- decal): the middle is halfway between the field edges (2026-10-13: a single painted 3 m rut
         -- at (580,-470) put the line on it, the track running between two fields).
         local corridor = nil
-        if cls == "track" and (pick == nil or not pick.ruts) then
+        if RF.CORRIDOR and cls == "track" and (pick == nil or not pick.ruts) then
             local isFieldFn = RF.fieldReader or RF.isFieldAt
             local function edge(sgn)
                 for k = 1, RF.CORRIDOR_MAX * 4 do
