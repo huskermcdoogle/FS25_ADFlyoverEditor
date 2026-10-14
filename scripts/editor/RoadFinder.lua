@@ -2456,6 +2456,7 @@ RF.JUNCTION_HOLD = 12            -- metres either side of a bridged junction whe
 -- the old lane and the town road worse (lane worst 0.8 -> 1.7 m), so paved keeps the gated filter.
 RF.GUIDE_SMOOTH = { paved = 0, track = 5 }   -- points (2 m) either side the guide is averaged over before reading
 RF.EDGE_TOL = 0.75               -- an edge within this of where its neighbours put it has held its line
+RF.BEND_WIDEN = 3                -- a reading widened evenly by up to this is a bend, not a junction
 RF.EDGE_REACH = 30               -- sections (2 m) either side searched for good readings to draw an edge from
 RF.EDGE_FOLLOW = true            -- suspect readings kept where one edge holds its line (false: all dropped)
 RF.ROBUST_FIT = { paved = false, track = true }   -- the middle fitted over FIT_SPAN either side (false: the gated filter)
@@ -2643,6 +2644,17 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
                 local px, pz = A.x + dx * t, A.z + dz * t
                 return (px - G[i].x) * nxs[i] + (pz - G[i].z) * nzs[i]
             end
+            -- a reading only wider, still centred on the walker's own line (within EDGE_TOL) and no
+            -- more than BEND_WIDEN over usual: the road widening round a bend - kept as read (a side
+            -- road pulls the reading's middle toward itself). (2026-10-14: a lane widening from 2.5 to
+            -- 4 m round a bend was read as a junction and the line held course 0.6 m off.)
+            for i = 1, n do
+                if suspect[i] and not nearJunction[i] and meas[i] ~= nil and abs(meas[i]) <= RF.EDGE_TOL
+                    and widths[i] ~= nil and widths[i] - usual <= RF.BEND_WIDEN then
+                    suspect[i] = false
+                    dbg[i].edge = "bend"
+                end
+            end
             for i = 1, n do
                 if suspect[i] and meas[i] ~= nil and RF.EDGE_FOLLOW then
                     local eL, eR = expected(EL, i), expected(ER, i)
@@ -2659,6 +2671,19 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
                                 bestB, bestD, side = b, dL, "left"
                             elseif dR <= RF.EDGE_TOL and dR < bestD and b.lo < eR - 0.5 * wExp then
                                 bestB, bestD, side = b, dR, "right"
+                            end
+                        end
+                        -- widened about equally on both sides (a road widens round a bend; a side road
+                        -- widens one side): the reading's own middle (2026-10-14: a lane's bend read as
+                        -- "too wide" and the line held course 0.5-0.9 m off the asphalt's middle)
+                        if bestB == nil then
+                            for _, b in ipairs(dbg[i].bands) do
+                                local outL, outR = eL - b.lo, b.hi - eR
+                                if outL >= -RF.EDGE_TOL and outR >= -RF.EDGE_TOL and abs(outL - outR) <= RF.EDGE_TOL
+                                    and outL + outR <= RF.BEND_WIDEN then
+                                    bestB, side = b, "both"
+                                    break
+                                end
                             end
                         end
                         if bestB ~= nil then
