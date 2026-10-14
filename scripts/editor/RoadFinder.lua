@@ -1707,11 +1707,18 @@ function RF.bandsAt(isRoad, x, z, nx, nz, cls)
         -- read finely for this: only single-sample holes closed, so a 1 m grass strip stays a gap
         local fine = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, W.res)
         local best = nil
+        local function pairOK(k)
+            local a, b = fine[k], fine[k + 1]
+            if a == nil or b == nil then return false end
+            local gap = b.lo - a.hi
+            return a.w <= W.rutMax and b.w <= W.rutMax and gap >= W.rutGapMin and gap <= W.rutGapMax
+                and min(a.w, b.w) >= RF.RUT_LIKE * max(a.w, b.w)
+        end
         for k = 1, #fine - 1 do
             local a, b = fine[k], fine[k + 1]
-            local gap = b.lo - a.hi
-            if a.w <= W.rutMax and b.w <= W.rutMax and gap >= W.rutGapMin and gap <= W.rutGapMax
-                and min(a.w, b.w) >= RF.RUT_LIKE * max(a.w, b.w) then
+            -- two two-rut tracks side by side are four ruts in a row: the middle two are one rut of
+            -- each track, never a pair (2026-10-13: the line ran between two parallel tracks)
+            if pairOK(k) and not (k > 1 and pairOK(k - 1) and pairOK(k + 1)) then
                 local mid = (a.mid + b.mid) / 2
                 -- a pair of wheel ruts is two strips of a like width; a rut and a narrow strip along a
                 -- field's edge is not (2026-10-13: the walk locked onto a 2 m rut + 1 m edge strip and
