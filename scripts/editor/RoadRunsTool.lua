@@ -292,6 +292,8 @@ function E:roadRunsHover(overPanel)
     end
     s.hover = st
     if st ~= nil then s.hoverSide = RF.sideOf(st, cx, cz) end
+    -- the last spot on the map (the card's "save this area" is pressed with the mouse on the card)
+    if cx ~= nil then s.lastMap = { x = cx, z = cz, hover = st } end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -1381,7 +1383,9 @@ end
 --- tuned on it missed in game).
 E.ROADVIEW_SAVE_HALF = 40
 function E:roadRunsSaveArea()
-    local cx, cz = self.cursorX, self.cursorZ
+    local last = roadState(self).lastMap
+    if last == nil then return end
+    local cx, cz = last.x, last.z
     if cx == nil or getUserProfileAppPath == nil or createXMLFile == nil then return end
     local folder = getUserProfileAppPath() .. "modSettings/FS25_ADFlyoverEditor/"
     createFolder(getUserProfileAppPath() .. "modSettings/")
@@ -1412,8 +1416,7 @@ function E:roadRunsSaveArea()
         end
         setXMLString(xml, string.format("roadArea.row(%d)#k", j), table.concat(row))
     end
-    local s = roadState(self)
-    local hov = s.hover and self:roadRunsRefined(s.hover) or nil
+    local hov = last.hover and self:roadRunsRefined(last.hover) or nil
     local function pts(P)
         local t = {}
         for _, p in ipairs(P or {}) do t[#t + 1] = string.format("%.2f,%.2f", p.x, p.z) end
