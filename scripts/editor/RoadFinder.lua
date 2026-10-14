@@ -2392,7 +2392,8 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
                             local e = res.pts[#res.pts]
                             if (q.x - e.x) ^ 2 + (q.z - e.z) ^ 2 > 0.09 then res.pts[#res.pts + 1] = q end
                         end
-                        if res.endNode ~= nil then res.endNode = { x = extEnd[#extEnd].x, z = extEnd[#extEnd].z, tag = "fork" } end
+                        res.endTag = "road"
+                        res.endNode = { x = extEnd[#extEnd].x, z = extEnd[#extEnd].z, tag = "road" }
                     end
                     if extStart ~= nil and #extStart > 0 then
                         local front = {}
@@ -2402,7 +2403,8 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
                             if e == nil or (q.x - e.x) ^ 2 + (q.z - e.z) ^ 2 > 0.09 then front[#front + 1] = q end
                         end
                         res.pts = front
-                        if res.startNode ~= nil then res.startNode = { x = extStart[#extStart].x, z = extStart[#extStart].z, tag = "fork" } end
+                        res.startTag = "road"
+                        res.startNode = { x = extStart[#extStart].x, z = extStart[#extStart].z, tag = "road" }
                     end
                     res.len = polylineLength(res.pts)
                     return res
@@ -3015,8 +3017,11 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         if st.endMet and metEnd == nil then metEnd = R[#R] end
     end
     local out = { startTag = st.startTag, endTag = st.endTag, startNode = st.startNode, endNode = st.endNode }
-    if metStart ~= nil then out.startTag, out.startNode = "fork", { x = metStart.x, z = metStart.z, tag = "fork" } end
-    if metEnd ~= nil then out.endTag, out.endNode = "fork", { x = metEnd.x, z = metEnd.z, tag = "fork" } end
+    -- an end that met a road is laid right to it ("road": no junction gap - 2026-10-14 user: the run
+    -- stopped way short of the pavement); one cut back off paving otherwise is a fork, gapped
+    local function metTag(met) return met and "road" or "fork" end
+    if metStart ~= nil then out.startTag, out.startNode = metTag(st.startMet), { x = metStart.x, z = metStart.z, tag = metTag(st.startMet) } end
+    if metEnd ~= nil then out.endTag, out.endNode = metTag(st.endMet), { x = metEnd.x, z = metEnd.z, tag = metTag(st.endMet) } end
     -- Ran off the read square, or the square lost the road ("end": a break in the paint - a muddy
     -- patch, another paint, a shadow - where the road plainly carries on): keep walking from that end.
     -- The walker bridges gaps up to 8 m and stops at a real fork, a change between paved and track,
