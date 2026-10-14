@@ -200,47 +200,74 @@ end
 -- AREA=<roadArea_X_Z.xml> (saved in game by the road runs detection view's "save this area"): inside
 -- that square the ground is what the GAME read there (kinds every 0.25 m, fields); outside it, the
 -- old harness map. The harness map is an old save at 1 m and did not match the game (2026-10-13).
-if os.getenv("AREA") then
-    local f = assert(io.open(os.getenv("AREA"), "rb"))
+-- Several files: AREA=a.xml;b.xml (the first that has a spot wins). AREAONLY=1: outside them the
+-- ground is no road (no harness map), for cases that must stand on the game's own reading alone.
+-- A case file (roadCases/track_N.xml) is a painted save with a <middle> the user drew.
+local function loadArea(file)
+    local f = assert(io.open(file, "rb"))
     local xml = f:read("*a")
     f:close()
-    local ax0 = tonumber(xml:match('x0="([^"]+)"'))
-    local az0 = tonumber(xml:match('z0="([^"]+)"'))
-    local ast = tonumber(xml:match('step="([^"]+)"'))
-    local an = tonumber(xml:match(' n="([^"]+)"'))
-    local rows = {}
-    for k in xml:gmatch('<row k="([^"]*)"') do rows[#rows + 1] = k end
-    T.area = { x0 = ax0, z0 = az0, step = ast, n = an, rows = rows }
-    T.area.mouse = { x = tonumber(xml:match('<mouse x="([^"]+)"')), z = tonumber(xml:match('<mouse [^>]*z="([^"]+)"')) }
-    T.area.line = xml:match('<line pts="([^"]*)"')
-    T.area.walk = xml:match('<walk pts="([^"]*)"')
-    -- painted saves (roadPaint_N.xml): one <tile x0 z0 k> per painted square, k row by row
+    local A = { xml = xml }
     local tileSize = tonumber(xml:match('tile="([^"]+)"'))
-    local tiles = {}
+    local ast = tonumber(xml:match('step="([^"]+)"')) or 0.25
     if tileSize ~= nil then
-        ast = ast or 0.25
+        -- painted saves (roadPaint_N.xml, track_N.xml): one <tile x0 z0 k> per square, k row by row
+        local tiles, count = {}, 0
         for tx0, tz0, k in xml:gmatch('<tile x0="([^"]+)" z0="([^"]+)" k="([^"]*)"') do
             tiles[math.floor(tonumber(tx0) / tileSize + 0.5) * 100003 + math.floor(tonumber(tz0) / tileSize + 0.5)] =
                 { x0 = tonumber(tx0), z0 = tonumber(tz0), k = k }
+            count = count + 1
         end
-        local count = 0
-        for _ in pairs(tiles) do count = count + 1 end
-        print(string.format("area: %d painted squares of %g m at %.2f m", count, tileSize, ast))
-    end
-    local per = tileSize and math.floor(tileSize / ast + 0.5) or nil
-    local function areaChar(x, z)
-        if tileSize ~= nil then
+        local per = math.floor(tileSize / ast + 0.5)
+        A.tiles, A.tileSize, A.count = tiles, tileSize, count
+        function A.char(x, z)
             local t = tiles[math.floor(x / tileSize) * 100003 + math.floor(z / tileSize)]
             if t == nil then return nil end
             local i, j = math.floor((x - t.x0) / ast), math.floor((z - t.z0) / ast)
             if i < 0 or j < 0 or i >= per or j >= per then return nil end
             return t.k:sub(j * per + i + 1, j * per + i + 1)
         end
+        if not os.getenv("AREAQUIET") then
+            print(string.format("area: %d painted squares of %g m at %.2f m", count, tileSize, ast))
+        end
+        return A
+    end
+    -- one square (roadArea_X_Z.xml)
+    local ax0 = tonumber(xml:match('x0="([^"]+)"'))
+    local az0 = tonumber(xml:match('z0="([^"]+)"'))
+    local an = tonumber(xml:match(' n="([^"]+)"'))
+    local rows = {}
+    for k in xml:gmatch('<row k="([^"]*)"') do rows[#rows + 1] = k end
+    A.x0, A.z0, A.step, A.n, A.rows = ax0, az0, ast, an, rows
+    A.mouse = { x = tonumber(xml:match('<mouse x="([^"]+)"')), z = tonumber(xml:match('<mouse [^>]*z="([^"]+)"')) }
+    A.line = xml:match('<line pts="([^"]*)"')
+    A.walk = xml:match('<walk pts="([^"]*)"')
+    function A.char(x, z)
         local i = math.floor((x - ax0) / ast)
         local j = math.floor((z - az0) / ast)
         if i < 0 or j < 0 or i >= an or j >= an then return nil end
         local row = rows[j + 1]
         return row and row:sub(i + 1, i + 1) or nil
+    end
+    if not os.getenv("AREAQUIET") then
+        print(string.format("area: %d x %d at %.2f m from (%.0f, %.0f)", an, an, ast, ax0, az0))
+    end
+    return A
+end
+
+if os.getenv("AREA") then
+    local areas = {}
+    for file in os.getenv("AREA"):gmatch("[^;]+") do areas[#areas + 1] = loadArea(file) end
+    T.area = areas[1]           -- the first file's own fields (mouse, line, walk), as before
+    T.areas = areas
+    local only = os.getenv("AREAONLY") ~= nil
+    local function areaChar(x, z)
+        for _, A in ipairs(areas) do
+            local c = A.char(x, z)
+            if c ~= nil then return c end
+        end
+        if only then return "." end
+        return nil
     end
     T.areaChar = areaChar
     local MAT = { d = 1, g = 6, p = 7 }
@@ -260,7 +287,6 @@ if os.getenv("AREA") then
         if c == nil then return baseCost(map, x, y, z) end
         return 0, false                        -- the game already left rock out of 'p'
     end
-    if an ~= nil then print(string.format("area: %d x %d at %.2f m from (%.0f, %.0f)", an, an, ast, ax0, az0)) end
 end
 
 TERRAIN = T
