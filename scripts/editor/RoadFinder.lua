@@ -1658,12 +1658,42 @@ end
 local function bandsAt(isRoad, x, z, nx, nz, cls)
     return RF.bandsAt(isRoad, x, z, nx, nz, cls)
 end
+--- The ground reader for patch filling (the tool sets its memoised reader; offline it is groundKindAt).
+RF.kindReader = nil
+RF.PATCH_FILL = 6          -- a gap of gravel/mud up to this wide between asphalt on both sides is road
+
 function RF.bandsAt(isRoad, x, z, nx, nz, cls)
     local W = RF.WALK
     -- paved: patches of other paint across a road (wet-look, gravel, shadow) are bridged up to
     -- pavedGap, or a patch in the middle splits the road and the line jumps to one half (wavy lanes,
     -- 2026-10-12)
     local bands = RF.crossSection(isRoad, x, z, nx, nz, W.half, W.res, (cls == "paved") and W.pavedGap or W.tightGap)
+    -- and wider patches of mud or gravel INSIDE the asphalt (asphalt on both sides, no grass between)
+    -- are road too: 2-4 m mud-gravel patches split the town road at (190,100) and the line wiggled
+    -- from half to half (2026-10-13). A grass strip still keeps two roads apart.
+    if cls == "paved" and #bands > 1 then
+        local kindAt = RF.kindReader or RF.groundKindAt
+        local merged = { bands[1] }
+        for k = 2, #bands do
+            local a, b = merged[#merged], bands[k]
+            local gap = b.lo - a.hi
+            local fill = gap <= RF.PATCH_FILL
+            if fill then
+                local o = a.hi + W.res / 2
+                while o < b.lo do
+                    if kindAt(x + nx * o, z + nz * o) == RF.KIND_NONE then fill = false break end
+                    o = o + W.res
+                end
+            end
+            if fill then
+                a.hi = b.hi
+                a.mid, a.w = (a.lo + a.hi) / 2, a.hi - a.lo
+            else
+                merged[#merged + 1] = b
+            end
+        end
+        bands = merged
+    end
     -- A farm track is TWO RUTS with a strip of grass between them (2026-10-12 screenshots): the middle
     -- of the track is halfway between the ruts. Find the pair of narrow dirt strips with a grass gap
     -- between them nearest the line, and read the track as that pair - stray mud beside the track (a
@@ -2194,6 +2224,7 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
                 for i = 1, #fwd do P[#P + 1] = fwd[i] end
                 if #P >= 3 then
                     local st = {
+                        walkedGuide = true,
                         pts = P, class = cls, width = medianWidth(P, 6), len = polylineLength(P),
                         startTag = startTag, endTag = endTag,
                         startNode = startAt and { x = startAt.x, z = startAt.z, tag = "fork" } or nil,
@@ -2228,6 +2259,8 @@ RF.SMOOTH_SPAN = 5                -- points (2 m) either side in each averaging 
 RF.FILTER = { gain = 0.25, gate = 2.0, headSpan = 3, reacquire = 4, mouthWidth = 1.5, mouthSpread = 3 }
 RF.JUNCTION_HOLD = 12            -- metres either side of a bridged junction where the line holds its course
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
+RF.WALKED_FORK_BEND = 4          -- the same for a walked line (it does not bend into the fork)
+RF.END_TURN_CAP = 1.5            -- degrees a metre at most when a line's end is carried on along its curve
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
     RF.walkIsField = isField
     local ok, out = pcall(RF.refineStretchInner, st, isRoadOf, isStopOf)
@@ -2247,6 +2280,10 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     -- Near a fork the square's centre line bends toward the fork's middle. Leave out the guide within
     -- FORK_BEND (or 1.5 road widths) of a fork and carry the walked line on straight there instead.
     local bend = max(RF.FORK_BEND, 1.5 * (st.width or 4))
+    -- a WALKED guide stops before a junction's mouth itself (it does not bend into the fork like the
+    -- square's centre line): only a short piece is left out, so the end is read, not guessed
+    -- (2026-10-13: a 15 m guessed tail drifted 5 m off a lane where it met a dirt yard)
+    if st.walkedGuide then bend = RF.WALKED_FORK_BEND end
     local cutStart, cutEnd = 0, 0
     local function nearFork(tag, node) return (tag == "fork" or tag == "wide") and node ~= nil end
     if nearFork(st.startTag, st.startNode) then
@@ -2421,7 +2458,7 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             local dh = h1 - h0
             if dh > pi then dh = dh - 2 * pi elseif dh < -pi then dh = dh + 2 * pi end
             rate = dh / (7 * W.step)
-            local cap = math.rad(3)                      -- at most 3 degrees a metre (radius ~19 m)
+            local cap = math.rad(RF.END_TURN_CAP)        -- (3 degrees a metre let a tail drift off a lane)
             if rate > cap then rate = cap elseif rate < -cap then rate = -cap end
         end
         return h1, rate
@@ -2439,6 +2476,13 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         return px, pz
     end
     -- carry the line on over the part left out near a fork
+    local function roadHere(x, z, hh)
+        local nx, nz = -sin(hh), cos(hh)
+        for _, b in ipairs(bandsAt(isRoad, x, z, nx, nz, cls)) do
+            if b.w >= W.minBand[cls] and abs(b.mid) <= 0.5 * b.w + 0.5 then return true end
+        end
+        return false
+    end
     local function extend(atEnd, length)
         if length <= 0 or #R < 4 then return end
         local h, rate = course(atEnd, 1)
@@ -2447,6 +2491,8 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         local d = W.step
         while d <= length + 1e-6 do
             local x, z = along(q.x, q.z, h, rate, d)
+            -- no road under it: the line stops here rather than run on off the road
+            if not roadHere(x, z, h + rate * d) then break end
             local e = { x = x, z = z, w = q.w }
             if atEnd then R[#R + 1] = e else table.insert(R, 1, e) end
             d = d + W.step
