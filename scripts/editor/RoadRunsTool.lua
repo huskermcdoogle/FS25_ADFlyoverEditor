@@ -1374,6 +1374,64 @@ function E:drawRoadView(lw)
     end
 end
 
+--- The ground as the game reads it round the mouse, saved for the offline tests: kinds every 0.25 m
+--- over ROADVIEW_SAVE_HALF each way ('.' none, 'd' dirt, 'g' gravel, 'p' paved, 'F' field), and the
+--- walk under the mouse (its raw path and laid line). modSettings/FS25_ADFlyoverEditor/roadArea_X_Z.xml
+--- (2026-10-13: the offline map - an old save at 1 m - did not match what the game read, so fixes
+--- tuned on it missed in game).
+E.ROADVIEW_SAVE_HALF = 40
+function E:roadRunsSaveArea()
+    local cx, cz = self.cursorX, self.cursorZ
+    if cx == nil or getUserProfileAppPath == nil or createXMLFile == nil then return end
+    local folder = getUserProfileAppPath() .. "modSettings/FS25_ADFlyoverEditor/"
+    createFolder(getUserProfileAppPath() .. "modSettings/")
+    createFolder(folder)
+    local path = string.format("%sroadArea_%d_%d.xml", folder, math.floor(cx), math.floor(cz))
+    local xml = createXMLFile("ADFlyoverRoadArea", path, "roadArea")
+    if xml == nil or xml == 0 then return end
+    local H, st = self.ROADVIEW_SAVE_HALF, 0.25
+    local x0, z0 = math.floor(cx - H), math.floor(cz - H)
+    local n = math.floor(2 * H / st) + 1
+    setXMLFloat(xml, "roadArea#x0", x0)
+    setXMLFloat(xml, "roadArea#z0", z0)
+    setXMLFloat(xml, "roadArea#step", st)
+    setXMLInt(xml, "roadArea#n", n)
+    local chars = { [RF.KIND_NONE] = ".", [RF.KIND_DIRT] = "d", [RF.KIND_GRAVEL] = "g", [RF.KIND_PAVED] = "p" }
+    for j = 0, n - 1 do
+        local row = {}
+        local z = z0 + j * st + st / 2
+        for i = 0, n - 1 do
+            local x = x0 + i * st + st / 2
+            local c = "."
+            if RF.onMap(x, z) then
+                local k = kindAtWalk(x, z)
+                c = chars[k] or "."
+                if c == "." and fieldAtWalk(x, z) then c = "F" end
+            end
+            row[#row + 1] = c
+        end
+        setXMLString(xml, string.format("roadArea.row(%d)#k", j), table.concat(row))
+    end
+    local s = roadState(self)
+    local hov = s.hover and self:roadRunsRefined(s.hover) or nil
+    local function pts(P)
+        local t = {}
+        for _, p in ipairs(P or {}) do t[#t + 1] = string.format("%.2f,%.2f", p.x, p.z) end
+        return table.concat(t, ";")
+    end
+    setXMLFloat(xml, "roadArea.mouse#x", cx)
+    setXMLFloat(xml, "roadArea.mouse#z", cz)
+    if hov ~= nil then
+        setXMLString(xml, "roadArea.line#pts", pts(hov.pts))
+        setXMLString(xml, "roadArea.walk#pts", pts(hov.raw))
+        setXMLString(xml, "roadArea.line#class", tostring(hov.class))
+    end
+    saveXMLFile(xml)
+    delete(xml)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - saved the area round (%.1f, %.1f) to %s", cx, cz, path)
+    if self.warnPlayer ~= nil then pcall(self.warnPlayer, self, "Saved this area for Claude: " .. path) end
+end
+
 function E:drawRoadRunsInner(lw)
     local s = self.roadRuns
     if s == nil then return end
@@ -1469,6 +1527,7 @@ function E:roadRunsCard(kit)
             kit.add("cursor", "read across", hov.fromSpline and "the map's own line: nothing read" or "no readings kept")
         end
         kit.add("hint", "green used; grey no road; purple junction; orange too wide; red jumped; white post = filtered middle")
+        kit.btn("save this area (for offline tests)", function() editor:roadRunsSaveArea() end)
         return
     end
     kit.segFlip("light up", "under mouse", "all nearby", self.roadShowAll, function()

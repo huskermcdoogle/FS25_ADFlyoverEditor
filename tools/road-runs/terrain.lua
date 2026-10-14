@@ -197,5 +197,49 @@ if os.getenv("TERRAIN_RAY") ~= "0" then
     end
 end
 
+-- AREA=<roadArea_X_Z.xml> (saved in game by the road runs detection view's "save this area"): inside
+-- that square the ground is what the GAME read there (kinds every 0.25 m, fields); outside it, the
+-- old harness map. The harness map is an old save at 1 m and did not match the game (2026-10-13).
+if os.getenv("AREA") then
+    local f = assert(io.open(os.getenv("AREA"), "rb"))
+    local xml = f:read("*a")
+    f:close()
+    local ax0 = tonumber(xml:match('x0="([^"]+)"'))
+    local az0 = tonumber(xml:match('z0="([^"]+)"'))
+    local ast = tonumber(xml:match('step="([^"]+)"'))
+    local an = tonumber(xml:match(' n="([^"]+)"'))
+    local rows = {}
+    for k in xml:gmatch('<row k="([^"]*)"') do rows[#rows + 1] = k end
+    T.area = { x0 = ax0, z0 = az0, step = ast, n = an, rows = rows }
+    T.area.mouse = { x = tonumber(xml:match('<mouse x="([^"]+)"')), z = tonumber(xml:match('<mouse [^>]*z="([^"]+)"')) }
+    T.area.line = xml:match('<line pts="([^"]*)"')
+    T.area.walk = xml:match('<walk pts="([^"]*)"')
+    local function areaChar(x, z)
+        local i = math.floor((x - ax0) / ast)
+        local j = math.floor((z - az0) / ast)
+        if i < 0 or j < 0 or i >= an or j >= an then return nil end
+        local row = rows[j + 1]
+        return row and row:sub(i + 1, i + 1) or nil
+    end
+    local MAT = { d = 1, g = 6, p = 7 }
+    local baseAttr, baseDensity, baseCost = getTerrainAttributesAtWorldPos, getDensityAtWorldPos, getVehicleNavigationMapCostAtWorldPos
+    function getTerrainAttributesAtWorldPos(t, x, y, z, ...)
+        local c = areaChar(x, z)
+        if c == nil then return baseAttr(t, x, y, z, ...) end
+        return 0, 0, 0, 0, MAT[c] or 2           -- 2: a material the editor reads as no road
+    end
+    function getDensityAtWorldPos(id, x, y, z)
+        local c = areaChar(x, z)
+        if c == nil then return baseDensity(id, x, y, z) end
+        return (id == DETAIL_ID and c == "F") and 1 or 0
+    end
+    function getVehicleNavigationMapCostAtWorldPos(map, x, y, z)
+        local c = areaChar(x, z)
+        if c == nil then return baseCost(map, x, y, z) end
+        return 0, false                        -- the game already left rock out of 'p'
+    end
+    print(string.format("area: %d x %d at %.2f m from (%.0f, %.0f)", an, an, ast, ax0, az0))
+end
+
 TERRAIN = T
 return T
