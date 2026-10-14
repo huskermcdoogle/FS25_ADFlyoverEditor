@@ -55,6 +55,15 @@ E.ROADVIEW_TILE = 8                -- painted squares (m)
 E.ROADVIEW_BRUSH = 6               -- the brush reaches this far round the mouse (m)
 E.ROADVIEW_HALF = 15               -- the paint layer covers this far round the mouse (m)
 E.ROADVIEW_STEP = 0.5              -- one paint mark per this (m)
+-- Test cases (2026-10-14, the user: "a multipoint spline draw tool, and I can then draw the center
+-- nicely"): in the detection view, click points along a track's true middle; a smooth curve runs
+-- through them. 'save track' writes the ground along the curve (ROADCASE_HALF each side) and the
+-- curve itself - the answer key - to modSettings/FS25_ADFlyoverEditor/roadCases/track_N.xml.
+-- tools/road-runs/scorecases.lua scores the walk against every saved case.
+E.roadDrawMid = false              -- detection view: clicks place middle points (no picking)
+E.ROADCASE_HALF = 12               -- ground saved this far each side of the middle (m)
+E.ROADCASE_GRAB = 1.5              -- a click this close to a point grabs it (m)
+E.ROADCASE_MAX_TILES = 3000        -- about 1.5 km of track; more freezes the game too long
 E.ROADVIEW_WHY = {                 -- the colour of a reading left out, by why
     none = { 0.35, 0.35, 0.35 },   -- no road band found across here
     junction = { 0.75, 0.3, 1 },   -- held out: a junction the walk went through
@@ -541,6 +550,7 @@ function E:roadRunsPaintAt(cx, cz)
 end
 
 function E:updateRoadRunsInner(overPanel)
+    if self.roadView and self.roadDrawMid then self:roadMidUpdate(overPanel) end
     if self.roadView and self.roadPaint and self.leftDown and not overPanel and self.cursorX ~= nil then
         self:roadRunsPaintAt(self.cursorX, self.cursorZ)
     end
@@ -817,6 +827,7 @@ local function addPick(s, st, dir)
 end
 
 function E:roadRunsClick()
+    if self.roadView and self.roadDrawMid then self:roadMidClick() return end
     if self.roadView and self.roadPaint then return end      -- painting: the drag paints, see update
     local s = roadState(self)
     local now = self:nowMs()
@@ -1410,6 +1421,7 @@ function E:drawRoadView(lw)
             end
         end
     end
+    self:drawRoadMid(lw, seg)
 end
 
 --- The ground as the game reads it round the mouse, saved for the offline tests: kinds every 0.25 m
@@ -1484,16 +1496,26 @@ function E:roadRunsSavePainted()
     local path = string.format("%sroadPaint_%d.xml", folder, n)
     local xml = createXMLFile("ADFlyoverRoadPaint", path, "roadArea")
     if xml == nil or xml == 0 then return end
+    local count = self:roadRunsWriteTiles(xml, s.painted)
+    saveXMLFile(xml)
+    delete(xml)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - saved %d painted squares to %s", count, path)
+    if self.warnPlayer ~= nil then pcall(self.warnPlayer, self, string.format("Saved %d painted squares: %s", count, path)) end
+end
+
+--- Write squares ({ [key] = { tx, tz } }, ROADVIEW_TILE m each) as roadArea.tile(i) x0 z0 k: the ground
+--- the game reads every 0.25 m ('.', d, g, p, F), row by row. Returns how many.
+function E:roadRunsWriteTiles(xml, squares)
     local T, st = self.ROADVIEW_TILE, 0.25
     local per = math.floor(T / st)
     setXMLFloat(xml, "roadArea#step", st)
     setXMLFloat(xml, "roadArea#tile", T)
     local chars = { [RF.KIND_NONE] = ".", [RF.KIND_DIRT] = "d", [RF.KIND_GRAVEL] = "g", [RF.KIND_PAVED] = "p" }
     local keys = {}
-    for k in pairs(s.painted) do keys[#keys + 1] = k end
+    for k in pairs(squares) do keys[#keys + 1] = k end
     table.sort(keys)
     for i, k in ipairs(keys) do
-        local t = s.painted[k]
+        local t = squares[k]
         local x0, z0 = t.tx * T, t.tz * T
         local cells = {}
         for j = 0, per - 1 do
@@ -1510,10 +1532,224 @@ function E:roadRunsSavePainted()
         setXMLFloat(xml, base .. "#z0", z0)
         setXMLString(xml, base .. "#k", table.concat(cells))
     end
+    return #keys
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- test cases: the user draws a track's true middle; it is saved with the ground along it
+
+--- A smooth curve through the points (centripetal Catmull-Rom: no loops or overshoot at sharp
+--- corners), a point every `step` m. Each sample carries the index of the point it leaves from.
+local function midCurve(P, step)
+    local out = {}
+    if #P == 0 then return out end
+    if #P == 1 then return { { x = P[1].x, z = P[1].z, seg = 1 } } end
+    local function knot(a, b)
+        return math.max(1e-3, math.sqrt(math.sqrt((b.x - a.x) ^ 2 + (b.z - a.z) ^ 2)))
+    end
+    local function mix(a, b, ta, tb, t)
+        local u = (t - ta) / (tb - ta)
+        return { x = a.x + (b.x - a.x) * u, z = a.z + (b.z - a.z) * u }
+    end
+    for i = 1, #P - 1 do
+        local p1, p2 = P[i], P[i + 1]
+        local p0 = P[i - 1] or { x = 2 * p1.x - p2.x, z = 2 * p1.z - p2.z }
+        local p3 = P[i + 2] or { x = 2 * p2.x - p1.x, z = 2 * p2.z - p1.z }
+        local t0 = 0
+        local t1 = t0 + knot(p0, p1)
+        local t2 = t1 + knot(p1, p2)
+        local t3 = t2 + knot(p2, p3)
+        local len = math.sqrt((p2.x - p1.x) ^ 2 + (p2.z - p1.z) ^ 2)
+        local n = math.max(1, math.ceil(len / step))
+        for k = 0, n - 1 do
+            local t = t1 + (t2 - t1) * k / n
+            local a1, a2, a3 = mix(p0, p1, t0, t1, t), mix(p1, p2, t1, t2, t), mix(p2, p3, t2, t3, t)
+            local b1, b2 = mix(a1, a2, t0, t2, t), mix(a2, a3, t1, t3, t)
+            local c = mix(b1, b2, t1, t2, t)
+            out[#out + 1] = { x = c.x, z = c.z, seg = i }
+        end
+    end
+    out[#out + 1] = { x = P[#P].x, z = P[#P].z, seg = #P - 1 }
+    return out
+end
+
+local function midState(self)
+    local s = roadState(self)
+    s.mid = s.mid or { pts = {} }
+    return s.mid
+end
+
+local function midSamples(m)
+    if m.curve == nil then m.curve = midCurve(m.pts, 0.5) end
+    return m.curve
+end
+
+local function midLength(C)
+    local L = 0
+    for i = 2, #C do L = L + math.sqrt((C[i].x - C[i - 1].x) ^ 2 + (C[i].z - C[i - 1].z) ^ 2) end
+    return L
+end
+
+local function nearestPoint(m, x, z, reach)
+    local best, bd = nil, reach
+    for i, p in ipairs(m.pts) do
+        local d = math.sqrt((p.x - x) ^ 2 + (p.z - z) ^ 2)
+        if d < bd then best, bd = i, d end
+    end
+    return best
+end
+
+--- Per frame while drawing the middle: which point is under the mouse, and drag the grabbed one.
+function E:roadMidUpdate(overPanel)
+    local m = midState(self)
+    local cx, cz = self.cursorX, self.cursorZ
+    if self.leftDown and not m.wasDown and not overPanel and cx ~= nil then
+        m.drag = nearestPoint(m, cx, cz, self.ROADCASE_GRAB)
+    end
+    if not self.leftDown then m.drag = nil end
+    if m.drag ~= nil and cx ~= nil and m.pts[m.drag] ~= nil then
+        local p = m.pts[m.drag]
+        if p.x ~= cx or p.z ~= cz then
+            p.x, p.z = cx, cz
+            m.curve, m.dragged = nil, true
+        end
+    end
+    m.wasDown = self.leftDown
+    m.hover = (cx ~= nil and not overPanel) and nearestPoint(m, cx, cz, self.ROADCASE_GRAB) or nil
+end
+
+--- A click adds a point: between two points when it is near the curve there, else on the nearer end.
+function E:roadMidClick()
+    local m = midState(self)
+    if m.dragged then m.dragged = false return end      -- the end of a drag, not a new point
+    local cx, cz = self.cursorX, self.cursorZ
+    if cx == nil or nearestPoint(m, cx, cz, self.ROADCASE_GRAB) ~= nil then return end
+    local at = #m.pts + 1
+    if #m.pts >= 2 then
+        local seg, bd = nil, 3
+        for _, c in ipairs(midSamples(m)) do
+            local d = math.sqrt((c.x - cx) ^ 2 + (c.z - cz) ^ 2)
+            if d < bd then seg, bd = c.seg, d end
+        end
+        if seg ~= nil then
+            at = seg + 1
+        else
+            local a, b = m.pts[1], m.pts[#m.pts]
+            if (a.x - cx) ^ 2 + (a.z - cz) ^ 2 < (b.x - cx) ^ 2 + (b.z - cz) ^ 2 then at = 1 end
+        end
+    end
+    table.insert(m.pts, at, { x = cx, z = cz })
+    m.last, m.curve = at, nil
+end
+
+--- Right-click: take off the point under the mouse, or else the last one placed.
+function E:roadMidRemove()
+    local m = midState(self)
+    if #m.pts == 0 then return false end
+    local i = m.hover or m.last or #m.pts
+    if m.pts[i] == nil then i = #m.pts end
+    table.remove(m.pts, i)
+    m.last, m.hover, m.curve = nil, nil, nil
+    return true
+end
+
+--- Save the track: the ground along the curve (ROADCASE_HALF each side, plus any painted squares) and
+--- the curve, to modSettings/FS25_ADFlyoverEditor/roadCases/track_N.xml. Then start a new middle.
+function E:roadRunsSaveTrack()
+    local s = roadState(self)
+    local m = midState(self)
+    if #m.pts < 2 or getUserProfileAppPath == nil or createXMLFile == nil then return end
+    local C = midSamples(m)
+    local T, H = self.ROADVIEW_TILE, self.ROADCASE_HALF
+    local squares, count = {}, 0
+    local function add(tx, tz)
+        local key = tx * 100003 + tz
+        if squares[key] == nil and RF.onMap(tx * T + T / 2, tz * T + T / 2) then
+            squares[key] = { tx = tx, tz = tz }
+            count = count + 1
+        end
+    end
+    for i = 1, #C, 2 do
+        local c = C[i]
+        for tx = math.floor((c.x - H) / T), math.floor((c.x + H) / T) do
+            for tz = math.floor((c.z - H) / T), math.floor((c.z + H) / T) do add(tx, tz) end
+        end
+    end
+    for _, t in pairs(s.painted or {}) do add(t.tx, t.tz) end
+    if count > self.ROADCASE_MAX_TILES then
+        if self.warnPlayer ~= nil then
+            pcall(self.warnPlayer, self, string.format("Track too long to save in one go (%.0f m) - save it in parts.", midLength(C)))
+        end
+        return
+    end
+    local base = getUserProfileAppPath() .. "modSettings/FS25_ADFlyoverEditor/"
+    local folder = base .. "roadCases/"
+    createFolder(getUserProfileAppPath() .. "modSettings/")
+    createFolder(base)
+    createFolder(folder)
+    local n = 1
+    while fileExists ~= nil and fileExists(string.format("%strack_%d.xml", folder, n)) do n = n + 1 end
+    local path = string.format("%strack_%d.xml", folder, n)
+    local xml = createXMLFile("ADFlyoverRoadCase", path, "roadArea")
+    if xml == nil or xml == 0 then return end
+    self:roadRunsWriteTiles(xml, squares)
+    local function pts(P)
+        local o = {}
+        for _, p in ipairs(P) do o[#o + 1] = string.format("%.2f,%.2f", p.x, p.z) end
+        return table.concat(o, " ")
+    end
+    setXMLFloat(xml, "roadArea.middle#half", H)
+    setXMLString(xml, "roadArea.middle#clicks", pts(m.pts))
+    setXMLString(xml, "roadArea.middle#pts", pts(C))
     saveXMLFile(xml)
     delete(xml)
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - saved %d painted squares to %s", #keys, path)
-    if self.warnPlayer ~= nil then pcall(self.warnPlayer, self, string.format("Saved %d painted squares: %s", #keys, path)) end
+    local len = midLength(C)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - saved track %d: %.0f m of middle (%d points), %d squares of ground, to %s",
+        n, len, #m.pts, count, path)
+    if self.warnPlayer ~= nil then
+        pcall(self.warnPlayer, self, string.format("Saved track %d (%.0f m): %s", n, len, path))
+    end
+    s.mid = nil
+end
+
+--- The middle being drawn: the curve (magenta), its points (posts; white under the mouse) and the
+--- edges of the ground that will be saved (faint cyan).
+function E:drawRoadMid(lw, seg)
+    local m = self.roadRuns and self.roadRuns.mid or nil
+    if m == nil or #m.pts == 0 then return end
+    local cx, cz = self.cursorX, self.cursorZ
+    local C = midSamples(m)
+    local R = 300
+    local function near(p) return cx == nil or (math.abs(p.x - cx) < R and math.abs(p.z - cz) < R) end
+    for i = 2, #C do
+        if near(C[i]) then seg(C[i - 1].x, C[i - 1].z, C[i].x, C[i].z, lw * 1.4, 1, 0.2, 0.9) end
+    end
+    if self.roadDrawMid then
+        local H = self.ROADCASE_HALF
+        local prev = nil
+        for i = 1, #C, 4 do
+            local a, b = C[math.max(1, i - 1)], C[math.min(#C, i + 1)]
+            local dx, dz = b.x - a.x, b.z - a.z
+            local l = math.sqrt(dx * dx + dz * dz)
+            if l > 1e-6 then
+                local nx, nz = -dz / l, dx / l
+                local cur = { C[i].x + nx * H, C[i].z + nz * H, C[i].x - nx * H, C[i].z - nz * H }
+                if prev ~= nil and near(C[i]) then
+                    seg(prev[1], prev[2], cur[1], cur[2], lw * 0.5, 0.2, 0.9, 1)
+                    seg(prev[3], prev[4], cur[3], cur[4], lw * 0.5, 0.2, 0.9, 1)
+                end
+                prev = cur
+            end
+        end
+    end
+    for i, p in ipairs(m.pts) do
+        if near(p) then
+            local y = terrainY(p.x, p.z)
+            local r, g, b = 1, 0.2, 0.9
+            if i == m.hover or i == m.drag then r, g, b = 1, 1, 1 end
+            ADDrawingManager:addLineTask(p.x, y, p.z, p.x, y + 1.5, p.z, lw * 2, r, g, b)
+        end
+    end
 end
 
 function E:drawRoadRunsInner(lw)
@@ -1611,13 +1847,29 @@ function E:roadRunsCard(kit)
             kit.add("cursor", "read across", hov.fromSpline and "the map's own line: nothing read" or "no readings kept")
         end
         kit.add("hint", "green used; grey no road; purple junction; orange too wide; red jumped; white post = filtered middle")
-        kit.tgl("paint area (left-drag)", self.roadPaint, function() editor.roadPaint = not editor.roadPaint end)
+        kit.tgl("paint area (left-drag)", self.roadPaint, function()
+            editor.roadPaint = not editor.roadPaint
+            if editor.roadPaint then editor.roadDrawMid = false end
+        end)
         if (s.paintedN or 0) > 0 then
             kit.add("cursor", "painted", string.format("%d squares of %d m", s.paintedN, self.ROADVIEW_TILE))
             kit.btn("save painted", function() editor:roadRunsSavePainted() end)
             kit.btn("clear painted", function() s.painted, s.paintedN = nil, 0 end)
         end
         kit.btn("save this area (for offline tests)", function() editor:roadRunsSaveArea() end)
+        kit.tgl("draw the middle (test case)", self.roadDrawMid, function()
+            editor.roadDrawMid = not editor.roadDrawMid
+            if editor.roadDrawMid then editor.roadPaint = false end
+        end)
+        local m = s.mid
+        if m ~= nil and #m.pts > 0 then
+            kit.add("cursor", "middle", string.format("%d points, %.0f m", #m.pts, midLength(midSamples(m))))
+            if #m.pts >= 2 then kit.btn("save track (ground + middle)", function() editor:roadRunsSaveTrack() end) end
+            kit.btn("clear middle", function() s.mid = nil end)
+        end
+        if self.roadDrawMid then
+            kit.add("hint", "click points along the true middle; drag a point to move it; right-click takes one off")
+        end
         return
     end
     kit.segFlip("light up", "under mouse", "all nearby", self.roadShowAll, function()
@@ -1710,6 +1962,7 @@ end
 --- Right-click: build what is picked. Returns true if there was something.
 function E:roadRunsStop()
     local s = self.roadRuns
+    if self.roadView and self.roadDrawMid then return self:roadMidRemove() end
     if s ~= nil and #s.picks > 0 then
         self:commitRoadRuns()
         return true
