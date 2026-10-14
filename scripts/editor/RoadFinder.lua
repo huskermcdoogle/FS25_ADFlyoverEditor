@@ -2365,6 +2365,8 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
                         startTag = startTag, endTag = endTag,
                         startNode = startAt and { x = startAt.x, z = startAt.z, tag = "fork" } or nil,
                         endNode = endAt and { x = endAt.x, z = endAt.z, tag = "fork" } or nil,
+                        startMet = startAt ~= nil and startAt.met or nil,
+                        endMet = endAt ~= nil and endAt.met or nil,
                     }
                     -- second pass: the walked line as the guide, the road read straight across it
                     -- every 2 m and the middle filtered both ways - the walker's steering cuts the
@@ -2407,6 +2409,7 @@ RF.FIT_SPAN = 8                  -- sections (2 m) either side in each fit
 RF.FIT_TRIM = 1.0                -- readings further than this off the fit are left out of it
 RF.FIT_MIN = 5                   -- fewer readings than this in reach: no fit there
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
+RF.MEET_TAIL = 12                -- metres of a met end laid on the walker's own path
 RF.WALKED_FORK_BEND = 4          -- the same for a walked line (it does not bend into the fork)
 RF.END_TURN_CAP = 1.5            -- degrees a metre at most when a line's end is carried on along its curve
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
@@ -2432,16 +2435,19 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     -- square's centre line): only a short piece is left out, so the end is read, not guessed
     -- (2026-10-13: a 15 m guessed tail drifted 5 m off a lane where it met a dirt yard)
     if st.walkedGuide then bend = RF.WALKED_FORK_BEND end
+    local bendStart, bendEnd = bend, bend
+    if st.startMet then bendStart = 0 end
+    if st.endMet then bendEnd = 0 end
     local cutStart, cutEnd = 0, 0
     local function nearFork(tag, node) return (tag == "fork" or tag == "wide") and node ~= nil end
     if nearFork(st.startTag, st.startNode) then
-        while #G > 6 and sqrt((G[1].x - st.startNode.x) ^ 2 + (G[1].z - st.startNode.z) ^ 2) < bend do
+        while #G > 6 and sqrt((G[1].x - st.startNode.x) ^ 2 + (G[1].z - st.startNode.z) ^ 2) < bendStart do
             table.remove(G, 1)
             cutStart = cutStart + W.step
         end
     end
     if nearFork(st.endTag, st.endNode) then
-        while #G > 6 and sqrt((G[#G].x - st.endNode.x) ^ 2 + (G[#G].z - st.endNode.z) ^ 2) < bend do
+        while #G > 6 and sqrt((G[#G].x - st.endNode.x) ^ 2 + (G[#G].z - st.endNode.z) ^ 2) < bendEnd do
             table.remove(G)
             cutEnd = cutEnd + W.step
         end
@@ -2760,9 +2766,74 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     local R = {}
     for i = 1, n do
         local off = offs[i]
-        R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w }
+        R[i] = { x = G[i].x + nxs[i] * off, z = G[i].z + nzs[i] * off, w = widths[i] or G[i].w, read = meas[i] ~= nil }
         dbg[i].off = off
     end
+    -- An end where the walk met the road it runs into: the walker followed the track's bend to the
+    -- road, and the readings there do not (the track widens as it bends, and the edge that holds its
+    -- line is the field side running straight on - 2026-10-13 the line ran straight past the bend).
+    -- The last MEET_TAIL metres blend onto the walker's own path.
+    local function blendMet(atEnd)
+        local P = st.pts
+        if #P < 2 or #R < 3 then return end
+        -- only where the walker kept to the track's own paint there (a walker that swerved over a
+        -- road's gravel apron is not followed: that is the apron, not a bend)
+        local onTrack, seen, run = 0, 0, 0
+        local j0, j1, dj = #P, 1, -1
+        if not atEnd then j0, j1, dj = 1, #P, 1 end
+        for j = j0, j1, dj do
+            local q = P[j]
+            if j ~= j0 then
+                local pq = P[j - dj]
+                run = run + sqrt((q.x - pq.x) ^ 2 + (q.z - pq.z) ^ 2)
+            end
+            if run > RF.MEET_TAIL then break end
+            seen = seen + 1
+            local hit = isRoad(q.x, q.z)
+            if not hit then
+                for _, o in ipairs({ { 0.75, 0 }, { -0.75, 0 }, { 0, 0.75 }, { 0, -0.75 } }) do
+                    if isRoad(q.x + o[1], q.z + o[2]) then hit = true break end
+                end
+            end
+            if hit then onTrack = onTrack + 1 end
+        end
+        if seen == 0 or onTrack < 0.7 * seen then return end
+        local acc = 0
+        local idx = {}
+        if atEnd then for i = #R, 1, -1 do idx[#idx + 1] = i end else for i = 1, #R do idx[#idx + 1] = i end end
+        for k, i in ipairs(idx) do
+            if k > 1 then
+                local q = R[idx[k - 1]]
+                acc = acc + sqrt((R[i].x - q.x) ^ 2 + (R[i].z - q.z) ^ 2)
+            end
+            if acc > RF.MEET_TAIL then break end
+            -- nearest point on the walker's path
+            local bx, bz, bd = nil, nil, math.huge
+            for j = 1, #P - 1 do
+                local a, b = P[j], P[j + 1]
+                local dx, dz = b.x - a.x, b.z - a.z
+                local l2 = dx * dx + dz * dz
+                local t = l2 > 0 and max(0, min(1, ((R[i].x - a.x) * dx + (R[i].z - a.z) * dz) / l2)) or 0
+                local qx, qz = a.x + dx * t, a.z + dz * t
+                local d = (R[i].x - qx) ^ 2 + (R[i].z - qz) ^ 2
+                if d < bd then bx, bz, bd = qx, qz, d end
+            end
+            if bx ~= nil then
+                local f = 1 - acc / RF.MEET_TAIL
+                R[i].x, R[i].z = R[i].x + (bx - R[i].x) * f, R[i].z + (bz - R[i].z) * f
+                R[i].read = true
+            end
+        end
+        -- and the end itself is the walker's end
+        local e = atEnd and P[#P] or P[1]
+        local r = atEnd and R[#R] or R[1]
+        if sqrt((e.x - r.x) ^ 2 + (e.z - r.z) ^ 2) > 0.5 then
+            local np = { x = e.x, z = e.z, w = r.w, read = true }
+            if atEnd then R[#R + 1] = np else table.insert(R, 1, np) end
+        end
+    end
+    if st.endMet then blendMet(true) end
+    if st.startMet then blendMet(false) end
     -- Across a stretch with no usable readings (a junction held out above, a gap in the paint), the
     -- line runs straight from the last good point to the next: holding the walked line's own shape
     -- there kept the walk's dip into the junction (~1 m at three T's, 2026-10-12).
@@ -2857,6 +2928,11 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
     -- 10 m, unless the road really turns there (the tip over 45 degrees off that course).
     local function steady(atEnd)
         if #R < 14 then return end
+        -- an end read well all the way is left as read: a track bending in its last metres to meet a
+        -- road was straightened past the bend (2026-10-13); only a guessed or doubtful end is steadied
+        local allRead = true
+        for k = 1, 5 do if not at(atEnd, k).read then allRead = false break end end
+        if allRead then return end
         local h, rate = course(atEnd, 6)
         if h == nil then return end
         local a, tip = at(atEnd, 6), at(atEnd, 1)
