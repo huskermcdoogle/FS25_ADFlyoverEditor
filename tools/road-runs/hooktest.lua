@@ -25,4 +25,11 @@ check("hook far from paving left", RF.cutEndHooks(line(true), far) .pts[#line(tr
 check("straight track left", #RF.cutEndHooks(line(false), paved).pts == #line(false).pts)
 local pv = line(true); pv.class = "paved"
 check("paved stretch left", #RF.cutEndHooks(pv, paved).pts == #pv.pts)
+-- a track that curves DOWN to the road (closer and closer) keeps its bend
+local turnIn = { pts = {}, class = "track", startTag = "end", endTag = "end" }
+for z = 100, 20, -2 do turnIn.pts[#turnIn.pts + 1] = { x = 0, z = z } end
+for k = 1, 8 do turnIn.pts[#turnIn.pts + 1] = { x = -k * 1.4, z = 20 - k * 1.4 } end
+turnIn.len = 0
+for i = 2, #turnIn.pts do turnIn.len = turnIn.len + math.sqrt((turnIn.pts[i].x - turnIn.pts[i-1].x) ^ 2 + (turnIn.pts[i].z - turnIn.pts[i-1].z) ^ 2) end
+check("track turning in to the road keeps its bend", #RF.cutEndHooks(turnIn, paved).pts == #turnIn.pts)
 print(fails == 0 and "ALL PASS" or (fails .. " FAILED"))

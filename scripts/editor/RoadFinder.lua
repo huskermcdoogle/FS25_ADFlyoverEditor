@@ -2047,6 +2047,23 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
             local ax, az = nil, nil
             if fx ~= nil and steerable(fw, usual) then ax, az = fx, fz
             elseif cx ~= nil and steerable(cw, usual) then ax, az = cx, cz end
+            -- too wide to steer by, with the road it meets close ahead (a track widening as it bends
+            -- down to meet a road - 2026-10-13 the walk held its course past the bend into the grass):
+            -- head for the nearest of that road within 12 m and 60 degrees
+            if ax == nil and isStop ~= nil then
+                local bestD = math.huge
+                for a = -60, 60, 10 do
+                    local rx, rz = rot(hx, hz, a)
+                    for d = 2, 12 do
+                        if d >= bestD then break end
+                        if isStop(px + rx * d, pz + rz * d) then
+                            bestD = d
+                            ax, az = px + rx * d, pz + rz * d
+                            break
+                        end
+                    end
+                end
+            end
             if ax == nil then ax, az = px + hx * W.lookAhead, pz + hz * W.lookAhead end   -- hold course
             local dx, dz = ax - px, az - pz
             local dl = sqrt(dx * dx + dz * dz)
@@ -3144,6 +3161,7 @@ end
 RF.HOOK_SPAN = 20        -- a track end's last metres looked at for a hook
 RF.HOOK_TURN = 45        -- bending more than this there, next to paving, is the track meeting the road
 RF.HOOK_PAVED = 12       -- paving this close to the bend
+RF.HOOK_CLOSER = 2       -- an end this much closer to the paving than the bend is turning in, not a hook
 
 --- A track that comes to a paved road and then bends to run along its verge (2026-10-13: a hook ~10 m
 --- along the gravel at (-390,-616)) has met the road at the bend: cut there, that end a fork.
@@ -3159,6 +3177,17 @@ function RF.cutEndHooks(st, isPaved)
             end
         end
         return false
+    end
+    local function pavedDist(x, z)
+        local best = math.huge
+        for a = 0, 15 do
+            local dx, dz = math.cos(a * math.pi / 8), math.sin(a * math.pi / 8)
+            for r = 0.5, RF.HOOK_PAVED + 6, 0.5 do
+                if r >= best then break end
+                if isPaved(x + dx * r, z + dz * r) then best = r break end
+            end
+        end
+        return best
     end
     -- P runs toward the end being looked at; returns the index (in P) to cut at, or nil
     local function hookIn(P)
@@ -3183,8 +3212,12 @@ function RF.cutEndHooks(st, isPaved)
             local dx, dz = P[b].x - P[i].x, P[b].z - P[i].z
             local dl = sqrt(dx * dx + dz * dz)
             if dl > 1 and (dx * hx + dz * hz) / dl < cosTurn then
-                if pavedNear(P[i].x, P[i].z) then return i end
-                return nil
+                if not pavedNear(P[i].x, P[i].z) then return nil end
+                -- a track that bends TOWARD the road (turning in to meet it) keeps its bend; only one
+                -- that bends to run along the verge, no closer, is a hook (2026-10-13: a track curving
+                -- down to a road was cut at its bend and left pointing into the grass)
+                if pavedDist(P[n].x, P[n].z) < pavedDist(P[i].x, P[i].z) - RF.HOOK_CLOSER then return nil end
+                return i
             end
         end
         return nil
