@@ -678,6 +678,7 @@ end
 -- into one has met the road
 local shoulderAtWalk = RF.newShoulderMap(kindAtWalk)
 RF.kindReader = kindAtWalk
+RF.fieldReader = fieldAtWalk
 
 -- for code above this point in the file (the locals are not visible there)
 E.roadRunsKindAt, E.roadRunsFieldAt, E.roadRunsShoulderAt = kindAtWalk, fieldAtWalk, shoulderAtWalk

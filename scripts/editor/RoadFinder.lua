@@ -1755,6 +1755,9 @@ end
 --- across the road is the narrowest. Returns cx, cz, hx, hz, width or nil.
 RF.SEED_RUN = 12                 -- metres each way a seed looks along each heading for road
 RF.SEED_START_WIDTH = { paved = 6, track = 4 }   -- a walk started where no width reads (a field entrance)
+RF.CORRIDOR_MAX = 10             -- a field edge this close each side makes a corridor (tracks)
+RF.CORRIDOR_MIN = 3              -- and at least this wide
+RF.fieldReader = nil             -- the tool sets its memoised field test
 RF.RUT_LIKE = 0.55               -- the narrower rut of a pair is at least this share of the wider
 RF.RUT_UNLIKE = 8                -- metres of distance a rut pair's width mismatch (as a share of the wider) counts as
 RF.SEED_SIDE = { 0, 0.75, -0.75, 1.5, -1.5 }   -- and this far to each side (a seed between two ruts)
@@ -2424,9 +2427,29 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             if b.w >= W.minBand[cls] and abs(b.mid) <= W.half and (pick == nil or abs(b.mid) < abs(pick.mid)) then pick = b end
         end
         if pick ~= nil then meas[i], widths[i] = pick.mid, pick.w end
+        -- A track between two fields where the paint shows one rut only (the other is grass, or a
+        -- decal): the middle is halfway between the field edges (2026-10-13: a single painted 3 m rut
+        -- at (580,-470) put the line on it, the track running between two fields).
+        local corridor = nil
+        if cls == "track" and (pick == nil or not pick.ruts) then
+            local isFieldFn = RF.fieldReader or RF.isFieldAt
+            local function edge(sgn)
+                for k = 1, RF.CORRIDOR_MAX * 4 do
+                    local o = sgn * k * 0.25
+                    if isFieldFn(G[i].x + nxs[i] * o, G[i].z + nzs[i] * o) then return o end
+                end
+                return nil
+            end
+            local l, r = edge(-1), edge(1)
+            if l ~= nil and r ~= nil and r - l >= RF.CORRIDOR_MIN and r - l <= 2 * RF.CORRIDOR_MAX then
+                corridor = { lo = l, hi = r }
+                meas[i], widths[i] = (l + r) / 2, min(r - l, (pick and pick.w) or (r - l))
+            end
+        end
         local bl = {}
         for _, b in ipairs(bands) do bl[#bl + 1] = { lo = b.mid - b.w / 2, hi = b.mid + b.w / 2, picked = (b == pick) } end
-        dbg[i] = { x = G[i].x, z = G[i].z, nx = nxs[i], nz = nzs[i], bands = bl, why = (pick == nil) and "none" or nil }
+        dbg[i] = { x = G[i].x, z = G[i].z, nx = nxs[i], nz = nzs[i], bands = bl, why = (meas[i] == nil) and "none" or nil,
+            edge = corridor and "fields" or nil }
         work(40)
     end
     -- Through a junction the walk bridged, the readings are the junction, not the road: within
