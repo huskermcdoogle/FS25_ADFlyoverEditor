@@ -6,6 +6,14 @@ Flyover Editor is a top-down editor for [url=https://github.com/Stephan-S/FS25_A
 
 It runs as a [b]companion mod[/b] beside [i]stock[/i] AutoDrive. It does [b]not[/b] modify AutoDrive's files or your savegame's config; it attaches to AutoDrive at runtime and politely refuses to load (and tells you why) if AutoDrive isn't installed. Everything you build goes through AutoDrive's own network API, so a route laid in the flyover editor is identical to one recorded from a vehicle.
 
+[size=150][b]New in 1.0.3.0[/b][/size]
+[list]
+[*][b]Road runs[/b] (new tool) — point at a map road or farm track with no AutoDrive path and it lights up; click to have the run laid for you, one-way, two-way or two lanes. Shape it with handles first, and reshape roads you've already built — through junctions, with the side roads following.
+[*][b]Spline, rebuilt[/b] — a smooth curve through as many points as you like, and [b]edit placed[/b] to pick up a run that's already laid and reshape it.
+[*][b]Junction tool (BETA)[/b] — clear the old turn wiring at a plain X or T road junction and lay a clean set of turns, in one right-click.
+[*][b]Left Alt + V[/b] opens the editor too, and a first draft of [b]Brazilian Portuguese[/b].
+[/list]
+
 [size=150][b]Why you'll want it[/b][/size]
 [list]
 [*][b]See the whole picture.[/b] A top-down camera over your farm means you plan routes looking at the actual field layout, junctions and yards — not the back of a tractor.
@@ -16,7 +24,7 @@ It runs as a [b]companion mod[/b] beside [i]stock[/i] AutoDrive. It does [b]not[
 
 [size=150][b]Opening it[/b][/size]
 [list]
-[*][b]Left Alt + F[/b] (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+[*][b]Left Alt + V[/b] or [b]Left Alt + F[/b] (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 [*][b]Esc[/b] to leave.
 [*][b]1–9 and 0[/b] select tools; [b]Q[/b] undo, [b]E[/b] redo; [b]H[/b] hides/shows the floating tool card; [b],[/b] and [b].[/b] nudge the Move falloff.
 [/list]
@@ -27,10 +35,11 @@ Tools are grouped by job on the panel. [b]Select[/b] is the default mode — no 
 [b]Create[/b]
 [list]
 [*][b]Draw[/b] — Place waypoints one click at a time, joining each to the last so a route grows as you go. Click empty ground to drop a point; click an existing waypoint to draw [i]from[/i] it and wire straight into the network; right-click ends the run. Options: one-way / two-way, primary / secondary (give-way), and whether new points snap to the terrain or any surface.
-[*][b]Spline[/b] — Connect two waypoints with a smooth curve instead of a straight segment, for sweeping bends a vehicle can take at speed. A live preview shows the curve before you commit; the wheel tightens or loosens the curvature, and endpoint/tangent controls flip which way the curve arrives.
+[*][b]Spline[/b] — Lay a smooth curve through as many points as you click, for sweeping bends a vehicle can take at speed. An end clicked on a waypoint joins the road and follows its heading. Drag a point to move it, click the curve to add one, Ctrl-click to remove one; a live preview shows the waypoints before you commit. [b]Edit placed[/b] picks up a run that's already laid and reshapes it the same way, keeping its direction and priority. AutoDrive's own two-point spline is still there if you prefer it.
 [*][b]Field loop[/b] — Generate a complete, drivable two-way loop just outside a field's boundary, smoothed to a turning radius and nudged around any obstacles in the way (trees, poles, fences, buildings). It's a standalone loop — no map markers, not wired to the rest of the network — so you connect it in afterwards. Controls: margin, turning radius, obstacle clearance and vehicle height.
 [*][b]Parallel[/b] — Copy an existing span or run sideways by a set distance as a second track alongside it — a passing lane or a return leg. Pick the span or run, set the distance and side, and choose whether a track beside a one-way road runs the same way or opposite as a return lane.
 [*][b]Siding[/b] — Drop a short parallel stretch beside a run and curve it back in at both ends — a pull-off or passing siding — in a single action. Set the offset and length (the wheel drives the length) and the side.
+[*][b]Road runs[/b] — Lay AutoDrive runs along the map's own roads and farm tracks. Point at a road with no path and it lights up with its lanes previewed; click to pick it (a click follows the road straight on through junctions and stops at T's), double-click to carry it on through forks, right-click to build. Lay as one-way, one two-way line, or two lanes keeping right; runs stop short at forks so the junction tool can finish them, and a track meeting a road runs right to the asphalt. Drag handles to shape a pick before building — or click a road that's already built and reshape it: a two-lane road moves as one, junction points move with it, short turns bend and side roads ease back into place.
 [/list]
 
 [b]Shape[/b]
@@ -46,6 +55,7 @@ Tools are grouped by job on the panel. [b]Select[/b] is the default mode — no 
 [list]
 [*][b]Convert[/b] — Rewrite existing connections: set the direction (two-way, one-way, other way, or AutoDrive's reverse-way) and the priority (primary or give-way secondary) and one click applies both — to a single point or a whole run.
 [*][b]Merge[/b] — Fold two separately-recorded parallel lanes into one shared track — the two directions of a road, or a lane you recorded twice. Pick the stretch on one track, then click the other track (or right-click when it's the only one); the part that will be absorbed turns green first. Merge distance and divergence keep it honest.
+[*][b]Junction (BETA)[/b] — Lock a road junction and, in one right-click, clear its old turn wiring (trimming the lanes back to clean ends), lay a fresh set of turns — the mod's own X or T pattern where it fits — or both at once. One undo takes it all back. It's a beta: plain X and T road junctions are what it does well today, with farm tracks, Y's and skewed junctions still to come. On by default; switch it off in the settings dialog.
 [/list]
 
 [b]Utility[/b]
@@ -77,7 +87,7 @@ Poor eyesight or a high-res display? The editor scales independently of the rest
 You're never lost. A [b]?[/b] button (and the [b]/[/b] key) shows contextual help for the current tool — what it does, how to use it, and its controls — that follows the tool as you switch. From there, open the [b]full browsable in-game manual[/b]: a page per tool plus a General reference covering keys, mouse, camera and settings.
 
 [size=150][b]Languages[/b][/size]
-Fully localized in [b]English and Deutsch[/b] — the panel, menus, on-screen guidance, help and the complete manual all follow your game language. Adding more languages is straightforward.
+Fully localized in [b]English and Deutsch[/b] — the panel, menus, on-screen guidance, help and the complete manual all follow your game language. A first draft of [b]Brazilian Portuguese[/b] is included too (anything not yet translated shows in English) — native speakers are welcome to help refine it.
 
 [size=150][b]Compatibility & safety[/b][/size]
 [list]
