@@ -3,7 +3,7 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="road runs: lane ends + walks + two-lane forks" build="@BUILD@">
+<testPlan title="road runs: lane ends, walks, probe" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="tEnd" title="track_1 lane: the end at the big road is centred"
@@ -12,4 +12,6 @@
           hint="Click the lane on the east side of the U, then on the west side: both give the same whole lane, end to end."/>
     <test id="twoLaneFork" title="Two-lane reshape next to a fork leaves the rest alone" passLog="twin lane .-cut to"
           hint="On a two-lane road where a side road joins one lane, shape it and right-click: past the fork that lane stays as it was (ticks itself when a lane is cut to the side-by-side part)."/>
+    <test id="probe" title="Probe at the U bend of track_1" passLog="probe %- %d+ decal%(s%) within"
+          hint="Detection view, mouse on the ragged asphalt at the U bend, then the card's 'probe here' button: rings show decals near it (ticks itself; the paint read goes to the log)."/>
 </testPlan>

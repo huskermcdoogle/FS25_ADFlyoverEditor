@@ -1993,6 +1993,23 @@ function E:drawRoadView(lw)
     if s == nil or cx == nil or not finite(cx) or not finite(cz) then return end
     local L = self.roadLayers
     local lift = 0.06
+    -- the probe's decals: a ring round each, bluish green; the probe spot a vermillion post
+    local pr = s.probe
+    if pr ~= nil then
+        local py = terrainY(pr.x, pr.z)
+        Draw:addLineTask(pr.x, py, pr.z, pr.x, py + 3, pr.z, lw * 2, 0.84, 0.37, 0)
+        for _, d in ipairs(pr.decals) do
+            local n = 24
+            for k = 0, n - 1 do
+                local a0, a1 = 2 * math.pi * k / n, 2 * math.pi * (k + 1) / n
+                local ax, az = d.x + math.cos(a0) * d.r, d.z + math.sin(a0) * d.r
+                local bx, bz = d.x + math.cos(a1) * d.r, d.z + math.sin(a1) * d.r
+                if finite(ax) and finite(az) and finite(bx) and finite(bz) then
+                    Draw:addLineTask(ax, terrainY(ax, az) + 0.15, az, bx, terrainY(bx, bz) + 0.15, bz, lw * 1.5, 0, 0.62, 0.45)
+                end
+            end
+        end
+    end
     local function seg(ax, az, bx, bz, w, r, g, b)
         if not (finite(ax) and finite(az) and finite(bx) and finite(bz)) then return end
         Draw:addLineTask(ax, terrainY(ax, az) + lift, az, bx, terrainY(bx, bz) + lift, bz, w, r, g, b)
@@ -2115,6 +2132,91 @@ end
 --- (2026-10-13: the offline map - an old save at 1 m - did not match what the game read, so fixes
 --- tuned on it missed in game).
 E.ROADVIEW_SAVE_HALF = 40
+--- PROBE (2026-10-15 user: why does the asphalt read ragged when it looks clean in game - is there a
+--- layer we cannot read?). At the last map spot: (1) the paint read two ways - one material per
+--- square (what the tool uses) and blended (the 'combined' flags on), on a 0.5 m grid 3 m across, to
+--- see whether the blended read gives "how much asphalt" instead of yes/no; (2) the map's decals
+--- (flat shapes on the ground, no collision) within ROADRUNS_PROBE_DECALS, found by name in the map's
+--- object tree, logged and ringed in the detection view.
+E.ROADRUNS_PROBE_DECALS = 25
+function E:roadRunsProbe()
+    local s = roadState(self)
+    local last = s.lastMap
+    local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+    if last == nil or terrain == nil then return end
+    local cx, cz = last.x, last.z
+    local log = ADFlyoverSettings.debugLog
+    log("[FlyoverEditor]: probe at (%.1f, %.1f)", cx, cz)
+    -- (1) paint: one material vs blended
+    local seen = {}
+    for dz = -3, 3 do
+        local row1, row2 = {}, {}
+        for dx = -3, 3 do
+            local x, z = cx + dx * 0.5, cz + dz * 0.5
+            local y = getTerrainHeightAtWorldPos(terrain, x, 0, z) or 0
+            local ok1, _, _, _, _, m1 = pcall(getTerrainAttributesAtWorldPos, terrain, x, y, z, true, true, true, true, false)
+            local ok2, r2, g2, b2, w2, m2 = pcall(getTerrainAttributesAtWorldPos, terrain, x, y, z, true, true, true, true, true)
+            row1[#row1 + 1] = ok1 and string.format("%2s", tostring(m1)) or " ?"
+            row2[#row2 + 1] = (ok2 and type(m2) == "number") and string.format("%5.2f", m2) or "    ?"
+            if ok2 and type(m2) == "number" then seen[string.format("%.3f", m2)] = true end
+            if dx == 0 and dz == 0 then
+                local okA, rA, gA, bA, wA = pcall(getTerrainAttributesAtWorldPos, terrain, x, y, z, false, false, false, false, false)
+                log("[FlyoverEditor]: probe -   centre: r g b softness one-layer %s; blended %s",
+                    okA and string.format("%.3f %.3f %.3f %.3f", rA or -1, gA or -1, bA or -1, wA or -1) or "?",
+                    ok2 and string.format("%.3f %.3f %.3f %.3f", r2 or -1, g2 or -1, b2 or -1, w2 or -1) or "?")
+            end
+        end
+        log("[FlyoverEditor]: probe -   z %+.1f  material %s   blended %s", dz * 0.5, table.concat(row1, " "), table.concat(row2, " "))
+    end
+    local vals = {}
+    for k in pairs(seen) do vals[#vals + 1] = k end
+    table.sort(vals)
+    log("[FlyoverEditor]: probe - blended material values seen: %s (fractions = the read blends; whole numbers = it does not)",
+        table.concat(vals, ", "))
+    -- (2) decals: scanned once (they do not move), then filtered by distance
+    if E.roadRunsDecals == nil then
+        local list, nodes = {}, 0
+        local root = getParent ~= nil and getParent(terrain) or nil
+        local stack = { root }
+        local t0 = getTimeSec ~= nil and getTimeSec() or 0
+        while #stack > 0 and nodes < 400000 do
+            local node = table.remove(stack)
+            if node ~= nil and node ~= 0 then
+                nodes = nodes + 1
+                local name = getName(node) or ""
+                if string.find(string.lower(name), "decal", 1, true) and getHasClassId(node, ClassIds.SHAPE) then
+                    local lx, ly, lz, r = getShapeBoundingSphere(node)
+                    local wx, wy, wz = localToWorld(node, lx or 0, ly or 0, lz or 0)
+                    local _, ry = getWorldRotation(node)
+                    list[#list + 1] = { name = name, x = wx, y = wy, z = wz, r = r or 0, ry = ry or 0, visible = getVisibility(node) }
+                end
+                for i = getNumOfChildren(node) - 1, 0, -1 do stack[#stack + 1] = getChildAt(node, i) end
+            end
+        end
+        E.roadRunsDecals = list
+        log("[FlyoverEditor]: probe - map scanned: %d nodes, %d decal shapes (%.1f s)", nodes, #list,
+            (getTimeSec ~= nil and getTimeSec() or 0) - t0)
+    end
+    local near = {}
+    local R = self.ROADRUNS_PROBE_DECALS
+    for _, d in ipairs(E.roadRunsDecals) do
+        local dist = math.sqrt((d.x - cx) ^ 2 + (d.z - cz) ^ 2)
+        if dist <= R + d.r then near[#near + 1] = d d.dist = dist end
+    end
+    table.sort(near, function(a, b) return a.dist < b.dist end)
+    for i, d in ipairs(near) do
+        if i > 40 then log("[FlyoverEditor]: probe -   ... %d more", #near - 40) break end
+        log("[FlyoverEditor]: probe -   decal %s at (%.1f, %.1f), %.1f m away, about %.1f m across, turned %.0f deg%s%s",
+            d.name, d.x, d.z, d.dist, 2 * d.r, math.deg(d.ry), d.dist <= d.r and " - COVERS this spot" or "",
+            d.visible and "" or " (hidden)")
+    end
+    log("[FlyoverEditor]: probe - %d decal(s) within %d m", #near, R)
+    s.probe = { x = cx, z = cz, decals = near }
+    if self.warnPlayer ~= nil then
+        pcall(self.warnPlayer, self, string.format("Probe: %d decal(s) within %d m, paint read logged.", #near, R))
+    end
+end
+
 function E:roadRunsSaveArea()
     local last = roadState(self).lastMap
     if last == nil then return end
@@ -2586,6 +2688,10 @@ function E:roadRunsCard(kit)
             kit.btn("clear painted", function() s.painted, s.paintedN = nil, 0 end)
         end
         kit.btn("save this area (for offline tests)", function() editor:roadRunsSaveArea() end)
+        kit.btn("probe here (paint blend + decals)", function()
+            local ok, err = pcall(editor.roadRunsProbe, editor)
+            if not ok then Logging.error("[FlyoverEditor]: probe failed: %s", tostring(err)) end
+        end)
         kit.tgl("draw the middle (test case)", self.roadDrawMid, function()
             editor.roadDrawMid = not editor.roadDrawMid
             if editor.roadDrawMid then editor.roadPaint = false end
