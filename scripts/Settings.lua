@@ -106,6 +106,11 @@ S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above",
 -- majority of it is routine per-click/per-action info lines (see FlyoverEditor.lua's debugLog
 -- call sites) that only matter while actively diagnosing something, not on every session.
 S.settings.flyoverDebugLogging = { values = { false, true }, default = 1, current = 1 }
+-- The spline tool: "multi" is the editor's own multi-point curve, "autodrive" the old two-point
+-- spline built by AutoDrive's own spline code. Spacing is how far apart the multi-point spline
+-- lays its waypoints, in metres (evenly along the curve, as near this as a whole number of steps).
+S.settings.splineMode = { values = { "multi", "autodrive" }, default = 1, current = 1 }
+S.settings.splineSpacing = { range = { min = 1, max = 20, step = 0.5 }, value = 4 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
@@ -267,6 +272,7 @@ function S.describe()
                             "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles", "toolCardStatic",
                             "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
+                            "splineMode", "splineSpacing",
                             "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))

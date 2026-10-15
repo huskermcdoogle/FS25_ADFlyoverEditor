@@ -104,21 +104,21 @@ Draw lays down new waypoints one click at a time, joining each to the last so a 
 <a id="spline"></a>
 ## Spline
 
-*Create — Draw a smooth curved connection between two points.*
+*Create — Draw a smooth curve through any number of points.*
 
-Spline connects two waypoints with a curve rather than a straight segment, for sweeping bends a vehicle can follow at speed. A live preview shows the curve before you commit it.
+Spline lays a smooth curve that passes through every point you click, for sweeping bends a vehicle can follow at speed. A live preview shows the curve and the waypoints it will lay before you commit it. An end clicked on a waypoint joins the road there and follows its heading; an end on bare ground gets a new waypoint.
 
 **How to use it**
 
-1. Click the start waypoint, then the end waypoint - the curve previews between them.
-1. Scroll the wheel to tighten or loosen the curvature while the preview is up.
-1. Click again / confirm to place it; right-click cancels.
+1. Click points in order - on the ground, or on a waypoint to join the road there.
+1. Drag a point to move it. Click near the curve to add a point in between. Ctrl-click a point to remove it.
+1. Right-click lays it as one undo step; Esc throws it away.
 
 **Controls**
 
-- **curvature (wheel)** — how tight the curve is, clamped to a sane range.
-- **spline direction** — as clicked builds the curve from the first point; reversed builds it from the far end. That reshapes the curve and, on a one-way, sets which way it runs.
-- **end / start tangent** — flip the direction the curve leaves each end.
+- **curve by** — multi-point is this curve; AutoDrive is the old two-point spline (click two waypoints, wheel for curvature).
+- **spacing** — how far apart the laid waypoints are, in metres.
+- **start / end heading** — flip which way along the road a joined end leaves or arrives.
 - **traffic / priority** — as for Draw - one-way, two-way or reverse-way (AutoDrive's reverse road, which vehicles drive in reverse gear) and primary/secondary.
 
 <a id="field-loop"></a>
