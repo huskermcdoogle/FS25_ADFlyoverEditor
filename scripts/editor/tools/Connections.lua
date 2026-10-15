@@ -303,19 +303,6 @@ function ADFlyoverEditor:getNextStepLines()
             end
             return L("Point at a junction and left-click to lock it. Right-click leaves the tool.")
         end
-        if self.junctionMode == "place" then
-            if jp ~= nil and jp.placeMode and jp.ok and jp.plan ~= nil then
-                local what = string.format("%s %s", jp.plan.shape == "exact" and "mod" or tostring(jp.plan.shape),
-                    tostring(jp.plan.kind))
-                if self.junctionArmed ~= nil then
-                    return string.format(L("Locked: right-click places the %s. Left-click moves the lock."), what)
-                end
-                return string.format(L("A %s goes here. Left-click locks it."), what)
-            elseif jp ~= nil and jp.placeMode then
-                return L("Nothing can be placed here - the card says why.")
-            end
-            return L("Point where roads cross and left-click to lock.")
-        end
         local placeable = jp ~= nil and ((jp.nNew or 0) + (jp.nRebuild or 0)) or 0
         -- What the build lays where the pattern was checked (a locked site): the pattern, or nothing
         -- when it won't fit and the card's advanced setting says refuse (doc 12).

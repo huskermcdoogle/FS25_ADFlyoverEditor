@@ -422,7 +422,8 @@ function ADFlyoverHud:buildRows(editor)
         { "MODE", { T.NONE } },
         { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING, T.ROADRUNS } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
-        { "CONNECT", { T.CONVERT, T.MERGE, T.JUNCTION } },
+        -- the junction tool is a beta (settings dialog: BETA - junction tool); off, it has no button
+        { "CONNECT", ADFlyoverSettings.get("junctionBeta") and { T.CONVERT, T.MERGE, T.JUNCTION } or { T.CONVERT, T.MERGE } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
     -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
@@ -436,6 +437,7 @@ function ADFlyoverHud:buildRows(editor)
         add("section", grp[1])
         for _, id in ipairs(grp[2]) do
             local name = (id == T.NONE) and "select" or editor.TOOL_NAMES[id]
+            if id == T.JUNCTION then name = "junction BETA" end
             add("tool", name, editor:toolKeyLabel(id), editor.tool == id, function() editor:setTool(id) end)
             rows[#rows].iconCell = ICON_CELL[id]
         end
@@ -2612,6 +2614,13 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
 
     if editor.roadRunsSettingsItems ~= nil then editor:roadRunsSettingsItems(push) end
+
+    push({ kind = "section", text = "BETA" })
+    push({ kind = "field", text = "junction tool",
+        value = ADFlyoverSettings.get("junctionBeta") and "on" or "off",
+        action = function() editor:toggleJunctionBeta() end,
+        stepAction = function() editor:toggleJunctionBeta() end })
+    push({ kind = "note", text = "still being finished: clear and build plain X and T road junctions" })
 
     push({ kind = "section", text = "DEBUG" })
     push({ kind = "field", text = "verbose logging",

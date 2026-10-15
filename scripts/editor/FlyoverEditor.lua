@@ -238,7 +238,7 @@ ADFlyoverEditor = {
     -- The card's action row (doc 12): clear | build | clear + build, starting on clear + build. Clear +
     -- build is the clear mode with junctionThenBuild set: the right-click clears and then builds on the
     -- same lock (applyJunctionClearThenBuild), so every clear-mode test in the tool still holds for it.
-    junctionMode = "clear",     -- "build", "clear" or "place" - see setJunctionAction
+    junctionMode = "clear",     -- "build" or "clear" - see setJunctionAction (place mode dropped in 1.0.3.0)
     junctionThenBuild = true,
     -- Build, when the pattern (junctionPattern, mod or smooth) won't fit the junction: "turns" lays it
     -- turn by turn, as the build always has; "refuse" builds nothing and says why. Under advanced.

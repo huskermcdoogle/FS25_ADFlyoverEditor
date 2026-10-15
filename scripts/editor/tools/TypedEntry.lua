@@ -94,7 +94,7 @@ function ADFlyoverEditor:getEditableNumbers()
         -- takes its scope from the junction, and place shows none. The two radii are whole metres, as
         -- they are saved. Under the card's "advanced" fold (doc 12), so only while it is open, and only
         -- where something is built (build, or clear + build).
-        if not self.junctionAdvancedOpen or self.junctionMode == "place"
+        if not self.junctionAdvancedOpen
             or (self.junctionMode == "clear" and not self.junctionThenBuild) then return {} end
         local function num(label, decimals, get, set, stepBy)
             return {
@@ -457,18 +457,6 @@ function ADFlyoverEditor:setJunctionTurnRadius(v)
         math.min(AutoDrive.FLYOVER_JUNCTION_TURN_MAX, v))
     if ADFlyoverSettings ~= nil then ADFlyoverSettings.setNearest("junctionTurnRadius", self.junctionTurnRadius) end
     self.junctionPreviewKey = nil
-end
-
-function ADFlyoverEditor:toggleJunctionMode()
-    -- build -> clear -> place (doc 08: place a whole X or T in one click) -> build.
-    local nextMode = { build = "clear", clear = "place", place = "build" }
-    self.junctionMode = nextMode[self.junctionMode or "build"] or "build"
-    self.junctionThenBuild = false
-    self.junctionPreviewKey = nil
-    self.junctionPreview = nil
-    local said = { build = "build (lays new turns)", clear = "clear (removes old wiring, leaves the roads)",
-        place = "place (lays a whole X or T where roads cross)" }
-    Logging.info("[FlyoverEditor]: junction tool set to %s.", said[self.junctionMode])
 end
 
 --- The card's action row (doc 12): "clear", "build" or "both" (clear + build: clear mode, then the

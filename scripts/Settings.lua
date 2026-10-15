@@ -116,6 +116,9 @@ S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above",
 -- majority of it is routine per-click/per-action info lines (see FlyoverEditor.lua's debugLog
 -- call sites) that only matter while actively diagnosing something, not on every session.
 S.settings.flyoverDebugLogging = { values = { false, true }, default = 1, current = 1 }
+-- The junction tool ships as a beta in 1.0.3.0 (2026-10-15 owner: on by default, its button says BETA,
+-- no major version until it leaves beta). Off takes its button away and setTool refuses it.
+S.settings.junctionBeta = { values = { false, true }, default = 2, current = 2 }
 -- The spline tool: "multi" is the editor's own multi-point curve, "autodrive" the old two-point
 -- spline built by AutoDrive's own spline code. Spacing is how far apart the multi-point spline
 -- lays its waypoints, in metres (evenly along the curve, as near this as a whole number of steps).

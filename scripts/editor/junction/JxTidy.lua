@@ -57,9 +57,6 @@ function ADFlyoverEditor:junctionClick()
         self.junctionTurnRadius or 12,
         (self:junctionAction() == "both") and "clear + build" or (self.junctionMode or "build"),
         (self:junctionAction() == "both") and "clears and builds" or ((self.junctionMode == "clear") and "clears" or "places"))
-    if self.junctionMode == "place" then
-        self.junctionPreview = nil
-    end
 end
 
 --- Place every NEW turn in the preview (behaviour A): tie in at each track's tangent point (insert on a

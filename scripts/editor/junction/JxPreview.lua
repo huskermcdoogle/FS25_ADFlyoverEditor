@@ -79,10 +79,6 @@ function ADFlyoverEditor:updateJunctionPreview()
         end
         cx, cz, cy = self.cursorX, self.cursorZ, self.cursorY
     end
-    if self.junctionMode == "place" then
-        self:updatePlacePreview()
-        return
-    end
     local clearMode0 = (self.junctionMode == "clear")
     local R = self:junctionRadiusValue()
     local searchR0 = nil

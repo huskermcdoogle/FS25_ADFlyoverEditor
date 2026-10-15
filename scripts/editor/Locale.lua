@@ -87,6 +87,7 @@ L.STRINGS = {
         ["convert"] = "umwandeln",
         ["merge"] = "zusammenführen",
         ["junction"] = "Kreuzung",
+        ["junction BETA"] = "Kreuzung BETA",
         ["name"] = "benennen",
         ["delete"] = "löschen",
 

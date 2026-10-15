@@ -14,6 +14,11 @@ function ADFlyoverEditor:setTool(tool)
     if self.tool == tool then
         return
     end
+    -- the junction tool is a beta: with it switched off in the settings dialog, nothing selects it
+    if tool == self.TOOL.JUNCTION and not ADFlyoverSettings.get("junctionBeta") then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: the junction tool (beta) is switched off in the settings dialog.")
+        return
+    end
     -- A tool picked from a selection menu opens its card where that menu was, so the eyes do not have
     -- to move. Held until the player drags the card or the tool changes; never saved.
     local pickedFrom = self.ctxMenu
@@ -173,6 +178,15 @@ function ADFlyoverEditor:selectionChain()
 end
 
 --- Hand a chain (ordered ids) to the active chain tool as its span, exactly as a picked span would be.
+--- The settings dialog's BETA row: the junction tool on or off (off leaves it if it is the tool in hand).
+function ADFlyoverEditor:toggleJunctionBeta()
+    ADFlyoverSettings.cycle("junctionBeta", 1)
+    if not ADFlyoverSettings.get("junctionBeta") and self.tool == self.TOOL.JUNCTION then
+        self:setTool(self.TOOL.NONE)
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction tool (beta) %s.", ADFlyoverSettings.get("junctionBeta") and "on" or "off")
+end
+
 function ADFlyoverEditor:setToolSpanFromChain(order)
     local ordered = self:trafficOrder(order)
     local a, b = ordered[1], ordered[#ordered]
