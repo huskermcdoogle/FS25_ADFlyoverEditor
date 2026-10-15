@@ -701,7 +701,6 @@ function ADFlyoverHud:buildRows(editor)
         -- without touching the shape.
         segFlip("spline direction", "as clicked", "reversed", editor.splineSwapEnds, function() editor:toggleSplineEnds() end)
         add("hint", "reversed builds the curve from the far end")
-        add("hint", "(shape, and on one-way the way it runs)")
         -- Which way the curve lies against the track where it arrives. On a two-way track the
         -- automatic choice is a guess between two equally valid tangents.
         segFlip("end tangent", "auto", "flipped", editor.splineFlipEndTangent, function() editor:toggleSplineEndTangent() end)
@@ -721,10 +720,6 @@ function ADFlyoverHud:buildRows(editor)
                 flow = string.format("%d -> %d", a, b)
             end
             add("cursor", "flow", flow)
-            if mode == editor.CONNECTION.TWOWAY then
-                add("hint", "two-way: set direction to one-way")
-                add("hint", "if you want to flip it")
-            end
         end
     elseif editor.tool == editor.TOOL.SMOOTH then
         segCycle("mode", editor.SMOOTH_MODE_NAMES, function(i) return i == 1 and "relax" or "rebuild" end,
@@ -2323,6 +2318,8 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     push({ kind = "field", text = "position", value = tostring(ADFlyoverSettings.get("launchButtonPosition")),
         action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
+
+    if editor.roadRunsSettingsItems ~= nil then editor:roadRunsSettingsItems(push) end
 
     push({ kind = "section", text = "DEBUG" })
     push({ kind = "field", text = "verbose logging",

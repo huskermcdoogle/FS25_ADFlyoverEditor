@@ -185,27 +185,26 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 <a id="move"></a>
 ## Road runs
 
-*Create — Lay AutoDrive runs along map roads and farm tracks that have no path yet.*
+*Create — Lay AutoDrive runs along map roads and farm tracks that have no path yet, and reshape roads already built.*
 
-Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt tracks - finds the middle of each road and where roads fork, and lights up the roads that have no AutoDrive path along them. Pick the ones you want and it lays the lanes: one-way, one two-way line, or two lanes keeping right. It stops short at forks so the junction tool can finish them, and joins an existing path where a road runs straight into one. Bridges and ramps are found from the game's road meshes, so a road carries on across a river. On bridges (or every road, if you choose) the lanes move in to keep a rig clear of railings, walls and banks; where two lanes will not fit, that part is one two-way line.
+Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt tracks - and lights up the roads that have no AutoDrive path. A click follows the road on through junctions where it carries straight on, and stops at T's, real ends and existing paths. It lays the lanes you choose: one-way, one two-way line, or two lanes keeping right. It stops short at forks so the junction tool can finish them; a track meeting a road runs right to the asphalt. Bridges and ramps are found from the game's road meshes. A road already built can be reshaped with handles, through its junctions, and the roads joining it follow.
 
 **How to use it**
 
-1. Point at a road: the stretch from one fork to the next lights up, with its lanes previewed.
-1. Click to pick it; click a picked road again to drop it. Double-click picks the whole road, carrying straight on through forks.
+1. Point at a road: it lights up, with its lanes previewed. Click to pick it; double-click carries it on through forks.
 1. For a one-way run, click on the side of the road you would drive on (keep right).
+1. Click a pick to select it: drag a handle to reshape it, click the line to add a handle, Ctrl-click a handle to remove it. An end dragged onto a waypoint joins it (hold Alt for no snap).
 1. Right-click builds everything picked. One undo takes it all back.
+1. Click a road already built to reshape it the same way. A two-lane road is shaped by its middle, both lanes together. Junction points move with it; short turns bend and side roads ease back into place. Right-click applies, as one undo step.
 
 **Controls**
 
 - **lay as** — auto (two lanes on paved roads, one two-way line on tracks), one-way, two-way, or two lanes.
 - **priority** — primary or secondary, as for Draw.
 - **roads to find** — paved, gravel and dirt - turn a kind off to stop it lighting up.
-- **light up** — under mouse only, or every road nearby with no path, faintly.
-- **lane gap** — from road: 0.6 x the road's measured width, as the map's own two-lane roads are laid (never under the rig width + 0.3 m); set: type your own. The card shows this road's width and how far apart the map's own lanes are.
-- **side check** — bridges: fit the lanes between the railings on bridges and ramps; everywhere: also keep clear of walls, posts, trees and banks on every road.
-- **rig width** — the widest rig the lanes must pass (3.0 m). Lanes are never closer than this plus 0.3 m, and keep half of it plus 0.3 m from a railing.
-- **fork gap** — how far back from a fork the run stops (7.5 m), leaving room for the junction tool.
+- **lane gap** — from road: measured from the road's width; set: type your own.
+- **through junctions** — when reshaping a built road: carry the selection on through its junctions (on), or take just the run between two junctions (off).
+- **settings dialog** — light up (under mouse or all nearby), side check (bridges or everywhere), rig width (3.0 m) and fork gap (7.5 m).
 
 <a id="move"></a>
 ## Move

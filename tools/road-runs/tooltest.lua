@@ -22,7 +22,8 @@ Logging = {
     warning = function(f, ...) print("[warn] " .. string.format(f, ...)) end,
     error = function(f, ...) print("[ERROR] " .. string.format(f, ...)) end,
 }
-ADFlyoverSettings = { debugLog = function(f, ...) print("[log] " .. string.format(f, ...)) end }
+ADFlyoverSettings = { debugLog = function(f, ...) print("[log] " .. string.format(f, ...)) end,
+    get = function(name) if name == "flyoverDebugLogging" then return os.getenv("DEBUGLOG") ~= nil end return nil end }
 dofile(HERE .. "terrain.lua")
 
 local lines, spheres, nans = 0, 0, 0

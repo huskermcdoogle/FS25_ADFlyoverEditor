@@ -2888,9 +2888,6 @@ function E:roadRunsCard(kit)
         end }
     end
     kit.seg("lay as", opts)
-    if self.ROADRUNS_MODE_KEYS[self.roadMode] == "auto" then
-        kit.add("hint", "auto = two lanes on paved, two-way on tracks")
-    end
     kit.segFlip("priority", "primary", "secondary", self.roadSubPrio, function()
         editor.roadSubPrio = not editor.roadSubPrio
         editor:roadRunsSaveSettings()
@@ -2900,9 +2897,15 @@ function E:roadRunsCard(kit)
         { label = "gravel", active = self.roadKinds[RF.KIND_GRAVEL], action = function() editor:roadRunsToggleKind(RF.KIND_GRAVEL) end },
         { label = "dirt", active = self.roadKinds[RF.KIND_DIRT], action = function() editor:roadRunsToggleKind(RF.KIND_DIRT) end },
     })
-    kit.segFlip("view", "build", "detection", self.roadView, function()
-        editor.roadView = not editor.roadView
-    end)
+    -- the detection view is our own tooling for test cases (paint layers, probe, saving areas and
+    -- drawn middles): only with verbose logging on (2026-10-15 release cleanup)
+    if not ADFlyoverSettings.get("flyoverDebugLogging") then
+        self.roadView, self.roadPaint, self.roadDrawMid = false, false, false
+    else
+        kit.segFlip("view", "build", "detection", self.roadView, function()
+            editor.roadView = not editor.roadView
+        end)
+    end
     if self.roadView then
         local L = self.roadLayers
         kit.tgl("ground paint", L.paint, function() L.paint = not L.paint end)
@@ -2952,11 +2955,6 @@ function E:roadRunsCard(kit)
         end
         return
     end
-    kit.segFlip("light up", "under mouse", "all nearby", self.roadShowAll, function()
-        editor.roadShowAll = not editor.roadShowAll
-        editor:roadRunsSaveSettings()
-    end)
-
     kit.segFlip("lane gap", "from road", "set", not self.roadGapAuto, function()
         editor.roadGapAuto = not editor.roadGapAuto
         editor:roadRunsSaveSettings()
@@ -2966,30 +2964,11 @@ function E:roadRunsCard(kit)
     if st ~= nil and st.width ~= nil then
         kit.add("cursor", "this road", string.format("%.1f m wide, lanes %.1f m apart", st.width, self:roadGapFor(st)))
     end
-    if s.mapGap ~= nil then
-        kit.add("cursor", "map's own lanes", string.format("%.1f m apart", s.mapGap))
-    end
-    if not self.roadGapAuto and self.roadLaneGap < self:roadMinGap() then
-        kit.add("hint", string.format("under %.1f m: the lanes are put %.1f m apart", self:roadMinGap(), self:roadMinGap()))
-    end
-    kit.segFlip("side check", "bridges", "everywhere", self.roadFitEverywhere, function()
-        editor.roadFitEverywhere = not editor.roadFitEverywhere
-        editor:roadRunsSaveSettings()
-    end)
-    kit.numberAfter("rig width")
-    kit.add("hint", "lanes come in from railings and banks; too narrow = one two-way line")
     local hovering = s.hover ~= nil and st == s.hover.refinedTo
     local lanes = st ~= nil and self:roadRunsLanesFor(st, (hovering and s.hoverSide) or 1, hovering) or nil
     if lanes ~= nil and (lanes.collapsed or 0) > 0 then
         kit.add("cursor", "too narrow for two", string.format("%.0f m as one two-way line", lanes.collapsed))
-    elseif lanes ~= nil and lanes.pulled then
-        kit.add("cursor", "side check", "lanes moved in to clear the sides")
     end
-    if lanes ~= nil and lanes.tooNarrow then
-        kit.add("hint", string.format("narrower than one %.1f m rig somewhere on this road", self.roadRigWidth))
-    end
-    kit.numberAfter("fork gap")
-    kit.add("hint", "room left at forks for the junction tool")
 
     if s.job ~= nil or (s.progress or 1) < 1 then
         kit.add("cursor", "reading the ground", string.format("%d%%", math.floor((s.progress or 0) * 100)))
@@ -3002,7 +2981,7 @@ function E:roadRunsCard(kit)
         if s.sel ~= nil and not s.sel.built then
             kit.add("cursor", "selected run", string.format("%d handles, %.0f m%s", #(s.sel.handles or {}), s.sel.st.len or 0,
                 s.sel.st.edited and ", shaped" or ""))
-            kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; alt: ends do not snap")
+            kit.add("hint", "drag a handle; click the line to add; ctrl-click to remove")
             kit.btn("drop selected run", function() editor:roadRunsDropSelected() end)
         end
     end
@@ -3010,7 +2989,7 @@ function E:roadRunsCard(kit)
         kit.add("cursor", "built run", string.format("%s%d handles, %.0f m%s",
             s.sel.twin and string.format("two lanes %.1f m apart, ", s.sel.gap) or string.format("%d waypoints, ", #s.sel.ids),
             #(s.sel.handles or {}), s.sel.st.len or 0, s.sel.st.edited and ", shaped" or ""))
-        kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; its ends stay put")
+        kit.add("hint", "drag a handle; click the line to add; ctrl-click to remove")
         kit.btn("apply shape (right-click)", function() editor:roadRunsApplyBuilt() end)
         kit.tgl("through junctions (next click)", editor.roadThrough ~= false, function()
             editor.roadThrough = (editor.roadThrough == false)
@@ -3039,9 +3018,42 @@ function E:roadRunsNumbers(fieldEntry)
     if not self.roadGapAuto then
         list[#list + 1] = fieldEntry("lane gap", "m", 1, "roadLaneGap", 2.5, 8, 0.1, false, save)
     end
-    list[#list + 1] = fieldEntry("rig width", "m", 1, "roadRigWidth", 2.0, 5.0, 0.1, false, save)
-    list[#list + 1] = fieldEntry("fork gap", "m", 1, "roadForkGap", 0, 40, 0.5, false, save)
     return list
+end
+
+--- The settings dialog's ROAD RUNS section (2026-10-15 release cleanup: rarely touched, off the card).
+function E:roadRunsSettingsItems(push)
+    roadState(self)
+    local editor = self
+    local function save() editor:roadRunsSaveSettings() end
+    push({ kind = "section", text = "ROAD RUNS" })
+    push({ kind = "field", text = "light up", value = self.roadShowAll and "all nearby" or "under mouse",
+        action = function() editor.roadShowAll = not editor.roadShowAll save() end,
+        stepAction = function() editor.roadShowAll = not editor.roadShowAll save() end })
+    push({ kind = "field", text = "side check", value = self.roadFitEverywhere and "everywhere" or "bridges",
+        action = function() editor.roadFitEverywhere = not editor.roadFitEverywhere save() end,
+        stepAction = function() editor.roadFitEverywhere = not editor.roadFitEverywhere save() end })
+    local function number(label, key, lo, hi, step)
+        local editing = editor.editing ~= nil and editor.editing.label == "road runs " .. label
+        local function set(v)
+            v = math.max(lo, math.min(hi, v))
+            editor[key] = math.floor(v / step + 0.5) * step
+            save()
+            return true
+        end
+        push({ kind = "field", text = label,
+            value = editing and (editor.editing.buffer .. "_") or string.format("%.1f m", editor[key]),
+            editing = editing,
+            action = function()
+                editor:beginEditNumber({ label = "road runs " .. label, unit = "m",
+                    get = function() return editor[key] end, apply = set,
+                    step = function(d) set(editor[key] + d * step) end })
+            end,
+            stepAction = function(d) set(editor[key] + d * step) end })
+    end
+    number("rig width", "roadRigWidth", 2.0, 5.0, 0.1)
+    number("fork gap", "roadForkGap", 0, 40, 0.5)
+    push({ kind = "note", text = "rig: the widest rig the lanes must pass; fork gap: room left at forks for the junction tool" })
 end
 
 function E:roadRunsNextStep()
