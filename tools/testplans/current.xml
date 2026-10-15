@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
+     this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
+     auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
+     matched against the editor's own log lines. A click always wins. -->
+<testPlan title="release 1.0.3.0: spline fix + icons" build="@BUILD@">
+    <test id="build" title="The game loaded this build" auto="build"
+          hint="Ticks itself: the running build is the one this plan was packed with."/>
+    <test id="spline" title="Spline: right-click lays a multi-point curve" passLog="placed multi%-point spline"
+          failLog="Spline%.lua:%d+: attempt"
+          hint="Click points, right-click lays it (ticks itself)."/>
+    <test id="icons" title="Toolbar: road runs and junction have icons, the others as before"
+          hint="Road runs: a road with a dashed middle. Junction BETA: a crossroads with a turn. Every other icon unchanged, the gear too."/>
+</testPlan>

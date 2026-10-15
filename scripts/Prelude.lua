@@ -42,6 +42,7 @@ source(Utils.getFilename("scripts/Proxy.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/Launch.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapProbe.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapMarker.lua", g_currentModDirectory))
+source(Utils.getFilename("scripts/SweptPath.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -98,13 +99,48 @@ P.MAX_ATTEMPTS = 300
 P.EDITOR_FILES = {
     "scripts/editor/PolygonUtils.lua",
     "scripts/editor/OffsetGeometry.lua",
+    "scripts/editor/SplinePath.lua",
     "scripts/editor/FieldLoopGenerator.lua",
+    "scripts/editor/RoadFinder.lua",
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",
+    "scripts/editor/SweptSim.lua",
+    "scripts/editor/TestPanel.lua",
     "scripts/editor/FlyoverHud.lua",
     "scripts/editor/FlyoverEditor.lua",
+    "scripts/editor/tools/Menus.lua",
+    "scripts/editor/tools/Selection.lua",
+    "scripts/editor/Draw.lua",
+    "scripts/editor/Mouse.lua",
+    "scripts/editor/tools/Move.lua",
+    "scripts/editor/tools/ConnectDelete.lua",
+    "scripts/editor/tools/TypedEntry.lua",
+    "scripts/editor/tools/Smooth.lua",
+    "scripts/editor/tools/Connections.lua",
+    "scripts/editor/tools/Siding.lua",
+    "scripts/editor/tools/Ground.lua",
+    "scripts/editor/junction/JxCore.lua",
+    "scripts/editor/junction/JxBuild.lua",
+    "scripts/editor/junction/JxFind.lua",
+    "scripts/editor/junction/JxDebug.lua",
+    "scripts/editor/junction/JxRegistry.lua",
+    "scripts/editor/junction/JxPlaceCheck.lua",
+    "scripts/editor/junction/JxPreview.lua",
+    "scripts/editor/junction/JxSwept.lua",
+    "scripts/editor/junction/JxTidy.lua",
+    "scripts/editor/junction/JxRebuild.lua",
+    "scripts/editor/junction/JxClassify.lua",
+    "scripts/editor/junction/JxParts.lua",
+    "scripts/editor/junction/JxCheck.lua",
+    "scripts/editor/junction/JxCheckCard.lua",
+    "scripts/editor/tools/Appearance.lua",
+    "scripts/editor/tools/Convert.lua",
+    "scripts/editor/tools/Merge.lua",
+    "scripts/editor/tools/FieldLoop.lua",
+    "scripts/editor/tools/Spline.lua",   -- the multi-point spline (road runs branch, re-homed at the 1.0.3.0 merge)
+    "scripts/editor/RoadRunsTool.lua",   -- adds the road runs tool to ADFlyoverEditor, so after it
 }
 
 P.state = "waiting" -- waiting | armed | gave-up | disabled
@@ -182,6 +218,16 @@ function P:update(dt)
     -- closes, whatever state arming is in.
     if ADFlyoverMapMarker ~= nil and ADFlyoverMapMarker.update ~= nil then
         pcall(ADFlyoverMapMarker.update)
+    end
+    -- The swept-path recorder samples the controlled vehicle while AutoDrive drives it - editor
+    -- open or not. Guarded: a diagnostic must never take the frame down.
+    if P.state == "armed" and ADFlyoverSweptPath ~= nil then
+        local ok, err = pcall(ADFlyoverSweptPath.update, dt)
+        if not ok and not P.sweptFaulted then
+            P.sweptFaulted = true
+            logError("swept-path recorder faulted (disabled): %s", tostring(err))
+            ADFlyoverSweptPath.armed = false
+        end
     end
 
     if P.state ~= "waiting" then
@@ -295,6 +341,9 @@ function P:draw()
     if editorLoaded() then
         ADFlyoverEditor:draw()
     end
+    if P.state == "armed" and ADFlyoverSweptPath ~= nil then
+        pcall(ADFlyoverSweptPath.draw)
+    end
     if ADFlyoverProxy ~= nil then
         ADFlyoverProxy.drawMarker()
     end
@@ -317,6 +366,7 @@ function P:consoleStatus()
         ADFlyoverWrappers.describe(),
         ADFlyoverProxy.describe(),
         ADFlyoverSettings.describe(),
+        ADFlyoverSweptPath ~= nil and ADFlyoverSweptPath.describe() or "swept: not loaded",
     }
     for _, line in ipairs(lines) do
         log("%s", line)
@@ -334,6 +384,37 @@ end
 --- It is also the sharpest test of the copy: with the fork disabled, ADPolygonUtils genuinely does
 --- not exist in AutoDrive's environment, so a wrong source order fails loudly here instead of
 --- silently borrowing the fork's copy.
+--- Points wired to themselves, network-wide. Reports by default; `FlyoverSelfLinks apply` repairs.
+--- Asking first because it edits the saved network - though a self-link is the one fault where
+--- there is nothing to weigh up: nothing drives it, so nothing can drive differently afterwards.
+function P:consoleSelfLinks(arg)
+    if ADFlyoverEditor == nil or ADFlyoverEditor.repairSelfLinks == nil then
+        return "the flyover editor is not loaded"
+    end
+    local apply = tostring(arg or ""):lower() == "apply"
+    local ok, found, fixed = pcall(function()
+        return ADFlyoverEditor:repairSelfLinks(apply)
+    end)
+    if not ok then return "failed: " .. tostring(found) end
+    if found == 0 then
+        return "no point is wired to itself."
+    end
+    if apply then
+        return string.format("%d point(s) were wired to themselves; %d unwired. Positions are in the log. Save to keep this.", found, fixed)
+    end
+    return string.format("%d point(s) are wired to themselves. Positions are in the log. Nothing changed - run 'FlyoverSelfLinks apply' to unwire them.", found)
+end
+
+function P:consoleRoadSplines()
+    if ADFlyoverEditor == nil or ADFlyoverEditor.dumpRoadSplines == nil then
+        return "the flyover editor is not loaded"
+    end
+    local ok, n, where = pcall(function() return ADFlyoverEditor:dumpRoadSplines(2) end)
+    if not ok then return "failed: " .. tostring(n) end
+    if n == nil then return "not saved: " .. tostring(where) end
+    return string.format("saved %d road spline(s) to %s", n, tostring(where))
+end
+
 function P:consoleGeomTest()
     if ADPolygonUtils == nil then
         return "ADPolygonUtils is nil - PolygonUtils.lua did not publish where this file can see it."
@@ -576,6 +657,32 @@ function P:consoleResetTheme()
     return "Flyover editor colours and scale reset to default (Contrast Dark + amber, 1.0x)."
 end
 
+-- Swept-path recorder (docs/swept-path-spec.md, phase 1). Console-only for now.
+local function sweptCall(fn, ...)
+    if ADFlyoverSweptPath == nil then
+        return "SweptPath.lua did not source."
+    end
+    if P.state ~= "armed" then
+        return "not armed yet - load a savegame first."
+    end
+    local ok, result = pcall(fn, ...)
+    return ok and tostring(result) or ("swept failed: " .. tostring(result))
+end
+function P:consoleSweptRecord() return sweptCall(ADFlyoverSweptPath.toggleRecord) end
+function P:consoleSweptSave(name) return sweptCall(ADFlyoverSweptPath.save, name) end
+function P:consoleSweptLoad(name) return sweptCall(ADFlyoverSweptPath.load, name) end
+function P:consoleSweptShow() return sweptCall(ADFlyoverSweptPath.toggleShow) end
+function P:consoleSweptClear() return sweptCall(ADFlyoverSweptPath.clear) end
+function P:consoleSweptRig() return sweptCall(ADFlyoverSweptPath.captureCurrentRig) end
+addConsoleCommand("FlyoverSweptRig", "Swept path: measure the entered vehicle (+ trailer) as the design rig the junction preview simulates", "consoleSweptRig", P)
+addConsoleCommand("FlyoverSweptRecord", "Swept path: toggle recording the controlled vehicle while AutoDrive drives it", "consoleSweptRecord", P)
+addConsoleCommand("FlyoverSweptSave", "Swept path: save the current run as <name> (modSettings/FS25_ADFlyoverEditor/swept/)", "consoleSweptSave", P)
+addConsoleCommand("FlyoverSweptLoad", "Swept path: load a saved run <name> as the overlay", "consoleSweptLoad", P)
+addConsoleCommand("FlyoverSweptShow", "Swept path: toggle the world overlay", "consoleSweptShow", P)
+addConsoleCommand("FlyoverSweptClear", "Swept path: discard the current run", "consoleSweptClear", P)
+
+addConsoleCommand("FlyoverRoadSplines", "Save the map's traffic splines (its own road centre-lines) to the savegame folder for the junction harness", "consoleRoadSplines", P)
+addConsoleCommand("FlyoverSelfLinks", "Report points wired to themselves; pass apply to unwire them", "consoleSelfLinks", P)
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
 addConsoleCommand("FlyoverHudOrder", "Whole-hud hide order: symmetric (default) or legacy (1.0.2.0)", "consoleHudOrder", P)
@@ -588,6 +695,16 @@ addConsoleCommand("FlyoverHistoryTest", "Stage 5a: snapshot the graph and check 
 addConsoleCommand("FlyoverProxyAt", "Stage 4: draw the network at x z instead of at the vehicle", "consoleProxyAt", P)
 addConsoleCommand("FlyoverProxyOff", "Stage 4: turn the proxy and the fake gate off", "consoleProxyOff", P)
 addConsoleCommand("FlyoverFakeActive", "Stage 3: pretend the editor is open, to exercise the wrappers", "consoleFakeActive", P)
+--- A test build's plan card (TestPanel.lua): show or hide it; "reload" reads testplan.xml again.
+function P:consoleTestPanel(arg)
+    if ADFlyoverTestPanel == nil then return "The test panel is not loaded (load a savegame first)." end
+    if arg == "reload" then
+        return ADFlyoverTestPanel.load() and "Test plan read again." or "This build carries no test plan (testplan.xml) - test builds only."
+    end
+    if ADFlyoverTestPanel.plan == nil then return "This build carries no test plan (testplan.xml) - test builds only." end
+    return ADFlyoverTestPanel.toggleShown() and "Test plan card shown (it sits on the editor's screen)." or "Test plan card hidden."
+end
+addConsoleCommand("FlyoverTestPanel", "Show or hide the test build's test plan card (reload: read testplan.xml again)", "consoleTestPanel", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 
 Logging.info("[%s] build %s loaded", P.MOD_NAME, P.versionString())

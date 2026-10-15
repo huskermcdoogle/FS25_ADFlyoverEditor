@@ -73,10 +73,34 @@ S.settings.fieldLoopMaxGap = { range = { min = 0, max = 50, step = 1 }, value = 
 -- ring - no point ever survives closer than this to its neighbour, corners included (reported
 -- live 2026-09-22: two very close, sharply-angled points at a tight corner). Default 1.0m.
 S.settings.fieldLoopMinPointSpacing = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 }, default = 3, current = 3 }
+-- Road runs (RoadRunsTool.lua): the card's choices, kept between sessions. Plain numbers (on/off as
+-- 0/1, "lay as" as its index) so each is one #value; read and written only by that tool.
+S.settings.roadRunsMode = { range = { min = 1, max = 4, step = 1 }, value = 1 }
+S.settings.roadRunsSubPrio = { range = { min = 0, max = 1, step = 1 }, value = 0 }
+S.settings.roadRunsPaved = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsGravel = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsDirt = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsShowAll = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsGapAuto = { range = { min = 0, max = 1, step = 1 }, value = 1 }
+S.settings.roadRunsLaneGap = { range = { min = 2.5, max = 8, step = 0.1 }, value = 4.0 }
+S.settings.roadRunsRigWidth = { range = { min = 2.0, max = 5.0, step = 0.1 }, value = 3.0 }
+-- (renamed from roadRunsForkGap when the default went 15 -> 7.5 m, so an old saved 15 is not kept)
+S.settings.roadRunsForkGapM = { range = { min = 0, max = 40, step = 0.5 }, value = 7.5 }
+S.settings.roadRunsFitEverywhere = { range = { min = 0, max = 1, step = 1 }, value = 0 }
 S.settings.flyoverMergeDistance = { values = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 }, default = 5, current = 5 }
 S.settings.sidingOffset = { values = { 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0, 11.5, 12.0, 12.5, 13.0, 13.5, 14.0, 14.5, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.5, 19.0, 19.5, 20.0 }, default = 7, current = 7 }
 S.settings.sidingLength = { values = { 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150, 155, 160, 165, 170, 175, 180, 185, 190, 195, 200 }, default = 5, current = 5 }
 S.settings.flyoverMergeDivergence = { values = { 0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100 }, default = 6, current = 6 }
+-- The junction tool's two radii are PERSISTED because they are not preferences so much as a
+-- property of the network being edited (how far apart its junctions sit), and losing them on every
+-- restart is actively misleading: a radius set to 20, a game restart for a new build, and the tool
+-- is silently back at 15 while the card the user last looked at said 20. That cost a full round of
+-- testing where a fix looked like it had done nothing.
+S.settings.junctionRadius = { values = { 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40 }, default = 10, current = 10 }          -- 6..40 m, default 15
+S.settings.junctionTurnRadius = { values = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 }, default = 11, current = 11 }      -- 2..30 m, default 12
+-- Junction numbers floating over each junction in the editor view while the junction tool is open
+-- (the user, 2026-10-07). On by default; the card row turns them off, and that choice is kept.
+S.settings.junctionShowNumbers = { values = { false, true }, default = 2, current = 2 }
 -- Move's own tolerance for auto-hookup (item 6) - deliberately its own setting rather than
 -- reusing flyoverMergeDistance/Divergence: those back a deliberate three-click confirmed action,
 -- this fires silently with no confirmation at all, so a tighter default is the safer starting
@@ -92,6 +116,14 @@ S.settings.launchButtonPosition = { values = { "auto", "left", "right", "above",
 -- majority of it is routine per-click/per-action info lines (see FlyoverEditor.lua's debugLog
 -- call sites) that only matter while actively diagnosing something, not on every session.
 S.settings.flyoverDebugLogging = { values = { false, true }, default = 1, current = 1 }
+-- The junction tool ships as a beta in 1.0.3.0 (2026-10-15 owner: on by default, its button says BETA,
+-- no major version until it leaves beta). Off takes its button away and setTool refuses it.
+S.settings.junctionBeta = { values = { false, true }, default = 2, current = 2 }
+-- The spline tool: "multi" is the editor's own multi-point curve, "autodrive" the old two-point
+-- spline built by AutoDrive's own spline code. Spacing is how far apart the multi-point spline
+-- lays its waypoints, in metres (evenly along the curve, as near this as a whole number of steps).
+S.settings.splineMode = { values = { "multi", "autodrive" }, default = 1, current = 1 }
+S.settings.splineSpacing = { range = { min = 1, max = 20, step = 0.5 }, value = 4 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
@@ -105,7 +137,11 @@ end
 --- than this mod's own log lines. Call sites across the editor were switched from Logging.info(...)
 --- to ADFlyoverSettings.debugLog(...) instead - a one-word rename, not a global override.
 function S.debugLog(fmt, ...)
-    if S.get("flyoverDebugLogging") then
+    -- A DEBUG DROP HAS TO BE COMPLETE. The drop records what reaches Logging, so with capture on
+    -- and verbose logging off it would have been missing every one of these lines - including the
+    -- lock reasoning that says what kind of junction a site was read as, which is most of what a
+    -- drop is for. Recording a capture is asking for everything, so it switches these on too.
+    if S.get("flyoverDebugLogging") or (AutoDrive ~= nil and AutoDrive.FLYOVER_DEBUG_CAPTURE == true) then
         Logging.info(fmt, ...)
     end
 end
@@ -171,7 +207,7 @@ end
 
 --- Move a setting's index by dir (usually ±1), wrapping around. setNearest assumes numeric values
 --- and a distance between them, which does not mean anything for a toggle or a named position - so
---- those cycle through their values list instead.
+--- those cycle through their values list instead, the same way the theme preset/accent do.
 function S.cycle(name, dir)
     local setting = S.settings[name]
     if setting == nil then
@@ -252,7 +288,9 @@ function S.describe()
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
                             "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles", "toolCardStatic",
                             "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
+                            "junctionRadius", "junctionTurnRadius",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
+                            "splineMode", "splineSpacing",
                             "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))

@@ -1,0 +1,19 @@
+# Your own network and results - regenerated, and not something to publish.
+graph_data.lua
+graph_*.lua
+reg*_*.txt
+regbuild*.txt
+sweptreg*.txt
+seq*_*.txt
+seq*/
+click*/
+captest/
+captures*/
+*.zip
+terrain_data/
+regnames_out/
+regmissed*.txt
+regmissed_out/
+regnames_*/
+regmissed_*/
+regplace*.txt

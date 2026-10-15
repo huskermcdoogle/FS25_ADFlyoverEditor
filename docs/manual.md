@@ -6,9 +6,9 @@ A top-down editor for AutoDrive route networks. This manual describes every tool
 
 - [General](#general)
 - **Mode** — [Select](#select)
-- **Create** — [Draw](#draw), [Spline](#spline), [Field loop](#field-loop), [Parallel](#parallel), [Siding](#siding)
+- **Create** — [Draw](#draw), [Spline](#spline), [Field loop](#field-loop), [Parallel](#parallel), [Siding](#siding), [Road runs](#road-runs)
 - **Shape** — [Move](#move), [Smooth](#smooth), [Straighten](#straighten), [Divide](#divide), [Ground](#ground)
-- **Connect** — [Convert](#convert), [Merge](#merge)
+- **Connect** — [Convert](#convert), [Merge](#merge), [Junction (beta)](#junction-beta)
 - **Utility** — [Name](#name), [Delete](#delete)
 
 ## General
@@ -17,7 +17,7 @@ Opening, leaving, and the keys and controls that work everywhere.
 
 ### Opening & leaving
 
-- Open the editor with Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+- Open the editor with Left Alt + V or Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - Press Esc to leave. Every edit is undoable.
 - Single player only. Edits are written when you are the host.
 
@@ -104,21 +104,21 @@ Draw lays down new waypoints one click at a time, joining each to the last so a 
 <a id="spline"></a>
 ## Spline
 
-*Create — Draw a smooth curved connection between two points.*
+*Create — Draw a smooth curve through any number of points.*
 
-Spline connects two waypoints with a curve rather than a straight segment, for sweeping bends a vehicle can follow at speed. A live preview shows the curve before you commit it.
+Spline lays a smooth curve that passes through every point you click, for sweeping bends a vehicle can follow at speed. A live preview shows the curve and the waypoints it will lay before you commit it. An end clicked on a waypoint joins the road there and follows its heading; an end on bare ground gets a new waypoint.
 
 **How to use it**
 
-1. Click the start waypoint, then the end waypoint - the curve previews between them.
-1. Scroll the wheel to tighten or loosen the curvature while the preview is up.
-1. Click again / confirm to place it; right-click cancels.
+1. Click points in order - on the ground, or right on a waypoint to join the road there. Hold Alt to place a point without snapping. A marker under the mouse shows what a click does: yellow joins a waypoint, white is bare ground, green goes into the line.
+1. Click on the curve to put a point into the line there. Drag a point to move it. Ctrl-click a point to remove it.
+1. Right-click lays it as one undo step; Esc throws it away.
 
 **Controls**
 
-- **curvature (wheel)** — how tight the curve is, clamped to a sane range.
-- **spline direction** — as clicked builds the curve from the first point; reversed builds it from the far end. That reshapes the curve and, on a one-way, sets which way it runs.
-- **end / start tangent** — flip the direction the curve leaves each end.
+- **curve by** — multi-point is this curve; AutoDrive is the old two-point spline (click two waypoints, wheel for curvature).
+- **spacing** — how far apart the laid waypoints are, in metres.
+- **start / end heading** — flip which way along the road a joined end leaves or arrives.
 - **traffic / priority** — as for Draw - one-way, two-way or reverse-way (AutoDrive's reverse road, which vehicles drive in reverse gear) and primary/secondary.
 
 <a id="field-loop"></a>
@@ -181,6 +181,30 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 - **side** — as for Parallel: left / right of travel on a one-way track, by screen on a two-way one.
 - **offset** — how far to the side the siding sits.
 - **length (wheel)** — how long the parallel stretch is.
+
+<a id="move"></a>
+## Road runs
+
+*Create — Lay AutoDrive runs along map roads and farm tracks that have no path yet, and reshape roads already built.*
+
+Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt tracks - and lights up the roads that have no AutoDrive path. A click follows the road on through junctions where it carries straight on, and stops at T's, real ends and existing paths. It lays the lanes you choose: one-way, one two-way line, or two lanes keeping right. It stops short at forks so the junction tool can finish them; a track meeting a road runs right to the asphalt. Bridges and ramps are found from the game's road meshes. A road already built can be reshaped with handles, through its junctions, and the roads joining it follow.
+
+**How to use it**
+
+1. Point at a road: it lights up, with its lanes previewed. Click to pick it; double-click carries it on through forks.
+1. For a one-way run, click on the side of the road you would drive on (keep right).
+1. Click a pick to select it: drag a handle to reshape it, click the line to add a handle, Ctrl-click a handle to remove it. An end dragged onto a waypoint joins it (hold Alt for no snap).
+1. Right-click builds everything picked. One undo takes it all back.
+1. Click a road already built to reshape it the same way. A two-lane road is shaped by its middle, both lanes together. Junction points move with it; short turns bend and side roads ease back into place. Right-click applies, as one undo step.
+
+**Controls**
+
+- **lay as** — auto (two lanes on paved roads, one two-way line on tracks), one-way, two-way, or two lanes.
+- **priority** — primary or secondary, as for Draw.
+- **roads to find** — paved, gravel and dirt - turn a kind off to stop it lighting up.
+- **lane gap** — from road: measured from the road's width; set: type your own.
+- **through junctions** — when reshaping a built road: carry the selection on through its junctions (on), or take just the run between two junctions (off).
+- **settings dialog** — light up (under mouse or all nearby), side check (bridges or everywhere), rig width (3.0 m) and fork gap (7.5 m).
 
 <a id="move"></a>
 ## Move
@@ -321,6 +345,28 @@ Merge is for a stretch where two separately-recorded tracks run alongside each o
 - **merge distance** — how far apart the two tracks may sit and still merge.
 - **divergence** — how far they may pull apart along the stretch before the merge stops there.
 - **snap to** — terrain, or keep merged points on a bridge / ramp surface.
+
+<a id="name"></a>
+## Junction (beta)
+
+*Connect — Clear a road junction's turns, lay new ones, or both in one right-click.*
+
+The junction tool works on one junction at a time. Clear takes out the old turn wiring inside the junction and trims the lanes back to clean ends; build lays new turns - the mod's own X or T pattern where it fits every road there, turn by turn where it does not (or nothing, as the advanced setting says). Clear + build does both as one undo step. Junctions are numbered over the map and the numbers stay with the savegame. It is a BETA: plain X and T road junctions are what it does well today; two-way farm tracks, Y's and skewed junctions are still to come. Switch it off in the settings dialog (BETA section) and its button goes.
+
+**How to use it**
+
+1. Point at a junction: the card says which one and what kind. Left-click locks it.
+1. Pick the action on the card: clear, build, or clear + build.
+1. Right-click does it. One undo takes it all back.
+1. Left-click elsewhere moves the lock to another junction; Esc lets it go.
+
+**Controls**
+
+- **action** — clear, build, or clear + build.
+- **through roads** — when clearing: kept (the roads straight through stay) or cleared too.
+- **shape** — when building: mod (the mod's own X or T) or smooth (rounder turns).
+- **must fit** — the vehicles every new turn has to fit.
+- **advanced** — the radii and checks behind the build; closed by default.
 
 <a id="name"></a>
 ## Name

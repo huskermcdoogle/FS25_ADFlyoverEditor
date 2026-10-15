@@ -1,5 +1,51 @@
 # Changelog
 
+## 1.0.3.0 — Road runs, multi-point spline, junction tool (beta)
+
+### Road runs (new tool, CREATE group)
+
+- **Lays AutoDrive runs along map roads and farm tracks that have no path yet.** It reads the ground
+  paint round the mouse - asphalt and concrete, gravel, dirt tracks - and lights up the roads with no
+  path. A click follows the road on through junctions where it carries straight on and stops at T's,
+  real ends and existing paths; double-click carries it on through forks too. It lays one-way, one
+  two-way line, or two lanes keeping right, stops short at forks for the junction tool, and runs a
+  track that meets a road right to the asphalt.
+- **Shape before you build:** click a pick for handles - drag one, click the line to add one,
+  Ctrl-click one to remove it; an end dragged onto a waypoint joins it (Alt: no snap).
+- **Reshape roads already built:** click any AutoDrive road and shape it the same way. A two-lane road
+  is shaped by its middle, both lanes together. The selection carries on through junctions (card
+  toggle); junction points move with it, short turns bend and stay joined, side roads ease back into
+  place within about 20 m. Right-click applies; one undo.
+- Card: lay as, priority, roads to find, lane gap. Light up, side check, rig width and fork gap are in
+  the settings dialog's ROAD RUNS section.
+
+### Spline: a multi-point curve of the editor's own
+
+- **Click any number of points** - on the ground, or on a waypoint to join the road there. Drag a point
+  to move it, click the curve to add one, Ctrl-click to remove one, Alt places without snapping.
+  Spacing sets how far apart the waypoints are laid. Right-click lays it as one undo step.
+- AutoDrive's own two-point spline is still there: "curve by: AutoDrive" on the card.
+
+### Junction tool (BETA)
+
+- **Clear, build, or clear + build a road junction in one right-click.** Click a junction to lock it;
+  clear takes out the old turn wiring and trims the lanes back, build lays the mod's X or T pattern
+  where it fits every road (turn by turn where it does not, as the advanced setting says). One undo.
+- It is a **beta**: plain X and T road junctions are what it does well today; two-way farm tracks, Y's
+  and skewed junctions are still to come. It is on by default and its button says BETA; switch it off
+  in the settings dialog (BETA section).
+- Junction numbers are drawn over the junctions and kept with the savegame.
+
+### Left Alt + V opens the editor too
+
+- **Left Alt + V now opens the editor as well as Left Alt + F.** Left Alt + F stays, so nobody has to
+  relearn anything - but it has a weakness we could not see from inside the mod: it is also the base
+  game's key for toggling a vehicle's lights from outside (`TOGGLE_LIGHTS_EXTERNAL`). Whenever you
+  stand at a vehicle on foot, the game registers that key, the clash switches ours off, and Alt + F
+  flicks the lights instead of opening the editor until the game next rebuilds its bindings. That
+  was the "lost Left Alt key". Alt + V has no such clash. Anyone who rebound the key in the controls
+  menu keeps their own binding.
+
 ## 1.0.2.2 — Field loop: stays in its own field, keeps clear of fences and other loops (2026-10-08)
 
 Reported on issues 14 and 15: a field loop jumped into the next field across a narrow strip, and loops

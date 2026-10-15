@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
+     this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
+     auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
+     matched against the editor's own log lines. A click always wins. -->
+<testPlan title="vehicle set + test card" build="@BUILD@">
+    <test id="build" title="The game loaded this build" auto="build"
+          hint="Ticks itself: the running build is the one this plan was packed with."/>
+    <test id="card" title="This card works"
+          hint="Click pass here, fold the card with its header, unfold it. The results file updates."/>
+    <test id="rigRows" title="Rig rows on the build card"
+          hint="Junction tool, build mode, under 'swept path': small rig and big rig say 'must fit', semi says 'not checked'."/>
+    <test id="rigToggle" title="Clicking a rig row toggles it" passLog="vehicle set %- semi must fit"
+          hint="Click 'semi': it changes to 'must fit' (ticks itself). Click again to set it back."/>
+    <test id="fitCounts" title="Locked site shows fit counts" passLog="fits %d+ of the %d+ turns this build lays"
+          hint="Lock a junction in build mode (try 52 or 7). Each rig row adds 'n/m fit' (ticks itself)."/>
+    <test id="skewBuild" title="Skew build: tight turn on asphalt"
+          hint="Clear 52 or 7 (through roads kept), then build. The sharp turn runs along the asphalt edge, only the trailer crosses the gravel shoulder, nothing refused."/>
+    <test id="saveSplit" title="A save keeps the split"
+          hint="Change a split decision, save the game, reload: the decision is still there."/>
+    <test id="clear" title="Clear works as before"
+          hint="Clear a junction you know: same result as the last build."/>
+</testPlan>

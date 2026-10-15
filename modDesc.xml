@@ -8,9 +8,9 @@
 		<en>
 <![CDATA[A top-down flyover editor for AutoDrive route networks - build and repair routes from above, on foot or in a vehicle, without driving every metre of them.
 
-Tools: draw, move, delete, name, spline, divide, smooth, convert, straighten, field loop, merge, parallel, siding and ground. Click a point, a second point for the span between, or double-click for the whole run - in every tool - and a popup or the tool card offers what you can do with it. Everything is undoable.
+Tools: draw, move, delete, name, spline, divide, smooth, convert, straighten, field loop, merge, parallel, siding, ground and road runs, plus the junction tool as a beta. Click a point, a second point for the span between, or double-click for the whole run - in every tool - and a popup or the tool card offers what you can do with it. Everything is undoable.
 
-Open it with Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD. Esc to leave.
+Open it with Left Alt + V or Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD. Esc to leave.
 
 Requires FS25_AutoDrive to be installed and active. This mod does not modify AutoDrive's files; it attaches at runtime and refuses to load if it cannot. Do not run it alongside a modified AutoDrive build that includes its own flyover editor.
 
@@ -18,7 +18,7 @@ Single player only.
 ]]>
 		</en>
 	</description>
-	<version>1.0.2.2</version>
+	<version>1.0.3.0</version>
 	<multiplayer supported="false" />
 	<iconFilename>modIcon.dds</iconFilename>
 	<actions>
@@ -28,6 +28,7 @@ Single player only.
 	</actions>
 	<inputBinding>
 		<actionBinding action="AD_FLYOVER_TOGGLE">
+			<binding device="KB_MOUSE_DEFAULT" input="KEY_lalt KEY_v" />
 			<binding device="KB_MOUSE_DEFAULT" input="KEY_lalt KEY_f" />
 		</actionBinding>
 		<!-- Unbound by default (no <binding>): a reset is easy to hit by accident, so the player

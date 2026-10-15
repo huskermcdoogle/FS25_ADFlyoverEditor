@@ -1,0 +1,16 @@
+# Junctions the registry does not number, added to the tests because the user cleared them in game
+# and the clean-up check found problems. One per line: label x z mode, where x z is the lock point the
+# game logged ("junction site locked at") and mode is 1 (through roads kept) or 0 (not). Run with
+# reg_extra.sh. Positions are savegame6 (north is small z).
+#
+# x1: 2026-10-02 00:29, capture 0015. 3 teal dots: one made by the clear at (10.3, -85.7), one fed by
+#     the end of a cut turn at (-19.8, -88.5), one missed at (5.8, -64.7). About 66 m south of j39.
+# x2: 2026-10-02 00:30, capture 0016. A missed join at (-6.6, -75.1); two turn starts left as dead
+#     ends at (5.8, -90.6) and (10.4, -69.7). About 51 m south of j40.
+# x3: 2026-10-02 14:04-14:53, three clears of 39se, j39's south-east part (the registry point locks j39's
+#     middle part, so no registry line clears this one). A dead end at (63.0, 11.0): 39se took the last
+#     point of 30's slip lane, 21 m out, and left 15 m of it hanging off 30's road. Named j39 here: without
+#     the user's split decisions (REGDIR) the three parts are lettered afresh.
+x1  5.1  -76.0  1
+x2  -19.5  -79.4  1
+x3  24.5  1.3  1

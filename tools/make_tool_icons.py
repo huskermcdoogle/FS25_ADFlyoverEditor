@@ -6,13 +6,14 @@ is either near-white (index 0) or fully transparent (index 3). That gives crisp,
 glyphs with a transparent background - which flat opaque DXT1 (make_icon.py) cannot - and needs no
 real compressor. Icons are white; the HUD tints them per button at render time.
 
-4x4 grid, 128px cells. Cell order is ICON_ORDER below; the HUD computes each tool's UV rect from its
-index there.
+8x8 grid, 128px cells on a 1024px atlas (4x4 on 512 until 1.0.3.0 added road runs and the junction
+tool and the 16 cells ran out). Cell order is ICON_ORDER below; the HUD computes each tool's UV rect
+from its index there (FlyoverHud renderIcon: ICON_GRID, ICON_ATLAS).
 """
 import struct, sys, math
 
-ATLAS = 512
-GRID = 4
+ATLAS = 1024
+GRID = 8
 CELL = ATLAS // GRID  # 128
 
 ICON_ORDER = [
@@ -20,6 +21,7 @@ ICON_ORDER = [
     "parallel", "siding", "move", "smooth",
     "straighten", "divide", "convert", "merge",
     "name", "delete", "ground", "settings",
+    "roadruns", "junction",
 ]
 
 
@@ -110,6 +112,23 @@ def _gear_shapes():
 
 
 ICONS["settings"] = _gear_shapes()
+
+# Road runs: a road curving away, its two edges and a dashed middle - a run laid along a road.
+def _road_runs_shapes():
+    left = bez((0.20, 0.84), (0.30, 0.30), (0.62, 0.16))
+    right = bez((0.48, 0.84), (0.52, 0.42), (0.80, 0.30))
+    mid = bez((0.34, 0.84), (0.41, 0.36), (0.71, 0.23), n=20)
+    shapes = [("poly", left, 0.05), ("poly", right, 0.05)]
+    for k in range(0, 20, 5):                       # dashes: every other short piece of the middle
+        shapes.append(("poly", mid[k:k + 3], 0.045))
+    return shapes
+
+
+ICONS["roadruns"] = _road_runs_shapes()
+# Junction: a crossroads with one turn swept round its corner.
+ICONS["junction"] = [("poly", [(0.5, 0.14), (0.5, 0.86)], 0.06),
+                     ("poly", [(0.14, 0.5), (0.86, 0.5)], 0.06),
+                     ("poly", bez((0.60, 0.86), (0.62, 0.62), (0.86, 0.60)), 0.045)]
 
 
 def seg_dist(px, py, ax, ay, bx, by):
