@@ -1174,7 +1174,7 @@ local function joinTarget(j, owner, pickIndex, R)
                 local ahead = dx * hx + dz * hz
                 if j.atStart then ahead = -ahead end
                 local side = math.abs(dx * hz - dz * hx)
-                local inLine = ahead > -1 and side <= self.ROADRUNS_JOIN_SIDE
+                local inLine = ahead > -1 and side <= E.ROADRUNS_JOIN_SIDE
                 -- a loose end of the old network
                 if inLine and owner[wp.id] == nil and neighbourCount(wp) <= 1 then
                     local fits
