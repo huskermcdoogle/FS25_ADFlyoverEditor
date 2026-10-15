@@ -578,7 +578,8 @@ function E:roadRunsVote(cx, cz)
     while #s.voted > 20 do table.remove(s.voted) end
     local v = st.votes or {}
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - voted: %d walk(s), %s; %.0f m kept (%s to %s)%s%s.",
-        v.walks or walks, v.need and string.format("%d needed to agree", v.need) or "too few to vote",
+        v.walks or walks, v.need and string.format("%d needed to agree", v.need)
+            or ((v.walks or 0) < 3 and "too few to vote" or "no majority round the mouse, its own walk kept"),
         st.len or 0, st.startTag, st.endTag, v.cutStart and "; cut at the start where the walks split" or "",
         v.cutEnd and "; cut at the end where the walks split" or "")
     return st
@@ -800,13 +801,16 @@ end
 function E:updateRoadRunsInner(overPanel)
     do
         local s = roadState(self)
-        local wps = ADGraphManager:getWayPoints()
+        -- AutoDrive's own count (# on its waypoint table does not follow an undo)
         local n = 0
-        if wps ~= nil then n = #wps end
-        if s.wpCount ~= nil and n ~= s.wpCount and (#s.picks > 0 or s.voted ~= nil) then
+        if ADGraphManager.getWayPointsCount ~= nil then n = ADGraphManager:getWayPointsCount() or 0
+        else n = #(ADGraphManager:getWayPoints() or {}) end
+        local stamp = ADEditorHistory ~= nil and ADEditorHistory.stack ~= nil and (#ADEditorHistory.stack * 100000 + #(ADEditorHistory.redoStack or {})) or 0
+        local key = n * 7919 + stamp
+        if s.wpCount ~= nil and key ~= s.wpCount and (#s.picks > 0 or s.voted ~= nil) then
             self:roadRunsForget("the waypoints changed")
         end
-        s.wpCount = n
+        s.wpCount = key
     end
     if not overPanel then self:roadRunsUpdateHandles() end
     if self.roadView and self.roadDrawMid then self:roadMidUpdate(overPanel) end
