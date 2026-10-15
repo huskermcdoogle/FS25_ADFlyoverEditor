@@ -115,6 +115,7 @@ function ADFlyoverEditor:createRunFrom(points, dual, flags)
 end
 
 dofile(HERE .. "../../scripts/editor/RoadFinder.lua")
+dofile(HERE .. "../../scripts/editor/SplinePath.lua")
 dofile(HERE .. "../../scripts/editor/RoadRunsTool.lua")
 local E = ADFlyoverEditor
 if DBGFILE then dofile(DBGFILE) end
@@ -239,6 +240,54 @@ for k, st in ipairs(targets) do
     end
 end
 print("picks: " .. #s.picks)
+-- shaping the selected run with its handles: drag one, add one on the line, ctrl-remove one
+do
+    local sel = s.sel
+    if sel == nil and #s.picks > 0 then E:roadRunsSelect(s.picks[#s.picks]) sel = s.sel end
+    if sel ~= nil then
+        local H = sel.handles
+        local n0, len0 = #H, sel.st.len or 0
+        local k = math.max(1, math.floor((#H + 1) / 2))
+        if k == 1 and #H > 2 then k = 2 end
+        local h = H[k]
+        -- press on it, move 3 m sideways past the drag threshold, release
+        E.cursorX, E.cursorZ, E.mouseX, E.mouseY = h.x, h.z, 0, 0
+        E.leftDown = true
+        local took = E:roadRunsPress()
+        E.mouseX = 0.1
+        local P = sel.st.pts
+        local i = math.max(2, math.floor(#P / 2))
+        local nx, nz = -(P[i].z - P[i - 1].z), P[i].x - P[i - 1].x
+        local nl = math.sqrt(nx * nx + nz * nz)
+        E.cursorX, E.cursorZ = h.x + 3 * nx / nl, h.z + 3 * nz / nl
+        frames(1)
+        E.leftDown = false
+        E:roadRunsClick()
+        local moved = sel.st.edited == true
+        local near = math.huge
+        local LP = sel.st.pts
+        for j = 1, #LP - 1 do
+            local a, b = LP[j], LP[j + 1]
+            local dx, dz = b.x - a.x, b.z - a.z
+            local l2 = dx * dx + dz * dz
+            local t = l2 > 0 and math.max(0, math.min(1, ((E.cursorX - a.x) * dx + (E.cursorZ - a.z) * dz) / l2)) or 0
+            near = math.min(near, math.sqrt((E.cursorX - a.x - dx * t) ^ 2 + (E.cursorZ - a.z - dz * t) ^ 2))
+        end
+        -- add a handle on the line
+        local mid = sel.st.pts[math.floor(#sel.st.pts / 3) + 1]
+        E.cursorX, E.cursorZ = mid.x, mid.z
+        frames(1)
+        E:roadRunsClick()
+        local n1 = #sel.handles
+        -- ctrl-remove it again
+        E.cursorX, E.cursorZ = mid.x, mid.z
+        frames(1)
+        local removed = E:roadRunsRemoveHandleAtCursor()
+        print(string.format("shape: press %s, dragged handle %d of %d: line edited %s, passes %.2f m from the drop; %.0f -> %.0f m; add -> %d handles; ctrl-remove %s -> %d",
+            tostring(took), k, n0, tostring(moved), near, len0, sel.st.len or 0, n1, tostring(removed), #sel.handles))
+        print((took and moved and near < 0.3 and n1 == n0 + 1 and removed and #sel.handles == n0) and "SHAPE PASS" or "SHAPE FAIL")
+    end
+end
 for _, r in ipairs(card()) do print("  card | " .. r) end
 print("next step: " .. E:roadRunsNextStep())
 local before = count

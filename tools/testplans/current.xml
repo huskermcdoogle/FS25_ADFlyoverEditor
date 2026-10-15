@@ -3,11 +3,13 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="no T links + spline snap" build="@BUILD@">
+<testPlan title="shape runs + no T links + spline snap" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="noTee" title="No link at a T with a road"
           hint="Road runs: build the field track to the road, and the lane that had the diagonal link. Each ends at the road's edge with no link into the road's lanes."/>
+    <test id="shapeRun" title="Shape a picked run with handles" passLog="road runs %- handle %d+ moved"
+          hint="Road runs: pick a road - handles appear on it. Drag one (ticks itself), click the line to add one, ctrl-click one to remove, drag an end onto a waypoint (yellow). Click another pick to select it; 'drop selected run' on the card. Build: the shaped line is laid."/>
     <test id="splineSnap" title="Spline snap is tighter; Alt places without snapping"
           hint="Spline tool: near a waypoint the point only snaps when right on it (yellow marker). Hold Alt: it never snaps (white marker)."/>
     <test id="splineInsert" title="Click on the curve adds a point"

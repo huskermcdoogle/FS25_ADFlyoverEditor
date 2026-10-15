@@ -3811,7 +3811,8 @@ function ADFlyoverEditor:onLeftPress()
 
     -- Alt alone claims the drag for box selection (view-aligned - see boxFrame). Not in the
     -- multi-point spline: there Alt means "place this point without snapping to a waypoint".
-    if self.leftAltHeld and not (self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint()) then
+    if self.leftAltHeld and not (self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint())
+        and not (self.tool == self.TOOL.ROADRUNS and self.roadRuns ~= nil and self.roadRuns.sel ~= nil) then
         self.boxActive = true
         self.boxStartX, self.boxStartZ = self.cursorX, self.cursorZ
         return
@@ -3841,6 +3842,10 @@ function ADFlyoverEditor:onLeftPress()
     -- Multi-point spline: a press on one of its points may become a drag of that point.
     if self.tool == self.TOOL.SPLINE and self.splineHoverIdx ~= nil and self:splineIsMultiPoint() then
         self:multiSplinePress()
+        return
+    end
+    -- Road runs: a press on a handle of the selected run may become a drag of it.
+    if self.tool == self.TOOL.ROADRUNS and self.roadRunsPress ~= nil and self:roadRunsPress() then
         return
     end
 
@@ -4028,6 +4033,10 @@ function ADFlyoverEditor:onLeftRelease()
         self.ctrlToggleArmed = false
         -- On a multi-point spline's own point, Ctrl-click removes the point instead of selecting.
         if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() and self:multiSplineRemoveAtCursor() then
+            return
+        end
+        -- On a road run's handle, Ctrl-click removes the handle.
+        if self.tool == self.TOOL.ROADRUNS and self.roadRunsRemoveHandleAtCursor ~= nil and self:roadRunsRemoveHandleAtCursor() then
             return
         end
         if self:chainToggleSelected(self.hoverId) then

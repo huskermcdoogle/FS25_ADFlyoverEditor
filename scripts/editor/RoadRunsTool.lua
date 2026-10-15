@@ -273,6 +273,12 @@ function E:roadRunsHover(overPanel)
         s.hover = nil
         return
     end
+    -- on the selected run's handles or line, a click shapes it: no new road lights up
+    if s.sel ~= nil and (s.handleDrag ~= nil or s.handleHover ~= nil or self:roadRunsHandlePiece() ~= nil) then
+        s.hover = nil
+        s.hoverPick = s.sel
+        return
+    end
     -- over a picked stretch? (a click there drops it)
     local best, bd = nil, math.huge
     for _, pk in ipairs(s.picks) do
@@ -561,6 +567,186 @@ function E:roadRunsVote(cx, cz)
     return st
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- shaping a picked run with handles (2026-10-14 user: "tool drops it close, then the user can massage
+-- into place"). Only the SELECTED pick shows handles: a new pick is selected; a click on another
+-- pick selects it; a click on empty ground clears the selection. Drag a handle to shape the run (the
+-- curve is the multi-point spline's, ADSplinePath); click on the selected run's line to add a handle;
+-- Ctrl-click a handle to remove it; an end handle snaps onto a waypoint right under the mouse (Alt
+-- held: never). Build lays the shaped line.
+
+E.ROADRUNS_HANDLE_TOL = 0.3          -- handles: as few as keep the picked line within this (m)
+
+--- Handles for a pick: the ends, and as few between as keep its line within ROADRUNS_HANDLE_TOL.
+function E:roadRunsMakeHandles(pk)
+    local P = pk.st.pts
+    local S = RF.simplifyLine(P, self.ROADRUNS_HANDLE_TOL)
+    local H = {}
+    for _, q in ipairs(S) do H[#H + 1] = { x = q.x, y = q.y, z = q.z } end
+    if #H < 2 then H = { { x = P[1].x, y = P[1].y, z = P[1].z }, { x = P[#P].x, y = P[#P].y, z = P[#P].z } } end
+    pk.handles = H
+    pk.orig = pk.orig or pk.st
+    self:roadRunsHandleCurve(pk)
+end
+
+--- The curve through a pick's handles (ADSplinePath), with snapped ends following their roads.
+function E:roadRunsHandleCurve(pk)
+    local H = pk.handles
+    local startDir, endDir = nil, nil
+    local function node(h)
+        if h.wpId == nil then return nil end
+        local wp = ADGraphManager:getWayPointById(h.wpId)
+        if wp ~= nil and math.abs(wp.x - h.x) < 0.05 and math.abs(wp.z - h.z) < 0.05 then return wp end
+        h.wpId = nil
+        return nil
+    end
+    local a, b = node(H[1]), node(H[#H])
+    if a ~= nil and self.splineRoadHeading ~= nil then startDir = self:splineRoadHeading(a, H[2].x, H[2].z) end
+    if b ~= nil and self.splineRoadHeading ~= nil then
+        local hd = self:splineRoadHeading(b, 2 * b.x - H[#H - 1].x, 2 * b.z - H[#H - 1].z)
+        if hd ~= nil then endDir = hd end
+    end
+    pk.curve = ADSplinePath ~= nil and ADSplinePath.build(H, startDir, endDir) or nil
+end
+
+--- After an edit: the pick's line is laid along its handles' curve, 2 m apart. A moved end is a plain
+--- end (no junction gap); one snapped onto a waypoint joins it.
+function E:roadRunsApplyHandles(pk, movedStart, movedEnd)
+    self:roadRunsHandleCurve(pk)
+    local H, C = pk.handles, pk.curve
+    if C == nil or #H < 2 then return end
+    local pts = { { x = H[1].x, z = H[1].z, y = H[1].y } }
+    for _, q in ipairs(ADSplinePath.resample(C, 2)) do pts[#pts + 1] = { x = q.x, z = q.z, y = q.y } end
+    pts[#pts + 1] = { x = H[#H].x, z = H[#H].z, y = H[#H].y }
+    for _, q in ipairs(pts) do q.y = nil end
+    withHeights(pts)
+    local st = {}
+    for k, v in pairs(pk.st) do st[k] = v end
+    st.pts, st.refinedTo, st.edited = pts, nil, true
+    st.refinedTo = st
+    local len = 0
+    for i = 2, #pts do len = len + math.sqrt((pts[i].x - pts[i - 1].x) ^ 2 + (pts[i].z - pts[i - 1].z) ^ 2) end
+    st.len = len
+    st.id = string.format("edit:%d:%d:%d", math.floor(pts[1].x), math.floor(pts[1].z), #pts)
+    if movedStart or H[1].wpId ~= nil then
+        st.startTag, st.startNode, st.joinStart = "end", nil, H[1].wpId
+    end
+    if movedEnd or H[#H].wpId ~= nil then
+        st.endTag, st.endNode, st.joinEnd = "end", nil, H[#H].wpId
+    end
+    pk.st = st
+end
+
+--- The selected pick's handle under the mouse (screen distance, as spline points), or nil.
+function E:roadRunsHandleAtCursor()
+    local s = roadState(self)
+    local pk = s.sel
+    if pk == nil or pk.handles == nil or self.cursorX == nil then return nil end
+    local best, bestD = nil, nil
+    if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
+        bestD = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS * AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
+        for i, h in ipairs(pk.handles) do
+            local ok, sx, sy, depth = pcall(project, h.x, (h.y or 0) + 0.8, h.z)
+            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+                local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
+                if dx * dx + dy * dy < bestD then best, bestD = i, dx * dx + dy * dy end
+            end
+        end
+        return best
+    end
+    bestD = 4
+    for i, h in ipairs(pk.handles) do
+        local dx, dz = h.x - self.cursorX, h.z - self.cursorZ
+        if dx * dx + dz * dz < bestD then best, bestD = i, dx * dx + dz * dz end
+    end
+    return best
+end
+
+--- Which piece of the selected pick's curve the mouse is on (to put a handle in), or nil.
+function E:roadRunsHandlePiece()
+    local s = roadState(self)
+    local pk = s.sel
+    if pk == nil or pk.curve == nil or self.cursorX == nil then return nil end
+    local seg, dist, px, pz, py = ADSplinePath.nearestPiece(pk.curve, self.cursorX, self.cursorZ)
+    if seg == nil then return nil end
+    if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
+        local ok, sx, sy, depth = pcall(project, px, (py or self.cursorY or 0) + 0.6, pz)
+        if ok and sx ~= nil and depth ~= nil and depth > 0 then
+            local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
+            local r = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
+            return (dx * dx + dy * dy <= r * r) and seg or nil
+        end
+        return nil
+    end
+    return dist <= 2 and seg or nil
+end
+
+--- Select a pick (handles shown), or clear the selection with nil.
+function E:roadRunsSelect(pk)
+    local s = roadState(self)
+    s.sel = pk
+    s.handlePress, s.handleDrag = nil, nil
+    if pk ~= nil and pk.handles == nil then self:roadRunsMakeHandles(pk) end
+end
+
+--- A press on a handle of the selected pick: it may become a drag. True when it took the press.
+function E:roadRunsPress()
+    local s = roadState(self)
+    local idx = self:roadRunsHandleAtCursor()
+    if idx == nil then return false end
+    s.handlePress = { idx = idx, mx = self.mouseX, my = self.mouseY }
+    return true
+end
+
+--- Ctrl-click on a handle of the selected pick removes it (two stay). True when it took the click.
+function E:roadRunsRemoveHandleAtCursor()
+    local s = roadState(self)
+    local pk = s.sel
+    local idx = self:roadRunsHandleAtCursor()
+    if pk == nil or idx == nil then return false end
+    if #pk.handles <= 2 then
+        self:warnPlayer("A run keeps its two end handles.")
+        return true
+    end
+    table.remove(pk.handles, idx)
+    self:roadRunsApplyHandles(pk, false, false)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - handle %d removed (%d left).", idx, #pk.handles)
+    return true
+end
+
+--- Per frame while a pick is selected: a press past the drag threshold drags its handle.
+function E:roadRunsUpdateHandles()
+    local s = roadState(self)
+    local pk = s.sel
+    if pk == nil then return end
+    local press = s.handlePress
+    if press ~= nil and s.handleDrag == nil and self.leftDown and self.mouseX ~= nil and press.mx ~= nil then
+        local dx, dy = self.mouseX - press.mx, self.mouseY - press.my
+        if math.sqrt(dx * dx + dy * dy) > (self.MOVE_DRAG_THRESHOLD or 0.004) then s.handleDrag = press.idx end
+    end
+    local idx = s.handleDrag
+    if idx ~= nil then
+        if not self.leftDown or pk.handles[idx] == nil then
+            s.handleDrag, s.handlePress = nil, nil
+        elseif self.cursorX ~= nil then
+            local isEnd = idx == 1 or idx == #pk.handles
+            local wp = (isEnd and self.splineSnapCandidate ~= nil) and self:splineSnapCandidate() or nil
+            local h
+            if wp ~= nil then
+                h = { x = wp.x, y = wp.y, z = wp.z, wpId = wp.id }
+            else
+                h = { x = self.cursorX, y = nil, z = self.cursorZ }
+            end
+            local old = pk.handles[idx]
+            if math.abs(old.x - h.x) > 0.05 or math.abs(old.z - h.z) > 0.05 or old.wpId ~= h.wpId then
+                pk.handles[idx] = h
+                self:roadRunsApplyHandles(pk, idx == 1, idx == #pk.handles)
+            end
+        end
+    end
+    s.handleHover = (s.handleDrag == nil) and self:roadRunsHandleAtCursor() or nil
+end
+
 --- Per frame, guarded: an error in the tool is logged once and the tool stops reading, but the
 --- editor's own update (camera keys, edge scroll) always carries on.
 function E:updateRoadRuns(overPanel)
@@ -591,6 +777,7 @@ function E:roadRunsPaintAt(cx, cz)
 end
 
 function E:updateRoadRunsInner(overPanel)
+    if not overPanel then self:roadRunsUpdateHandles() end
     if self.roadView and self.roadDrawMid then self:roadMidUpdate(overPanel) end
     if self.roadView and self.roadPaint and self.leftDown and not overPanel and self.cursorX ~= nil then
         self:roadRunsPaintAt(self.cursorX, self.cursorZ)
@@ -871,6 +1058,31 @@ function E:roadRunsClick()
     if self.roadView and self.roadDrawMid then self:roadMidClick() return end
     if self.roadView and self.roadPaint then return end      -- painting: the drag paints, see update
     local s = roadState(self)
+    -- shaping the selected run
+    if s.handleDrag ~= nil then
+        local pk = s.sel
+        local h = pk ~= nil and pk.handles[s.handleDrag] or nil
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - handle %d moved to (%.1f, %.1f)%s; run now %.0f m.", s.handleDrag,
+            h and h.x or 0, h and h.z or 0, (h and h.wpId) and string.format(" (on waypoint %d)", h.wpId) or "",
+            pk and pk.st.len or 0)
+        s.handleDrag, s.handlePress = nil, nil
+        return
+    end
+    if s.handlePress ~= nil then
+        s.handlePress = nil                                     -- a click on a handle without a drag
+        return
+    end
+    if s.sel ~= nil then
+        local seg = self:roadRunsHandlePiece()
+        if seg ~= nil then
+            local pk = s.sel
+            table.insert(pk.handles, seg + 1, { x = self.cursorX, y = nil, z = self.cursorZ })
+            self:roadRunsApplyHandles(pk, false, false)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - handle added at (%.1f, %.1f) (%d handles).",
+                self.cursorX, self.cursorZ, #pk.handles)
+            return
+        end
+    end
     local now = self:nowMs()
     local last = s.lastClick
     local isDouble = last ~= nil and (now - last.at) < self.DOUBLE_CLICK_MS
@@ -929,6 +1141,7 @@ function E:roadRunsClick()
         s.picks[#s.picks + 1] = pick
         s.chainDir = {}
         s.lastClick.pick = pick
+        self:roadRunsSelect(pick)
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - picked a %s stretch, %.0f m, %.1f m wide (%s to %s), %s.",
             RF.KIND_NAMES[st.kind] or "?", st.len, st.width or -1, st.startTag, st.endTag,
             st.fromSpline and "the map's own road line" or st.pointWalk and "walked from the mouse"
@@ -948,12 +1161,21 @@ function E:roadRunsClick()
         end
         self:roadRunsRefreshStretches()
     elseif s.hoverPick ~= nil then
-        for k, pk in ipairs(s.picks) do
-            if pk == s.hoverPick then table.remove(s.picks, k) break end
-        end
-        s.hoverPick = nil
-        self:roadRunsRefreshStretches()
+        -- a click on a pick selects it for shaping (it is dropped with the card's button)
+        self:roadRunsSelect(s.hoverPick)
+    else
+        self:roadRunsSelect(nil)                                -- empty ground: nothing selected
     end
+end
+
+--- Drop the selected pick (the card's button).
+function E:roadRunsDropSelected()
+    local s = roadState(self)
+    for k, pk in ipairs(s.picks) do
+        if pk == s.sel then table.remove(s.picks, k) break end
+    end
+    self:roadRunsSelect(nil)
+    self:roadRunsRefreshStretches()
 end
 
 --- Double-click on a road walked from the mouse: from each end that stopped at a junction, hop
@@ -1032,6 +1254,7 @@ end
 function E:roadRunsClearPicks()
     local s = roadState(self)
     s.picks = {}
+    self:roadRunsSelect(nil)
     self:roadRunsRefreshStretches()
 end
 
@@ -1288,10 +1511,16 @@ function E:commitRoadRuns()
                     -- only where an existing path carries the road on (never at a T with a road:
                     -- the junction tool ties those in - 2026-10-14 user)
                     local function joins(tag) return tag == "path" end
-                    if ln.startAt ~= nil and joins(tagAt(ln.startAt)) then
+                    -- an end handle snapped onto a waypoint joins that waypoint
+                    local function snapAt(at) return (at == "start") and st.joinStart or st.joinEnd end
+                    if ln.startAt ~= nil and snapAt(ln.startAt) ~= nil then
+                        pending[#pending + 1] = { pick = pickIndex, id = firstId, p = P[1], h = { P[2].x - P[1].x, P[2].z - P[1].z }, atStart = true, dual = ln.dual, joinId = snapAt(ln.startAt) }
+                    elseif ln.startAt ~= nil and joins(tagAt(ln.startAt)) then
                         pending[#pending + 1] = { pick = pickIndex, id = firstId, p = P[1], h = { P[2].x - P[1].x, P[2].z - P[1].z }, atStart = true, dual = ln.dual }
                     end
-                    if ln.endAt ~= nil and joins(tagAt(ln.endAt)) then
+                    if ln.endAt ~= nil and snapAt(ln.endAt) ~= nil then
+                        pending[#pending + 1] = { pick = pickIndex, id = lastId, p = P[n], h = { P[n].x - P[n - 1].x, P[n].z - P[n - 1].z }, atStart = false, dual = ln.dual, joinId = snapAt(ln.endAt) }
+                    elseif ln.endAt ~= nil and joins(tagAt(ln.endAt)) then
                         pending[#pending + 1] = { pick = pickIndex, id = lastId, p = P[n], h = { P[n].x - P[n - 1].x, P[n].z - P[n - 1].z }, atStart = false, dual = ln.dual }
                     end
                 end
@@ -1315,7 +1544,9 @@ function E:commitRoadRuns()
         -- a run that meets a road's lane head-on joins it in a T: straight on from its end to the
         -- first lane it crosses, a waypoint put into that lane there (2026-10-14 user: a diagonal
         -- link to a waypoint 8 m along the road "I don't much like the way it is connecting")
-        local target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS)
+        local target
+        if j.joinId ~= nil then target = ADGraphManager:getWayPointById(j.joinId)
+        else target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS) end
         if target ~= nil and own ~= nil and target ~= own and finite(target.x) and finite(target.z) then
             if j.atStart then
                 ADGraphManager:toggleConnectionBetween(target, own, false, j.dual, false)
@@ -1897,8 +2128,27 @@ function E:drawRoadRunsInner(lw)
     -- the picks, as they will be laid
     for _, pk in ipairs(s.picks) do
         self:drawRoadRunLanes(self:roadRunsLanesFor(pk.st, pk.dir), lw, pr, pg, pb)
-        if pk == s.hoverPick then
-            drawLine(pk.st.pts, 1, lw * 1.5, 1, 0.3, 0.3, 0.4)    -- red: a click drops it
+        if pk == s.hoverPick and pk ~= s.sel then
+            drawLine(pk.st.pts, 1, lw * 1.5, 1, 1, 1, 0.4)          -- white: a click selects it
+        end
+    end
+    -- the selected pick's handles: ends larger, the one under the mouse (or dragged) bright
+    local sel = s.sel
+    if sel ~= nil and sel.handles ~= nil then
+        drawLine(sel.st.pts, 1, lw * 1.2, 1, 1, 1, 0.5)
+        for i, h in ipairs(sel.handles) do
+            if finite(h.x) and finite(h.z) then
+                local y = (h.y or terrainY(h.x, h.z)) + 0.8
+                local isEnd = i == 1 or i == #sel.handles
+                local hot = i == s.handleHover or i == s.handleDrag
+                if hot then
+                    ADDrawingManager:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 1, 0.9, 0.1, 0.20)
+                elseif h.wpId ~= nil then
+                    ADDrawingManager:addSphereTask(h.x, y, h.z, 4, 1, 0.9, 0.1, 0.15)          -- joined to a waypoint
+                else
+                    ADDrawingManager:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 0.3, 0.8, 1, 0.15)
+                end
+            end
         end
     end
     -- the hovered stretch: bright, with its lanes previewed and the forks it stops short of
@@ -2036,6 +2286,12 @@ function E:roadRunsCard(kit)
     if n > 0 then
         kit.btn("build (right-click)", function() editor:commitRoadRuns() end)
         kit.btn("clear picks", function() editor:roadRunsClearPicks() end)
+        if s.sel ~= nil then
+            kit.add("cursor", "selected run", string.format("%d handles, %.0f m%s", #(s.sel.handles or {}), s.sel.st.len or 0,
+                s.sel.st.edited and ", shaped" or ""))
+            kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; alt: ends do not snap")
+            kit.btn("drop selected run", function() editor:roadRunsDropSelected() end)
+        end
     end
     if RF.noRockCheck then
         kit.add("hint", "not the host: rock may light up as paved")
