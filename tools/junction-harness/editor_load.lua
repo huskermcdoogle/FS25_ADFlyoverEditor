@@ -18,6 +18,11 @@ return function()
     f:close()
     local list = assert(txt:match("P%.EDITOR_FILES%s*=%s*(%b{})"), "Prelude.lua: no P.EDITOR_FILES list")
     local on = false
+    -- road runs and the multi-point spline (1.0.3.0) lean on two files listed before FlyoverEditor.lua
+    -- that the harness does not stub: load them as the game does
+    for _, early in ipairs({ { "ADRoadFinder", "scripts/editor/RoadFinder.lua" }, { "ADSplinePath", "scripts/editor/SplinePath.lua" } }) do
+        if _G[early[1]] == nil and list:find(early[2], 1, true) then dofile("../../" .. early[2]) end
+    end
     for path in list:gmatch('"([^"]+)"') do
         if path == "scripts/editor/FlyoverEditor.lua" then on = true end
         if on then dofile("../../" .. path) end
