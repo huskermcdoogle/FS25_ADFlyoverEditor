@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Left Alt + V opens the editor too
+
+- **Left Alt + V now opens the editor as well as Left Alt + F.** Left Alt + F stays, so nobody has to
+  relearn anything - but it has a weakness we could not see from inside the mod: it is also the base
+  game's key for toggling a vehicle's lights from outside (`TOGGLE_LIGHTS_EXTERNAL`). Whenever you
+  stand at a vehicle on foot, the game registers that key, the clash switches ours off, and Alt + F
+  flicks the lights instead of opening the editor until the game next rebuilds its bindings. That
+  was the "lost Left Alt key". Alt + V has no such clash. Anyone who rebound the key in the controls
+  menu keeps their own binding.
+
 ## 1.0.2.2 — Field loop: stays in its own field, keeps clear of fences and other loops (2026-10-08)
 
 Reported on issues 14 and 15: a field loop jumped into the next field across a narrow strip, and loops

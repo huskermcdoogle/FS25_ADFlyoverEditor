@@ -776,7 +776,7 @@ L.GENERAL = {
         summary = "Öffnen, Verlassen und die überall gültigen Tasten und Steuerungen.",
         sections = {
             { title = "ÖFFNEN & VERLASSEN", lines = {
-                "Den Editor mit Linke Alt + F öffnen (im Steuerungsmenü belegbar) oder mit dem Knopf neben AutoDrives HUD.",
+                "Den Editor mit Linke Alt + V oder Linke Alt + F öffnen (im Steuerungsmenü belegbar) oder mit dem Knopf neben AutoDrives HUD.",
                 "Esc zum Verlassen. Jede Änderung ist widerrufbar.",
                 "Nur Einzelspieler. Änderungen werden geschrieben, wenn du der Host bist.",
             } },
