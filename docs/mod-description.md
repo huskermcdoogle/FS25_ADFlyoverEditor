@@ -15,7 +15,7 @@ It runs as a **companion mod** beside *stock* AutoDrive. It does **not** modify 
 
 ## Opening it
 
-- **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+- **Left Alt + V** or **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - **Esc** to leave.
 - **1–9 and 0** select tools; **Q** undo, **E** redo; **H** hides/shows the floating tool card; **,** and **.** nudge the Move falloff.
 

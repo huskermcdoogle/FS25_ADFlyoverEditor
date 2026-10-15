@@ -30,7 +30,7 @@ Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/w6mvhuaa9k
 
 ## Opening the editor
 
-- **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+- **Left Alt + V** or **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - **Esc** to leave. Every edit is undoable — **Q** undo, **E** redo.
 
 ## Works with placeable junctions too
