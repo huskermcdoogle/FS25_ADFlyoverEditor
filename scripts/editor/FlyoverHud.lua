@@ -77,6 +77,42 @@ local function TR(s)
     return s
 end
 
+--- How wide a piece of text renders, or 0 where the engine cannot say. Wrapped so the callers that
+--- only want to know whether something fits do not each have to guard getTextWidth themselves.
+function ADFlyoverHud:measure(fontSize, text)
+    if text == nil or text == "" or getTextWidth == nil then return 0 end
+    local ok, w = pcall(getTextWidth, fontSize, text)
+    return (ok and w) or 0
+end
+
+--- Fit `text` into `maxW`, and say at what size to draw it. Shrunk first, down to three quarters of
+--- the size asked for, because a slightly smaller line that can be read beats a full-size one that
+--- cannot; only then cut short, with an ellipsis so it is obvious something was cut rather than the
+--- reader being left to wonder what the rest of it said.
+---
+--- Returns the text unchanged and the size unchanged whenever it already fits, which is almost
+--- always - nothing is measured twice for the sake of the one row in fifty that overruns.
+function ADFlyoverHud:fitToWidth(text, fontSize, maxW)
+    if text == nil or text == "" then return text, fontSize end
+    if maxW == nil or maxW <= 0 or getTextWidth == nil then return text, fontSize end
+    if self:measure(fontSize, text) <= maxW then return text, fontSize end
+
+    local floorSize = fontSize * 0.75
+    local size = fontSize
+    for _ = 1, 6 do
+        size = size - fontSize * 0.05
+        if size <= floorSize then break end
+        if self:measure(size, text) <= maxW then return text, size end
+    end
+
+    size = floorSize
+    local cut = text
+    while #cut > 1 and self:measure(size, cut .. "...") > maxW do
+        cut = cut:sub(1, #cut - 1)
+    end
+    return cut .. "...", size
+end
+
 function ADFlyoverHud:ensureOverlays()
     if self.background == nil then
         self.background = Overlay.new(g_baseUIFilename, 0, 0, 1, 1)
