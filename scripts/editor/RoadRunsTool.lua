@@ -2155,8 +2155,10 @@ function E:drawRoadRunsInner(lw)
     end
     local cx, cz = self.cursorX, self.cursorZ
     local radius = AutoDrive.FLYOVER_DRAW_RADIUS or 200
-    local pr, pg, pb = 0.3, 0.7, 1
-    if self.roadSubPrio then pr, pg, pb = 1, 0.83, 0.3 end
+    -- Saturated colours that hold after the linear conversion (mid-tones went dark and washed out
+    -- against grass and asphalt - 2026-10-14 user: "the colors are still hard to see")
+    local pr, pg, pb = 0, 0.85, 1                                    -- picks, primary: cyan
+    if self.roadSubPrio then pr, pg, pb = 1, 0.85, 0 end             -- picks, secondary: yellow
 
     -- every unpathed road nearby, faint
     if self.roadShowAll and cx ~= nil then
@@ -2167,7 +2169,7 @@ function E:drawRoadRunsInner(lw)
                 for i = 1, #P, 4 do
                     if math.abs(P[i].x - cx) < radius and math.abs(P[i].z - cz) < radius then near = true break end
                 end
-                if near then drawLine(P, 2, lw * 0.6, 0.55, 0.45, 0.15, 0.3) end
+                if near then drawLine(P, 2, lw * 0.8, 0.9, 0.55, 0.05, 0.3) end
             end
         end
     end
@@ -2175,24 +2177,24 @@ function E:drawRoadRunsInner(lw)
     for _, pk in ipairs(s.picks) do
         self:drawRoadRunLanes(self:roadRunsLanesFor(pk.st, pk.dir), lw, pr, pg, pb)
         if pk == s.hoverPick and pk ~= s.sel then
-            drawLine(pk.st.pts, 1, lw * 1.5, 1, 1, 1, 0.4)          -- white: a click selects it
+            drawLine(pk.st.pts, 1, lw * 2, 1, 1, 1, 0.4)            -- white: a click selects it
         end
     end
     -- the selected pick's handles: ends larger, the one under the mouse (or dragged) bright
     local sel = s.sel
     if sel ~= nil and sel.handles ~= nil then
-        drawLine(sel.st.pts, 1, lw * 1.2, 1, 1, 1, 0.5)
+        drawLine(sel.st.pts, 1, lw * 2.2, 1, 1, 1, 0.5)            -- the selected run: thick white
         for i, h in ipairs(sel.handles) do
             if finite(h.x) and finite(h.z) then
                 local y = (h.y or terrainY(h.x, h.z)) + 0.8
                 local isEnd = i == 1 or i == #sel.handles
                 local hot = i == s.handleHover or i == s.handleDrag
                 if hot then
-                    Draw:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 1, 0.9, 0.1, 0.20)
+                    Draw:addSphereTask(h.x, y, h.z, isEnd and 6 or 5, 1, 1, 0, 0.20)          -- under the mouse: yellow
                 elseif h.wpId ~= nil then
-                    Draw:addSphereTask(h.x, y, h.z, 4, 1, 0.9, 0.1, 0.15)          -- joined to a waypoint
+                    Draw:addSphereTask(h.x, y, h.z, 6, 1, 0.4, 0, 0.20)                       -- joined to a waypoint: orange
                 else
-                    Draw:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 0.3, 0.8, 1, 0.15)
+                    Draw:addSphereTask(h.x, y, h.z, isEnd and 5 or 4, 1, 0, 1, 0.20)          -- handle: magenta
                 end
             end
         end
@@ -2200,11 +2202,11 @@ function E:drawRoadRunsInner(lw)
     -- the hovered stretch: bright, with its lanes previewed and the forks it stops short of
     local st = s.hover and self:roadRunsRefined(s.hover) or nil
     if st ~= nil then
-        drawLine(st.pts, 1, lw * 1.5, 1, 0.69, 0.13, 0.4)
-        self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1, true), lw, 1, 0.85, 0.5)
+        drawLine(st.pts, 1, lw * 2, 1, 0.45, 0, 0.4)                 -- the road under the mouse: orange
+        self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1, true), lw * 1.3, 1, 0.9, 0.3)
         for _, n in ipairs({ st.startNode, st.endNode }) do
             if n ~= nil and n.tag == "fork" then
-                Draw:addSphereTask(n.x, terrainY(n.x, n.z) + 0.8, n.z, 3, 1, 1, 1, 0.15)
+                Draw:addSphereTask(n.x, terrainY(n.x, n.z) + 0.8, n.z, 4, 1, 1, 1, 0.20)
             end
         end
     end
