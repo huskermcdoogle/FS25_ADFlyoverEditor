@@ -285,7 +285,22 @@ do
         local removed = E:roadRunsRemoveHandleAtCursor()
         print(string.format("shape: press %s, dragged handle %d of %d: line edited %s, passes %.2f m from the drop; %.0f -> %.0f m; add -> %d handles; ctrl-remove %s -> %d",
             tostring(took), k, n0, tostring(moved), near, len0, sel.st.len or 0, n1, tostring(removed), #sel.handles))
-        print((took and moved and near < 0.3 and n1 == n0 + 1 and removed and #sel.handles == n0) and "SHAPE PASS" or "SHAPE FAIL")
+        -- the lanes that would be laid follow the shaped line (not the line before the edit)
+        local lanes = E:roadRunsLanesFor(sel.st, sel.dir)
+        local laneNear = math.huge
+        for _, ln in ipairs(lanes) do
+            for j = 1, #ln.pts - 1 do
+                local a, b = ln.pts[j], ln.pts[j + 1]
+                local dx, dz = b.x - a.x, b.z - a.z
+                local l2 = dx * dx + dz * dz
+                local t = l2 > 0 and math.max(0, math.min(1, ((h.x + 3 * nx / nl - a.x) * dx + (h.z + 3 * nz / nl - a.z) * dz) / l2)) or 0
+                laneNear = math.min(laneNear, math.sqrt((h.x + 3 * nx / nl - a.x - dx * t) ^ 2 + (h.z + 3 * nz / nl - a.z - dz * t) ^ 2))
+            end
+        end
+        print(string.format("shape: the lane laid passes %.2f m from the dragged handle", laneNear))
+        local allow = 0.5
+        if #lanes >= 2 then allow = E:roadGapFor(sel.st) / 2 + 0.5 end           -- two lanes sit either side
+        print((took and moved and near < 0.3 and laneNear < allow and n1 == n0 + 1 and removed and #sel.handles == n0) and "SHAPE PASS" or "SHAPE FAIL")
     end
 end
 for _, r in ipairs(card()) do print("  card | " .. r) end

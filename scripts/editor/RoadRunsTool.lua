@@ -181,6 +181,23 @@ end
 -- ---------------------------------------------------------------------------------------------
 -- reading the ground and finding the roads
 
+-- Colours for the 3D lines and spheres are authored in sRGB (as a colour picker shows them); the
+-- engine takes LINEAR light, so they are converted here - passed straight through, the display's
+-- gamma lifts every value and the colours read washed out (2026-10-14 user; Theme.lua does the same
+-- for the HUD). Every draw call in this file goes through Draw.
+local function srgbToLinear(v)
+    if v == nil then return nil end
+    if v <= 0.04045 then return v / 12.92 end
+    return ((v + 0.055) / 1.055) ^ 2.4
+end
+local Draw = {}
+function Draw:addLineTask(x1, y1, z1, x2, y2, z2, w, r, g, b)
+    ADDrawingManager:addLineTask(x1, y1, z1, x2, y2, z2, w, srgbToLinear(r), srgbToLinear(g), srgbToLinear(b))
+end
+function Draw:addSphereTask(x, y, z, size, r, g, b, glow)
+    ADDrawingManager:addSphereTask(x, y, z, size, srgbToLinear(r), srgbToLinear(g), srgbToLinear(b), glow)
+end
+
 local function terrainY(x, z)
     local terrain = g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
     if terrain == nil or not RF.onMap(x, z) then return 0 end
@@ -622,12 +639,16 @@ function E:roadRunsApplyHandles(pk, movedStart, movedEnd)
     withHeights(pts)
     local st = {}
     for k, v in pairs(pk.st) do st[k] = v end
+    -- nothing worked out for the old line carries over (the lanes were cached ON the stretch, and the
+    -- build laid the line from before the edit - 2026-10-14)
+    st.laneCache, st.hairpinPieces, st.debug, st.walk, st.raw = nil, nil, nil, nil, nil
     st.pts, st.refinedTo, st.edited = pts, nil, true
     st.refinedTo = st
     local len = 0
     for i = 2, #pts do len = len + math.sqrt((pts[i].x - pts[i - 1].x) ^ 2 + (pts[i].z - pts[i - 1].z) ^ 2) end
     st.len = len
-    st.id = string.format("edit:%d:%d:%d", math.floor(pts[1].x), math.floor(pts[1].z), #pts)
+    E.roadRunsEditSerial = (E.roadRunsEditSerial or 0) + 1
+    st.id = string.format("edit:%d", E.roadRunsEditSerial)      -- every shaped version its own (lanes are cached by id)
     if movedStart or H[1].wpId ~= nil then
         st.startTag, st.startNode, st.joinStart = "end", nil, H[1].wpId
     end
@@ -646,7 +667,7 @@ function E:roadRunsHandleAtCursor()
     if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
         bestD = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS * AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
         for i, h in ipairs(pk.handles) do
-            local ok, sx, sy, depth = pcall(project, h.x, (h.y or 0) + 0.8, h.z)
+            local ok, sx, sy, depth = pcall(project, h.x, (h.y or terrainY(h.x, h.z)) + 0.8, h.z)
             if ok and sx ~= nil and depth ~= nil and depth > 0 then
                 local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
                 if dx * dx + dy * dy < bestD then best, bestD = i, dx * dx + dy * dy end
@@ -735,7 +756,7 @@ function E:roadRunsUpdateHandles()
             if wp ~= nil then
                 h = { x = wp.x, y = wp.y, z = wp.z, wpId = wp.id }
             else
-                h = { x = self.cursorX, y = nil, z = self.cursorZ }
+                h = { x = self.cursorX, y = terrainY(self.cursorX, self.cursorZ), z = self.cursorZ }
             end
             local old = pk.handles[idx]
             if math.abs(old.x - h.x) > 0.05 or math.abs(old.z - h.z) > 0.05 or old.wpId ~= h.wpId then
@@ -777,6 +798,16 @@ function E:roadRunsPaintAt(cx, cz)
 end
 
 function E:updateRoadRunsInner(overPanel)
+    do
+        local s = roadState(self)
+        local wps = ADGraphManager:getWayPoints()
+        local n = 0
+        if wps ~= nil then n = #wps end
+        if s.wpCount ~= nil and n ~= s.wpCount and (#s.picks > 0 or s.voted ~= nil) then
+            self:roadRunsForget("the waypoints changed")
+        end
+        s.wpCount = n
+    end
     if not overPanel then self:roadRunsUpdateHandles() end
     if self.roadView and self.roadDrawMid then self:roadMidUpdate(overPanel) end
     if self.roadView and self.roadPaint and self.leftDown and not overPanel and self.cursorX ~= nil then
@@ -1076,7 +1107,7 @@ function E:roadRunsClick()
         local seg = self:roadRunsHandlePiece()
         if seg ~= nil then
             local pk = s.sel
-            table.insert(pk.handles, seg + 1, { x = self.cursorX, y = nil, z = self.cursorZ })
+            table.insert(pk.handles, seg + 1, { x = self.cursorX, y = terrainY(self.cursorX, self.cursorZ), z = self.cursorZ })
             self:roadRunsApplyHandles(pk, false, false)
             ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - handle added at (%.1f, %.1f) (%d handles).",
                 self.cursorX, self.cursorZ, #pk.handles)
@@ -1165,6 +1196,20 @@ function E:roadRunsClick()
         self:roadRunsSelect(s.hoverPick)
     else
         self:roadRunsSelect(nil)                                -- empty ground: nothing selected
+    end
+end
+
+--- Forget everything not built: picks, their handles and shaping, the selection, the remembered
+--- votes and walks (2026-10-14 user: a shaped run that was never placed, or whose waypoints were
+--- deleted, must not stay). Called on leaving the tool and when the network changes under us.
+function E:roadRunsForget(why)
+    local s = self.roadRuns
+    if s == nil then return end
+    local had = #s.picks
+    s.picks, s.voted, s.walked, s.hover, s.hoverPick = {}, nil, nil, nil, nil
+    s.sel, s.handlePress, s.handleDrag, s.handleHover = nil, nil, nil, nil
+    if had > 0 then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - %d unbuilt pick(s) dropped (%s).", had, why or "?")
     end
 end
 
@@ -1564,6 +1609,7 @@ function E:commitRoadRuns()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - built %d stretch(es): %d lane(s), %d point(s), %d join(s) to existing paths, %.0f m laid as one two-way line where two lanes did not fit, %s.",
         #s.picks, laid, points, joins, narrow, self.roadSubPrio and "secondary" or "primary")
     s.picks = {}
+    s.sel, s.handlePress, s.handleDrag, s.handleHover = nil, nil, nil, nil
     s.netKey = nil
     self:roadRunsRefreshStretches()
     return true
@@ -1578,13 +1624,13 @@ local function drawLine(P, step, lw, r, g, b, lift)
         local p = P[i]
         if not (finite(p.x) and finite(p.z) and finite(p.y or 0)) then return end
         if prev ~= nil then
-            ADDrawingManager:addLineTask(prev.x, (prev.y or 0) + lift, prev.z, p.x, (p.y or 0) + lift, p.z, lw, r, g, b)
+            Draw:addLineTask(prev.x, (prev.y or 0) + lift, prev.z, p.x, (p.y or 0) + lift, p.z, lw, r, g, b)
         end
         prev = p
     end
     local last = P[#P]
     if prev ~= nil and prev ~= last and finite(last.x) and finite(last.z) and finite(last.y or 0) then
-        ADDrawingManager:addLineTask(prev.x, (prev.y or 0) + lift, prev.z, last.x, (last.y or 0) + lift, last.z, lw, r, g, b)
+        Draw:addLineTask(prev.x, (prev.y or 0) + lift, prev.z, last.x, (last.y or 0) + lift, last.z, lw, r, g, b)
     end
 end
 
@@ -1616,13 +1662,13 @@ function E:drawRoadRunLanes(lanes, lw, r, g, b)
         if a ~= nil and b2 ~= nil and #a.pts > 0 and #b2.pts > 0 then
             local p = lk.fromStart and a.pts[1] or a.pts[#a.pts]
             local q = lk.toEnd and b2.pts[#b2.pts] or b2.pts[1]
-            ADDrawingManager:addLineTask(p.x, p.y + 0.6, p.z, q.x, q.y + 0.6, q.z, lw, r, g, b)
+            Draw:addLineTask(p.x, p.y + 0.6, p.z, q.x, q.y + 0.6, q.z, lw, r, g, b)
         end
     end
     for _, ln in ipairs(lanes) do
         drawLine(ln.pts, 1, lw, r, g, b, 0.6)
         for i, p in ipairs(ln.pts) do
-            ADDrawingManager:addSphereTask(p.x, p.y + 0.6, p.z, 1.6, r, g, b, 0.15)
+            Draw:addSphereTask(p.x, p.y + 0.6, p.z, 1.6, r, g, b, 0.15)
             -- an arrow tick every few points on one-way lanes, pointing the way of travel
             if not ln.dual and i > 1 and i % 3 == 0 then
                 local q = ln.pts[i - 1]
@@ -1631,8 +1677,8 @@ function E:drawRoadRunLanes(lanes, lw, r, g, b)
                 if hl > 1e-6 then
                     hx, hz = hx / hl, hz / hl
                     local bx, bz = p.x - hx * 1.2, p.z - hz * 1.2
-                    ADDrawingManager:addLineTask(p.x, p.y + 0.6, p.z, bx - hz * 0.7, p.y + 0.6, bz + hx * 0.7, lw, r, g, b)
-                    ADDrawingManager:addLineTask(p.x, p.y + 0.6, p.z, bx + hz * 0.7, p.y + 0.6, bz - hx * 0.7, lw, r, g, b)
+                    Draw:addLineTask(p.x, p.y + 0.6, p.z, bx - hz * 0.7, p.y + 0.6, bz + hx * 0.7, lw, r, g, b)
+                    Draw:addLineTask(p.x, p.y + 0.6, p.z, bx + hz * 0.7, p.y + 0.6, bz - hx * 0.7, lw, r, g, b)
                 end
             end
         end
@@ -1658,7 +1704,7 @@ function E:drawRoadView(lw)
     local lift = 0.06
     local function seg(ax, az, bx, bz, w, r, g, b)
         if not (finite(ax) and finite(az) and finite(bx) and finite(bz)) then return end
-        ADDrawingManager:addLineTask(ax, terrainY(ax, az) + lift, az, bx, terrainY(bx, bz) + lift, bz, w, r, g, b)
+        Draw:addLineTask(ax, terrainY(ax, az) + lift, az, bx, terrainY(bx, bz) + lift, bz, w, r, g, b)
     end
     -- ground paint: a short mark per cell (paved light grey, gravel yellow, dirt brown, field red)
     if L.paint then
@@ -1688,7 +1734,7 @@ function E:drawRoadView(lw)
         end
         local h = st * 0.35
         for _, c in ipairs(cache.cells) do
-            ADDrawingManager:addLineTask(c.x - h, c.y, c.z, c.x + h, c.y, c.z, lw, c.c[1], c.c[2], c.c[3])
+            Draw:addLineTask(c.x - h, c.y, c.z, c.x + h, c.y, c.z, lw, c.c[1], c.c[2], c.c[3])
         end
     end
     -- painted squares (to save): outlined in cyan
@@ -1731,7 +1777,7 @@ function E:drawRoadView(lw)
                 local px, pz = sc.x + sc.nx * sc.off, sc.z + sc.nz * sc.off
                 if finite(px) and finite(pz) then
                     local y = terrainY(px, pz)
-                    ADDrawingManager:addLineTask(px, y, pz, px, y + 0.6, pz, lw, 1, 1, 1)
+                    Draw:addLineTask(px, y, pz, px, y + 0.6, pz, lw, 1, 1, 1)
                 end
             end
         end
@@ -2095,7 +2141,7 @@ function E:drawRoadMid(lw, seg)
             local y = terrainY(p.x, p.z)
             local r, g, b = 1, 0.2, 0.9
             if i == m.hover or i == m.drag then r, g, b = 1, 1, 1 end
-            ADDrawingManager:addLineTask(p.x, y, p.z, p.x, y + 1.5, p.z, lw * 2, r, g, b)
+            Draw:addLineTask(p.x, y, p.z, p.x, y + 1.5, p.z, lw * 2, r, g, b)
         end
     end
 end
@@ -2142,11 +2188,11 @@ function E:drawRoadRunsInner(lw)
                 local isEnd = i == 1 or i == #sel.handles
                 local hot = i == s.handleHover or i == s.handleDrag
                 if hot then
-                    ADDrawingManager:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 1, 0.9, 0.1, 0.20)
+                    Draw:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 1, 0.9, 0.1, 0.20)
                 elseif h.wpId ~= nil then
-                    ADDrawingManager:addSphereTask(h.x, y, h.z, 4, 1, 0.9, 0.1, 0.15)          -- joined to a waypoint
+                    Draw:addSphereTask(h.x, y, h.z, 4, 1, 0.9, 0.1, 0.15)          -- joined to a waypoint
                 else
-                    ADDrawingManager:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 0.3, 0.8, 1, 0.15)
+                    Draw:addSphereTask(h.x, y, h.z, isEnd and 4 or 3, 0.3, 0.8, 1, 0.15)
                 end
             end
         end
@@ -2158,7 +2204,7 @@ function E:drawRoadRunsInner(lw)
         self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1, true), lw, 1, 0.85, 0.5)
         for _, n in ipairs({ st.startNode, st.endNode }) do
             if n ~= nil and n.tag == "fork" then
-                ADDrawingManager:addSphereTask(n.x, terrainY(n.x, n.z) + 0.8, n.z, 3, 1, 1, 1, 0.15)
+                Draw:addSphereTask(n.x, terrainY(n.x, n.z) + 0.8, n.z, 3, 1, 1, 1, 0.15)
             end
         end
     end
