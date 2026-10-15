@@ -1607,11 +1607,11 @@ function E:roadRunsApplyBuilt()
     ADGraphManager:markChanges()
     s.wpCount = nil                       -- our own change: the picks waiting to be built stay
     if pk.twin ~= nil then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the two-lane road %d..%d + %d..%d: %d + %d waypoints now (was %d + %d), %.1f m apart, %d junction point(s) moved, %s, %s.",
+        Logging.info("[FlyoverEditor]: road runs - reshaped the two-lane road %d..%d + %d..%d: %d + %d waypoints now (was %d + %d), %.1f m apart, %d junction point(s) moved, %s, %s.",
             pk.ids[1], pk.ids[#pk.ids], pk.twin.ids[1], pk.twin.ids[#pk.twin.ids], res.points[1] or 0, res.points[2] or 0,
             #pk.ids, #pk.twin.ids, pk.gap, res.moved, res.connectors, res.ok and "done" or "FAILED")
     else
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the built run %d..%d: %d waypoints now (was %d), %d junction point(s) moved, %s, %s.",
+        Logging.info("[FlyoverEditor]: road runs - reshaped the built run %d..%d: %d waypoints now (was %d), %d junction point(s) moved, %s, %s.",
             pk.ids[1], pk.ids[#pk.ids], res.points[1] or 0, #pk.ids, res.moved, res.connectors, res.ok and "done" or "FAILED")
     end
     self:roadRunsSelect(nil)
@@ -2160,7 +2160,7 @@ function E:commitRoadRuns()
     end
     self:invalidateIdReferences()
     ADGraphManager:markChanges()
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - built %d stretch(es): %d lane(s), %d point(s), %d join(s) to existing paths, %.0f m laid as one two-way line where two lanes did not fit, %s.",
+    Logging.info("[FlyoverEditor]: road runs - built %d stretch(es): %d lane(s), %d point(s), %d join(s) to existing paths, %.0f m laid as one two-way line where two lanes did not fit, %s.",
         #s.picks, laid, points, joins, narrow, self.roadSubPrio and "secondary" or "primary")
     s.picks = {}
     s.sel, s.handlePress, s.handleDrag, s.handleHover = nil, nil, nil, nil

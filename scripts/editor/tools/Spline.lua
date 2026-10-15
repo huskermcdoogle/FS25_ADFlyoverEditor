@@ -446,7 +446,7 @@ function ADFlyoverEditor:commitMultiSpline()
         joined = string.format(" (joined %s)", (startNode ~= nil and endNode ~= nil) and "both ends"
             or (startNode ~= nil and "start" or "end"))
     end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: placed multi-point spline id=%d -> id=%d from %d clicked point(s): %d new waypoint(s), %.1f m, %s%s%s.",
+    Logging.info("[FlyoverEditor]: placed multi-point spline id=%d -> id=%d from %d clicked point(s): %d new waypoint(s), %.1f m, %s%s%s.",
         chain[1].id, chain[#chain].id, #pts, created, self.splineLength or 0,
         dual and "two-way" or (reverse and "reverse" or "one-way"),
         flags ~= AutoDrive.FLAG_NONE and " secondary" or "", joined)
