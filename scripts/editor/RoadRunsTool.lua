@@ -1298,6 +1298,25 @@ function E:roadRunsFindTwin(ids, P)
     return best
 end
 
+--- Where A runs beside B: the longest unbroken stretch of A's points that sit across from B (not
+--- past either end of B), as A's first and last index there - or nil.
+local function besideRange(A, B)
+    local best0, best1, i0 = nil, nil, nil
+    for i = 1, #A + 1 do
+        local ok = false
+        if i <= #A then
+            local d, _, _, seg, t = nearestOnLine(B, A[i].x, A[i].z)
+            ok = d <= E.ROADRUNS_TWIN_MAX and not ((seg == 1 and t <= 0) or (seg == #B - 1 and t >= 1))
+        end
+        if ok and i0 == nil then i0 = i end
+        if not ok and i0 ~= nil then
+            if best0 == nil or i - 1 - i0 > best1 - best0 then best0, best1 = i0, i - 1 end
+            i0 = nil
+        end
+    end
+    return best0, best1
+end
+
 --- The middle line between a lane and its twin (where both run side by side), and which side of it
 --- the lane is on (+1 / -1, RF.offsetLine's sign).
 local function twinMiddle(A, B)
@@ -1382,9 +1401,24 @@ function E:roadRunsSelectBuilt(seedId)
     if not dual then
         twin = self:roadRunsFindTwin(ids, P)
         if twin ~= nil then
-            local M
-            M, side = twinMiddle(P, twin.pts)
-            if M == nil then twin = nil else P = M end
+            -- only the stretch where the two run side by side (2026-10-15: a lane that passes a fork
+            -- the other does not would have had its far part laid straight to its end); the rest of
+            -- the longer lane stays as it is, cut off at a waypoint of its own
+            local i0, i1 = besideRange(P, twin.pts)
+            local j0, j1 = besideRange(twin.pts, P)
+            if i0 == nil or j0 == nil or i1 - i0 < 2 or j1 - j0 < 2 then
+                twin = nil
+            else
+                local cutA = (i0 > 1 or i1 < #P) and string.format(" (lane cut to %d..%d of %d)", i0, i1, #P) or ""
+                local cutB = (j0 > 1 or j1 < #twin.pts) and string.format(" (twin cut to %d..%d of %d)", j0, j1, #twin.pts) or ""
+                local function cut(T, a, b) local r = {} for k = a, b do r[#r + 1] = T[k] end return r end
+                P, ids = cut(P, i0, i1), cut(ids, i0, i1)
+                twin.pts, twin.ids = cut(twin.pts, j0, j1), cut(twin.ids, j0, j1)
+                twin.cut = cutA .. cutB
+                local M
+                M, side = twinMiddle(P, twin.pts)
+                if M == nil then twin = nil else P = M end
+            end
         end
     end
     withHeights(P)
@@ -1403,7 +1437,7 @@ function E:roadRunsSelectBuilt(seedId)
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - selected a built run to shape: %d waypoints (%d..%d), %.0f m, %s%s; %d handles.",
         #ids, ids[1], ids[#ids], len, dual and "two-way" or "one-way",
         twin and string.format(", with its twin lane (%d waypoints, %d..%d) %.1f m apart - shaped by the middle",
-            #twin.ids, twin.ids[1], twin.ids[#twin.ids], twin.gap) or "", #pk.handles)
+            #twin.ids, twin.ids[1], twin.ids[#twin.ids], twin.gap) .. twin.cut or "", #pk.handles)
     return true
 end
 

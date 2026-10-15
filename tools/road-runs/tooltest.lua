@@ -518,8 +518,12 @@ do
         end
         return out
     end
+    -- the twin runs 32 m further west, past where the lane stops (a fork on the lane's side): that
+    -- part of it must stay as it is
+    local midB = {}
+    for i = -8, 30 do midB[#midB + 1] = { x = ox + i * 4, z = oz + 10 * math.sin(i / 30 * math.pi) } end
     local Ap = side(mid, 2.25)
-    local Bp = side(mid, -2.25)
+    local Bp = side(midB, -2.25)
     local Brev = {}
     for i = #Bp, 1, -1 do Brev[#Brev + 1] = Bp[i] end
     local a1, aN = E:createRunFrom(Ap, false, 0)
@@ -572,10 +576,18 @@ do
             local d = dist(B2, A2[j].x, A2[j].z)
             lo, hi = math.min(lo, d), math.max(hi, d)
         end
+        -- the twin's own part past the lane: its 8 westmost points still where they were
+        local extraKept = 0
+        for i = 1, 8 do
+            for _, q in ipairs(B2) do
+                if math.abs(q.x - Bp[i].x) < 0.01 and math.abs(q.z - Bp[i].z) < 0.01 then extraKept = extraKept + 1 break end
+            end
+        end
+        print(string.format("two lanes: the twin's part past the lane kept %d of 8 points", extraKept))
         local endsKept = A2[1].id == a1 and math.abs(A2[#A2].x - Ap[#Ap].x) < 0.01 and math.abs(B2[#B2].x - Brev[#Brev].x) < 0.01
         print(string.format("two lanes: rebuilt %d + %d waypoints; from the drop: lane %.2f m, twin %.2f m; apart %.2f-%.2f m; ends kept %s; %d undo snapshot(s)",
             #A2, #B2, dA, dB, lo, hi, tostring(endsKept), snapshots - snaps0))
-        print((math.abs(dA - 2.25) < 0.5 and math.abs(dB - 2.25) < 0.5 and lo > 4.0 and hi < 5.0 and endsKept and snapshots - snaps0 == 1)
+        print((math.abs(dA - 2.25) < 0.5 and math.abs(dB - 2.25) < 0.5 and lo > 4.0 and hi < 5.0 and endsKept and extraKept == 8 and snapshots - snaps0 == 1)
             and "TWO LANE PASS" or "TWO LANE FAIL")
     else
         print("TWO LANE FAIL")
