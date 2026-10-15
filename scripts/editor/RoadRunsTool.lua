@@ -1244,32 +1244,42 @@ local function nearestOnLine(P, x, z)
     return math.sqrt(bd), bx, bz, bs, bt
 end
 
---- How B runs beside A: the median distance and its spread, or nil when it is not a twin lane
---- (too near, too far, not steady, or not running the other way).
+--- How B runs beside A: the median distance, its spread and how many metres of A run beside B, or
+--- nil when it is not a twin lane. Only the part of A across from B counts (2026-10-15: a 319 m lane
+--- and its 136 m twin - one passes a junction the other does not - were not paired), and along it B
+--- must keep a steady 1.5-9 m off and run the other way.
+E.ROADRUNS_TWIN_BESIDE = 20            -- metres side by side, at least
 local function twinFit(A, B)
     if #A < 3 or #B < 3 then return nil end
-    local ds = {}
-    for f = 0.15, 0.86, 0.1 do
-        local i = math.max(1, math.min(#A - 1, math.floor(#A * f)))
-        local d, _, _, seg = nearestOnLine(B, A[i].x, A[i].z)
-        if d < E.ROADRUNS_TWIN_MIN or d > E.ROADRUNS_TWIN_MAX then return nil end
-        local ax, az = A[i + 1].x - A[i].x, A[i + 1].z - A[i].z
-        local bx, bz = B[seg + 1].x - B[seg].x, B[seg + 1].z - B[seg].z
-        local la, lb = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
-        if la < 1e-6 or lb < 1e-6 or (ax * bx + az * bz) / (la * lb) > -0.7 then return nil end
-        ds[#ds + 1] = d
+    local ds, beside = {}, 0
+    for i = 1, #A - 1 do
+        local d, _, _, seg, t = nearestOnLine(B, A[i].x, A[i].z)
+        local atEnd = (seg == 1 and t <= 0) or (seg == #B - 1 and t >= 1)
+        if not atEnd and d >= E.ROADRUNS_TWIN_MIN and d <= E.ROADRUNS_TWIN_MAX then
+            local ax, az = A[i + 1].x - A[i].x, A[i + 1].z - A[i].z
+            local bx, bz = B[seg + 1].x - B[seg].x, B[seg + 1].z - B[seg].z
+            local la, lb = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
+            if la > 1e-6 and lb > 1e-6 and (ax * bx + az * bz) / (la * lb) <= -0.7 then
+                ds[#ds + 1] = d
+                beside = beside + la
+            end
+        end
     end
+    if beside < E.ROADRUNS_TWIN_BESIDE then return nil end
     table.sort(ds)
-    if #ds == 0 or ds[#ds] - ds[1] > E.ROADRUNS_TWIN_SPREAD then return nil end
-    return ds[math.floor((#ds + 1) / 2)], ds[#ds] - ds[1]
+    -- steady: the middle 80% of the readings within ROADRUNS_TWIN_SPREAD (a lane bending away at a
+    -- junction at either end does not count against it)
+    local lo, hi = ds[math.max(1, math.floor(#ds * 0.1) + 1)], ds[math.max(1, math.ceil(#ds * 0.9))]
+    if hi - lo > E.ROADRUNS_TWIN_SPREAD then return nil end
+    return ds[math.floor((#ds + 1) / 2)], hi - lo, beside
 end
 
 --- The twin lane of a one-way run (its points with ids), or nil.
 function E:roadRunsFindTwin(ids, P)
     local inRun = {}
     for _, id in ipairs(ids) do inRun[id] = true end
-    local samples = {}
-    for f = 0.2, 0.81, 0.15 do samples[#samples + 1] = P[math.max(1, math.min(#P, math.floor(#P * f)))] end
+    -- the whole run, not only its middle: a shorter twin may lie beside one end of it
+    local samples = P
     local reach = (self.ROADRUNS_TWIN_MAX + 1) ^ 2
     local cand = {}
     for _, w in pairs(ADGraphManager:getWayPoints() or {}) do
@@ -1280,7 +1290,7 @@ function E:roadRunsFindTwin(ids, P)
         end
     end
     table.sort(cand)
-    local tried, best, bestSpread = {}, nil, math.huge
+    local tried, best, bestBeside = {}, nil, 0
     for _, id in ipairs(cand) do
         if not tried[id] then
             local pts = self:orderedRunThrough(id)
@@ -1289,8 +1299,8 @@ function E:roadRunsFindTwin(ids, P)
                 for i, q in ipairs(pts) do tried[q.id] = true bIds[i] = q.id end
                 local dual = self.spanStyle ~= nil and self:spanStyle(bIds) or false
                 if not dual then
-                    local gap, spread = twinFit(P, pts)
-                    if gap ~= nil and spread < bestSpread then best, bestSpread = { pts = pts, ids = bIds, gap = gap }, spread end
+                    local gap, spread, beside = twinFit(P, pts)
+                    if gap ~= nil and beside > bestBeside then best, bestBeside = { pts = pts, ids = bIds, gap = gap }, beside end
                 end
             end
         end
@@ -1406,7 +1416,11 @@ function E:roadRunsSelectBuilt(seedId)
             -- the longer lane stays as it is, cut off at a waypoint of its own
             local i0, i1 = besideRange(P, twin.pts)
             local j0, j1 = besideRange(twin.pts, P)
-            if i0 == nil or j0 == nil or i1 - i0 < 2 or j1 - j0 < 2 then
+            -- the click must be where the two run side by side: on the part of a lane with no twin
+            -- beside it, that lane alone is shaped, whole
+            local seedAt = nil
+            for k, id in ipairs(ids) do if id == seedId then seedAt = k end end
+            if i0 == nil or j0 == nil or i1 - i0 < 2 or j1 - j0 < 2 or (seedAt ~= nil and (seedAt < i0 or seedAt > i1)) then
                 twin = nil
             else
                 local cutA = (i0 > 1 or i1 < #P) and string.format(" (lane cut to %d..%d of %d)", i0, i1, #P) or ""

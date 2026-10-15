@@ -594,6 +594,70 @@ do
     end
     E.hoverId = nil
 end
+-- TWO-LANE ROAD, SHORT TWIN (2026-10-15 in game: a 319 m lane with a 136 m twin was not paired): the
+-- clicked lane runs 120 m, its twin only beside its last 60 m; both still taken, the lane's own first
+-- part left as it was
+do
+    local ox, oz = cx + 400, cz + 520
+    local function line(i0, i1, d)
+        local P = {}
+        for i = i0, i1 do P[#P + 1] = { x = ox + i * 4, z = oz + 6 * math.sin(i / 30 * math.pi) } end
+        local out = {}
+        for i = 1, #P do
+            local a, b = P[math.max(1, i - 1)], P[math.min(#P, i + 1)]
+            local hx, hz = b.x - a.x, b.z - a.z
+            local l = math.sqrt(hx * hx + hz * hz)
+            out[i] = { x = P[i].x - hz / l * d, z = P[i].z + hx / l * d }
+        end
+        return out
+    end
+    local Ap = line(0, 30, 2)
+    local Bp = line(15, 30, -2)
+    local Brev = {}
+    for i = #Bp, 1, -1 do Brev[#Brev + 1] = Bp[i] end
+    local a1 = E:createRunFrom(Ap, false, 0)
+    E:createRunFrom(Brev, false, 0)
+    frames(1)
+    E:roadRunsSelect(nil)
+    s.hover, s.hoverPick = nil, nil
+    E.hoverId = a1 + 5                    -- clicked on the lane's part with no twin beside it: that lane alone
+    E:roadRunsClick()
+    local alone = s.sel ~= nil and s.sel.twin == nil and #s.sel.ids == #Ap
+    print(string.format("short twin: a click where no twin runs beside takes the lane alone: %s", tostring(alone)))
+    E:roadRunsSelect(nil)
+    E.hoverId = a1 + 22                   -- clicked where both run side by side
+    E:roadRunsClick()
+    local sel = s.sel
+    local paired = sel ~= nil and sel.twin ~= nil
+    print(string.format("short twin: selected %s, twin %s, %.2f m apart", tostring(sel ~= nil), tostring(paired), sel and sel.gap or -1))
+    local ok = false
+    if paired then
+        local H = sel.handles
+        local k = math.floor((#H + 1) / 2)
+        local h = H[k]
+        E.cursorX, E.cursorZ, E.mouseX, E.mouseY = h.x, h.z, 0, 0
+        E.leftDown = true
+        E:roadRunsPress()
+        E.mouseX = 0.1
+        E.cursorX, E.cursorZ = h.x, h.z + 2
+        frames(1)
+        E.leftDown = false
+        E:roadRunsClick()
+        E:roadRunsStop()
+        frames(1)
+        local A2 = E:orderedRunThrough(a1)
+        local kept = 0
+        for i = 1, 12 do
+            for _, q in ipairs(A2) do
+                if math.abs(q.x - Ap[i].x) < 0.01 and math.abs(q.z - Ap[i].z) < 0.01 then kept = kept + 1 break end
+            end
+        end
+        print(string.format("short twin: the lane's part with no twin kept %d of 12 points; lane now %d waypoints", kept, #A2))
+        ok = kept == 12
+    end
+    print((alone and paired and ok) and "SHORT TWIN PASS" or "SHORT TWIN FAIL")
+    E.hoverId = nil
+end
 -- a second window: move away and back
 local t1 = os.clock()
 settle(cx + 300, cz)
