@@ -53,6 +53,8 @@ Long help text (the `HELP` section) is one paragraph per line. Do not break it i
 
 ## How to edit and save (in your browser, nothing to install)
 
+> **The translation branch is closed for now:** the draft shipped in 1.0.3.0. If you would like to help, leave a comment on [issue #16](https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/issues/16) and the maintainer will reopen `translation-pt-br` from the current release, then the steps below apply.
+
 1. Accept the invitation to the repository (GitHub or your email).
 2. Open the file on the translation branch:
    <https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/blob/translation-pt-br/scripts/editor/locale/br.lua>
