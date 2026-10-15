@@ -269,6 +269,25 @@ if os.getenv("AREA") then
         if only then return "." end
         return nil
     end
+    -- DECALS="x,z,r;..." (2026-10-15 probe): ground under a concrete decal's circle read as paved;
+    -- DECALMODE=all: everything there (grass too), otherwise only gravel and dirt
+    local decals = {}
+    for x, z, r in (os.getenv("DECALS") or ""):gmatch("([%-%d%.]+),([%-%d%.]+),([%-%d%.]+)") do
+        decals[#decals + 1] = { x = tonumber(x), z = tonumber(z), r = tonumber(r) }
+    end
+    if #decals > 0 then
+        local plain = areaChar
+        local all = os.getenv("DECALMODE") == "all"
+        areaChar = function(x, z)
+            local c = plain(x, z)
+            for _, d in ipairs(decals) do
+                if (x - d.x) ^ 2 + (z - d.z) ^ 2 <= d.r * d.r then
+                    if c == "g" or c == "d" or (all and c == ".") then return "p" end
+                end
+            end
+            return c
+        end
+    end
     T.areaChar = areaChar
     local MAT = { d = 1, g = 6, p = 7 }
     local baseAttr, baseDensity, baseCost = getTerrainAttributesAtWorldPos, getDensityAtWorldPos, getVehicleNavigationMapCostAtWorldPos
