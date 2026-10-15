@@ -149,15 +149,17 @@ function ADFlyoverHud:ensureOverlays()
     end
 end
 
---- Draw one tool glyph from the atlas: cell 0..14, row-major in a 4x4 grid of 128px cells, tinted to
---- the button. Guarded so an unexpected UV/render API drops to label-only rather than erroring.
+--- Draw one tool glyph from the atlas: row-major in an ICON_GRID x ICON_GRID grid of 128px cells
+--- (tools/make_tool_icons.py; 8x8 on 1024 px since 1.0.3.0), tinted to the button. Guarded so an
+--- unexpected UV/render API drops to label-only rather than erroring.
+local ICON_GRID, ICON_ATLAS = 8, 1024
 function ADFlyoverHud:renderIcon(cell, x, y, w, h, r, g, b, a)
     if self.iconOverlay == nil or GuiUtils == nil then
         return
     end
-    local col, row = cell % 4, math.floor(cell / 4)
+    local col, row = cell % ICON_GRID, math.floor(cell / ICON_GRID)
     local ok = pcall(function()
-        self.iconOverlay:setUVs(GuiUtils.getUVs({ col * 128, row * 128, 128, 128 }, { 512, 512 }))
+        self.iconOverlay:setUVs(GuiUtils.getUVs({ col * 128, row * 128, 128, 128 }, { ICON_ATLAS, ICON_ATLAS }))
         self.iconOverlay:setColor(r, g, b, a)
         self.iconOverlay:setPosition(x, y)
         self.iconOverlay:setDimension(w, h)
@@ -426,12 +428,12 @@ function ADFlyoverHud:buildRows(editor)
         { "CONNECT", ADFlyoverSettings.get("junctionBeta") and { T.CONVERT, T.MERGE, T.JUNCTION } or { T.CONVERT, T.MERGE } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
-    -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
+    -- Atlas cell per tool (row-major in tool_icons.dds, see renderIcon), independent of grouping/order.
     local ICON_CELL = {
         [T.NONE] = 0, [T.DRAW] = 1, [T.SPLINE] = 2, [T.FIELDLOOP] = 3,
         [T.PARALLEL] = 4, [T.SIDING] = 5, [T.MOVE] = 6, [T.SMOOTH] = 7,
         [T.STRAIGHTEN] = 8, [T.DIVIDE] = 9, [T.CONVERT] = 10, [T.MERGE] = 11,
-        [T.NAME] = 12, [T.DELETE] = 13, [T.GROUND] = 14,
+        [T.NAME] = 12, [T.DELETE] = 13, [T.GROUND] = 14, [T.ROADRUNS] = 16, [T.JUNCTION] = 17,
     }
     for _, grp in ipairs(GROUPS) do
         add("section", grp[1])
