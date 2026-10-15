@@ -25,6 +25,9 @@
   to move it, click the curve to add one, Ctrl-click to remove one, Alt places without snapping.
   Spacing sets how far apart the waypoints are laid. Right-click lays it as one undo step.
 - AutoDrive's own two-point spline is still there: "curve by: AutoDrive" on the card.
+- **Edit a placed run:** set "action: edit placed" and click a run already laid - its shape becomes
+  points to drag, add or remove; its two ends stay where other roads meet. Right-click lays it again,
+  keeping its direction, one-way or two-way and priority. One undo.
 
 ### Junction tool (BETA)
 
@@ -35,6 +38,11 @@
   and skewed junctions are still to come. It is on by default and its button says BETA; switch it off
   in the settings dialog (BETA section).
 - Junction numbers are drawn over the junctions and kept with the savegame.
+
+### Brazilian Portuguese (draft)
+
+- A first, machine-assisted Brazilian Portuguese translation (language "br"), waiting for a native
+  speaker to review it. It covers most of the editor; anything missing shows in English.
 
 ### Left Alt + V opens the editor too
 

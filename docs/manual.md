@@ -106,16 +106,18 @@ Draw lays down new waypoints one click at a time, joining each to the last so a 
 
 *Create — Draw a smooth curve through any number of points.*
 
-Spline lays a smooth curve that passes through every point you click, for sweeping bends a vehicle can follow at speed. A live preview shows the curve and the waypoints it will lay before you commit it. An end clicked on a waypoint joins the road there and follows its heading; an end on bare ground gets a new waypoint.
+Spline lays a smooth curve that passes through every point you click, for sweeping bends a vehicle can follow at speed. A live preview shows the curve and the waypoints it will lay before you commit it. An end clicked on a waypoint joins the road there and follows its heading; an end on bare ground gets a new waypoint. With action set to edit placed, a click on a run already laid picks it up for reshaping the same way.
 
 **How to use it**
 
 1. Click points in order - on the ground, or right on a waypoint to join the road there. Hold Alt to place a point without snapping. A marker under the mouse shows what a click does: yellow joins a waypoint, white is bare ground, green goes into the line.
 1. Click on the curve to put a point into the line there. Drag a point to move it. Ctrl-click a point to remove it.
 1. Right-click lays it as one undo step; Esc throws it away.
+1. To reshape a run already laid, set action to edit placed and click the run: its shape becomes points to drag, add (click the curve) or remove (Ctrl-click). Its two ends stay, as other roads meet there. Right-click lays it again, keeping its direction, one-way or two-way and priority; one undo takes it back.
 
 **Controls**
 
+- **action** — new lays a new spline; edit placed reshapes a run already laid (the stretch between two junctions).
 - **curve by** — multi-point is this curve; AutoDrive is the old two-point spline (click two waypoints, wheel for curvature).
 - **spacing** — how far apart the laid waypoints are, in metres.
 - **start / end heading** — flip which way along the road a joined end leaves or arrives.

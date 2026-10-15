@@ -149,13 +149,40 @@ function ADGraphManager:recordWayPoint(x, y, z, connectPrevious, dual, isReverse
     ordered[#ordered + 1] = w
     byId[w.id] = w
     if connectPrevious and previousId ~= nil and byId[previousId] ~= nil then
-        table.insert(byId[previousId].out, w.id)
-        table.insert(w.incoming, previousId)
+        -- as AutoDrive: the link (and its way back when dual, or a reverse link) is a toggle
+        ADGraphManager:toggleConnectionBetween(byId[previousId], w, isReverse, dual, false)
     end
     return w
 end
 
+--- AutoDrive's own toggle (GraphManager.lua toggleConnectionBetween), events left out.
+function ADGraphManager:toggleConnectionBetween(startNode, endNode, reverseDirection, dualConnection)
+    if startNode == nil or endNode == nil then return end
+    local function has(list, id) for _, v in ipairs(list) do if v == id then return true end end return false end
+    local function drop(list, id) for i = #list, 1, -1 do if list[i] == id then table.remove(list, i) end end end
+    if has(startNode.out, endNode.id) or has(endNode.incoming, startNode.id) then
+        drop(startNode.out, endNode.id)
+        drop(endNode.incoming, startNode.id)
+    else
+        table.insert(startNode.out, endNode.id)
+        if not reverseDirection then
+            table.insert(endNode.incoming, startNode.id)
+            if dualConnection then
+                table.insert(endNode.out, startNode.id)
+                table.insert(startNode.incoming, endNode.id)
+            end
+        end
+    end
+end
+
 function ADGraphManager:setWayPointFlags() end
+
+--- AutoDrive's own test (GraphManager.lua isDualRoad): each lists the other as incoming.
+function ADGraphManager:isDualRoad(start, target)
+    if start == nil or target == nil or start.incoming == nil or target.incoming == nil then return false end
+    local function has(list, id) for _, v in ipairs(list) do if v == id then return true end end return false end
+    return has(start.incoming, target.id) and has(target.incoming, start.id)
+end
 
 --- Move a waypoint in place, as the game's own call does: id and links untouched.
 function ADGraphManager:moveWayPoint(id, x, y, z, flags)
