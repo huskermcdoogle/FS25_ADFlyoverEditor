@@ -31,6 +31,7 @@ E.ROADRUNS_SAMPLES_PER_FRAME = 4000 -- cap; reads stop sooner once the frame's t
 E.ROADRUNS_RIG_MARGIN = 0.3        -- clearance kept beyond a rig's own width: to the other lane, to a railing
 E.ROADRUNS_PROBE_REACH = 6         -- how far out from the centre line the side check looks
 E.ROADRUNS_TAPER = 12              -- metres over which a lane eases in or out round a narrow part
+E.ROADRUNS_JOIN_SIDE = 2           -- a path to join lies no further than this off the run's line
 E.ROADRUNS_JOIN_RADIUS = 10        -- how far a run's end looks for an existing path to join
 E.ROADRUNS_MODE_NAMES = { "auto", "one-way", "two-way", "two lanes" }
 E.ROADRUNS_MODE_KEYS = { "auto", "one", "two", "lanes" }
@@ -1168,8 +1169,14 @@ local function joinTarget(j, owner, pickIndex, R)
                     local tl = math.sqrt(tx * tx + tz * tz)
                     if tl > 1e-6 then c = (tx * hx + tz * hz) / tl end
                 end
+                -- only straight on in line with the run: no more than ROADRUNS_JOIN_SIDE off its line
+                -- (a diagonal link 8 m along a road the run met in a T, 2026-10-14)
+                local ahead = dx * hx + dz * hz
+                if j.atStart then ahead = -ahead end
+                local side = math.abs(dx * hz - dz * hx)
+                local inLine = ahead > -1 and side <= self.ROADRUNS_JOIN_SIDE
                 -- a loose end of the old network
-                if owner[wp.id] == nil and neighbourCount(wp) <= 1 then
+                if inLine and owner[wp.id] == nil and neighbourCount(wp) <= 1 then
                     local fits
                     if j.dual then
                         fits = true
@@ -1184,11 +1191,9 @@ local function joinTarget(j, owner, pickIndex, R)
                     if fits and (c == nil or c > -0.2) then score = d - 3 end
                 end
                 -- or a path running the same way
-                if score == nil and c ~= nil then
+                if score == nil and c ~= nil and inLine then
                     local cc = j.dual and math.abs(c) or c
-                    local ahead = dx * hx + dz * hz
-                    if j.atStart then ahead = -ahead end
-                    if cc > 0.7 and ahead > -2 then score = d + (1 - cc) * 10 end
+                    if cc > math.cos(math.rad(30)) then score = d + (1 - cc) * 10 end
                 end
                 if score ~= nil and score < bestScore then best, bestScore = wp, score end
             end
@@ -1280,7 +1285,9 @@ function E:commitRoadRuns()
                     -- a lane end at a stretch end that an existing path takes over from: join it there
                     local P, n = ln.pts, #ln.pts
                     local function tagAt(at) return (at == "start") and st.startTag or st.endTag end
-                    local function joins(tag) return tag == "path" or tag == "road" end
+                    -- only where an existing path carries the road on (never at a T with a road:
+                    -- the junction tool ties those in - 2026-10-14 user)
+                    local function joins(tag) return tag == "path" end
                     if ln.startAt ~= nil and joins(tagAt(ln.startAt)) then
                         pending[#pending + 1] = { pick = pickIndex, id = firstId, p = P[1], h = { P[2].x - P[1].x, P[2].z - P[1].z }, atStart = true, dual = ln.dual }
                     end
@@ -1308,8 +1315,7 @@ function E:commitRoadRuns()
         -- a run that meets a road's lane head-on joins it in a T: straight on from its end to the
         -- first lane it crosses, a waypoint put into that lane there (2026-10-14 user: a diagonal
         -- link to a waypoint 8 m along the road "I don't much like the way it is connecting")
-        local target = self:roadRunsTeeTarget(j, owner)
-        if target == nil then target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS) end
+        local target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS)
         if target ~= nil and own ~= nil and target ~= own and finite(target.x) and finite(target.z) then
             if j.atStart then
                 ADGraphManager:toggleConnectionBetween(target, own, false, j.dual, false)
