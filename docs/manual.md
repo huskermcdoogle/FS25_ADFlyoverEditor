@@ -6,9 +6,9 @@ A top-down editor for AutoDrive route networks. This manual describes every tool
 
 - [General](#general)
 - **Mode** — [Select](#select)
-- **Create** — [Draw](#draw), [Spline](#spline), [Field loop](#field-loop), [Parallel](#parallel), [Siding](#siding)
+- **Create** — [Draw](#draw), [Spline](#spline), [Field loop](#field-loop), [Parallel](#parallel), [Siding](#siding), [Road runs](#road-runs)
 - **Shape** — [Move](#move), [Smooth](#smooth), [Straighten](#straighten), [Divide](#divide), [Ground](#ground)
-- **Connect** — [Convert](#convert), [Merge](#merge)
+- **Connect** — [Convert](#convert), [Merge](#merge), [Junction (beta)](#junction-beta)
 - **Utility** — [Name](#name), [Delete](#delete)
 
 ## General
@@ -345,6 +345,28 @@ Merge is for a stretch where two separately-recorded tracks run alongside each o
 - **merge distance** — how far apart the two tracks may sit and still merge.
 - **divergence** — how far they may pull apart along the stretch before the merge stops there.
 - **snap to** — terrain, or keep merged points on a bridge / ramp surface.
+
+<a id="name"></a>
+## Junction (beta)
+
+*Connect — Clear a road junction's turns, lay new ones, or both in one right-click.*
+
+The junction tool works on one junction at a time. Clear takes out the old turn wiring inside the junction and trims the lanes back to clean ends; build lays new turns - the mod's own X or T pattern where it fits every road there, turn by turn where it does not (or nothing, as the advanced setting says). Clear + build does both as one undo step. Junctions are numbered over the map and the numbers stay with the savegame. It is a BETA: plain X and T road junctions are what it does well today; two-way farm tracks, Y's and skewed junctions are still to come. Switch it off in the settings dialog (BETA section) and its button goes.
+
+**How to use it**
+
+1. Point at a junction: the card says which one and what kind. Left-click locks it.
+1. Pick the action on the card: clear, build, or clear + build.
+1. Right-click does it. One undo takes it all back.
+1. Left-click elsewhere moves the lock to another junction; Esc lets it go.
+
+**Controls**
+
+- **action** — clear, build, or clear + build.
+- **through roads** — when clearing: kept (the roads straight through stay) or cleared too.
+- **shape** — when building: mod (the mod's own X or T) or smooth (rounder turns).
+- **must fit** — the vehicles every new turn has to fit.
+- **advanced** — the radii and checks behind the build; closed by default.
 
 <a id="name"></a>
 ## Name

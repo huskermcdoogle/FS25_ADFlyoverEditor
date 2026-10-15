@@ -332,6 +332,31 @@ TOOLS = [
         ],
     },
     {
+        "key": "junction", "name": "Junction (beta)", "group": "Connect",
+        "summary": "Clear a road junction's turns, lay new ones, or both in one right-click.",
+        "what": "The junction tool works on one junction at a time. Clear takes out the old turn wiring "
+                "inside the junction and trims the lanes back to clean ends; build lays new turns - the "
+                "mod's own X or T pattern where it fits every road there, turn by turn where it does "
+                "not (or nothing, as the advanced setting says). Clear + build does both as one undo "
+                "step. Junctions are numbered over the map and the numbers stay with the savegame. "
+                "It is a BETA: plain X and T road junctions are what it does well today; two-way farm "
+                "tracks, Y's and skewed junctions are still to come. Switch it off in the settings "
+                "dialog (BETA section) and its button goes.",
+        "how": [
+            "Point at a junction: the card says which one and what kind. Left-click locks it.",
+            "Pick the action on the card: clear, build, or clear + build.",
+            "Right-click does it. One undo takes it all back.",
+            "Left-click elsewhere moves the lock to another junction; Esc lets it go.",
+        ],
+        "controls": [
+            ("action", "clear, build, or clear + build."),
+            ("through roads", "when clearing: kept (the roads straight through stay) or cleared too."),
+            ("shape", "when building: mod (the mod's own X or T) or smooth (rounder turns)."),
+            ("must fit", "the vehicles every new turn has to fit."),
+            ("advanced", "the radii and checks behind the build; closed by default."),
+        ],
+    },
+    {
         "key": "name", "name": "Name", "group": "Utility",
         "summary": "Give a waypoint a map-marker name.",
         "what": "Name attaches a label to a waypoint so it becomes a named destination/marker on the "
