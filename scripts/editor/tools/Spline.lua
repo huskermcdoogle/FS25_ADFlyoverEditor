@@ -34,6 +34,7 @@ function ADFlyoverEditor:cancelMultiSpline()
     self.splinePoints = {}
     self.splineHoverIdx, self.splinePressIdx, self.splineDragIdx, self.splineGhost = nil, nil, nil, nil
     self.splineCurve, self.splineLaid, self.splineLaidKey, self.splineLength = nil, nil, nil, nil
+    self.splineEdit, self.splineEditHoverSeed, self.splineEditHoverPts = nil, nil, nil
     -- a flip belongs to the spline it was set on: the next one starts on auto (2026-10-15 review: a
     -- flip left on a free end - greyed, so not seen - turned the next joined spline)
     self.splineFlipStartTangent, self.splineFlipEndTangent = false, false
@@ -72,7 +73,8 @@ function ADFlyoverEditor:splineRoadHeading(node, tx, tz)
     local seen, sx, sz, count = {}, 0, 0, 0
     for _, listName in ipairs({ "out", "incoming" }) do
         for _, id in pairs(node[listName] or {}) do
-            if not seen[id] then
+            local ownMiddle = self.splineEdit ~= nil and self.splineEdit.interior[id]
+            if not seen[id] and not ownMiddle then
                 seen[id] = true
                 local n = ADGraphManager:getWayPointById(id)
                 if n ~= nil then
@@ -248,7 +250,14 @@ function ADFlyoverEditor:multiSplineClick()
     if self.splineHoverIdx ~= nil then
         return
     end
+    if self.splineEditMode and self.splineEdit == nil then
+        if self.hoverId ~= nil then self:splineEditSelect(self.hoverId) end
+        return
+    end
     local seg = self:splineInsertPiece()
+    if self.splineEdit ~= nil and seg == nil then
+        return                                   -- editing: points go into the line, never on the ends
+    end
     local p = self:splinePointAtCursor(seg == nil)
     if p ~= nil then
         self:multiSplineAdd(p, seg ~= nil and seg + 1 or nil)
@@ -260,6 +269,10 @@ function ADFlyoverEditor:multiSplineRemoveAtCursor()
     local idx = self.splineHoverIdx
     if idx == nil or self.splinePoints == nil or self.splinePoints[idx] == nil then
         return false
+    end
+    if self.splineEdit ~= nil and (idx == 1 or idx == #self.splinePoints) then
+        self:warnPlayer("The run's ends stay where they are - other roads meet there.")
+        return true
     end
     table.remove(self.splinePoints, idx)
     self.splineHoverIdx = nil
@@ -293,6 +306,15 @@ function ADFlyoverEditor:updateMultiSpline()
         self.splinePoints = {}
     end
     local pts = self.splinePoints
+    -- the waypoints changed under an edit (an undo, another tool): its ids are stale - drop it
+    if self.splineEdit ~= nil and ADGraphManager:getWayPointsCount() ~= self.splineEdit.count then
+        self:cancelMultiSpline()
+        self:warnPlayer("The waypoints changed - pick the run to edit again.")
+        return
+    end
+    if self.splineEdit ~= nil and self.splinePressIdx ~= nil and (self.splinePressIdx == 1 or self.splinePressIdx == #pts) then
+        self.splinePressIdx = nil                -- an edited run's ends stay put
+    end
 
     if self.splinePressIdx ~= nil and self.splineDragIdx == nil and self.leftDown
         and self.mouseX ~= nil and self.splinePressMX ~= nil then
@@ -322,7 +344,7 @@ function ADFlyoverEditor:updateMultiSpline()
     if self.splineDragIdx == nil and self.splineHoverIdx == nil then
         local seg = self:splineInsertPiece()
         local g = self:splinePointAtCursor(seg == nil)
-        if g ~= nil then
+        if g ~= nil and not (self.splineEdit ~= nil and seg == nil) then   -- editing: only into the line
             g.insert = seg ~= nil
             self.splineGhost = g
         end
@@ -369,6 +391,9 @@ end
 
 --- Right-click: lay the previewed curve as waypoints, as one undo step.
 function ADFlyoverEditor:commitMultiSpline()
+    if self.splineEdit ~= nil then
+        return self:splineEditApply()
+    end
     local pts = self.splinePoints
     if pts == nil or #pts < 2 then
         self:cancelMultiSpline()
@@ -459,9 +484,109 @@ end
 
 --- The preview: the clicked points large (orange; one joined to a waypoint yellow), the waypoints
 --- that would be laid small along the curve, and a line from the last point to the cursor.
+-- ---------------------------------------------------------------------------------------------
+-- EDIT A PLACED SPLINE (2026-10-15 owner: "spline tool should have an edit function for placed
+-- splines, similar to road runs tool"). The card's "action: edit placed" makes a click on a laid run
+-- pick the run between its junctions; its shape becomes the spline's points (as few as keep it within
+-- SPLINE_EDIT_TOL), so the spline's own gestures shape it. Its two end waypoints stay (other roads
+-- meet there); right-click lays its middle again along the curve, keeping its direction, one-way or
+-- two-way and priority (replaceChainInterior), as one undo step.
+-- ---------------------------------------------------------------------------------------------
+ADFlyoverEditor.SPLINE_EDIT_TOL = 0.5
+
+function ADFlyoverEditor:toggleSplineEditMode()
+    self:cancelMultiSpline()
+    self.splineEditMode = not self.splineEditMode
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline action: %s.", self.splineEditMode and "edit placed" or "new")
+end
+
+--- Pick the laid run through `seedId` for editing. True when it did.
+function ADFlyoverEditor:splineEditSelect(seedId)
+    local run, _, _, why = self:orderedRunThrough(seedId)
+    if run == nil or #run < 2 then
+        self:warnPlayer("Can't edit that: " .. tostring(why or "no run there"))
+        return false
+    end
+    local ids, interior = {}, {}
+    for i, q in ipairs(run) do
+        ids[i] = q.id
+        if i > 1 and i < #run then interior[q.id] = true end
+    end
+    local dual, flags = false, AutoDrive.FLAG_NONE
+    if self.spanStyle ~= nil then dual, flags = self:spanStyle(ids) end
+    local S = (ADRoadFinder ~= nil and ADRoadFinder.simplifyLine ~= nil) and ADRoadFinder.simplifyLine(run, self.SPLINE_EDIT_TOL) or run
+    local pts = {}
+    for i, q in ipairs(S) do pts[i] = { x = q.x, y = q.y, z = q.z } end
+    if #pts < 2 then pts = { { x = run[1].x, y = run[1].y, z = run[1].z }, { x = run[#run].x, y = run[#run].y, z = run[#run].z } } end
+    pts[1].wpId, pts[#pts].wpId = ids[1], ids[#ids]
+    self:cancelMultiSpline()
+    self.splinePoints = pts
+    self.splineEdit = { ids = ids, interior = interior, dual = dual, flags = flags,
+        count = ADGraphManager:getWayPointsCount() }
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: spline - editing the run %d..%d: %d waypoints, %d handles, %s.",
+        ids[1], ids[#ids], #ids, #pts, dual and "two-way" or "one-way")
+    return true
+end
+
+--- Right-click while editing: the run's middle laid again along the curve. One undo step.
+function ADFlyoverEditor:splineEditApply()
+    local e = self.splineEdit
+    self.splineLaidKey = nil
+    self:updateMultiSpline()
+    e = self.splineEdit                         -- (an update may have dropped a stale edit)
+    local laid = self.splineLaid
+    if e == nil or laid == nil or #laid < 2 then
+        self:cancelMultiSpline()
+        return
+    end
+    if g_server == nil then
+        self:warnPlayer("Waypoints can only be changed on the server (host/singleplayer).")
+        return
+    end
+    local a, b = ADGraphManager:getWayPointById(e.ids[1]), ADGraphManager:getWayPointById(e.ids[#e.ids])
+    if a == nil or b == nil then
+        self:cancelMultiSpline()
+        return
+    end
+    local P = {}
+    for i, q in ipairs(laid) do P[i] = { x = q.x, y = q.y, z = q.z } end
+    P[1], P[#P] = { x = a.x, y = a.y, z = a.z }, { x = b.x, y = b.y, z = b.z }
+    ADEditorHistory:snapshot("spline: edit placed")
+    local ok = self:replaceChainInterior(e.ids, P, e.dual, e.flags)
+    self:invalidateIdReferences()
+    ADGraphManager:markChanges()
+    -- always logged, one line per right-click (the in-game test card ticks itself from it)
+    Logging.info("[FlyoverEditor]: spline - edited the run %d..%d: %d waypoints now (was %d), %s.",
+        e.ids[1], e.ids[#e.ids], #P, #e.ids, ok and "done" or "FAILED")
+    self:cancelMultiSpline()
+end
+
+--- Edit mode, nothing picked: the run a click would pick, outlined.
+function ADFlyoverEditor:splineEditHoverRun()
+    if not self.splineEditMode or self.splineEdit ~= nil or self.hoverId == nil then
+        self.splineEditHoverSeed, self.splineEditHoverPts = nil, nil
+        return nil
+    end
+    if self.splineEditHoverSeed ~= self.hoverId then
+        self.splineEditHoverSeed = self.hoverId
+        self.splineEditHoverPts = self:orderedRunThrough(self.hoverId)
+    end
+    return self.splineEditHoverPts
+end
+
 function ADFlyoverEditor:drawMultiSpline(lw)
     local pts = self.splinePoints
     if pts == nil then
+        return
+    end
+    if #pts == 0 and self.splineEditMode then
+        local run = self:splineEditHoverRun()
+        if run ~= nil then
+            for i = 2, #run do
+                local p, q = run[i - 1], run[i]
+                ADDrawingManager:addLineTask(p.x, p.y + 0.3, p.z, q.x, q.y + 0.3, q.z, lw * 2, 0.12, 0.47, 0.73)
+            end
+        end
         return
     end
     if #pts == 0 then

@@ -712,6 +712,10 @@ function ADFlyoverHud:buildRows(editor)
         segFlip("curve by", "multi-point", "AutoDrive", not editor:splineIsMultiPoint(), function() editor:toggleSplineMode() end)
     end
     if editor.tool == editor.TOOL.SPLINE and editor:splineIsMultiPoint() then
+        segFlip("action", "new", "edit placed", editor.splineEditMode == true, function() editor:toggleSplineEditMode() end)
+        if editor.splineEdit ~= nil then
+            add("cursor", "editing", string.format("%d waypoints, %d points", #editor.splineEdit.ids, #(editor.splinePoints or {})))
+        end
         numberAfter("spacing")
         local pts = editor.splinePoints or {}
         -- The flips only mean something on an end that is joined to a road; on a free end the curve

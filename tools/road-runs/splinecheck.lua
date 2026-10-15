@@ -1,7 +1,7 @@
 -- How much of the map's own AI road lines (aiSystem.roadSplines, dumped by FlyoverRoadSplines) runs
 -- where the AutoDrive network has no path? lua splinecheck.lua <roadSplines.xml>
 local HERE = (arg[0]:match("^(.*)[/\]") or ".") .. "/"
-local JH = os.getenv("JH") or (HERE .. "../../../junction-rework-fec884/tools/junction-harness/")
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 dofile(HERE .. "../../scripts/editor/RoadFinder.lua")
 local RF = ADRoadFinder
 local wps = dofile(os.getenv("GRAPH") or (JH .. "graph_data.lua"))

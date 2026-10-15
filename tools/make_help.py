@@ -70,7 +70,8 @@ TOOLS = [
         "what": "Spline lays a smooth curve that passes through every point you click, for sweeping "
                 "bends a vehicle can follow at speed. A live preview shows the curve and the waypoints "
                 "it will lay before you commit it. An end clicked on a waypoint joins the road there "
-                "and follows its heading; an end on bare ground gets a new waypoint.",
+                "and follows its heading; an end on bare ground gets a new waypoint. With action set to "
+                "edit placed, a click on a run already laid picks it up for reshaping the same way.",
         "how": [
             "Click points in order - on the ground, or right on a waypoint to join the road there. "
             "Hold Alt to place a point without snapping. A marker under the mouse shows what a click "
@@ -78,8 +79,14 @@ TOOLS = [
             "Click on the curve to put a point into the line there. Drag a point to move it. "
             "Ctrl-click a point to remove it.",
             "Right-click lays it as one undo step; Esc throws it away.",
+            "To reshape a run already laid, set action to edit placed and click the run: its shape "
+            "becomes points to drag, add (click the curve) or remove (Ctrl-click). Its two ends stay, "
+            "as other roads meet there. Right-click lays it again, keeping its direction, one-way or "
+            "two-way and priority; one undo takes it back.",
         ],
         "controls": [
+            ("action", "new lays a new spline; edit placed reshapes a run already laid (the stretch "
+                       "between two junctions)."),
             ("curve by", "multi-point is this curve; AutoDrive is the old two-point spline (click two "
                          "waypoints, wheel for curvature)."),
             ("spacing", "how far apart the laid waypoints are, in metres."),

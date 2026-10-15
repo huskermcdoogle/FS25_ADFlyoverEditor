@@ -1,7 +1,7 @@
 -- Dump paint + the walk (raw walker path and laid line) round a spot for bendplot.py:
 --   lua bendplot.lua mouseX mouseZ x0 x1 z0 z1 > out/bend.txt
 local HERE = (arg[0]:match("^(.*)[/\]") or ".") .. "/"
-local JH = HERE .. "../../../junction-rework-fec884/tools/junction-harness/"
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 local real = os.getenv
 os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 g_currentMission = { terrainRootNode = 1 }; AutoDrive, CollisionFlag = {}, {}

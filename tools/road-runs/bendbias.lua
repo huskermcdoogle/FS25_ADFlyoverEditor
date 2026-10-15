@@ -2,7 +2,7 @@
 -- the asphalt's middle measured toward the bend's inside (+ = the line is outside the middle, i.e.
 -- the middle lies further in; - = the line cuts inside). lua bendbias.lua x z   (AREA= for saved ground)
 local HERE = (arg[0]:match("^(.*)[/\]") or ".") .. "/"
-local JH = HERE .. "../../../junction-rework-fec884/tools/junction-harness/"
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 local real = os.getenv
 os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 g_currentMission = { terrainRootNode = 1 }; AutoDrive, CollisionFlag = {}, {}

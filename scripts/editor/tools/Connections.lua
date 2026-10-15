@@ -186,6 +186,11 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span.")
     elseif self.tool == t.NAME then
         return L("Click a waypoint to name it.")
+    elseif self.tool == t.SPLINE and self:splineIsMultiPoint() and self.splineEditMode then
+        if self.splineEdit ~= nil then
+            return L("Drag a point to reshape the run, click the line to add one, Ctrl-click one to remove it. The ends stay. Right-click lays it; Esc lets it go.")
+        end
+        return L("Click a placed run to edit its shape.")
     elseif self.tool == t.SPLINE and self:splineIsMultiPoint() then
         local n = self.splinePoints ~= nil and #self.splinePoints or 0
         if n >= 2 then

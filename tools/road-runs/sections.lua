@@ -1,7 +1,7 @@
 -- What the centring pass read across a walked line, section by section, between two z values:
 --   lua sections.lua x z zFrom zTo [middleX]
 local HERE = (arg[0]:match("^(.*)[/\]") or ".") .. "/"
-local JH = HERE .. "../../../junction-rework-fec884/tools/junction-harness/"
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 local real = os.getenv
 os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 g_currentMission = { terrainRootNode = 1 }; AutoDrive, CollisionFlag = {}, {}

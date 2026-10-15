@@ -9,7 +9,7 @@
 --   GRAPH        graph_data.lua from that harness's export_graph.py (AutoDrive network)
 -- Options: KINDS=pgd (paved, gravel, dirt; default all), MODE=one|two|lanes, GAP=4, FORKGAP=15
 local HERE = (arg[0]:match("^(.*)[/\\]") or ".") .. "/"
-local JH = os.getenv("JH") or (HERE .. "../../../junction-rework-fec884/tools/junction-harness/")
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 if os.getenv("TERRAIN_DIR") == nil then
     -- terrain.lua reads TERRAIN_DIR through os.getenv; point it at the junction harness copy
     local real = os.getenv
