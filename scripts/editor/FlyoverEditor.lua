@@ -330,6 +330,18 @@ function ADFlyoverEditor.fieldOf(wp)
     return nil
 end
 
+--- A new point's flags: the field point bit kept with a field number, dropped without one - the same
+--- rule as ADFlyoverRecordWayPoint, for callers that hand flags to AutoDrive themselves. (main's helper,
+--- used by the multi-point spline; it went missing at the 1.0.3.0 merge and broke the spline's
+--- right-click: "Spline.lua:390: attempt to call a nil value".)
+function ADFlyoverEditor.fieldFlags(flags, fieldID)
+    local f = flags or 0
+    local isField = math.floor(f / 8) % 2 == 1
+    if isField and fieldID == nil then f = f - 8 end
+    if fieldID ~= nil and not isField then f = f + 8 end
+    return f
+end
+
 --- `flags` with only its priority bit (FLAG_SUBPRIO, 1) set as asked: what a priority change means.
 --- Every other bit is AutoDrive's own mark and stays - the map's traffic system, a field point.
 function ADFlyoverEditor.withPriority(flags, secondary)
