@@ -77,6 +77,42 @@ local function TR(s)
     return s
 end
 
+--- How wide a piece of text renders, or 0 where the engine cannot say. Wrapped so the callers that
+--- only want to know whether something fits do not each have to guard getTextWidth themselves.
+function ADFlyoverHud:measure(fontSize, text)
+    if text == nil or text == "" or getTextWidth == nil then return 0 end
+    local ok, w = pcall(getTextWidth, fontSize, text)
+    return (ok and w) or 0
+end
+
+--- Fit `text` into `maxW`, and say at what size to draw it. Shrunk first, down to three quarters of
+--- the size asked for, because a slightly smaller line that can be read beats a full-size one that
+--- cannot; only then cut short, with an ellipsis so it is obvious something was cut rather than the
+--- reader being left to wonder what the rest of it said.
+---
+--- Returns the text unchanged and the size unchanged whenever it already fits, which is almost
+--- always - nothing is measured twice for the sake of the one row in fifty that overruns.
+function ADFlyoverHud:fitToWidth(text, fontSize, maxW)
+    if text == nil or text == "" then return text, fontSize end
+    if maxW == nil or maxW <= 0 or getTextWidth == nil then return text, fontSize end
+    if self:measure(fontSize, text) <= maxW then return text, fontSize end
+
+    local floorSize = fontSize * 0.75
+    local size = fontSize
+    for _ = 1, 6 do
+        size = size - fontSize * 0.05
+        if size <= floorSize then break end
+        if self:measure(size, text) <= maxW then return text, size end
+    end
+
+    size = floorSize
+    local cut = text
+    while #cut > 1 and self:measure(size, cut .. "...") > maxW do
+        cut = cut:sub(1, #cut - 1)
+    end
+    return cut .. "...", size
+end
+
 function ADFlyoverHud:ensureOverlays()
     if self.background == nil then
         self.background = Overlay.new(g_baseUIFilename, 0, 0, 1, 1)
@@ -384,7 +420,7 @@ function ADFlyoverHud:buildRows(editor)
     local T = editor.TOOL
     local GROUPS = {
         { "MODE", { T.NONE } },
-        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
+        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING, T.ROADRUNS } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
         { "CONNECT", { T.CONVERT, T.MERGE, T.JUNCTION } },
         { "UTILITY", { T.NAME, T.DELETE } },
@@ -669,6 +705,27 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.SPLINE then
+        segFlip("curve by", "multi-point", "AutoDrive", not editor:splineIsMultiPoint(), function() editor:toggleSplineMode() end)
+    end
+    if editor.tool == editor.TOOL.SPLINE and editor:splineIsMultiPoint() then
+        numberAfter("spacing")
+        local pts = editor.splinePoints or {}
+        -- The flips only mean something on an end that is joined to a road; on a free end the curve
+        -- picks its own heading, so they grey out there.
+        local startJoined = pts[1] ~= nil and pts[1].wpId ~= nil
+        local endJoined = #pts >= 2 and pts[#pts].wpId ~= nil
+        segFlip("start heading", "auto", "flipped", editor.splineFlipStartTangent,
+            function() editor:toggleSplineStartTangent() end, not startJoined)
+        segFlip("end heading", "auto", "flipped", editor.splineFlipEndTangent,
+            function() editor:toggleSplineEndTangent() end, not endJoined)
+        if #pts > 0 then
+            local laid = editor.splineLaid
+            add("cursor", "points", tostring(#pts))
+            if laid ~= nil then
+                add("cursor", "waypoints", string.format("%d, %.0f m", #laid, editor.splineLength or 0))
+            end
+        end
+    elseif editor.tool == editor.TOOL.SPLINE then
         -- Read-only: the wheel drives this while a preview is up, and the mod clamps it to
         -- 0.49-3.5. Showing the live value beats a list of preset steps.
         local c = AutoDrive.splineInterpolationUserCurvature
@@ -678,7 +735,6 @@ function ADFlyoverHud:buildRows(editor)
         -- without touching the shape.
         segFlip("spline direction", "as clicked", "reversed", editor.splineSwapEnds, function() editor:toggleSplineEnds() end)
         add("hint", "reversed builds the curve from the far end")
-        add("hint", "(shape, and on one-way the way it runs)")
         -- Which way the curve lies against the track where it arrives. On a two-way track the
         -- automatic choice is a guess between two equally valid tangents.
         segFlip("end tangent", "auto", "flipped", editor.splineFlipEndTangent, function() editor:toggleSplineEndTangent() end)
@@ -698,10 +754,6 @@ function ADFlyoverHud:buildRows(editor)
                 flow = string.format("%d -> %d", a, b)
             end
             add("cursor", "flow", flow)
-            if mode == editor.CONNECTION.TWOWAY then
-                add("hint", "two-way: set direction to one-way")
-                add("hint", "if you want to flip it")
-            end
         end
     elseif editor.tool == editor.TOOL.SMOOTH then
         segCycle("mode", editor.SMOOTH_MODE_NAMES, function(i) return i == 1 and "relax" or "rebuild" end,
@@ -714,6 +766,9 @@ function ADFlyoverHud:buildRows(editor)
         if editor.groundPreview ~= nil then
             add("cursor", "off the ground", string.format("%d of %d", #editor.groundPreview, editor.groundChecked or 0))
         end
+    elseif editor.tool == editor.TOOL.ROADRUNS then
+        -- RoadRunsTool.lua builds its own rows from the same kit
+        editor:roadRunsCard({ tgl = tgl, seg = seg, segFlip = segFlip, btn = btn, add = add, numberAfter = numberAfter })
     elseif editor.tool == editor.TOOL.FIELDLOOP then
         segFlip("priority", "primary", "secondary", editor.fieldLoopSubPrio, function() editor:toggleFieldLoopPriority() end)
         segCycle("track", editor.FIELD_LOOP_DIR_NAMES, nil, editor.fieldLoopDirection,
@@ -2555,6 +2610,8 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     push({ kind = "field", text = "position", value = tostring(ADFlyoverSettings.get("launchButtonPosition")),
         action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
+
+    if editor.roadRunsSettingsItems ~= nil then editor:roadRunsSettingsItems(push) end
 
     push({ kind = "section", text = "DEBUG" })
     push({ kind = "field", text = "verbose logging",

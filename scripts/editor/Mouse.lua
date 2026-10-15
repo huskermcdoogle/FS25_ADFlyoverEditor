@@ -161,10 +161,11 @@ function ADFlyoverEditor:toolHasPendingStart()
     elseif t == self.TOOL.GROUND then return self.groundFromId ~= nil
     elseif t == self.TOOL.PARALLEL then return self.offsetFromId ~= nil
     elseif t == self.TOOL.SIDING then return self.sidingAnchorId ~= nil
-    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil
+    elseif t == self.TOOL.SPLINE then return self.splineFromId ~= nil or self:multiSplinePending()
     elseif t == self.TOOL.MERGE then return self.mergeFromId ~= nil
     elseif t == self.TOOL.DRAW then return self.lastWaypointId ~= nil
     elseif t == self.TOOL.JUNCTION then return self.junctionArmed ~= nil
+    elseif t == self.TOOL.ROADRUNS then return self.roadRuns ~= nil and #self.roadRuns.picks > 0
     end
     return false
 end
@@ -204,8 +205,10 @@ function ADFlyoverEditor:onLeftPress()
         return
     end
 
-    -- Alt alone claims the drag for box selection (view-aligned - see boxFrame).
-    if self.leftAltHeld then
+    -- Alt alone claims the drag for box selection (view-aligned - see boxFrame). Not in the
+    -- multi-point spline: there Alt means "place this point without snapping to a waypoint".
+    if self.leftAltHeld and not (self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint())
+        and not (self.tool == self.TOOL.ROADRUNS and self.roadRuns ~= nil and self.roadRuns.sel ~= nil) then
         self.boxActive = true
         self.boxStartX, self.boxStartZ = self.cursorX, self.cursorZ
         return
@@ -232,6 +235,16 @@ function ADFlyoverEditor:onLeftPress()
     -- picking its two ends (and later replacing one) is a plain click, not a drag, so it is left
     -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
     -- exists AND the hovered point is actually a member of it.
+    -- Multi-point spline: a press on one of its points may become a drag of that point.
+    if self.tool == self.TOOL.SPLINE and self.splineHoverIdx ~= nil and self:splineIsMultiPoint() then
+        self:multiSplinePress()
+        return
+    end
+    -- Road runs: a press on a handle of the selected run may become a drag of it.
+    if self.tool == self.TOOL.ROADRUNS and self.roadRunsPress ~= nil and self:roadRunsPress() then
+        return
+    end
+
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
         -- An offset already awaiting its right-click commit owns this press: resume cursor-driven
         -- adjustment if the point is part of that SAME chain, otherwise ignore the press entirely
@@ -414,6 +427,14 @@ function ADFlyoverEditor:onLeftRelease()
     -- leaving the tool you are working with.
     if self.ctrlToggleArmed then
         self.ctrlToggleArmed = false
+        -- On a multi-point spline's own point, Ctrl-click removes the point instead of selecting.
+        if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() and self:multiSplineRemoveAtCursor() then
+            return
+        end
+        -- On a road run's handle, Ctrl-click removes the handle.
+        if self.tool == self.TOOL.ROADRUNS and self.roadRunsRemoveHandleAtCursor ~= nil and self:roadRunsRemoveHandleAtCursor() then
+            return
+        end
         if self:chainToggleSelected(self.hoverId) then
             return
         end
@@ -482,7 +503,11 @@ function ADFlyoverEditor:onLeftRelease()
     elseif self.tool == self.TOOL.NAME then
         self:nameAtCursor()
     elseif self.tool == self.TOOL.SPLINE then
-        self:splineClick()
+        if self:splineIsMultiPoint() then
+            self:multiSplineRelease()
+        else
+            self:splineClick()
+        end
     elseif self.tool == self.TOOL.MERGE then
         self:mergeClick()
     elseif self.tool == self.TOOL.FIELDLOOP then
@@ -501,6 +526,8 @@ function ADFlyoverEditor:onLeftRelease()
         self:divideClick()
     elseif self.tool == self.TOOL.JUNCTION then
         self:junctionClick()
+    elseif self.tool == self.TOOL.ROADRUNS then
+        self:roadRunsClick()
     elseif self.tool == self.TOOL.NONE then
         self:selectClick()
     end
@@ -590,6 +617,11 @@ function ADFlyoverEditor:stopCurrentAction()
             self:commitSiding()
             return true
         end
+    elseif tool == self.TOOL.ROADRUNS then
+        -- road runs (RoadRunsTool.lua): right-click builds what is picked
+        if self:roadRunsStop() then
+            return true
+        end
     elseif tool == self.TOOL.MOVE then
         if self.moveOffsetChainIds ~= nil then
             self:commitMoveOffset()
@@ -630,6 +662,13 @@ function ADFlyoverEditor:stopCurrentAction()
             self:cancelSmooth()
             return true
         end
+    elseif tool == self.TOOL.SPLINE and self:multiSplinePending() then
+        if #self.splinePoints >= 2 then
+            self:commitMultiSpline()
+        else
+            self:cancelMultiSpline()
+        end
+        return true
     elseif tool == self.TOOL.SPLINE then
         if self.splineToId ~= nil then
             self:commitSplinePreview()

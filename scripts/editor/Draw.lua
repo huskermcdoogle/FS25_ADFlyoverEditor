@@ -280,6 +280,10 @@ function ADFlyoverEditor:drawNetwork()
         end
     end
 
+    if self.tool == self.TOOL.ROADRUNS then
+        self:drawRoadRuns(lw)
+    end
+
     if self.tool == self.TOOL.PARALLEL and self.offsetPreview ~= nil then
         for i = 1, #self.offsetPreview do
             local p = self.offsetPreview[i]
@@ -479,6 +483,10 @@ function ADFlyoverEditor:drawNetwork()
                 ADDrawingManager:addLineTask(q.x, (q.y or 0) + 0.6, q.z, p.x, py, p.z, lw, 0.4, 1, 0.4)
             end
         end
+    end
+
+    if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() then
+        self:drawMultiSpline(lw)
     end
 
     if self.tool == self.TOOL.DIVIDE and self.dividePreview ~= nil then

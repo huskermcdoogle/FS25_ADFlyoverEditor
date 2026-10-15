@@ -99,7 +99,9 @@ P.MAX_ATTEMPTS = 300
 P.EDITOR_FILES = {
     "scripts/editor/PolygonUtils.lua",
     "scripts/editor/OffsetGeometry.lua",
+    "scripts/editor/SplinePath.lua",
     "scripts/editor/FieldLoopGenerator.lua",
+    "scripts/editor/RoadFinder.lua",
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
@@ -137,6 +139,8 @@ P.EDITOR_FILES = {
     "scripts/editor/tools/Convert.lua",
     "scripts/editor/tools/Merge.lua",
     "scripts/editor/tools/FieldLoop.lua",
+    "scripts/editor/tools/Spline.lua",   -- the multi-point spline (road runs branch, re-homed at the 1.0.3.0 merge)
+    "scripts/editor/RoadRunsTool.lua",   -- adds the road runs tool to ADFlyoverEditor, so after it
 }
 
 P.state = "waiting" -- waiting | armed | gave-up | disabled

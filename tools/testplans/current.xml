@@ -3,15 +3,19 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="test course: the pair, built and redone" build="@BUILD@">
+<testPlan title="release check: road runs + spline cards" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
-          hint="Ticks itself: the running build is the one this plan was packed with. Slot 10 with the course's own network (nothing built yet)."/>
-    <test id="pair" title="1e and 1w get the mod's T"
-          passLog="the mod's exact T fits"
-          failLog="the mod pattern won't fit here"
-          hint="Clear + build 1e, then 1w - click 1w a few metres up its side road. Ticks itself from the log."/>
-    <test id="redo" title="Redoing 1e and 1w stays clean"
-          passLog="junction clear %+ build %- cleared, built"
-          failLog="the mod pattern won't fit here"
-          hint="Clear + build 1e again, then 1w again, twice over. Each time the mod's T comes back. Ticks itself from the log."/>
+          hint="Ticks itself: the running build is the one this plan was packed with."/>
+    <test id="rrCard" title="Road runs: short card, every row works"
+          hint="With verbose logging off: lay as, priority, roads to find, lane gap, then picked and build. No view row. Each row changes what lights up or how it lays."/>
+    <test id="rrBuild" title="Road runs: pick, shape and build a road" passLog="road runs %- built"
+          hint="Pick a road, drag a handle, right-click: the run follows the shape (ticks itself)."/>
+    <test id="rrReshape" title="Road runs: reshape a built two-lane road" passLog="reshaped the two%-lane road"
+          hint="Click a built two-lane road, drag a handle, right-click: both lanes follow, all joins kept (ticks itself)."/>
+    <test id="rrSettings" title="Settings dialog: ROAD RUNS rows change and stay"
+          hint="Settings dialog: light up, side check, rig width, fork gap each change; close and reopen, they stay."/>
+    <test id="spline" title="Spline: lay a multi-point curve" passLog="placed multi%-point spline"
+          hint="Click points, drag one, ctrl-click one away, right-click lays it (ticks itself)."/>
+    <test id="splineAD" title="Spline: AutoDrive mode still lays a curve"
+          hint="Switch curve by to AutoDrive, click two waypoints, wheel the curvature, lay it."/>
 </testPlan>

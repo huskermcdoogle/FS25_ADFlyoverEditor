@@ -1546,6 +1546,8 @@ function ADFlyoverEditor:cancelPendingAction()
         self:cancelStraighten()
     elseif t == T.SMOOTH and (self.smoothFromId ~= nil or self.smoothToId ~= nil) then
         self:cancelSmooth()
+    elseif t == T.SPLINE and self:multiSplinePending() then
+        self:cancelMultiSpline()
     elseif t == T.SPLINE and (self.splineFromId ~= nil or self.splineToId ~= nil) then
         self:cancelSplinePreview()
     elseif t == T.DIVIDE and (self.divideFromId ~= nil or self.divideToId ~= nil) then
@@ -1553,6 +1555,10 @@ function ADFlyoverEditor:cancelPendingAction()
     elseif t == T.MERGE and (self.mergeFromId ~= nil or self.mergeToId ~= nil) then
         self.mergeFromId, self.mergeToId = nil, nil
         self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+    elseif t == T.ROADRUNS and self.roadRuns ~= nil and self.roadRuns.sel ~= nil then
+        self:roadRunsSelect(nil)
+    elseif t == T.ROADRUNS and self.roadRuns ~= nil and #self.roadRuns.picks > 0 then
+        self:roadRunsClearPicks()
     else
         return false
     end
@@ -1894,7 +1900,11 @@ function ADFlyoverEditor:update(dt)
     self:updateFieldUnderCursor()
 
     if self.tool == self.TOOL.SPLINE then
-        self:updateSplinePreview()
+        if self:splineIsMultiPoint() then
+            self:updateMultiSpline()
+        else
+            self:updateSplinePreview()
+        end
     elseif self.tool == self.TOOL.MERGE then
         self:updateMergePreview()
     elseif self.tool == self.TOOL.DIVIDE then
@@ -1911,6 +1921,8 @@ function ADFlyoverEditor:update(dt)
         self:updateSmoothPreview()
     elseif self.tool == self.TOOL.JUNCTION then
         self:updateJunctionPreview()
+    elseif self.tool == self.TOOL.ROADRUNS then
+        self:updateRoadRuns(overPanel)
     end
 
     -- Move: a held press that has travelled past the threshold becomes a drag.

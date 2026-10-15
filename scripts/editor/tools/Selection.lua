@@ -33,6 +33,11 @@ function ADFlyoverEditor:setTool(tool)
     else
         self.menuBackTo = nil
     end
+    -- Leaving road runs drops what it has not built (picks, shaped runs).
+    if self.tool == self.TOOL.ROADRUNS and self.roadRunsForget ~= nil then
+        self:roadRunsForget("left the tool")
+    end
+    self.roadRunsBroken = nil             -- an error in road runs lasts until the tool is next chosen
     self.tool = tool
     self.lastMovedIds = nil
     self.movePickFromMenu = false
@@ -49,11 +54,16 @@ function ADFlyoverEditor:setTool(tool)
     if self.splineFromId ~= nil or self.splineToId ~= nil then
         self:cancelSplinePreview()
     end
+    self:cancelMultiSpline()
     self.mergeFromId = nil
     self.mergeToId = nil
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = nil, nil, nil
     self.divideFromId, self.divideToId, self.dividePreview = nil, nil, nil
     self.junctionArmed, self.junctionPreview, self.junctionPreviewKey = nil, nil, nil
+    -- road runs keeps its window of read ground (reading it again is the slow part); only the picks go
+    if self.roadRunsReset ~= nil then
+        self:roadRunsReset()
+    end
     self.dragId = nil
     self.boxActive = false
     self.circleActive = false

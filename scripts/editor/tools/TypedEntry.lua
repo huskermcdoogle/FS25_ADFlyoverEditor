@@ -66,6 +66,9 @@ function ADFlyoverEditor:getEditableNumbers()
         }
     end
     local AD = AutoDrive
+    if self.tool == self.TOOL.ROADRUNS then
+        return self:roadRunsNumbers(fieldEntry)
+    end
     if self.tool == self.TOOL.PARALLEL then
         return { fieldEntry("distance", "m", 1, "offsetDistance", AD.FLYOVER_OFFSET_MIN, AD.FLYOVER_OFFSET_MAX,
             AD.FLYOVER_OFFSET_STEP, false, function() editor.offsetCache = nil end) }
@@ -79,6 +82,10 @@ function ADFlyoverEditor:getEditableNumbers()
         return { fieldEntry("points", "", 0, "divideCount", 0, AD.FLYOVER_DIVIDE_MAX, 1, true) }
     elseif self.tool == self.TOOL.SMOOTH and self.smoothMode ~= self.SMOOTH_MODE.REBUILD then
         return { fieldEntry("strength", "", 0, "smoothStrength", 0, AD.FLYOVER_SMOOTH_MAX, 1, true) }
+    end
+
+    if self.tool == self.TOOL.SPLINE and self:splineIsMultiPoint() then
+        return { settingEntry("spacing", "splineSpacing") }
     end
 
     if self.tool == self.TOOL.JUNCTION then

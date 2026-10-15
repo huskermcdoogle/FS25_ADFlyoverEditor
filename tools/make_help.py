@@ -66,20 +66,24 @@ TOOLS = [
     },
     {
         "key": "spline", "name": "Spline", "group": "Create",
-        "summary": "Draw a smooth curved connection between two points.",
-        "what": "Spline connects two waypoints with a curve rather than a straight segment, for "
-                "sweeping bends a vehicle can follow at speed. A live preview shows the curve before "
-                "you commit it.",
+        "summary": "Draw a smooth curve through any number of points.",
+        "what": "Spline lays a smooth curve that passes through every point you click, for sweeping "
+                "bends a vehicle can follow at speed. A live preview shows the curve and the waypoints "
+                "it will lay before you commit it. An end clicked on a waypoint joins the road there "
+                "and follows its heading; an end on bare ground gets a new waypoint.",
         "how": [
-            "Click the start waypoint, then the end waypoint - the curve previews between them.",
-            "Scroll the wheel to tighten or loosen the curvature while the preview is up.",
-            "Click again / confirm to place it; right-click cancels.",
+            "Click points in order - on the ground, or right on a waypoint to join the road there. "
+            "Hold Alt to place a point without snapping. A marker under the mouse shows what a click "
+            "does: yellow joins a waypoint, white is bare ground, green goes into the line.",
+            "Click on the curve to put a point into the line there. Drag a point to move it. "
+            "Ctrl-click a point to remove it.",
+            "Right-click lays it as one undo step; Esc throws it away.",
         ],
         "controls": [
-            ("curvature (wheel)", "how tight the curve is, clamped to a sane range."),
-            ("spline direction", "as clicked builds the curve from the first point; reversed builds it from "
-                                 "the far end. That reshapes the curve and, on a one-way, sets which way it runs."),
-            ("end / start tangent", "flip the direction the curve leaves each end."),
+            ("curve by", "multi-point is this curve; AutoDrive is the old two-point spline (click two "
+                         "waypoints, wheel for curvature)."),
+            ("spacing", "how far apart the laid waypoints are, in metres."),
+            ("start / end heading", "flip which way along the road a joined end leaves or arrives."),
             ("traffic / priority", "as for Draw - one-way, two-way or reverse-way (AutoDrive's reverse road, which "
                                    "vehicles drive in reverse gear) and primary/secondary."),
         ],
@@ -152,6 +156,38 @@ TOOLS = [
             ("side", "as for Parallel: left / right of travel on a one-way track, by screen on a two-way one."),
             ("offset", "how far to the side the siding sits."),
             ("length (wheel)", "how long the parallel stretch is."),
+        ],
+    },
+    {
+        "key": "road runs", "name": "Road runs", "group": "Create",
+        "summary": "Lay AutoDrive runs along map roads and farm tracks that have no path yet, and reshape roads already built.",
+        "what": "Road runs reads the ground paint round the mouse - asphalt and concrete, gravel, dirt "
+                "tracks - and lights up the roads that have no AutoDrive path. A click follows the road "
+                "on through junctions where it carries straight on, and stops at T's, real ends and "
+                "existing paths. It lays the lanes you choose: one-way, one two-way line, or two lanes "
+                "keeping right. It stops short at forks so the junction tool can finish them; a track "
+                "meeting a road runs right to the asphalt. Bridges and ramps are found from the game's "
+                "road meshes. A road already built can be reshaped with handles, through its junctions, "
+                "and the roads joining it follow.",
+        "how": [
+            "Point at a road: it lights up, with its lanes previewed. Click to pick it; double-click carries it on through forks.",
+            "For a one-way run, click on the side of the road you would drive on (keep right).",
+            "Click a pick to select it: drag a handle to reshape it, click the line to add a handle, Ctrl-click a handle "
+            "to remove it. An end dragged onto a waypoint joins it (hold Alt for no snap).",
+            "Right-click builds everything picked. One undo takes it all back.",
+            "Click a road already built to reshape it the same way. A two-lane road is shaped by its middle, both "
+            "lanes together. Junction points move with it; short turns bend and side roads ease back into place. "
+            "Right-click applies, as one undo step.",
+        ],
+        "controls": [
+            ("lay as", "auto (two lanes on paved roads, one two-way line on tracks), one-way, two-way, or two lanes."),
+            ("priority", "primary or secondary, as for Draw."),
+            ("roads to find", "paved, gravel and dirt - turn a kind off to stop it lighting up."),
+            ("lane gap", "from road: measured from the road's width; set: type your own."),
+            ("through junctions", "when reshaping a built road: carry the selection on through its junctions (on), "
+                                  "or take just the run between two junctions (off)."),
+            ("settings dialog", "light up (under mouse or all nearby), side check (bridges or everywhere), rig "
+                                "width (3.0 m) and fork gap (7.5 m)."),
         ],
     },
     {

@@ -119,6 +119,9 @@ function ADFlyoverEditor:getNextStepLines()
         return L("No tool selected. Pick one above, or press 1-9 / 0.")
     end
 
+    if self.tool == t.ROADRUNS then
+        return self:roadRunsNextStep()
+    end
     if self.tool == t.DRAW then
         if self.lastWaypointId ~= nil then
             return L("Click ground to extend, or a waypoint to link. Right-click ends.")
@@ -183,6 +186,15 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Click one end of the span.")
     elseif self.tool == t.NAME then
         return L("Click a waypoint to name it.")
+    elseif self.tool == t.SPLINE and self:splineIsMultiPoint() then
+        local n = self.splinePoints ~= nil and #self.splinePoints or 0
+        if n >= 2 then
+            return L("Click to add a point (on the line it goes in between), drag one to move it, Ctrl-click one to remove it. Hold Alt to place without snapping. Right-click lays it.")
+        end
+        if n == 1 then
+            return L("Click the next point. On a waypoint it joins the road there; hold Alt to place without snapping.")
+        end
+        return L("Click the first point - on a waypoint to start from the road, or on the ground. Hold Alt to place without snapping.")
     elseif self.tool == t.SPLINE then
         if self.splineToId ~= nil then
             return L("Wheel adjusts the curve. Right-click places it.")

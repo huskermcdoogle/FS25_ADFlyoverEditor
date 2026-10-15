@@ -424,6 +424,14 @@ function ADFlyoverEditor:menuArmSpline()
     local id = self:menuTarget()
     if id == nil then return end
     self:setTool(self.TOOL.SPLINE)
+    if self:splineIsMultiPoint() then
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil then
+            self:multiSplineAdd({ x = wp.x, y = wp.y, z = wp.z, wpId = wp.id })
+        end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: spline armed from id=%s; click on to add points.", tostring(id))
+        return
+    end
     self.splineFromId = id
     ADFlyoverSettings.debugLog("[FlyoverEditor]: spline armed from id=%s; click the waypoint to curve to.", tostring(id))
 end
