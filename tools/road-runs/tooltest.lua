@@ -441,6 +441,7 @@ do
     if #pts >= 6 then
         frames(1)
         E:roadRunsSelect(nil)
+        E.roadThrough = false             -- the run between its junctions (THROUGH below covers the rest)
         E.hoverId = seed
         s.hover, s.hoverPick = nil, nil
         E:roadRunsClick()
@@ -504,6 +505,7 @@ do
             tostring(ok1), #pts, #H, tostring(endKept), #pts, #again, near, maxGap, tostring(endsOk), snapshots - snaps0, s.sel == nil and "cleared" or "LEFT"))
         print((ok1 and endKept and near < 1.0 and endsOk and maxGap <= 7.01 and snapshots - snaps0 == 1 and s.sel == nil and count > n0)
             and "BUILT SHAPE PASS" or "BUILT SHAPE FAIL")
+        E.roadThrough = nil
     else
         print("built shape: no built run to try (" .. #pts .. " points)")
     end

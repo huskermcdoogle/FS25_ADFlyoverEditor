@@ -1440,6 +1440,10 @@ function ADFlyoverEditor:cancelPendingAction()
     elseif t == T.MERGE and (self.mergeFromId ~= nil or self.mergeToId ~= nil) then
         self.mergeFromId, self.mergeToId = nil, nil
         self.mergePreviewSpan, self.mergePreviewOther, self.mergePreviewQueryId = nil, nil, nil
+    elseif t == T.ROADRUNS and self.roadRuns ~= nil and self.roadRuns.sel ~= nil then
+        self:roadRunsSelect(nil)
+    elseif t == T.ROADRUNS and self.roadRuns ~= nil and #self.roadRuns.picks > 0 then
+        self:roadRunsClearPicks()
     else
         return false
     end
@@ -2470,6 +2474,7 @@ function ADFlyoverEditor:setTool(tool)
     if self.tool == self.TOOL.ROADRUNS and self.roadRunsForget ~= nil then
         self:roadRunsForget("left the tool")
     end
+    self.roadRunsBroken = nil             -- an error in road runs lasts until the tool is next chosen
     self.tool = tool
     self.lastMovedIds = nil
     self.movePickFromMenu = false
@@ -8052,6 +8057,9 @@ function ADFlyoverEditor:cancelMultiSpline()
     self.splinePoints = {}
     self.splineHoverIdx, self.splinePressIdx, self.splineDragIdx, self.splineGhost = nil, nil, nil, nil
     self.splineCurve, self.splineLaid, self.splineLaidKey, self.splineLength = nil, nil, nil, nil
+    -- a flip belongs to the spline it was set on: the next one starts on auto (2026-10-15 review: a
+    -- flip left on a free end - greyed, so not seen - turned the next joined spline)
+    self.splineFlipStartTangent, self.splineFlipEndTangent = false, false
 end
 
 --- Is a multi-point spline being drawn (at least one point down)?

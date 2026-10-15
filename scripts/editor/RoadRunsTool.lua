@@ -2,7 +2,7 @@
 Road runs tool: lays AutoDrive runs along map roads and farm tracks that have no path yet.
 
   hover         the road under the mouse lights up, fork to fork (RoadFinder.lua finds the roads)
-  click         adds that stretch to the pick (click a picked one again to drop it)
+  click         adds that stretch to the pick (click a picked one again to select it for shaping)
   double-click  the whole road: carries straight on through forks while the road does
   right-click   builds every picked stretch - one undo takes it all back
 
@@ -696,11 +696,12 @@ function E:roadRunsHandlePiece()
         if ok and sx ~= nil and depth ~= nil and depth > 0 then
             local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
             local r = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
-            return (dx * dx + dy * dy <= r * r) and seg or nil
+            if dx * dx + dy * dy <= r * r then return seg, px, pz end
         end
         return nil
     end
-    return dist <= 2 and seg or nil
+    if dist <= 2 then return seg, px, pz end
+    return nil
 end
 
 --- Select a pick (handles shown), or clear the selection with nil.
@@ -811,7 +812,7 @@ function E:updateRoadRunsInner(overPanel)
         else n = #(ADGraphManager:getWayPoints() or {}) end
         local stamp = ADEditorHistory ~= nil and ADEditorHistory.stack ~= nil and (#ADEditorHistory.stack * 100000 + #(ADEditorHistory.redoStack or {})) or 0
         local key = n * 7919 + stamp
-        if s.wpCount ~= nil and key ~= s.wpCount and (#s.picks > 0 or s.voted ~= nil) then
+        if s.wpCount ~= nil and key ~= s.wpCount and (#s.picks > 0 or s.voted ~= nil or s.sel ~= nil) then
             self:roadRunsForget("the waypoints changed")
         end
         s.wpCount = key
@@ -1094,6 +1095,7 @@ local function addPick(s, st, dir)
 end
 
 function E:roadRunsClick()
+    if self.roadRunsBroken then return end
     if self.roadView and self.roadDrawMid then self:roadMidClick() return end
     if self.roadView and self.roadPaint then return end      -- painting: the drag paints, see update
     local s = roadState(self)
@@ -1111,20 +1113,24 @@ function E:roadRunsClick()
         s.handlePress = nil                                     -- a click on a handle without a drag
         return
     end
-    if s.sel ~= nil then
-        local seg = self:roadRunsHandlePiece()
-        if seg ~= nil then
-            local pk = s.sel
-            table.insert(pk.handles, seg + 1, { x = self.cursorX, y = terrainY(self.cursorX, self.cursorZ), z = self.cursorZ })
-            self:roadRunsApplyHandles(pk, false, false)
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - handle added at (%.1f, %.1f) (%d handles).",
-                self.cursorX, self.cursorZ, #pk.handles)
-            return
-        end
-    end
     local now = self:nowMs()
     local last = s.lastClick
     local isDouble = last ~= nil and (now - last.at) < self.DOUBLE_CLICK_MS
+    -- (the second click of a double-click lands on the line the first one selected: it carries
+    -- the road on, it does not add a handle)
+    if s.sel ~= nil and not (isDouble and last.pick ~= nil) then
+        local seg, px, pz = self:roadRunsHandlePiece()
+        if seg ~= nil then
+            local pk = s.sel
+            -- on the line itself (the cursor may be a few metres off it when zoomed out)
+            px, pz = px or self.cursorX, pz or self.cursorZ
+            table.insert(pk.handles, seg + 1, { x = px, y = terrainY(px, pz), z = pz })
+            self:roadRunsApplyHandles(pk, false, false)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - handle added at (%.1f, %.1f) (%d handles).",
+                px, pz, #pk.handles)
+            return
+        end
+    end
     s.lastClick = { at = now }
 
     if isDouble and last.pick ~= nil then
@@ -1218,6 +1224,7 @@ function E:roadRunsForget(why)
     local had = #s.picks
     s.picks, s.voted, s.walked, s.hover, s.hoverPick = {}, nil, nil, nil, nil
     s.sel, s.handlePress, s.handleDrag, s.handleHover = nil, nil, nil, nil
+    s.builtHoverSeed, s.builtHoverPts = nil, nil
     if had > 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - %d unbuilt pick(s) dropped (%s).", had, why or "?")
     end
@@ -1372,12 +1379,22 @@ end
 function E:roadRunsFindTwin(ids, P)
     local inRun = {}
     for _, id in ipairs(ids) do inRun[id] = true end
-    -- the whole run, not only its middle: a shorter twin may lie beside one end of it
-    local samples = P
+    -- the whole run, not only its middle: a shorter twin may lie beside one end of it (every second
+    -- point, and only waypoints inside a box round the road - a 2 km road read every waypoint on the
+    -- map for each of its points)
+    local samples = {}
+    for i = 1, #P, 2 do samples[#samples + 1] = P[i] end
+    samples[#samples + 1] = P[#P]
     local reach = (self.ROADRUNS_TWIN_MAX + 1) ^ 2
+    local pad = self.ROADRUNS_TWIN_MAX + 1
+    local x0, x1, z0, z1 = math.huge, -math.huge, math.huge, -math.huge
+    for _, q in ipairs(P) do
+        x0, x1, z0, z1 = math.min(x0, q.x), math.max(x1, q.x), math.min(z0, q.z), math.max(z1, q.z)
+    end
+    x0, x1, z0, z1 = x0 - pad, x1 + pad, z0 - pad, z1 + pad
     local cand = {}
     for _, w in pairs(ADGraphManager:getWayPoints() or {}) do
-        if type(w) == "table" and w.id ~= nil and not inRun[w.id] then
+        if type(w) == "table" and w.id ~= nil and not inRun[w.id] and w.x >= x0 and w.x <= x1 and w.z >= z0 and w.z <= z1 then
             for _, q in ipairs(samples) do
                 if (w.x - q.x) ^ 2 + (w.z - q.z) ^ 2 <= reach then cand[#cand + 1] = w.id break end
             end
@@ -1537,7 +1554,7 @@ function E:roadRunsSelectBuilt(seedId)
     for i = 2, #P do len = len + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
     local st = { pts = P, len = len, class = "built", startTag = "end", endTag = "end", id = "built:" .. ids[1] .. ":" .. ids[#ids] }
     st.refinedTo = st
-    local pk = { built = true, ids = ids, dual = dual, flags = flags, st = st, dir = 1, keep = keep,
+    local pk = { built = true, ids = ids, dual = dual, flags = flags, st = st, dir = 1, keep = keep, seedId = seedId,
         oldPts = (twin == nil) and pts or nil }
     if twin ~= nil then
         local tDual, tFlags = false, flags
@@ -1588,6 +1605,7 @@ function E:roadRunsApplyBuilt()
     local res = self:roadRunsLayLanes(lanes)
     if self.invalidateIdReferences ~= nil then self:invalidateIdReferences() end
     ADGraphManager:markChanges()
+    s.wpCount = nil                       -- our own change: the picks waiting to be built stay
     if pk.twin ~= nil then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the two-lane road %d..%d + %d..%d: %d + %d waypoints now (was %d + %d), %.1f m apart, %d junction point(s) moved, %s, %s.",
             pk.ids[1], pk.ids[#pk.ids], pk.twin.ids[1], pk.twin.ids[#pk.twin.ids], res.points[1] or 0, res.points[2] or 0,
@@ -2965,7 +2983,11 @@ function E:roadRunsCard(kit)
         kit.add("cursor", "this road", string.format("%.1f m wide, lanes %.1f m apart", st.width, self:roadGapFor(st)))
     end
     local hovering = s.hover ~= nil and st == s.hover.refinedTo
-    local lanes = st ~= nil and self:roadRunsLanesFor(st, (hovering and s.hoverSide) or 1, hovering) or nil
+    local lanes = nil
+    if st ~= nil then
+        local ok, r = pcall(self.roadRunsLanesFor, self, st, (hovering and s.hoverSide) or 1, hovering)
+        if ok then lanes = r end
+    end
     if lanes ~= nil and (lanes.collapsed or 0) > 0 then
         kit.add("cursor", "too narrow for two", string.format("%.0f m as one two-way line", lanes.collapsed))
     end
@@ -2975,7 +2997,7 @@ function E:roadRunsCard(kit)
     end
     local n, L = self:roadRunsPickedLength()
     kit.add("cursor", "picked", n > 0 and string.format("%d stretch%s, %.0f m", n, n == 1 and "" or "es", L) or "-")
-    if n > 0 then
+    if n > 0 and not (s.sel ~= nil and s.sel.built) then
         kit.btn("build (right-click)", function() editor:commitRoadRuns() end)
         kit.btn("clear picks", function() editor:roadRunsClearPicks() end)
         if s.sel ~= nil and not s.sel.built then
@@ -2991,8 +3013,15 @@ function E:roadRunsCard(kit)
             #(s.sel.handles or {}), s.sel.st.len or 0, s.sel.st.edited and ", shaped" or ""))
         kit.add("hint", "drag a handle; click the line to add; ctrl-click to remove")
         kit.btn("apply shape (right-click)", function() editor:roadRunsApplyBuilt() end)
-        kit.tgl("through junctions (next click)", editor.roadThrough ~= false, function()
+        kit.tgl("through junctions", editor.roadThrough ~= false, function()
             editor.roadThrough = (editor.roadThrough == false)
+            s.builtHoverSeed, s.builtHoverPts = nil, nil
+            -- select the same road again, the new way (its edits go: they were on the old extent)
+            local seed = s.sel ~= nil and s.sel.seedId or nil
+            if seed ~= nil then
+                editor:roadRunsSelect(nil)
+                editor:roadRunsSelectBuilt(seed)
+            end
         end)
         kit.btn("cancel shaping", function() editor:roadRunsSelect(nil) end)
     end
@@ -3070,6 +3099,7 @@ end
 
 --- Right-click: build what is picked. Returns true if there was something.
 function E:roadRunsStop()
+    if self.roadRunsBroken then return false end
     local s = self.roadRuns
     if self.roadView and self.roadDrawMid then return self:roadMidRemove() end
     if s ~= nil and s.sel ~= nil and s.sel.built then return self:roadRunsApplyBuilt() end
