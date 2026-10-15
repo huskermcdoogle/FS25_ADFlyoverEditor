@@ -3,15 +3,15 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="road runs phase 2: reshape a built run" build="@BUILD@">
+<testPlan title="road runs phase 2: two-lane roads" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="selectBuilt" title="Click a built run: it gets handles" passLog="selected a built run to shape"
-          hint="Road runs tool, hover an AutoDrive run (it outlines sky blue), click it (ticks itself)."/>
-    <test id="endsStay" title="Its end handles do not move"
-          hint="Try to drag an end handle, and ctrl-click it: it stays put."/>
-    <test id="reshape" title="Right-click rebuilds it along the new shape" passLog="reshaped the built run .- done"
-          hint="Drag a middle handle, add one, right-click: the run follows the shape, still joined at both ends, same direction (ticks itself - check by eye)."/>
-    <test id="undo" title="One undo puts it back"
-          hint="Undo once: the old run is back as it was."/>
+    <test id="twoLane" title="Click a two-lane road: both lanes, handles in the middle" passLog="with its twin lane"
+          hint="Click either lane of a built two-lane road: handles on the middle line, both lanes drawn thick (ticks itself)."/>
+    <test id="twoLaneShape" title="Right-click lays both lanes along the new shape" passLog="reshaped the two%-lane road .- done"
+          hint="Drag a middle handle, right-click: both lanes follow, same spacing, still joined at their ends (ticks itself - check by eye)."/>
+    <test id="oneLane" title="A single run still reshapes alone" passLog="reshaped the built run .- done"
+          hint="A one-way or two-way run with no twin: shape and right-click (ticks itself)."/>
+    <test id="undo" title="One undo puts both lanes back"
+          hint="Undo once after a two-lane reshape: both old lanes are back."/>
 </testPlan>

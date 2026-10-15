@@ -1223,6 +1223,136 @@ function E:roadRunsForget(why)
     end
 end
 
+--- TWO-LANE ROADS (2026-10-15 user: "two lane roads, that is where the real value is"). A one-way
+--- run with a twin - a one-way run beside it, the other way, a steady 1.5-9 m off - is shaped as
+--- one road: the handles sit on the middle line between the two, and apply lays both lanes again
+--- either side of the shaped middle, as far apart as they were. Each lane keeps its own ends.
+E.ROADRUNS_TWIN_MIN, E.ROADRUNS_TWIN_MAX, E.ROADRUNS_TWIN_SPREAD = 1.5, 9, 2.0
+
+--- Nearest point on polyline P to (x, z): distance, point, segment index, t along it.
+local function nearestOnLine(P, x, z)
+    local bd, bx, bz, bs, bt = math.huge, nil, nil, nil, nil
+    for i = 1, #P - 1 do
+        local a, b = P[i], P[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l2 = dx * dx + dz * dz
+        local t = l2 > 0 and math.max(0, math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / l2)) or 0
+        local qx, qz = a.x + dx * t, a.z + dz * t
+        local d = (x - qx) ^ 2 + (z - qz) ^ 2
+        if d < bd then bd, bx, bz, bs, bt = d, qx, qz, i, t end
+    end
+    return math.sqrt(bd), bx, bz, bs, bt
+end
+
+--- How B runs beside A: the median distance and its spread, or nil when it is not a twin lane
+--- (too near, too far, not steady, or not running the other way).
+local function twinFit(A, B)
+    if #A < 3 or #B < 3 then return nil end
+    local ds = {}
+    for f = 0.15, 0.86, 0.1 do
+        local i = math.max(1, math.min(#A - 1, math.floor(#A * f)))
+        local d, _, _, seg = nearestOnLine(B, A[i].x, A[i].z)
+        if d < E.ROADRUNS_TWIN_MIN or d > E.ROADRUNS_TWIN_MAX then return nil end
+        local ax, az = A[i + 1].x - A[i].x, A[i + 1].z - A[i].z
+        local bx, bz = B[seg + 1].x - B[seg].x, B[seg + 1].z - B[seg].z
+        local la, lb = math.sqrt(ax * ax + az * az), math.sqrt(bx * bx + bz * bz)
+        if la < 1e-6 or lb < 1e-6 or (ax * bx + az * bz) / (la * lb) > -0.7 then return nil end
+        ds[#ds + 1] = d
+    end
+    table.sort(ds)
+    if #ds == 0 or ds[#ds] - ds[1] > E.ROADRUNS_TWIN_SPREAD then return nil end
+    return ds[math.floor((#ds + 1) / 2)], ds[#ds] - ds[1]
+end
+
+--- The twin lane of a one-way run (its points with ids), or nil.
+function E:roadRunsFindTwin(ids, P)
+    local inRun = {}
+    for _, id in ipairs(ids) do inRun[id] = true end
+    local samples = {}
+    for f = 0.2, 0.81, 0.15 do samples[#samples + 1] = P[math.max(1, math.min(#P, math.floor(#P * f)))] end
+    local reach = (self.ROADRUNS_TWIN_MAX + 1) ^ 2
+    local cand = {}
+    for _, w in pairs(ADGraphManager:getWayPoints() or {}) do
+        if type(w) == "table" and w.id ~= nil and not inRun[w.id] then
+            for _, q in ipairs(samples) do
+                if (w.x - q.x) ^ 2 + (w.z - q.z) ^ 2 <= reach then cand[#cand + 1] = w.id break end
+            end
+        end
+    end
+    table.sort(cand)
+    local tried, best, bestSpread = {}, nil, math.huge
+    for _, id in ipairs(cand) do
+        if not tried[id] then
+            local pts = self:orderedRunThrough(id)
+            if pts ~= nil and #pts >= 3 then
+                local bIds = {}
+                for i, q in ipairs(pts) do tried[q.id] = true bIds[i] = q.id end
+                local dual = self.spanStyle ~= nil and self:spanStyle(bIds) or false
+                if not dual then
+                    local gap, spread = twinFit(P, pts)
+                    if gap ~= nil and spread < bestSpread then best, bestSpread = { pts = pts, ids = bIds, gap = gap }, spread end
+                end
+            end
+        end
+    end
+    return best
+end
+
+--- The middle line between a lane and its twin (where both run side by side), and which side of it
+--- the lane is on (+1 / -1, RF.offsetLine's sign).
+local function twinMiddle(A, B)
+    local M = {}
+    for _, a in ipairs(A) do
+        local d, qx, qz, seg, t = nearestOnLine(B, a.x, a.z)
+        local atEnd = (seg == 1 and t <= 0) or (seg == #B - 1 and t >= 1)
+        if not atEnd and d <= E.ROADRUNS_TWIN_MAX then
+            local b0, b1 = B[seg], B[seg + 1]
+            local by = (b0.y and b1.y) and (b0.y + (b1.y - b0.y) * t) or nil
+            M[#M + 1] = { x = (a.x + qx) / 2, z = (a.z + qz) / 2, y = (a.y and by) and (a.y + by) / 2 or nil }
+        end
+    end
+    if #M < 4 then return nil end
+    local i = math.max(2, math.floor(#M / 2))
+    local hx, hz = M[i].x - M[i - 1].x, M[i].z - M[i - 1].z
+    local _, ax, az = nearestOnLine(A, M[i].x, M[i].z)
+    local side = ((ax - M[i].x) * -hz + (az - M[i].z) * hx) >= 0 and 1 or -1
+    return M, side
+end
+
+--- One lane laid again beside the shaped middle C, `off` to the side, between its own end waypoints
+--- (ids in the run's order). The points for replaceChainInterior, or nil.
+local function laneAlong(C, off, ids)
+    local E1, E2 = ADGraphManager:getWayPointById(ids[1]), ADGraphManager:getWayPointById(ids[#ids])
+    if E1 == nil or E2 == nil then return nil end
+    local O = RF.offsetLine(C, off)
+    local function nearestIdx(w)
+        local bi, bd = 1, math.huge
+        for i, q in ipairs(O) do
+            local d = (q.x - w.x) ^ 2 + (q.z - w.z) ^ 2
+            if d < bd then bi, bd = i, d end
+        end
+        return bi
+    end
+    local i1, i2 = nearestIdx(E1), nearestIdx(E2)
+    if i1 > i2 then
+        O = RF.reversed(O)
+        i1, i2 = nearestIdx(E1), nearestIdx(E2)
+    end
+    local pts = { { x = E1.x, y = E1.y, z = E1.z } }
+    for i = i1, i2 do
+        local q = O[i]
+        if (q.x - E1.x) ^ 2 + (q.z - E1.z) ^ 2 > 4 and (q.x - E2.x) ^ 2 + (q.z - E2.z) ^ 2 > 4 then
+            pts[#pts + 1] = { x = q.x, y = q.y, z = q.z }
+        end
+    end
+    pts[#pts + 1] = { x = E2.x, y = E2.y, z = E2.z }
+    local R = RF.resampleForDriving(pts)
+    if #R < 2 then return nil end
+    R[1], R[#R] = pts[1], pts[#pts]
+    return R
+end
+E.roadRunsLaneAlong = laneAlong
+
 --- PHASE 2 (2026-10-15): reshape a run that is already built - any AutoDrive run between junctions.
 --- A click on it (with no unbuilt road under the mouse) selects it with handles; its two end waypoints
 --- stay where they are (other roads meet there), so its end handles do not move. Apply (right-click or
@@ -1235,6 +1365,9 @@ function E:roadRunsSelectBuilt(seedId)
         for _, id in ipairs(cur.ids) do
             if id == seedId then return true end                -- already the one being shaped: keep its edits
         end
+        for _, id in ipairs(cur.twin and cur.twin.ids or {}) do
+            if id == seedId then return true end
+        end
     end
     local pts, _, _, why = self:orderedRunThrough(seedId)
     if pts == nil or #pts < 2 then
@@ -1245,14 +1378,32 @@ function E:roadRunsSelectBuilt(seedId)
     for i, q in ipairs(pts) do ids[i] = q.id; P[i] = { x = q.x, y = q.y, z = q.z } end
     local dual, flags = false, AutoDrive.FLAG_NONE
     if self.spanStyle ~= nil then dual, flags = self:spanStyle(ids) end
+    local twin, side = nil, nil
+    if not dual then
+        twin = self:roadRunsFindTwin(ids, P)
+        if twin ~= nil then
+            local M
+            M, side = twinMiddle(P, twin.pts)
+            if M == nil then twin = nil else P = M end
+        end
+    end
+    withHeights(P)
     local len = 0
     for i = 2, #P do len = len + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
     local st = { pts = P, len = len, class = "built", startTag = "end", endTag = "end", id = "built:" .. ids[1] .. ":" .. ids[#ids] }
     st.refinedTo = st
     local pk = { built = true, ids = ids, dual = dual, flags = flags, st = st, dir = 1 }
+    if twin ~= nil then
+        local tDual, tFlags = false, flags
+        if self.spanStyle ~= nil then tDual, tFlags = self:spanStyle(twin.ids) end
+        pk.twin = { ids = twin.ids, dual = tDual, flags = tFlags }
+        pk.gap, pk.side = twin.gap, side
+    end
     self:roadRunsSelect(pk)
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - selected a built run to shape: %d waypoints (%d..%d), %.0f m, %s; %d handles.",
-        #ids, ids[1], ids[#ids], len, dual and "two-way" or "one-way", #pk.handles)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - selected a built run to shape: %d waypoints (%d..%d), %.0f m, %s%s; %d handles.",
+        #ids, ids[1], ids[#ids], len, dual and "two-way" or "one-way",
+        twin and string.format(", with its twin lane (%d waypoints, %d..%d) %.1f m apart - shaped by the middle",
+            #twin.ids, twin.ids[1], twin.ids[#twin.ids], twin.gap) or "", #pk.handles)
     return true
 end
 
@@ -1265,6 +1416,7 @@ function E:roadRunsApplyBuilt()
         self:roadRunsSelect(nil)
         return true
     end
+    if pk.twin ~= nil then return self:roadRunsApplyPair(pk) end
     local newPoints = RF.resampleForDriving(pk.st.pts)
     -- the ends are the run's own end waypoints, exactly
     local a, b = ADGraphManager:getWayPointById(pk.ids[1]), ADGraphManager:getWayPointById(pk.ids[#pk.ids])
@@ -1281,6 +1433,38 @@ function E:roadRunsApplyBuilt()
     ADGraphManager:markChanges()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the built run %d..%d: %d waypoints now (was %d), %s.",
         pk.ids[1], pk.ids[#pk.ids], #newPoints, #pk.ids, ok and "done" or "FAILED")
+    self:roadRunsSelect(nil)
+    self:roadRunsRefreshStretches()
+    return true
+end
+
+--- Both lanes of a two-lane road laid again either side of the shaped middle, one undo step.
+function E:roadRunsApplyPair(pk)
+    local h = pk.gap / 2
+    local A = laneAlong(pk.st.pts, pk.side * h, pk.ids)
+    local B = laneAlong(pk.st.pts, -pk.side * h, pk.twin.ids)
+    if A == nil or B == nil then
+        self:warnPlayer("The road's lane ends are gone - shape it again.")
+        self:roadRunsSelect(nil)
+        return true
+    end
+    ADEditorHistory:snapshot("road runs: reshape two lanes")
+    local okA = self:replaceChainInterior(pk.ids, A, pk.dual, pk.flags)
+    -- the twin's ids moved down by the lane points removed below them
+    local doomed = {}
+    for i = 2, #pk.ids - 1 do doomed[#doomed + 1] = pk.ids[i] end
+    local tIds = {}
+    for i, id in ipairs(pk.twin.ids) do
+        local shift = 0
+        for _, d in ipairs(doomed) do if d < id then shift = shift + 1 end end
+        tIds[i] = id - shift
+    end
+    local okB = self:replaceChainInterior(tIds, B, pk.twin.dual, pk.twin.flags)
+    if self.invalidateIdReferences ~= nil then self:invalidateIdReferences() end
+    ADGraphManager:markChanges()
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the two-lane road %d..%d + %d..%d: %d + %d waypoints now (was %d + %d), %.1f m apart, %s.",
+        pk.ids[1], pk.ids[#pk.ids], pk.twin.ids[1], pk.twin.ids[#pk.twin.ids], #A, #B, #pk.ids, #pk.twin.ids, pk.gap,
+        (okA and okB) and "done" or "FAILED")
     self:roadRunsSelect(nil)
     self:roadRunsRefreshStretches()
     return true
@@ -2271,7 +2455,14 @@ function E:drawRoadRunsInner(lw)
     -- the selected pick's handles: ends larger, the one under the mouse (or dragged) bright
     local sel = s.sel
     if sel ~= nil and sel.handles ~= nil then
-        drawLine(sel.st.pts, 1, lw * 2.6, 0.34, 0.71, 0.91, 0.5)   -- the selected run: thickest, sky blue
+        if sel.twin ~= nil then
+            -- a two-lane road: its middle thin, both lanes as they will be laid thick
+            drawLine(sel.st.pts, 1, lw, 0.34, 0.71, 0.91, 0.5)
+            drawLine(RF.offsetLine(sel.st.pts, sel.gap / 2), 1, lw * 2.6, 0.34, 0.71, 0.91, 0.5)
+            drawLine(RF.offsetLine(sel.st.pts, -sel.gap / 2), 1, lw * 2.6, 0.34, 0.71, 0.91, 0.5)
+        else
+            drawLine(sel.st.pts, 1, lw * 2.6, 0.34, 0.71, 0.91, 0.5)   -- the selected run: thickest, sky blue
+        end
         for i, h in ipairs(sel.handles) do
             if finite(h.x) and finite(h.z) then
                 local y = (h.y or terrainY(h.x, h.z)) + 0.8
@@ -2431,8 +2622,9 @@ function E:roadRunsCard(kit)
         end
     end
     if s.sel ~= nil and s.sel.built then
-        kit.add("cursor", "built run", string.format("%d waypoints, %d handles, %.0f m%s", #s.sel.ids, #(s.sel.handles or {}),
-            s.sel.st.len or 0, s.sel.st.edited and ", shaped" or ""))
+        kit.add("cursor", "built run", string.format("%s%d handles, %.0f m%s",
+            s.sel.twin and string.format("two lanes %.1f m apart, ", s.sel.gap) or string.format("%d waypoints, ", #s.sel.ids),
+            #(s.sel.handles or {}), s.sel.st.len or 0, s.sel.st.edited and ", shaped" or ""))
         kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; its ends stay put")
         kit.btn("apply shape (right-click)", function() editor:roadRunsApplyBuilt() end)
         kit.btn("cancel shaping", function() editor:roadRunsSelect(nil) end)

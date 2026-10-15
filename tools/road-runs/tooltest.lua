@@ -384,14 +384,39 @@ do
         for _, o in ipairs(a.incoming) do if o == ids[2] then dual = true end end
         return dual, 0
     end
-    function ADFlyoverEditor:replaceChainInterior(ids, newPoints, dual, flags)
-        for i = 2, #ids - 1 do byId[ids[i]].gone = true end
-        local a, b = byId[ids[1]], byId[ids[#ids]]
-        for _, w in ipairs({ a, b }) do
-            for _, list in ipairs({ w.out, w.incoming }) do
-                for i = #list, 1, -1 do if byId[list[i]].gone then table.remove(list, i) end end
+    -- as AutoDrive: removing a waypoint renumbers every id above it
+    local function removeIds(doomed)
+        local gone = {}
+        for _, id in ipairs(doomed) do gone[id] = true end
+        local sorted = {}
+        for _, id in ipairs(doomed) do sorted[#sorted + 1] = id end
+        table.sort(sorted)
+        local function newId(id)
+            local n = 0
+            for _, d in ipairs(sorted) do if d < id then n = n + 1 else break end end
+            return id - n
+        end
+        local fresh = {}
+        for id = 1, count do
+            local w = byId[id]
+            if w ~= nil and not gone[id] then
+                local o, inc = {}, {}
+                for _, x in ipairs(w.out or {}) do if not gone[x] then o[#o + 1] = newId(x) end end
+                for _, x in ipairs(w.incoming or {}) do if not gone[x] then inc[#inc + 1] = newId(x) end end
+                w.out, w.incoming = o, inc
+                w.id = newId(id)
+                fresh[w.id] = w
             end
         end
+        for id = 1, count do byId[id] = nil end
+        for id, w in pairs(fresh) do byId[id] = w end
+        count = count - #sorted
+    end
+    function ADFlyoverEditor:replaceChainInterior(ids, newPoints, dual, flags)
+        local a, b = byId[ids[1]], byId[ids[#ids]]
+        local doomed = {}
+        for i = 2, #ids - 1 do doomed[#doomed + 1] = ids[i] end
+        removeIds(doomed)
         local prev = a.id
         for i = 2, #newPoints - 1 do prev = ADGraphManager:recordWayPoint(newPoints[i].x, 0, newPoints[i].z, true, dual, false, prev, flags).id end
         link(byId[prev], b)
@@ -474,6 +499,86 @@ do
             and "BUILT SHAPE PASS" or "BUILT SHAPE FAIL")
     else
         print("built shape: no built run to try (" .. #pts .. " points)")
+    end
+    E.hoverId = nil
+end
+-- TWO-LANE ROAD: two one-way lanes 4.5 m apart, the other way round; a click on one takes both,
+-- the middle handle dragged 3 m, both lanes laid again either side of it, still 4.5 m apart
+do
+    local ox, oz = cx + 400, cz + 400
+    local mid = {}
+    for i = 0, 30 do mid[#mid + 1] = { x = ox + i * 4, z = oz + 10 * math.sin(i / 30 * math.pi) } end
+    local function side(P, d)
+        local out = {}
+        for i = 1, #P do
+            local a, b = P[math.max(1, i - 1)], P[math.min(#P, i + 1)]
+            local hx, hz = b.x - a.x, b.z - a.z
+            local l = math.sqrt(hx * hx + hz * hz)
+            out[i] = { x = P[i].x - hz / l * d, z = P[i].z + hx / l * d }
+        end
+        return out
+    end
+    local Ap = side(mid, 2.25)
+    local Bp = side(mid, -2.25)
+    local Brev = {}
+    for i = #Bp, 1, -1 do Brev[#Brev + 1] = Bp[i] end
+    local a1, aN = E:createRunFrom(Ap, false, 0)
+    local b1, bN = E:createRunFrom(Brev, false, 0)
+    frames(1)
+    E:roadRunsSelect(nil)
+    s.hover, s.hoverPick = nil, nil
+    E.hoverId = a1 + 15
+    E:roadRunsClick()
+    local sel = s.sel
+    local paired = sel ~= nil and sel.twin ~= nil
+    print(string.format("two lanes: selected %s, twin %s, %.2f m apart, %d handles",
+        tostring(sel ~= nil), tostring(paired), sel and sel.gap or -1, sel and #sel.handles or 0))
+    if paired then
+        local H = sel.handles
+        local k = math.floor((#H + 1) / 2)
+        local h = H[k]
+        local a, b = H[k - 1], H[k + 1]
+        local nx, nz = -(b.z - a.z), b.x - a.x
+        local nl = math.sqrt(nx * nx + nz * nz)
+        E.cursorX, E.cursorZ, E.mouseX, E.mouseY = h.x, h.z, 0, 0
+        E.leftDown = true
+        E:roadRunsPress()
+        E.mouseX = 0.1
+        local tx, tz = h.x + 3 * nx / nl, h.z + 3 * nz / nl
+        E.cursorX, E.cursorZ = tx, tz
+        frames(1)
+        E.leftDown = false
+        E:roadRunsClick()
+        local snaps0 = snapshots
+        E:roadRunsStop()
+        frames(1)
+        local A2 = E:orderedRunThrough(a1)
+        local B2 = E:orderedRunThrough(b1 - (aN - a1 - 1))
+        local function dist(P, x, z)
+            local best = math.huge
+            for j = 1, #P - 1 do
+                local p, q = P[j], P[j + 1]
+                local dx, dz = q.x - p.x, q.z - p.z
+                local l2 = dx * dx + dz * dz
+                local t = l2 > 0 and math.max(0, math.min(1, ((x - p.x) * dx + (z - p.z) * dz) / l2)) or 0
+                best = math.min(best, math.sqrt((x - p.x - dx * t) ^ 2 + (z - p.z - dz * t) ^ 2))
+            end
+            return best
+        end
+        local dA, dB = dist(A2, tx, tz), dist(B2, tx, tz)
+        -- the lanes stay 4.5 m apart along the middle half
+        local lo, hi = math.huge, 0
+        for j = math.floor(#A2 * 0.25), math.floor(#A2 * 0.75) do
+            local d = dist(B2, A2[j].x, A2[j].z)
+            lo, hi = math.min(lo, d), math.max(hi, d)
+        end
+        local endsKept = A2[1].id == a1 and math.abs(A2[#A2].x - Ap[#Ap].x) < 0.01 and math.abs(B2[#B2].x - Brev[#Brev].x) < 0.01
+        print(string.format("two lanes: rebuilt %d + %d waypoints; from the drop: lane %.2f m, twin %.2f m; apart %.2f-%.2f m; ends kept %s; %d undo snapshot(s)",
+            #A2, #B2, dA, dB, lo, hi, tostring(endsKept), snapshots - snaps0))
+        print((math.abs(dA - 2.25) < 0.5 and math.abs(dB - 2.25) < 0.5 and lo > 4.0 and hi < 5.0 and endsKept and snapshots - snaps0 == 1)
+            and "TWO LANE PASS" or "TWO LANE FAIL")
+    else
+        print("TWO LANE FAIL")
     end
     E.hoverId = nil
 end
