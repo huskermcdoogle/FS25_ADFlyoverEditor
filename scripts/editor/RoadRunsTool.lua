@@ -1649,7 +1649,9 @@ function E:roadRunsLayLanes(lanes)
         -- anchors: the two ends and every kept junction, placed at the same share along the new path
         local anchors = {}
         for k, w in ipairs(W) do
-            if k == 1 or k == #W or ln.keep[ln.ids[k]] then
+            -- (any waypoint with a link off the lane is a junction, whatever the walk said: the twin's
+            -- junctions were missed and deleted, cutting its connectors - 2026-10-15 in game)
+            if k == 1 or k == #W or ln.keep[ln.ids[k]] or #neighbourIds(w) > 2 then
                 local at = (fOld > 0) and oldC[k] / fOld * fNew or 0
                 if k == 1 then at = 0 elseif k == #W then at = fNew end
                 local x, z = pointAt(N, newC, at)

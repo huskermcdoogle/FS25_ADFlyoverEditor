@@ -413,6 +413,7 @@ do
                 fresh[w.id] = w
             end
         end
+        for id in pairs(gone) do if byId[id] ~= nil then byId[id].id = -1 end end      -- as AutoDrive
         for id = 1, count do byId[id] = nil end
         for id, w in pairs(fresh) do byId[id] = w end
         count = count - #sorted
@@ -730,6 +731,73 @@ do
     end
     print(ok and "THROUGH PASS" or "THROUGH FAIL")
     E.hoverId = nil
+end
+-- REPRO=<id>: on a real network (GRAPH=...), select the road through waypoint <id>, drag its middle
+-- handle 2 m, apply, and list every link outside the rebuilt pieces that changed
+if os.getenv("REPRO") then
+    local seed = tonumber(os.getenv("REPRO"))
+    local all = {}
+    for id = 1, count do if byId[id] ~= nil then all[#all + 1] = byId[id] end end
+    local function nbSet(w)
+        local t = {}
+        for _, l in ipairs({ w.out or {}, w.incoming or {} }) do for _, id in ipairs(l) do if byId[id] then t[byId[id]] = (t[byId[id]] or "") .. "." end end end
+        return t
+    end
+    local before = {}
+    for _, w in ipairs(all) do before[w] = { out = {}, inc = {} } for _, id in ipairs(w.out or {}) do before[w].out[byId[id]] = true end for _, id in ipairs(w.incoming or {}) do before[w].inc[byId[id]] = true end end
+    E:roadRunsSelect(nil)
+    s.hover, s.hoverPick = nil, nil
+    E.hoverId = seed
+    E:roadRunsClick()
+    local sel = s.sel
+    print(string.format("repro: selected %s, twin %s, %d handles", tostring(sel ~= nil), tostring(sel and sel.twin ~= nil), sel and #sel.handles or 0))
+    if sel ~= nil then
+        local inSel = {}
+        for _, id in ipairs(sel.ids) do inSel[byId[id]] = true end
+        for _, id in ipairs(sel.twin and sel.twin.ids or {}) do inSel[byId[id]] = true end
+        local H = sel.handles
+        local k = math.floor((#H + 1) / 2)
+        local h = H[k]
+        local a, b = H[k - 1], H[k + 1]
+        local nx, nz = -(b.z - a.z), b.x - a.x
+        local nl = math.sqrt(nx * nx + nz * nz)
+        E.cursorX, E.cursorZ, E.mouseX, E.mouseY = h.x, h.z, 0, 0
+        E.leftDown = true
+        E:roadRunsPress()
+        E.mouseX = 0.1
+        E.cursorX, E.cursorZ = h.x + 2 * nx / nl, h.z + 2 * nz / nl
+        frames(1)
+        E.leftDown = false
+        E:roadRunsClick()
+        E:roadRunsStop()
+        local bad = 0
+        for _, w in ipairs(all) do
+            if w.id > 0 then
+                local function check(listName, was)
+                    local now = {}
+                    for _, id in ipairs(w[listName] or {}) do if byId[id] then now[byId[id]] = true end end
+                    for o in pairs(was) do
+                        -- a link to a waypoint now deleted counts too, unless both were in the rebuilt pieces
+                        if not now[o] and not (inSel[w] and inSel[o] and (o.id < 0 or w.id < 0 or true) and not (o.id < 0 and not inSel[w])) and not (inSel[w] and inSel[o] and o.id > 0) then
+                            bad = bad + 1
+                            print(string.format("repro: LOST %s link %d (%.1f,%.1f) %s %d (%.1f,%.1f)%s%s", listName, w.id, w.x, w.z,
+                                listName == "out" and "->" or "<-", o.id, o.x, o.z, inSel[w] and " [w in selection]" or "", inSel[o] and " [o in selection]" or ""))
+                        end
+                    end
+                end
+                check("out", before[w].out)
+                check("incoming", before[w].inc)
+            end
+        end
+        for _, w in ipairs(all) do
+            if w.id < 0 then
+                for o in pairs(before[w].out) do if not inSel[o] then bad = bad + 1 print(string.format("repro: DELETED (%.1f,%.1f) had a link to %d outside", w.x, w.z, o.id)) end end
+                for o in pairs(before[w].inc) do if not inSel[o] then bad = bad + 1 print(string.format("repro: DELETED (%.1f,%.1f) had a link from %d outside", w.x, w.z, o.id)) end end
+            end
+        end
+        print("repro: links lost outside the rebuilt pieces: " .. bad)
+    end
+    os.exit(0)
 end
 -- a second window: move away and back
 local t1 = os.clock()

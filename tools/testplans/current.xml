@@ -3,15 +3,11 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="road runs: through junctions, lane ends, probe" build="@BUILD@">
+<testPlan title="road runs: junction connections kept" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="through" title="A click takes the road on through its junctions" passLog="through [1-9]%d* junction"
-          hint="Click a built road that crosses a junction: the outline and handles carry on past it, up to a T (ticks itself)."/>
-    <test id="throughMove" title="Moving a junction: its connectors follow" passLog="junction point%(s%) moved, connectors"
-          hint="Add a handle at a junction, drag it, right-click: side roads fade back to place within about 20 m, short turns bend and stay joined (ticks itself - check by eye)."/>
-    <test id="twoLaneShort" title="A lane with a shorter twin pairs" passLog="with its twin lane"
-          hint="Click a two-lane road where one lane runs on past a junction the other does not, on the stretch where both run side by side: both lanes get handles (ticks itself)."/>
-    <test id="probe" title="Probe at the U bend of track_1" passLog="probe %- %d+ decal%(s%) within"
-          hint="Detection view, mouse on the ragged asphalt at the U bend, then the card's 'probe here' button: rings show decals near it (ticks itself; the paint read goes to the log)."/>
+    <test id="keptLinks" title="Two-lane reshape through junctions keeps every connection"
+          hint="Shape a two-lane road through its junctions and right-click: every side road and turn on BOTH lanes is still joined."/>
+    <test id="throughMove" title="Connectors follow the moved junctions" passLog="junction point%(s%) moved, connectors"
+          hint="Side roads fade back to place within about 20 m, short turns bend and stay joined (ticks itself - check by eye)."/>
 </testPlan>
