@@ -1197,6 +1197,64 @@ local function joinTarget(j, owner, pickIndex, R)
     return best
 end
 
+--- T-join: the lane crossed first straight on from a run's end (within ROADRUNS_TEE_REACH, crossing
+--- at more than ROADRUNS_TEE_ANGLE), with a waypoint put into it where they cross. Returns that
+--- waypoint (an existing end point when the crossing is within 1 m of it), or nil.
+E.ROADRUNS_TEE_REACH = 15
+E.ROADRUNS_TEE_ANGLE = 30
+function E:roadRunsTeeTarget(j, owner)
+    local hx, hz = j.h[1], j.h[2]
+    if j.atStart then hx, hz = -hx, -hz end
+    local hl = math.sqrt(hx * hx + hz * hz)
+    if hl < 1e-6 then return nil end
+    hx, hz = hx / hl, hz / hl
+    local ox, oz = j.p.x, j.p.z
+    local sinMin = math.sin(math.rad(self.ROADRUNS_TEE_ANGLE))
+    local best, bestT = nil, math.huge
+    for _, a in pairs(ADGraphManager:getWayPoints()) do
+        if type(a) == "table" and a.x ~= nil and owner[a.id] == nil and math.abs(a.x - ox) < 60 and math.abs(a.z - oz) < 60 then
+            for _, bid in ipairs(a.out or {}) do
+                local b = ADGraphManager:getWayPointById(bid)
+                if b ~= nil and owner[b.id] == nil then
+                    -- ray o + t*h against segment a + u*(b - a)
+                    local ex, ez = b.x - a.x, b.z - a.z
+                    local den = hx * ez - hz * ex
+                    local el = math.sqrt(ex * ex + ez * ez)
+                    if el > 1e-6 and math.abs(den) / el >= sinMin then
+                        local wx, wz = a.x - ox, a.z - oz
+                        local t = (wx * ez - wz * ex) / den
+                        local u = (wx * hz - wz * hx) / den
+                        if t >= -1 and t <= self.ROADRUNS_TEE_REACH and u >= 0 and u <= 1 and t < bestT then
+                            best, bestT = { a = a, b = b, u = u, el = el }, t
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if best == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - no lane crossed within %d m straight on from the run's %s at (%.1f, %.1f).",
+            self.ROADRUNS_TEE_REACH, j.atStart and "start" or "end", ox, oz)
+        return nil
+    end
+    local a, b = best.a, best.b
+    local near = (best.u * best.el <= 1 and a) or (((1 - best.u) * best.el <= 1) and b) or nil
+    if near ~= nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - T-joined the lane at its point %d, %.1f m on from the run's end.", near.id, bestT)
+        return near
+    end
+    if self.insertOnSegment == nil then return nil end
+    local dual = false
+    for _, id in ipairs(b.out or {}) do if id == a.id then dual = true end end
+    local pos = { x = a.x + (b.x - a.x) * best.u, z = a.z + (b.z - a.z) * best.u }
+    local flags = (a.flags ~= nil) and a.flags or AutoDrive.FLAG_NONE
+    local newId = self:insertOnSegment(a.id, b.id, pos, dual, flags)
+    if newId == nil then return nil end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - T-joined the lane %d->%d at (%.1f, %.1f), %.1f m on from the run's end.",
+        a.id, b.id, pos.x, pos.z, bestT)
+    return ADGraphManager:getWayPointById(newId)
+end
+
 --- Build every picked stretch. One undo step for all of it.
 function E:commitRoadRuns()
     local s = roadState(self)
@@ -1222,10 +1280,11 @@ function E:commitRoadRuns()
                     -- a lane end at a stretch end that an existing path takes over from: join it there
                     local P, n = ln.pts, #ln.pts
                     local function tagAt(at) return (at == "start") and st.startTag or st.endTag end
-                    if ln.startAt ~= nil and tagAt(ln.startAt) == "path" then
+                    local function joins(tag) return tag == "path" or tag == "road" end
+                    if ln.startAt ~= nil and joins(tagAt(ln.startAt)) then
                         pending[#pending + 1] = { pick = pickIndex, id = firstId, p = P[1], h = { P[2].x - P[1].x, P[2].z - P[1].z }, atStart = true, dual = ln.dual }
                     end
-                    if ln.endAt ~= nil and tagAt(ln.endAt) == "path" then
+                    if ln.endAt ~= nil and joins(tagAt(ln.endAt)) then
                         pending[#pending + 1] = { pick = pickIndex, id = lastId, p = P[n], h = { P[n].x - P[n - 1].x, P[n].z - P[n - 1].z }, atStart = false, dual = ln.dual }
                     end
                 end
@@ -1246,7 +1305,11 @@ function E:commitRoadRuns()
     end
     for _, j in ipairs(pending) do
         local own = ADGraphManager:getWayPointById(j.id)
-        local target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS)
+        -- a run that meets a road's lane head-on joins it in a T: straight on from its end to the
+        -- first lane it crosses, a waypoint put into that lane there (2026-10-14 user: a diagonal
+        -- link to a waypoint 8 m along the road "I don't much like the way it is connecting")
+        local target = self:roadRunsTeeTarget(j, owner)
+        if target == nil then target = joinTarget(j, owner, j.pick, self.ROADRUNS_JOIN_RADIUS) end
         if target ~= nil and own ~= nil and target ~= own and finite(target.x) and finite(target.z) then
             if j.atStart then
                 ADGraphManager:toggleConnectionBetween(target, own, false, j.dual, false)

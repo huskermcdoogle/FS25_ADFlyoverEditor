@@ -87,6 +87,23 @@ ADFlyoverEditor = {
     invalidateIdReferences = function() end,
     warnPlayer = function(_, m) print("[warning box] " .. m) end,
 }
+-- the editor's insertOnSegment (FlyoverEditor.lua), for the road runs T-join
+function ADFlyoverEditor:insertOnSegment(aId, bId, pos, dual, flags)
+    local a, b = ADGraphManager:getWayPointById(aId), ADGraphManager:getWayPointById(bId)
+    if a == nil or b == nil then return nil end
+    local function unlink(p, q)
+        for i = #(p.out or {}), 1, -1 do if p.out[i] == q.id then table.remove(p.out, i) end end
+        for i = #(q.incoming or {}), 1, -1 do if q.incoming[i] == p.id then table.remove(q.incoming, i) end end
+    end
+    unlink(a, b)
+    if dual then unlink(b, a) end
+    local w = ADGraphManager:recordWayPoint(pos.x, 0, pos.z, false, false, false, 0, flags)
+    ADGraphManager:toggleConnectionBetween(a, w, false, dual)
+    ADGraphManager:toggleConnectionBetween(w, b, false, dual)
+    teeJoins = (teeJoins or 0) + 1
+    return w.id
+end
+
 function ADFlyoverEditor:createRunFrom(points, dual, flags)
     local first, prev = nil, nil
     for _, p in ipairs(points) do
