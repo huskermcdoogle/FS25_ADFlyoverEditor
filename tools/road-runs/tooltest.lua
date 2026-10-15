@@ -67,6 +67,10 @@ ADGraphManager = {
         end
         return w
     end,
+    moveWayPoint = function(_, id, x, y, z)
+        local w = byId[id]
+        if w ~= nil then chk(x, y, z) w.x, w.y, w.z = x, y, z end
+    end,
     toggleConnectionBetween = function(_, a, b, reverse, dual)
         link(a, b)
         if dual then link(b, a) end
@@ -367,6 +371,7 @@ do
             for _ = 1, 2000 do
                 if nxt == nil or seen[nxt] then break end
                 cur = byId[nxt]
+                if #nb(cur) > 2 then break end          -- as the editor: a junction is not part of a run
                 seen[cur.id] = true
                 if side == 2 then table.insert(ids, 1, cur.id) else ids[#ids + 1] = cur.id end
                 local n = nb(cur)
@@ -656,6 +661,74 @@ do
         ok = kept == 12
     end
     print((alone and paired and ok) and "SHORT TWIN PASS" or "SHORT TWIN FAIL")
+    E.hoverId = nil
+end
+-- THROUGH A JUNCTION: a two-way road west-J-east with a side road north from J (80 m: a road of its
+-- own, faded) and a 20 m turn from J to a dead end (bent to stay joined). Clicked west of J, the
+-- selection carries on through J; a handle at J dragged 3 m south moves J, the side road fades
+do
+    local ox, oz = cx + 400, cz + 650
+    local W, Ep, Np, Tp = {}, {}, {}, {}
+    for i = 0, 15 do W[#W + 1] = { x = ox + i * 4, z = oz } end
+    for i = 17, 32 do Ep[#Ep + 1] = { x = ox + i * 4, z = oz } end
+    for i = 1, 20 do Np[#Np + 1] = { x = ox + 64, z = oz - i * 4 } end
+    for i = 1, 5 do Tp[#Tp + 1] = { x = ox + 64 + i * 3, z = oz - i * 2.5 } end
+    local w1, wN = E:createRunFrom(W, true, 0)
+    local J = ADGraphManager:recordWayPoint(ox + 64, 0, oz, false, false, false, 0, 0)
+    local e1, eN = E:createRunFrom(Ep, true, 0)
+    local n1, nN = E:createRunFrom(Np, true, 0)
+    local t1, tN = E:createRunFrom(Tp, true, 0)
+    for _, pair in ipairs({ { wN, J.id }, { J.id, e1 }, { J.id, n1 }, { J.id, t1 } }) do
+        ADGraphManager:toggleConnectionBetween(byId[pair[1]], byId[pair[2]], false, true)
+    end
+    local Jt, N5, N3, T3 = J, byId[n1 + 4], byId[n1 + 2], byId[t1 + 2]       -- held as tables (ids renumber)
+    local n5x, n5z, n3z, t3z = N5.x, N5.z, N3.z, T3.z
+    frames(1)
+    E:roadRunsSelect(nil)
+    s.hover, s.hoverPick = nil, nil
+    E.hoverId = w1 + 5
+    E:roadRunsClick()
+    local sel = s.sel
+    local through = sel ~= nil and sel.keep ~= nil and sel.keep[J.id] == true
+    print(string.format("through: selected %s, %d waypoints, through J %s", tostring(sel ~= nil), sel and #sel.ids or 0, tostring(through)))
+    local ok = false
+    if through then
+        -- a handle on the line at J, dragged 3 m south (larger z)
+        E.cursorX, E.cursorZ = ox + 64, oz
+        frames(1)
+        E:roadRunsClick()
+        local H = sel.handles
+        local k = nil
+        for i, h in ipairs(H) do if math.abs(h.x - (ox + 64)) < 0.5 and math.abs(h.z - oz) < 0.5 then k = i end end
+        if k ~= nil then
+            E.cursorX, E.cursorZ, E.mouseX, E.mouseY = H[k].x, H[k].z, 0, 0
+            E.leftDown = true
+            E:roadRunsPress()
+            E.mouseX = 0.1
+            E.cursorX, E.cursorZ = ox + 64, oz + 3
+            frames(1)
+            E.leftDown = false
+            E:roadRunsClick()
+            local snaps0 = snapshots
+            E:roadRunsStop()
+            frames(1)
+            local jMoved = Jt.z - oz
+            local n3 = N3.z - n3z
+            local n5 = N5.z - n5z
+            local t3 = T3.z - t3z
+            -- still one road from west to east through J
+            local run = E:orderedRunThrough(Jt.id - 1)
+            local joined = false
+            for _, id in ipairs(Jt.out) do if byId[id] ~= nil and byId[id].x > Jt.x then joined = true end end
+            print(string.format("through: J moved %.2f m south; side road at 12 m moved %.2f m, at 20 m %.2f m (x %.2f); turn's middle %.2f m; J joined on east %s; %d undo snapshot(s)",
+                jMoved, n3, n5, N5.x - n5x, t3, tostring(joined), snapshots - snaps0))
+            ok = jMoved > 2.5 and jMoved < 3.5 and n3 > 0.1 and n3 < jMoved and math.abs(n5) < 0.05 and t3 > 0.5 and t3 < jMoved
+                and joined and snapshots - snaps0 == 1 and Jt.id > 0
+        else
+            print("through: no handle at J")
+        end
+    end
+    print(ok and "THROUGH PASS" or "THROUGH FAIL")
     E.hoverId = nil
 end
 -- a second window: move away and back

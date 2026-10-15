@@ -1223,6 +1223,100 @@ function E:roadRunsForget(why)
     end
 end
 
+--- THROUGH JUNCTIONS (2026-10-15 user: select the through road at a junction, and when it moves the
+--- connectors move too, with falloff; "the tool should walk the connector and make a decision").
+--- A built run is taken on through each junction onto the path that carries on straightest (within
+--- ROADRUNS_THROUGH_ANGLE, the same way for a one-way road), until a T or a dead end. The junction
+--- waypoints are kept and moved with the new shape; only the pieces between them are laid again.
+E.ROADRUNS_THROUGH_ANGLE = 35
+E.ROADRUNS_THROUGH_MAX = 2000          -- metres, at most
+E.ROADRUNS_THROUGH_JUNCTIONS = 12
+
+local function neighbourIds(wp)
+    local list, seen = {}, {}
+    for _, l in ipairs({ wp.out or {}, wp.incoming or {} }) do
+        for _, id in pairs(l) do
+            if id ~= wp.id and not seen[id] then seen[id] = true list[#list + 1] = id end
+        end
+    end
+    return list
+end
+local function hasLink(a, bId)
+    for _, id in pairs(a.out or {}) do if id == bId then return true end end
+    return false
+end
+
+--- The built road through seedId: points {x,y,z,id} in order, and the set of junction ids in it (kept
+--- and moved, not laid again). With E.roadThrough off, only the run between its junctions.
+function E:roadRunsChainAt(seedId)
+    local base, _, _, why = self:orderedRunThrough(seedId)
+    if base == nil or #base < 2 then return nil, nil, why end
+    local chain, keep, inChain = {}, {}, {}
+    for i, q in ipairs(base) do chain[i] = q inChain[q.id] = true end
+    if self.roadThrough == false then return chain, keep end
+    local function lenOf(P)
+        local l = 0
+        for i = 2, #P do l = l + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+        return l
+    end
+    local function extend()
+        for _ = 1, self.ROADRUNS_THROUGH_JUNCTIONS do
+            if lenOf(chain) > self.ROADRUNS_THROUGH_MAX then return end
+            local e = chain[#chain]
+            local ew = ADGraphManager:getWayPointById(e.id)
+            if ew == nil then return end
+            local J = nil
+            for _, id in ipairs(neighbourIds(ew)) do
+                local w = ADGraphManager:getWayPointById(id)
+                if w ~= nil and not inChain[id] and #neighbourIds(w) > 2 then J = w break end
+            end
+            if J == nil then return end
+            -- the road's heading in: from ~10 m back to the junction
+            local back = chain[math.max(1, #chain - 4)]
+            local hx, hz = J.x - back.x, J.z - back.z
+            local hl = math.sqrt(hx * hx + hz * hz)
+            if hl < 1e-6 then return end
+            hx, hz = hx / hl, hz / hl
+            local toward, from = hasLink(ew, J.id), hasLink(J, ew.id)
+            local best, bestA = nil, math.cos(math.rad(self.ROADRUNS_THROUGH_ANGLE))
+            for _, id in ipairs(neighbourIds(J)) do
+                local n = ADGraphManager:getWayPointById(id)
+                if n ~= nil and id ~= ew.id and not inChain[id] then
+                    -- the same way round: a one-way road carries on one-way the same way
+                    local sameWay = (toward and hasLink(J, id)) or (from and hasLink(n, J.id))
+                    local dx, dz = n.x - J.x, n.z - J.z
+                    local dl = math.sqrt(dx * dx + dz * dz)
+                    if sameWay and dl > 1e-6 and #neighbourIds(n) <= 2 then
+                        local c = (dx * hx + dz * hz) / dl
+                        if c >= bestA then best, bestA = n, c end
+                    end
+                end
+            end
+            if best == nil then return end
+            local run = self:orderedRunThrough(best.id)
+            if run == nil or #run < 2 then return end
+            if run[1].id ~= best.id then
+                local r = {}
+                for i = #run, 1, -1 do r[#r + 1] = run[i] end
+                run = r
+            end
+            if run[1].id ~= best.id then return end
+            for _, q in ipairs(run) do if inChain[q.id] or q.id == J.id then return end end
+            chain[#chain + 1] = { x = J.x, y = J.y, z = J.z, id = J.id }
+            inChain[J.id], keep[J.id] = true, true
+            for _, q in ipairs(run) do chain[#chain + 1] = q inChain[q.id] = true end
+        end
+    end
+    extend()
+    local r = {}
+    for i = #chain, 1, -1 do r[#r + 1] = chain[i] end
+    chain = r
+    extend()
+    r = {}
+    for i = #chain, 1, -1 do r[#r + 1] = chain[i] end
+    return r, keep
+end
+
 --- TWO-LANE ROADS (2026-10-15 user: "two lane roads, that is where the real value is"). A one-way
 --- run with a twin - a one-way run beside it, the other way, a steady 1.5-9 m off - is shaped as
 --- one road: the handles sit on the middle line between the two, and apply lays both lanes again
@@ -1293,7 +1387,7 @@ function E:roadRunsFindTwin(ids, P)
     local tried, best, bestBeside = {}, nil, 0
     for _, id in ipairs(cand) do
         if not tried[id] then
-            local pts = self:orderedRunThrough(id)
+            local pts = self:roadRunsChainAt(id)
             if pts ~= nil and #pts >= 3 then
                 local bIds = {}
                 for i, q in ipairs(pts) do tried[q.id] = true bIds[i] = q.id end
@@ -1350,7 +1444,7 @@ end
 
 --- One lane laid again beside the shaped middle C, `off` to the side, between its own end waypoints
 --- (ids in the run's order). The points for replaceChainInterior, or nil.
-local function laneAlong(C, off, ids)
+local function laneAlong(C, off, ids, dense)
     local E1, E2 = ADGraphManager:getWayPointById(ids[1]), ADGraphManager:getWayPointById(ids[#ids])
     if E1 == nil or E2 == nil then return nil end
     local O = RF.offsetLine(C, off)
@@ -1375,6 +1469,7 @@ local function laneAlong(C, off, ids)
         end
     end
     pts[#pts + 1] = { x = E2.x, y = E2.y, z = E2.z }
+    if dense then return pts end
     local R = RF.resampleForDriving(pts)
     if #R < 2 then return nil end
     R[1], R[#R] = pts[1], pts[#pts]
@@ -1398,11 +1493,13 @@ function E:roadRunsSelectBuilt(seedId)
             if id == seedId then return true end
         end
     end
-    local pts, _, _, why = self:orderedRunThrough(seedId)
+    local pts, keep, why = self:roadRunsChainAt(seedId)
     if pts == nil or #pts < 2 then
         if why ~= nil then self:warnPlayer("Cannot shape that run: " .. tostring(why)) end
         return false
     end
+    local nKeep = 0
+    for _ in pairs(keep) do nKeep = nKeep + 1 end
     local ids, P = {}, {}
     for i, q in ipairs(pts) do ids[i] = q.id; P[i] = { x = q.x, y = q.y, z = q.z } end
     local dual, flags = false, AutoDrive.FLAG_NONE
@@ -1440,16 +1537,18 @@ function E:roadRunsSelectBuilt(seedId)
     for i = 2, #P do len = len + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
     local st = { pts = P, len = len, class = "built", startTag = "end", endTag = "end", id = "built:" .. ids[1] .. ":" .. ids[#ids] }
     st.refinedTo = st
-    local pk = { built = true, ids = ids, dual = dual, flags = flags, st = st, dir = 1 }
+    local pk = { built = true, ids = ids, dual = dual, flags = flags, st = st, dir = 1, keep = keep,
+        oldPts = (twin == nil) and pts or nil }
     if twin ~= nil then
         local tDual, tFlags = false, flags
         if self.spanStyle ~= nil then tDual, tFlags = self:spanStyle(twin.ids) end
-        pk.twin = { ids = twin.ids, dual = tDual, flags = tFlags }
+        local _, tKeep = self:roadRunsChainAt(twin.ids[math.floor((#twin.ids + 1) / 2)])
+        pk.twin = { ids = twin.ids, dual = tDual, flags = tFlags, keep = tKeep or {} }
         pk.gap, pk.side = twin.gap, side
     end
     self:roadRunsSelect(pk)
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - selected a built run to shape: %d waypoints (%d..%d), %.0f m, %s%s; %d handles.",
-        #ids, ids[1], ids[#ids], len, dual and "two-way" or "one-way",
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - selected a built run to shape: %d waypoints (%d..%d), %.0f m, %s, through %d junction(s)%s; %d handles.",
+        #ids, ids[1], ids[#ids], len, dual and "two-way" or "one-way", nKeep,
         twin and string.format(", with its twin lane (%d waypoints, %d..%d) %.1f m apart - shaped by the middle",
             #twin.ids, twin.ids[1], twin.ids[#twin.ids], twin.gap) .. twin.cut or "", #pk.handles)
     return true
@@ -1464,58 +1563,188 @@ function E:roadRunsApplyBuilt()
         self:roadRunsSelect(nil)
         return true
     end
-    if pk.twin ~= nil then return self:roadRunsApplyPair(pk) end
-    local newPoints = RF.resampleForDriving(pk.st.pts)
-    -- the ends are the run's own end waypoints, exactly
-    local a, b = ADGraphManager:getWayPointById(pk.ids[1]), ADGraphManager:getWayPointById(pk.ids[#pk.ids])
-    if a == nil or b == nil then
-        self:warnPlayer("The run's ends are gone - shape it again.")
-        self:roadRunsSelect(nil)
-        return true
+    local lanes = {}
+    if pk.twin ~= nil then
+        local h = pk.gap / 2
+        lanes[1] = { ids = pk.ids, keep = pk.keep or {}, path = laneAlong(pk.st.pts, pk.side * h, pk.ids, true) }
+        lanes[2] = { ids = pk.twin.ids, keep = pk.twin.keep or {}, path = laneAlong(pk.st.pts, -pk.side * h, pk.twin.ids, true) }
+    else
+        local a, b = ADGraphManager:getWayPointById(pk.ids[1]), ADGraphManager:getWayPointById(pk.ids[#pk.ids])
+        if a ~= nil and b ~= nil then
+            local P = { { x = a.x, y = a.y, z = a.z } }
+            for k = 2, #pk.st.pts - 1 do P[#P + 1] = pk.st.pts[k] end
+            P[#P + 1] = { x = b.x, y = b.y, z = b.z }
+            lanes[1] = { ids = pk.ids, keep = pk.keep or {}, path = P }
+        end
     end
-    newPoints[1] = { x = a.x, y = a.y, z = a.z }
-    newPoints[#newPoints] = { x = b.x, y = b.y, z = b.z }
-    ADEditorHistory:snapshot("road runs: reshape")
-    local ok = self:replaceChainInterior(pk.ids, newPoints, pk.dual, pk.flags)
+    for _, ln in ipairs(lanes) do
+        if ln.path == nil or #ln.path < 2 then
+            self:warnPlayer("The road's ends are gone - shape it again.")
+            self:roadRunsSelect(nil)
+            return true
+        end
+    end
+    ADEditorHistory:snapshot(pk.twin and "road runs: reshape two lanes" or "road runs: reshape")
+    local res = self:roadRunsLayLanes(lanes)
     if self.invalidateIdReferences ~= nil then self:invalidateIdReferences() end
     ADGraphManager:markChanges()
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the built run %d..%d: %d waypoints now (was %d), %s.",
-        pk.ids[1], pk.ids[#pk.ids], #newPoints, #pk.ids, ok and "done" or "FAILED")
+    if pk.twin ~= nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the two-lane road %d..%d + %d..%d: %d + %d waypoints now (was %d + %d), %.1f m apart, %d junction point(s) moved, %s, %s.",
+            pk.ids[1], pk.ids[#pk.ids], pk.twin.ids[1], pk.twin.ids[#pk.twin.ids], res.points[1] or 0, res.points[2] or 0,
+            #pk.ids, #pk.twin.ids, pk.gap, res.moved, res.connectors, res.ok and "done" or "FAILED")
+    else
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the built run %d..%d: %d waypoints now (was %d), %d junction point(s) moved, %s, %s.",
+            pk.ids[1], pk.ids[#pk.ids], res.points[1] or 0, #pk.ids, res.moved, res.connectors, res.ok and "done" or "FAILED")
+    end
     self:roadRunsSelect(nil)
     self:roadRunsRefreshStretches()
     return true
 end
 
---- Both lanes of a two-lane road laid again either side of the shaped middle, one undo step.
-function E:roadRunsApplyPair(pk)
-    local h = pk.gap / 2
-    local A = laneAlong(pk.st.pts, pk.side * h, pk.ids)
-    local B = laneAlong(pk.st.pts, -pk.side * h, pk.twin.ids)
-    if A == nil or B == nil then
-        self:warnPlayer("The road's lane ends are gone - shape it again.")
-        self:roadRunsSelect(nil)
-        return true
+--- How the connectors at a moved junction follow it (2026-10-15 user: "walk the connector and make
+--- a decision"). Walked from the junction to the next junction or end:
+---   back to the road being shaped within CONNECT_BACK (a crossover between the lanes): it follows
+---     both its ends, blended along it;
+---   on to another road within CONNECT_SHORT (a turn, the junction tool's own or not): blended from
+---     the full move at this end to none at the far one, so it bends but stays joined;
+---   further (a road of its own): the move fades out over CONNECT_FADE.
+E.ROADRUNS_CONNECT_BACK = 60
+E.ROADRUNS_CONNECT_SHORT = 40
+E.ROADRUNS_CONNECT_FADE = 20
+
+--- Lay lanes again along new paths: lanes = { { ids = chain ids, keep = { [junctionId] = true },
+--- path = new line from its first to its last waypoint } }. Kept junction points go to the same share
+--- of the way along the new path as along the old, their connectors follow, and each piece between
+--- two of them is laid again. Waypoints are held as tables (AutoDrive renumbers ids on delete).
+function E:roadRunsLayLanes(lanes)
+    local res = { points = {}, moved = 0, ok = true, connectors = "no connectors" }
+    local moves, inChain = {}, {}
+    local plans = {}
+    local function arcs(P)
+        local c = { 0 }
+        for i = 2, #P do c[i] = c[i - 1] + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+        return c
     end
-    ADEditorHistory:snapshot("road runs: reshape two lanes")
-    local okA = self:replaceChainInterior(pk.ids, A, pk.dual, pk.flags)
-    -- the twin's ids moved down by the lane points removed below them
-    local doomed = {}
-    for i = 2, #pk.ids - 1 do doomed[#doomed + 1] = pk.ids[i] end
-    local tIds = {}
-    for i, id in ipairs(pk.twin.ids) do
-        local shift = 0
-        for _, d in ipairs(doomed) do if d < id then shift = shift + 1 end end
-        tIds[i] = id - shift
+    local function pointAt(P, c, d)
+        if d <= 0 then return P[1].x, P[1].z, 1 end
+        for i = 2, #P do
+            if c[i] >= d then
+                local t = (c[i] - c[i - 1]) > 0 and (d - c[i - 1]) / (c[i] - c[i - 1]) or 0
+                return P[i - 1].x + (P[i].x - P[i - 1].x) * t, P[i - 1].z + (P[i].z - P[i - 1].z) * t, i
+            end
+        end
+        return P[#P].x, P[#P].z, #P
     end
-    local okB = self:replaceChainInterior(tIds, B, pk.twin.dual, pk.twin.flags)
-    if self.invalidateIdReferences ~= nil then self:invalidateIdReferences() end
-    ADGraphManager:markChanges()
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the two-lane road %d..%d + %d..%d: %d + %d waypoints now (was %d + %d), %.1f m apart, %s.",
-        pk.ids[1], pk.ids[#pk.ids], pk.twin.ids[1], pk.twin.ids[#pk.twin.ids], #A, #B, #pk.ids, #pk.twin.ids, pk.gap,
-        (okA and okB) and "done" or "FAILED")
-    self:roadRunsSelect(nil)
-    self:roadRunsRefreshStretches()
-    return true
+    for li, ln in ipairs(lanes) do
+        local W = {}
+        for k, id in ipairs(ln.ids) do
+            W[k] = ADGraphManager:getWayPointById(id)
+            if W[k] == nil then res.ok = false return res end
+            inChain[W[k]] = true
+        end
+        local oldC = arcs(W)
+        local N = ln.path
+        local newC = arcs(N)
+        local fOld, fNew = oldC[#oldC], newC[#newC]
+        -- anchors: the two ends and every kept junction, placed at the same share along the new path
+        local anchors = {}
+        for k, w in ipairs(W) do
+            if k == 1 or k == #W or ln.keep[ln.ids[k]] then
+                local at = (fOld > 0) and oldC[k] / fOld * fNew or 0
+                if k == 1 then at = 0 elseif k == #W then at = fNew end
+                local x, z = pointAt(N, newC, at)
+                anchors[#anchors + 1] = { k = k, w = w, at = at, x = x, z = z }
+                if k ~= 1 and k ~= #W then
+                    moves[w] = { dx = x - w.x, dz = z - w.z }
+                    res.moved = res.moved + 1
+                end
+            end
+        end
+        -- each piece: its waypoints (tables) and the new path between its two anchors
+        for a = 1, #anchors - 1 do
+            local A, B = anchors[a], anchors[a + 1]
+            local tabs = {}
+            for k = A.k, B.k do tabs[#tabs + 1] = W[k] end
+            local pts = { { x = A.x, z = A.z } }
+            for i = 2, #N - 1 do
+                if newC[i] > A.at + 0.5 and newC[i] < B.at - 0.5 then pts[#pts + 1] = { x = N[i].x, z = N[i].z } end
+            end
+            pts[#pts + 1] = { x = B.x, z = B.z }
+            local ids = {}
+            for k, w in ipairs(tabs) do ids[k] = w.id end
+            local dual, flags = false, AutoDrive.FLAG_NONE
+            if self.spanStyle ~= nil then dual, flags = self:spanStyle(ids) end
+            plans[#plans + 1] = { lane = li, tabs = tabs, pts = pts, dual = dual, flags = flags }
+        end
+    end
+    -- the connectors at each moved junction, walked and decided
+    local done = {}
+    local kinds = { back = 0, turn = 0, fade = 0 }
+    local function moveW(w, dx, dz)
+        if w.id == nil or w.id < 0 then return end
+        if self.moveTo ~= nil then self:moveTo(w.id, w.x + dx, w.z + dz)
+        else ADGraphManager:moveWayPoint(w.id, w.x + dx, w.y, w.z + dz, w.flags, false) end
+    end
+    local junctions = {}
+    for w in pairs(moves) do junctions[#junctions + 1] = w end
+    table.sort(junctions, function(a, b) return a.id < b.id end)
+    for _, J in ipairs(junctions) do
+        local mJ = moves[J]
+        for _, nid in ipairs(neighbourIds(J)) do
+            local first = ADGraphManager:getWayPointById(nid)
+            if first ~= nil and not inChain[first] and not done[first] and not moves[first] then
+                local list, dist = {}, {}
+                local prev, cur, len = J, first, 0
+                local Q = nil
+                for _ = 1, 400 do
+                    len = len + math.sqrt((cur.x - prev.x) ^ 2 + (cur.z - prev.z) ^ 2)
+                    local nb = neighbourIds(cur)
+                    if inChain[cur] or moves[cur] or #nb ~= 2 then Q = cur break end
+                    list[#list + 1] = cur
+                    dist[#dist + 1] = len
+                    if len > self.ROADRUNS_CONNECT_BACK then break end
+                    local nxt = nil
+                    for _, id in ipairs(nb) do if id ~= prev.id then nxt = ADGraphManager:getWayPointById(id) end end
+                    if nxt == nil then Q = cur break end
+                    prev, cur = cur, nxt
+                end
+                for _, w in ipairs(list) do done[w] = true end
+                local mQ = Q ~= nil and moves[Q] or nil
+                for k, w in ipairs(list) do
+                    local t = dist[k] / math.max(1e-6, len)
+                    local dx, dz
+                    if mQ ~= nil and len <= self.ROADRUNS_CONNECT_BACK then
+                        dx, dz = mJ.dx + (mQ.dx - mJ.dx) * t, mJ.dz + (mQ.dz - mJ.dz) * t
+                        if k == 1 then kinds.back = kinds.back + 1 end
+                    elseif Q ~= nil and len <= self.ROADRUNS_CONNECT_SHORT then
+                        dx, dz = mJ.dx * (1 - t), mJ.dz * (1 - t)
+                        if k == 1 then kinds.turn = kinds.turn + 1 end
+                    else
+                        local u = math.max(0, 1 - dist[k] / self.ROADRUNS_CONNECT_FADE)
+                        local f = u * u * (3 - 2 * u)
+                        dx, dz = mJ.dx * f, mJ.dz * f
+                        if k == 1 then kinds.fade = kinds.fade + 1 end
+                    end
+                    moveW(w, dx, dz)
+                end
+            end
+        end
+    end
+    res.connectors = string.format("connectors: %d between the lanes, %d turns bent, %d roads faded", kinds.back, kinds.turn, kinds.fade)
+    for w, m in pairs(moves) do moveW(w, m.dx, m.dz) end
+    -- each piece laid again between its (moved) anchors
+    for _, pl in ipairs(plans) do
+        local ids = {}
+        for k, w in ipairs(pl.tabs) do ids[k] = w.id end
+        local a, b = pl.tabs[1], pl.tabs[#pl.tabs]
+        local pts = pl.pts
+        pts[1], pts[#pts] = { x = a.x, z = a.z }, { x = b.x, z = b.z }
+        local R = RF.resampleForDriving(pts)
+        R[1], R[#R] = { x = a.x, y = a.y, z = a.z }, { x = b.x, y = b.y, z = b.z }
+        if #R < 2 or a.id < 0 or b.id < 0 or not self:replaceChainInterior(ids, R, pl.dual, pl.flags) then res.ok = false end
+        res.points[pl.lane] = (res.points[pl.lane] or 1) + #R - 1
+    end
+    return res
 end
 
 --- Drop the selected pick (the card's button).
@@ -2595,7 +2824,7 @@ function E:drawRoadRunsInner(lw)
     if s.hover == nil and s.sel == nil and self.hoverId ~= nil and self.orderedRunThrough ~= nil then
         if s.builtHoverSeed ~= self.hoverId then
             s.builtHoverSeed = self.hoverId
-            local pts = self:orderedRunThrough(self.hoverId)
+            local pts = self:roadRunsChainAt(self.hoverId)
             s.builtHoverPts = pts
         end
         if s.builtHoverPts ~= nil then drawLine(s.builtHoverPts, 1, lw * 2, 0.34, 0.71, 0.91, 0.5) end
@@ -2781,6 +3010,9 @@ function E:roadRunsCard(kit)
             #(s.sel.handles or {}), s.sel.st.len or 0, s.sel.st.edited and ", shaped" or ""))
         kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; its ends stay put")
         kit.btn("apply shape (right-click)", function() editor:roadRunsApplyBuilt() end)
+        kit.tgl("through junctions (next click)", editor.roadThrough ~= false, function()
+            editor.roadThrough = (editor.roadThrough == false)
+        end)
         kit.btn("cancel shaping", function() editor:roadRunsSelect(nil) end)
     end
     if RF.noRockCheck then

@@ -3,13 +3,13 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="road runs: lane ends, walks, probe" build="@BUILD@">
+<testPlan title="road runs: through junctions, lane ends, probe" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="tEnd" title="track_1 lane: the end at the big road is centred"
-          hint="Hover the lane you saved as track_1: its end at the big road sits in the middle of the lane, not on the right-hand corner."/>
-    <test id="anySpot" title="track_1 lane: a click anywhere gives the whole lane"
-          hint="Click the lane on the east side of the U, then on the west side: both give the same whole lane, end to end."/>
+    <test id="through" title="A click takes the road on through its junctions" passLog="through [1-9]%d* junction"
+          hint="Click a built road that crosses a junction: the outline and handles carry on past it, up to a T (ticks itself)."/>
+    <test id="throughMove" title="Moving a junction: its connectors follow" passLog="junction point%(s%) moved, connectors"
+          hint="Add a handle at a junction, drag it, right-click: side roads fade back to place within about 20 m, short turns bend and stay joined (ticks itself - check by eye)."/>
     <test id="twoLaneShort" title="A lane with a shorter twin pairs" passLog="with its twin lane"
           hint="Click a two-lane road where one lane runs on past a junction the other does not, on the stretch where both run side by side: both lanes get handles (ticks itself)."/>
     <test id="probe" title="Probe at the U bend of track_1" passLog="probe %- %d+ decal%(s%) within"
