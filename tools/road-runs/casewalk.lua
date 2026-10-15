@@ -49,7 +49,11 @@ local total = along[#along]
 local FRACS = { 0.1, 0.3, 0.5, 0.7, 0.9 }
 local SIDE = tonumber(os.getenv("SIDE") or "0.6")
 RF.WALK.maxLen = 400                                     -- E.ROADRUNS_POINT_WALK
+-- ONLY=i: just spot i; TRACE=1: the walker's own trace (RF.TRACE)
+local ONLY = tonumber(os.getenv("ONLY") or "")
+RF.TRACE = os.getenv("TRACE") ~= nil
 for si, f in ipairs(FRACS) do
+  if ONLY == nil or ONLY == si then
     local want, i = f * total, 2
     while i < #mid and along[i] < want do i = i + 1 end
     local a, b = mid[i - 1], mid[i]
@@ -63,9 +67,24 @@ for si, f in ipairs(FRACS) do
     local function walkLine(wx, wz)
         local ok, r = pcall(RF.walkFrom, isRoadOf, wx, wz, { "paved", "track" }, isStopOf)
         if ok and r ~= nil and r.pts ~= nil and #r.pts >= 4 then
+            local STAGES = os.getenv("STAGES") ~= nil
+            local function stage(name, q)
+                if STAGES then
+                    print(string.format("# spot %d %s: %s", si, name, q and string.format("%d pts, %.0f m, (%.1f,%.1f)..(%.1f,%.1f) %s..%s",
+                        #q.pts, q.len or 0, q.pts[1].x, q.pts[1].z, q.pts[#q.pts].x, q.pts[#q.pts].z, tostring(q.startTag), tostring(q.endTag)) or "nil"))
+                end
+            end
+            stage("walked", r)
+            if STAGES then
+                for _, q in ipairs(r.pts) do print(string.format("W %.2f %.2f", q.x, q.z)) end
+                for _, q in ipairs(r.raw or {}) do print(string.format("R %.2f %.2f", q.x, q.z)) end
+            end
             r = RF.cutHairpins(r, wx, wz)
+            stage("hairpins cut", r)
             if r ~= nil then r = RF.cutEndHooks(r, function(x, z) return kindAt(x, z) == RF.KIND_PAVED end) end
+            stage("hooks cut", r)
             if r ~= nil then r = RF.trimGhosts(r, isRoadOf(r.class), r.class, wx, wz) end
+            stage("ghosts trimmed", r)
             return r
         elseif not ok then
             print("e " .. si .. " " .. tostring(r))
@@ -79,4 +98,5 @@ for si, f in ipairs(FRACS) do
         print(string.format("c %d %s", si, tostring(r.class)))
         for _, p in ipairs(r.pts) do print(string.format("l %d %.2f %.2f", si, p.x, p.z)) end
     end
+  end
 end

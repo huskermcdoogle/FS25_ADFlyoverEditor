@@ -1939,7 +1939,12 @@ end
 --- roads for a kilometre).
 RF.walkCovered = nil
 RF.COVER_STOP_STEPS = 3
-function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
+RF.RETRACE_NEAR = 1.5            -- a walk this close to where it has already been is walking it again
+RF.RETRACE_SKIP = 15             -- (its own last this many steps - 30 m - do not count)
+--- (prior: points already walked - this walk's own earlier pieces and the other direction's walk;
+--- 2026-10-15: a walk on track_1 looped round a turning place and came back up the lane over itself,
+--- and the line made of that was cut down to 4 m)
+function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop, prior)
     -- Steered like a driver (pure pursuit): look `lookAhead` metres on, aim at the middle of the road
     -- there; then step and settle onto the middle just in front. An earlier walker turned a fraction of
     -- the way toward the middle each step and expected bends to carry on: it over-steered, weaved, ran
@@ -2127,6 +2132,22 @@ function RF.walkRoad(isRoad, cls, x, z, hx, hz, w0, isStop)
         end
         len = len + W.step
         if len > 40 and sqrt((px - x) ^ 2 + (pz - z) ^ 2) < W.step then return pts, "loop" end
+        -- on ground already walked: stop where it began walking it again
+        local r2 = RF.RETRACE_NEAR * RF.RETRACE_NEAR
+        local again = false
+        for i = 1, #pts - RF.RETRACE_SKIP do
+            local q = pts[i]
+            if (q.x - px) ^ 2 + (q.z - pz) ^ 2 < r2 then again = true break end
+        end
+        if not again and prior ~= nil then
+            for _, q in ipairs(prior) do
+                if (q.x - px) ^ 2 + (q.z - pz) ^ 2 < r2 then again = true break end
+            end
+        end
+        if again then
+            if #pts > 1 then table.remove(pts) end
+            return pts, "loop"
+        end
         -- run onto an existing path: end there, at the first covered point
         if RF.walkCovered ~= nil and RF.walkCovered(px, pz, hx, hz) then
             covRun = covRun + 1
@@ -2325,12 +2346,24 @@ function RF.throughArm(isRoad, cls, x, z, ux, uz)
     return nil
 end
 
-local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop)
+local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop, other)
     local all = { { x = x, z = z, w = w } }
     local tag, at = "end", nil
-    for _ = 1, RF.MAX_THROUGH + 1 do
+    -- the other direction's walk, less its first 20 m (both start at the same spot)
+    local otherFar = {}
+    for i = 11, #(other or {}) do otherFar[#otherFar + 1] = other[i] end
+    for piece = 1, RF.MAX_THROUGH + 1 do
+        -- what this walk must not walk again: the other direction's, and its own earlier pieces
+        local prior = otherFar
+        if piece > 1 then
+            prior = {}
+            for _, q in ipairs(otherFar) do prior[#prior + 1] = q end
+            -- (all of it but the last metres up to where this piece starts: a first piece shorter
+            -- than RETRACE_SKIP would otherwise not count at all)
+            for i = 1, #all - 2 do prior[#prior + 1] = all[i] end
+        end
         local pts
-        pts, tag, at = RF.walkRoad(isRoad, cls, x, z, hx, hz, w, isStop)
+        pts, tag, at = RF.walkRoad(isRoad, cls, x, z, hx, hz, w, isStop, prior)
         for i = 2, #pts do all[#all + 1] = pts[i] end
         if tag ~= "fork" then break end
         -- a track that has met a paved road stops there: the junction tool ties it in (it never hops
@@ -2377,7 +2410,7 @@ function RF.walkFrom(isRoadOf, x, z, classes, isStopOf)
             if cx ~= nil then
                 local isStop = isStopOf ~= nil and isStopOf(cls) or nil
                 local fwd, endTag, endAt = walkThrough(isRoad, cls, cx, cz, hx, hz, w, isStop)
-                local back, startTag, startAt = walkThrough(isRoad, cls, cx, cz, -hx, -hz, w, isStop)
+                local back, startTag, startAt = walkThrough(isRoad, cls, cx, cz, -hx, -hz, w, isStop, fwd)
                 -- an end that met a road's shoulder carries on straight across it to the asphalt's
                 -- edge (2026-10-13 user: the line stopped a few metres short, where the gravel began)
                 local function toAsphalt(P, at)
@@ -2491,6 +2524,9 @@ RF.FIT_MIN = 5                   -- fewer readings than this in reach: no fit th
 RF.FORK_BEND = 10                -- metres before a fork where the found line bends toward the fork's middle
 RF.TO_ASPHALT = 12               -- a track end on a road's shoulder carries on this far at most to the asphalt
 RF.MEET_TAIL = 12                -- metres of a met end laid on the walker's own path
+RF.BLEND_FORK_ENDS = true        -- a walked line's fork end is laid on the walker's own path too (2026-10-15:
+                                 -- track_1's lane curves into a T; carried on along its course from 14 m
+                                 -- back, the end ran 3.5 m off the middle the walker had kept)
 RF.WALKED_FORK_BEND = 4          -- the same for a walked line (it does not bend into the fork)
 RF.END_TURN_CAP = 1.5            -- degrees a metre at most when a line's end is carried on along its curve
 function RF.refineStretch(st, isRoadOf, isStopOf, isField)
@@ -2937,8 +2973,9 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             if atEnd then R[#R + 1] = np else table.insert(R, 1, np) end
         end
     end
-    if st.endMet then blendMet(true) end
-    if st.startMet then blendMet(false) end
+    local blendedStart, blendedEnd = false, false
+    if st.endMet or (RF.BLEND_FORK_ENDS and st.walkedGuide and st.endTag == "fork") then blendMet(true) blendedEnd = true end
+    if st.startMet or (RF.BLEND_FORK_ENDS and st.walkedGuide and st.startTag == "fork") then blendMet(false) blendedStart = true end
     -- Across a stretch with no usable readings (a junction held out above, a gap in the paint), the
     -- line runs straight from the last good point to the next: holding the walked line's own shape
     -- there kept the walk's dip into the junction (~1 m at three T's, 2026-10-12).
@@ -3026,8 +3063,9 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
             d = d + W.step
         end
     end
-    extend(false, cutStart)
-    extend(true, cutEnd)
+    -- (an end laid on the walker's path already reaches where the walker stopped)
+    if not blendedStart then extend(false, cutStart) end
+    if not blendedEnd then extend(true, cutEnd) end
     -- Steady ends: the last metres are read with fewer points either side and drift, or hook into a
     -- yard or a junction's mud. Carry the line's own course (read from 10 m in) out over its last
     -- 10 m, unless the road really turns there (the tip over 45 degrees off that course).
