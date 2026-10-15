@@ -1,6 +1,6 @@
 -- The laid line along a straight N-S track against its true middle: lua trackline.lua x z middleX
 local HERE = (arg[0]:match("^(.*)[/\]") or ".") .. "/"
-local JH = HERE .. "../../../junction-rework-fec884/tools/junction-harness/"
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 local real = os.getenv
 os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 g_currentMission = { terrainRootNode = 1 }; AutoDrive, CollisionFlag = {}, {}

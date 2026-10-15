@@ -2,7 +2,7 @@
 -- line against the chord 12 m either side: a weave from half to half of the road shows as metres.
 --   lua wiggle.lua x z [x z ...]       NOFILL=1: without the patch fill (compare)
 local HERE = (arg[0]:match("^(.*)[/\\]") or ".") .. "/"
-local JH = HERE .. "../../../junction-rework-fec884/tools/junction-harness/"
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 local real = os.getenv
 os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 g_currentMission = { terrainRootNode = 1 }; AutoDrive, CollisionFlag = {}, {}

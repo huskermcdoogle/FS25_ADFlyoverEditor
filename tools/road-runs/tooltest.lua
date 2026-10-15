@@ -7,7 +7,7 @@
 --
 -- Same data as bench.lua (TERRAIN_DIR / GRAPH / JH).
 local HERE = (arg[0]:match("^(.*)[/\\]") or ".") .. "/"
-local JH = os.getenv("JH") or (HERE .. "../../../junction-rework-fec884/tools/junction-harness/")
+local JH = dofile(HERE .. "datadir.lua")(HERE)
 if os.getenv("TERRAIN_DIR") == nil then
     local real = os.getenv
     os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end

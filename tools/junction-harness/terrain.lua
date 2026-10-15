@@ -13,7 +13,7 @@
 -- collision), so the paint is the answer the game gives too.
 
 local T = {}
-local DIR = os.getenv("TERRAIN_DIR") or "terrain_data/"
+local DIR = os.getenv("TERRAIN_DIR") or (dofile("datadir.lua")("") .. "terrain_data/")
 if DIR:sub(-1) ~= "/" and DIR:sub(-1) ~= "\\" then DIR = DIR .. "/" end
 
 local function slurp(name, want)

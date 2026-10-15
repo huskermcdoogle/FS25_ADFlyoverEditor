@@ -1,5 +1,5 @@
 -- Walk the same road from several mouse spots: lua starts.lua x1 z1 x2 z2 ...  (same ends = consistent)
-local JH = "../../../junction-rework-fec884/tools/junction-harness/"
+local JH = dofile("datadir.lua")("")
 local real = os.getenv; os.getenv = function(k) if k == "TERRAIN_DIR" then return JH .. "terrain_data/" end return real(k) end
 g_currentMission = { terrainRootNode = 1 }; AutoDrive, CollisionFlag = {}, {}
 dofile("terrain.lua"); dofile("../../scripts/editor/RoadFinder.lua"); local RF = ADRoadFinder

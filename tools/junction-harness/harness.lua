@@ -67,7 +67,7 @@ do
 end
 
 -- ------------------------------------------------------------------------------- the graph itself
-local raw = dofile(os.getenv("GRAPH") or "graph_data.lua")
+local raw = dofile(os.getenv("GRAPH") or (dofile("datadir.lua")("") .. "graph_data.lua"))
 local byId = {}
 for _, w in ipairs(raw) do
     byId[w.id] = { id = w.id, x = w.x, y = w.y, z = w.z, flags = w.flags, out = w.out,
