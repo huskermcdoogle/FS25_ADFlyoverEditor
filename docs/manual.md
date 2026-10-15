@@ -17,7 +17,7 @@ Opening, leaving, and the keys and controls that work everywhere.
 
 ### Opening & leaving
 
-- Open the editor with Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+- Open the editor with Left Alt + V or Left Alt + F (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - Press Esc to leave. Every edit is undoable.
 - Single player only. Edits are written when you are the host.
 
