@@ -2250,6 +2250,7 @@ RF.THROUGH_WALK_ANGLE = 20
 --- degrees at (-807,341), a Y at (-645,402) - so the same road was stopped at or walked through
 --- depending on which way it was walked, 2026-10-13.) A side road meeting a T finds nothing in line:
 --- the cross road runs across it.
+RF.T_BACK_ANGLE = 30             -- a road on beyond the junction this far off our own way in is a crossing road
 RF.THROUGH_ARC = 45              -- the road carried on into lies within this of straight on
 RF.THROUGH_BEND = 75             -- and runs within this of the arriving line (a lane bending 60 degrees
                                  -- through a junction at (-645,402) is still the same lane)
@@ -2294,7 +2295,25 @@ function RF.throughArm(isRoad, cls, x, z, ux, uz)
                             x, z, d, r.a0, r.a1, math.deg(math.acos(max(-1, min(1, shx * ux + shz * uz)))),
                             cl > 1e-6 and math.deg(math.acos(max(-1, min(1, (cx * ux + cz * uz) / cl)))) or 0))
                     end
-                    if cl > 1e-6 and shx * ux + shz * uz >= cosBend and (cx * ux + cz * uz) / cl >= cosArc
+                    -- a road that ALSO runs on through the junction the other way (and not back the way
+                    -- we came) is a road crossing ours: our road meets it in a T and stops there, even
+                    -- when it crosses at 45 degrees (2026-10-14 user: "the ends of this road are T's")
+                    local crossing = false
+                    if cl > 1e-6 then
+                        local vx, vz = cx / cl, cz / cl
+                        if (-vx) * (-ux) + (-vz) * (-uz) < math.cos(math.rad(RF.T_BACK_ANGLE)) then
+                            local hits = 0
+                            for _, dd in ipairs({ 8, 12, 16 }) do
+                                local px, pz = x - vx * dd, z - vz * dd
+                                for _, o in ipairs({ 0, 1, -1 }) do
+                                    if isRoad(px + (-vz) * o, pz + vx * o) then hits = hits + 1 break end
+                                end
+                            end
+                            crossing = hits >= 2
+                        end
+                    end
+                    if RF.TRACE and crossing then print("    (a road crossing ours: a T)") end
+                    if not crossing and cl > 1e-6 and shx * ux + shz * uz >= cosBend and (cx * ux + cz * uz) / cl >= cosArc
                         and abs(a) < bestA then
                         best, bestA = { x = sx, z = sz, hx = shx, hz = shz, w = sw }, abs(a)
                     end
@@ -2313,7 +2332,7 @@ local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop)
         local pts
         pts, tag, at = RF.walkRoad(isRoad, cls, x, z, hx, hz, w, isStop)
         for i = 2, #pts do all[#all + 1] = pts[i] end
-        if tag ~= "fork" or #all < 3 then break end
+        if tag ~= "fork" then break end
         -- a track that has met a paved road stops there: the junction tool ties it in (it never hops
         -- across or on along the road's verge - 2026-10-13 apron walk ran 500 m along a shoulder)
         if at ~= nil and at.met then break end
@@ -2324,6 +2343,10 @@ local function walkThrough(isRoad, cls, x, z, hx, hz, w, isStop)
         local q = all[#all]
         local p1, p0 = all[max(1, #all - 4)], all[max(1, #all - 15)]
         local ux, uz = p1.x - p0.x, p1.z - p0.z
+        -- a junction read in the very first steps (a start on a curve, patchy paint either side):
+        -- carry on along the start's own heading rather than stop (2026-10-14: walks from two spots
+        -- on the user's lane stopped after a few metres)
+        if ux * ux + uz * uz < 1 then ux, uz = hx, hz end
         local ul = sqrt(ux * ux + uz * uz)
         if ul < 1e-6 then break end
         ux, uz = ux / ul, uz / ul
@@ -3487,6 +3510,114 @@ function RF.cutEndHooks(st, isPaved)
     if iStart then out.startTag, out.startNode = "fork", { x = P[i0].x, z = P[i0].z, tag = "fork" } end
     if iEnd then out.endTag, out.endNode = "fork", { x = P[i1].x, z = P[i1].z, tag = "fork" } end
     out.len = polylineLength(out.pts)
+    return out
+end
+
+--- VOTING (2026-10-14, user: the same road gave wildly different lines as the mouse moved; "ask
+--- several times and go with the majority"). walkAt(x, z) walks a road from a spot and returns its
+--- line (or nil). The road is walked from the mouse, then again from VOTE_SPOTS spots spread along
+--- that first line. The walk that agrees best with all the others leads; each of its points stays
+--- only where a strict majority of the walks run within VOTE_TOL of it, and the line is cut where
+--- they stop agreeing (an even split at a Y stops the run there - the user clicks the arm they want).
+--- Each kept point is the average of the agreeing walks there. Returns the line (with .votes) or nil.
+RF.VOTE_SPOTS = { 0.1, 0.3, 0.5, 0.7, 0.9 }
+RF.VOTE_TOL = 1.5
+
+local function distToLine(P, x, z)
+    local bd, bx, bz = math.huge, nil, nil
+    for i = 1, #P - 1 do
+        local a, b = P[i], P[i + 1]
+        local dx, dz = b.x - a.x, b.z - a.z
+        local l2 = dx * dx + dz * dz
+        local t = l2 > 0 and max(0, min(1, ((x - a.x) * dx + (z - a.z) * dz) / l2)) or 0
+        local qx, qz = a.x + dx * t, a.z + dz * t
+        local d = (x - qx) ^ 2 + (z - qz) ^ 2
+        if d < bd then bd, bx, bz = d, qx, qz end
+    end
+    return sqrt(bd), bx, bz
+end
+
+function RF.voteWalk(walkAt, mx, mz)
+    local first = walkAt(mx, mz)
+    if first == nil or #first.pts < 4 then return first end
+    local walks = { first }
+    local function spread(base)
+        local P = base.pts
+        local acc = { 0 }
+        for i = 2, #P do acc[i] = acc[i - 1] + sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+        for _, f in ipairs(RF.VOTE_SPOTS) do
+            local target = f * acc[#P]
+            local k = 1
+            while k < #P and acc[k] < target do k = k + 1 end
+            local w = walkAt(P[k].x, P[k].z)
+            if w ~= nil and #w.pts >= 4 then walks[#walks + 1] = w end
+        end
+    end
+    spread(first)
+    -- a first walk cut short (it turned back at a junction and was trimmed) spreads the others along
+    -- its short piece only: when one comes back much longer, walk again from spots along that one
+    local longest = first
+    for _, w in ipairs(walks) do if (w.len or 0) > (longest.len or 0) then longest = w end end
+    if longest ~= first and (longest.len or 0) > 1.5 * (first.len or 0) then spread(longest) end
+    if RF.TRACE_VOTE then
+        for i, w in ipairs(walks) do print(string.format("  vote walk %d: %.0f m (%.0f,%.0f)..(%.0f,%.0f)", i, w.len or 0, w.pts[1].x, w.pts[1].z, w.pts[#w.pts].x, w.pts[#w.pts].z)) end
+    end
+    if #walks < 3 then first.votes = { walks = #walks } return first end
+    local tol = RF.VOTE_TOL
+    -- how much of A lies along B
+    local function along(A, B)
+        local n = 0
+        for _, q in ipairs(A.pts) do if distToLine(B.pts, q.x, q.z) <= tol then n = n + 1 end end
+        return n / #A.pts
+    end
+    local agree = {}
+    for i = 1, #walks do agree[i] = {} end
+    local lead, leadScore = 1, -1
+    for i = 1, #walks do
+        local sc = 0
+        for j = 1, #walks do
+            if i ~= j then sc = sc + along(walks[i], walks[j]) + along(walks[j], walks[i]) end
+        end
+        if sc > leadScore then lead, leadScore = i, sc end
+    end
+    local L = walks[lead]
+    local need = math.floor(#walks / 2) + 1
+    local keep, avg = {}, {}
+    for i, q in ipairs(L.pts) do
+        local n, sx, sz = 0, 0, 0
+        for _, w in ipairs(walks) do
+            local d, bx, bz = distToLine(w.pts, q.x, q.z)
+            if d <= tol then n, sx, sz = n + 1, sx + bx, sz + bz end
+        end
+        keep[i] = n >= need
+        avg[i] = { x = sx / max(1, n), z = sz / max(1, n), n = n }
+    end
+    -- the agreed run round the mouse
+    local m, bd = nil, math.huge
+    for i, q in ipairs(L.pts) do
+        local d = (q.x - mx) ^ 2 + (q.z - mz) ^ 2
+        if keep[i] and d < bd then m, bd = i, d end
+    end
+    if m == nil then first.votes = { walks = #walks, agreed = 0 } return first end
+    local i0, i1 = m, m
+    while i0 > 1 and keep[i0 - 1] do i0 = i0 - 1 end
+    while i1 < #L.pts and keep[i1 + 1] do i1 = i1 + 1 end
+    if i1 - i0 < 3 then first.votes = { walks = #walks, agreed = 0 } return first end
+    local out = {}
+    for k, v in pairs(L) do out[k] = v end
+    out.pts = {}
+    for i = i0, i1 do
+        local q = L.pts[i]
+        local np = {}
+        for k, v in pairs(q) do np[k] = v end
+        np.x, np.z = avg[i].x, avg[i].z
+        out.pts[#out.pts + 1] = np
+    end
+    if i0 > 1 then out.startTag, out.startNode = "fork", { x = out.pts[1].x, z = out.pts[1].z, tag = "fork" } end
+    if i1 < #L.pts then out.endTag, out.endNode = "fork", { x = out.pts[#out.pts].x, z = out.pts[#out.pts].z, tag = "fork" } end
+    out.len = polylineLength(out.pts)
+    out.votes = { walks = #walks, need = need, lead = lead, cutStart = i0 > 1, cutEnd = i1 < #L.pts }
+    out.refinedTo = out
     return out
 end
 

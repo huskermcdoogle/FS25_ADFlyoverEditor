@@ -469,34 +469,21 @@ function E:roadRunsWalkFrom(isRoadOf, x, z, classes, isStopOf)
     return r
 end
 
-function E:roadRunsWalkAtCursor(cx, cz)
-    local s = roadState(self)
-    local w = s.walked
-    if w ~= nil and RF.stretchNear({ w }, cx, cz, 3) ~= nil then return w end
-    local now = self:nowMs()
-    local last = s.walkTry
-    if last ~= nil and now - last.at < 250 and math.abs(cx - last.x) < 1.5 and math.abs(cz - last.z) < 1.5 then
-        return nil
-    end
-    s.walkTry = { at = now, x = cx, z = cz }
+--- One walk of the road at (cx, cz), as the tool lays it: walked, cut to the uncovered part, hairpins,
+--- hooks and ghosts trimmed. nil if there is no road there. No caching, no log.
+function E:roadRunsWalkLine(cx, cz)
     local classes = {}
     if self.roadKinds[RF.KIND_PAVED] then classes[#classes + 1] = "paved" end
     if self.roadKinds[RF.KIND_GRAVEL] or self.roadKinds[RF.KIND_DIRT] then classes[#classes + 1] = "track" end
     local isRoadOf, isStopOf = self:roadRunsWalkTests()
     local r = self:roadRunsWalkFrom(isRoadOf, cx, cz, classes, isStopOf)
-    if r == nil or #r.pts < 4 then
-        s.walked = nil
-        return nil
-    end
+    if r == nil or #r.pts < 4 then return nil end
     local grid = self:roadRunsCoverGrid()
     r = RF.keepUncovered(r, grid)
     if r ~= nil then r = RF.cutHairpins(r, cx, cz) end
     if r ~= nil then r = RF.cutEndHooks(r, function(x, z) return E.roadRunsKindAt(x, z) == RF.KIND_PAVED end) end
     if r ~= nil then r = RF.trimGhosts(r, isRoadOf(r.class), r.class, cx, cz) end
-    if r == nil or #r.pts < 4 then
-        s.walked = nil
-        return nil
-    end
+    if r == nil or #r.pts < 4 then return nil end
     local k = RF.groundKindAt(cx, cz)
     if r.class == "paved" then r.kind = RF.KIND_PAVED
     elseif k == RF.KIND_DIRT or k == RF.KIND_GRAVEL then r.kind = k
@@ -505,7 +492,26 @@ function E:roadRunsWalkAtCursor(cx, cz)
     r.id = string.format("walk:%d:%d", math.floor(r.pts[1].x), math.floor(r.pts[1].z))
     r.refinedTo = r
     r.pointWalk = true
+    return r
+end
+
+--- The road under the mouse for hovering: a road already voted on (a click) is shown as voted;
+--- otherwise one quick walk (kept while the mouse stays on it).
+function E:roadRunsWalkAtCursor(cx, cz)
+    local s = roadState(self)
+    local voted = self:roadRunsVotedAt(cx, cz)
+    if voted ~= nil then return voted end
+    local w = s.walked
+    if w ~= nil and RF.stretchNear({ w }, cx, cz, 3) ~= nil then return w end
+    local now = self:nowMs()
+    local last = s.walkTry
+    if last ~= nil and now - last.at < 250 and math.abs(cx - last.x) < 1.5 and math.abs(cz - last.z) < 1.5 then
+        return nil
+    end
+    s.walkTry = { at = now, x = cx, z = cz }
+    local r = self:roadRunsWalkLine(cx, cz)
     s.walked = r
+    if r == nil then return nil end
     local mi = math.max(1, math.floor(#r.pts / 2))
     ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - walked a %s road from the mouse at (%.1f, %.1f): %.0f m, %.1f m wide (%s to %s); across its middle (%.1f, %.1f): %s",
         r.class, cx, cz, r.len or 0, r.width or -1, r.startTag, r.endTag, r.pts[mi].x, r.pts[mi].z,
@@ -518,6 +524,40 @@ function E:roadRunsWalkAtCursor(cx, cz)
             sc.sp.name, sc.lean, sc.mean, sc.worst, sc.n, #r.pts)
     end
     return r
+end
+
+--- A road voted on earlier (a click) under (cx, cz), while the network is as it was then.
+function E:roadRunsVotedAt(cx, cz)
+    local s = roadState(self)
+    if s.voted == nil then return nil end
+    local key = s.coverGrid and s.coverGrid.key or nil
+    for _, v in ipairs(s.voted) do
+        if v.key == key and RF.stretchNear({ v.st }, cx, cz, 3) ~= nil then return v.st end
+    end
+    return nil
+end
+
+--- Vote on the road at (cx, cz): walked from the mouse and from five spots along it, the majority
+--- line kept (RF.voteWalk). Remembered, so hovering it again shows the same line.
+function E:roadRunsVote(cx, cz)
+    local s = roadState(self)
+    local walks = 0
+    local st = RF.voteWalk(function(x, z) walks = walks + 1 return self:roadRunsWalkLine(x, z) end, cx, cz)
+    if st == nil then return nil end
+    withHeights(st.pts)
+    st.pointWalk = true
+    st.refinedTo = st
+    st.id = string.format("vote:%d:%d", math.floor(st.pts[1].x), math.floor(st.pts[1].z))
+    s.voted = s.voted or {}
+    self:roadRunsCoverGrid()
+    table.insert(s.voted, 1, { st = st, key = s.coverGrid and s.coverGrid.key or nil })
+    while #s.voted > 20 do table.remove(s.voted) end
+    local v = st.votes or {}
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - voted: %d walk(s), %s; %.0f m kept (%s to %s)%s%s.",
+        v.walks or walks, v.need and string.format("%d needed to agree", v.need) or "too few to vote",
+        st.len or 0, st.startTag, st.endTag, v.cutStart and "; cut at the start where the walks split" or "",
+        v.cutEnd and "; cut at the end where the walks split" or "")
+    return st
 end
 
 --- Per frame, guarded: an error in the tool is logged once and the tool stops reading, but the
@@ -870,6 +910,14 @@ function E:roadRunsClick()
 
     if s.hover ~= nil then
         local st = s.hover
+        -- a road walked from the mouse is voted on first (the same road from anywhere on it)
+        if st.pointWalk and not st.votes and self.cursorX ~= nil then
+            local voted = self:roadRunsVote(self.cursorX, self.cursorZ)
+            if voted ~= nil then
+                st = voted
+                s.hover = voted
+            end
+        end
         st = self:roadRunsRefined(st)
         if #self:roadRunsLanesFor(st, s.hoverSide or 1, true) == 0 then
             self:warnPlayer(string.format("This stretch is too short to lay with %.1f m left at its forks - lower the fork gap.",

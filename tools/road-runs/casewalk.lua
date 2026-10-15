@@ -59,15 +59,22 @@ for si, f in ipairs(FRACS) do
     local side = (si % 2 == 0) and SIDE or -SIDE
     local sx, sz = a.x + (b.x - a.x) * u - dz * side, a.z + (b.z - a.z) * u + dx * side
     print(string.format("s %d %.2f %.2f", si, sx, sz))
-    local ok, r = pcall(RF.walkFrom, isRoadOf, sx, sz, { "paved", "track" }, isStopOf)
-    if ok and r ~= nil and r.pts ~= nil and #r.pts >= 4 then
-        r = RF.cutHairpins(r, sx, sz)
-        if r ~= nil then r = RF.cutEndHooks(r, function(x, z) return kindAt(x, z) == RF.KIND_PAVED end) end
-        if r ~= nil then r = RF.trimGhosts(r, isRoadOf(r.class), r.class, sx, sz) end
-    elseif not ok then
-        print("e " .. si .. " " .. tostring(r))
-        r = nil
+    -- one walk as the game's tool does it (RoadRunsTool roadRunsWalkLine)
+    local function walkLine(wx, wz)
+        local ok, r = pcall(RF.walkFrom, isRoadOf, wx, wz, { "paved", "track" }, isStopOf)
+        if ok and r ~= nil and r.pts ~= nil and #r.pts >= 4 then
+            r = RF.cutHairpins(r, wx, wz)
+            if r ~= nil then r = RF.cutEndHooks(r, function(x, z) return kindAt(x, z) == RF.KIND_PAVED end) end
+            if r ~= nil then r = RF.trimGhosts(r, isRoadOf(r.class), r.class, wx, wz) end
+            return r
+        elseif not ok then
+            print("e " .. si .. " " .. tostring(r))
+        end
+        return nil
     end
+    -- VOTE=1: as a click does - walked from here and from five spots along it, the majority kept
+    local r
+    if os.getenv("VOTE") then RF.TRACE_VOTE = os.getenv("TRACE_VOTE") ~= nil r = RF.voteWalk(walkLine, sx, sz) else r = walkLine(sx, sz) end
     if r ~= nil and r.pts ~= nil and #r.pts >= 4 then
         print(string.format("c %d %s", si, tostring(r.class)))
         for _, p in ipairs(r.pts) do print(string.format("l %d %.2f %.2f", si, p.x, p.z)) end
