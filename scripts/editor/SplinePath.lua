@@ -127,23 +127,25 @@ function ADSplinePath.resample(curve, spacing)
     return out, total
 end
 
---- Which piece of the curve passes closest to (x, z), and how close. nil when the curve is empty.
+--- Which piece of the curve passes closest to (x, z), how close, and the closest point on it
+--- (x, z, y). nil when the curve is empty.
 function ADSplinePath.nearestPiece(curve, x, z)
-    local bestSeg, bestD2 = nil, math.huge
+    local bestSeg, bestD2, bx, bz, by = nil, math.huge, nil, nil, nil
     for i = 2, #curve do
         local a, b = curve[i - 1], curve[i]
         local vx, vz = b.x - a.x, b.z - a.z
         local len2 = vx * vx + vz * vz
         local t = len2 > 1e-9 and ((x - a.x) * vx + (z - a.z) * vz) / len2 or 0
         t = math.max(0, math.min(1, t))
-        local px, pz = a.x + vx * t - x, a.z + vz * t - z
-        local d2 = px * px + pz * pz
+        local cx, cz = a.x + vx * t, a.z + vz * t
+        local d2 = (cx - x) * (cx - x) + (cz - z) * (cz - z)
         if d2 < bestD2 then
-            bestSeg, bestD2 = b.seg, d2
+            bestSeg, bestD2, bx, bz = b.seg, d2, cx, cz
+            by = (a.y ~= nil and b.y ~= nil) and (a.y + (b.y - a.y) * t) or (a.y or b.y)
         end
     end
     if bestSeg == nil then
         return nil
     end
-    return bestSeg, math.sqrt(bestD2)
+    return bestSeg, math.sqrt(bestD2), bx, bz, by
 end

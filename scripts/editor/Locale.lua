@@ -361,9 +361,9 @@ L.STRINGS = {
         ["Wheel adjusts the curve. Right-click places it."] = "Rad passt die Kurve an. Rechtsklick platziert sie.",
         ["Click the waypoint to curve to."] = "Den Wegpunkt anklicken, zu dem die Kurve führt.",
         ["Click the waypoint to curve from."] = "Den Wegpunkt anklicken, von dem die Kurve ausgeht.",
-        ["Click to add a point, drag one to move it, Ctrl-click one to remove it. Right-click lays it."] = "Klicken fügt einen Punkt hinzu, Ziehen verschiebt ihn, Strg-Klick entfernt ihn. Rechtsklick legt die Kurve.",
-        ["Click the next point. On a waypoint it joins the road there."] = "Den nächsten Punkt anklicken. Auf einem Wegpunkt schließt die Kurve dort an die Straße an.",
-        ["Click the first point - on a waypoint to start from the road, or on the ground."] = "Den ersten Punkt anklicken - auf einem Wegpunkt, um an der Straße zu beginnen, oder auf dem Boden.",
+        ["Click to add a point (on the line it goes in between), drag one to move it, Ctrl-click one to remove it. Hold Alt to place without snapping. Right-click lays it."] = "Klicken fügt einen Punkt hinzu (auf der Linie wird er dazwischen eingefügt), Ziehen verschiebt ihn, Strg-Klick entfernt ihn. Alt halten setzt ohne Einrasten. Rechtsklick legt die Kurve.",
+        ["Click the next point. On a waypoint it joins the road there; hold Alt to place without snapping."] = "Den nächsten Punkt anklicken. Auf einem Wegpunkt schließt die Kurve dort an die Straße an; Alt halten setzt ohne Einrasten.",
+        ["Click the first point - on a waypoint to start from the road, or on the ground. Hold Alt to place without snapping."] = "Den ersten Punkt anklicken - auf einem Wegpunkt, um an der Straße zu beginnen, oder auf dem Boden. Alt halten setzt ohne Einrasten.",
         ["Waypoints can only be placed on the server (host/singleplayer)."] = "Wegpunkte können nur auf dem Server gesetzt werden (Host/Einzelspieler).",
         ["The spline starts and ends on the same waypoint."] = "Der Spline beginnt und endet auf demselben Wegpunkt.",
         ["Click inside a field to ring it. Uses the field loop settings."] = "In ein Feld klicken, um es zu umranden. Nutzt die Feldschleifen-Einstellungen.",
@@ -495,8 +495,8 @@ L.HELP = {
                 "Spline legt eine glatte Kurve, die durch jeden angeklickten Punkt läuft - für weite Bögen, denen ein Fahrzeug zügig folgen kann. Eine Live-Vorschau zeigt die Kurve und die Wegpunkte, die sie legt, bevor du sie festlegst. Ein Ende auf einem Wegpunkt schließt dort an die Straße an und folgt ihrer Richtung; ein Ende auf freiem Boden bekommt einen neuen Wegpunkt.",
             },
             how = {
-                "Punkte der Reihe nach anklicken - auf dem Boden, oder auf einem Wegpunkt, um dort an die Straße anzuschließen.",
-                "Einen Punkt ziehen, um ihn zu verschieben. Nahe der Kurve klicken fügt einen Punkt dazwischen ein. Strg-Klick auf einen Punkt entfernt ihn.",
+                "Punkte der Reihe nach anklicken - auf dem Boden, oder direkt auf einem Wegpunkt, um dort an die Straße anzuschließen. Alt halten setzt einen Punkt ohne Einrasten. Eine Markierung unter der Maus zeigt, was ein Klick tut: gelb schließt an einen Wegpunkt an, weiß ist freier Boden, grün fügt in die Linie ein.",
+                "Auf die Kurve klicken fügt dort einen Punkt in die Linie ein. Einen Punkt ziehen, um ihn zu verschieben. Strg-Klick auf einen Punkt entfernt ihn.",
                 "Rechtsklick legt die Kurve als ein Rückgängig-Schritt; Esc verwirft sie.",
             },
             controls = {
