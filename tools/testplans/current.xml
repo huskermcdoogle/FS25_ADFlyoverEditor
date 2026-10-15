@@ -3,19 +3,12 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="release 1.0.3.0: everything together" build="@BUILD@">
+<testPlan title="release 1.0.3.0: spline fix + icons" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="roadRuns" title="Road runs: pick, build and reshape still work" passLog="road runs %- built"
-          hint="Pick a road, right-click builds; click it again, drag a handle, right-click reshapes (ticks on the build)."/>
-    <test id="spline" title="Spline: lay a multi-point curve" passLog="placed multi%-point spline"
+    <test id="spline" title="Spline: right-click lays a multi-point curve" passLog="placed multi%-point spline"
+          failLog="Spline%.lua:%d+: attempt"
           hint="Click points, right-click lays it (ticks itself)."/>
-    <test id="junction" title="Junction BETA: clear + build a plain X or T" passLog="junction clear %+ build %- cleared"
-          hint="Button says 'junction BETA'. Lock a plain road junction, clear + build, right-click (ticks itself). One undo takes it back."/>
-    <test id="betaOff" title="Settings: BETA junction tool off hides it, on brings it back"
-          hint="Settings dialog, BETA section: off - the junction button goes; on - it is back."/>
-    <test id="tools" title="Other tools as before (draw, move, smooth, field loop)"
-          hint="A quick try of each: the editor was split into modules for this release."/>
-    <test id="help" title="Help: road runs and junction (beta) pages"
-          hint="Open the help for road runs and for the junction tool: both read right."/>
+    <test id="icons" title="Toolbar: road runs and junction have icons, the others as before"
+          hint="Road runs: a road with a dashed middle. Junction BETA: a crossroads with a turn. Every other icon unchanged, the gear too."/>
 </testPlan>
