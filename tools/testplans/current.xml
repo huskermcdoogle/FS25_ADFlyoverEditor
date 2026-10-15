@@ -6,8 +6,8 @@
 <testPlan title="road runs shaping: colours + fixes" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="colours" title="Colours easy to tell apart"
-          hint="Road runs: road under the mouse orange; picks magenta (secondary purple); the selected run thick white; handles yellow, the one under the mouse big white, one joined to a waypoint red. None looks like AutoDrive's own green/blue lines."/>
+    <test id="colours" title="Colours easy to tell apart (colour-blind safe)"
+          hint="Road under the mouse vermillion; picks reddish purple (secondary orange); selected run thick sky blue; handles yellow, the one under the mouse big vermillion, one joined to a waypoint bluish green. Not too bright."/>
     <test id="shapeBuild" title="Build lays the shaped line" passLog="road runs %- built"
           hint="Drag a handle, build: the laid line follows the shape (ticks on the build - check it by eye)."/>
     <test id="ctrlRemove" title="Ctrl-click removes a handle" passLog="road runs %- handle %d+ removed"

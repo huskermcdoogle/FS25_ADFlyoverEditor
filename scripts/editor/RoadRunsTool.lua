@@ -2163,8 +2163,10 @@ function E:drawRoadRunsInner(lw)
     -- against grass and asphalt - 2026-10-14 user: "the colors are still hard to see")
     -- each thing its own colour, clear of AutoDrive's own green and blue lines (cyan picks read as
     -- AutoDrive's blue - 2026-10-14 user: "not very distinguishable")
-    local pr, pg, pb = 1, 0, 1                                       -- picks, primary: magenta
-    if self.roadSubPrio then pr, pg, pb = 0.55, 0, 1 end             -- picks, secondary: purple
+    -- Okabe-Ito (colour-blind safe), dimmer, and size tells the handles apart too (2026-10-14 user:
+    -- too bright, hard for colour blindness, yellow and white hard to tell apart)
+    local pr, pg, pb = 0.80, 0.47, 0.65                              -- picks, primary: reddish purple
+    if self.roadSubPrio then pr, pg, pb = 0.90, 0.62, 0 end          -- picks, secondary: orange
 
     -- every unpathed road nearby, faint
     if self.roadShowAll and cx ~= nil then
@@ -2183,13 +2185,13 @@ function E:drawRoadRunsInner(lw)
     for _, pk in ipairs(s.picks) do
         self:drawRoadRunLanes(self:roadRunsLanesFor(pk.st, pk.dir), lw, pr, pg, pb)
         if pk == s.hoverPick and pk ~= s.sel then
-            drawLine(pk.st.pts, 1, lw * 2, 1, 1, 1, 0.4)            -- white: a click selects it
+            drawLine(pk.st.pts, 1, lw * 2, 0.34, 0.71, 0.91, 0.4)  -- sky blue: a click selects it
         end
     end
     -- the selected pick's handles: ends larger, the one under the mouse (or dragged) bright
     local sel = s.sel
     if sel ~= nil and sel.handles ~= nil then
-        drawLine(sel.st.pts, 1, lw * 2.6, 1, 1, 1, 0.5)            -- the selected run: thickest, white
+        drawLine(sel.st.pts, 1, lw * 2.6, 0.34, 0.71, 0.91, 0.5)   -- the selected run: thickest, sky blue
         for i, h in ipairs(sel.handles) do
             if finite(h.x) and finite(h.z) then
                 local y = (h.y or terrainY(h.x, h.z)) + 0.8
@@ -2197,11 +2199,11 @@ function E:drawRoadRunsInner(lw)
                 local hot = i == s.handleHover or i == s.handleDrag
                 -- glow 0.10: more pushes the hue toward white and they all look alike
                 if hot then
-                    Draw:addSphereTask(h.x, y, h.z, 7, 1, 1, 1, 0.10)                         -- under the mouse: white, big
+                    Draw:addSphereTask(h.x, y, h.z, 8, 0.84, 0.37, 0, 0.05)                   -- under the mouse: vermillion, big
                 elseif h.wpId ~= nil then
-                    Draw:addSphereTask(h.x, y, h.z, 6, 1, 0, 0, 0.10)                         -- joined to a waypoint: red
+                    Draw:addSphereTask(h.x, y, h.z, 6, 0, 0.62, 0.45, 0.05)                   -- joined to a waypoint: bluish green
                 else
-                    Draw:addSphereTask(h.x, y, h.z, isEnd and 6 or 5, 1, 1, 0, 0.10)          -- handle: yellow
+                    Draw:addSphereTask(h.x, y, h.z, isEnd and 6 or 5, 0.94, 0.89, 0.26, 0.05) -- handle: yellow
                 end
             end
         end
@@ -2209,7 +2211,7 @@ function E:drawRoadRunsInner(lw)
     -- the hovered stretch: bright, with its lanes previewed and the forks it stops short of
     local st = s.hover and self:roadRunsRefined(s.hover) or nil
     if st ~= nil then
-        drawLine(st.pts, 1, lw * 2, 1, 0.45, 0, 0.4)                 -- the road under the mouse: orange
+        drawLine(st.pts, 1, lw * 2, 0.84, 0.37, 0, 0.4)              -- the road under the mouse: vermillion
         self:drawRoadRunLanes(self:roadRunsLanesFor(st, s.hoverSide or 1, true), lw * 1.3, 1, 0.9, 0.3)
         for _, n in ipairs({ st.startNode, st.endNode }) do
             if n ~= nil and n.tag == "fork" then
