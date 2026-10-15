@@ -624,6 +624,14 @@ function ADFlyoverEditor:junctionSelect(cx, cz)
                 table.sort(own, jxBeforeInPlace)
                 partSite = evaluate({ x = sx / #own, z = sz / #own, nodes = own, virgin = true, partOf = true }) or false
             end
+            -- A T cleared with its through road kept leaves only its side road's two lane ends, too few
+            -- to read as a junction, and the click went to the wired twin 20 m off (the course's 1e,
+            -- 2026-10-15: its clear + build then built on 1w). The part was clicked and is known; it is
+            -- the site, cleared.
+            if not partSite then
+                table.sort(own, jxBeforeInPlace)
+                partSite = { x = onPart.x, z = onPart.z, nodes = own, virgin = true, partOf = true }
+            end
         end
         if partSite then return partSite end
         return site

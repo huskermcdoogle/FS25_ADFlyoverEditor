@@ -2132,23 +2132,45 @@ function ADFlyoverEditor:updateJunctionPreview()
             end
             return nil
         end
+        -- ...and a link between a through road and a side road's lane, near the middle (2026-10-15): the side
+        -- lane's walk ran back along a pattern's last left-turn link onto the main road, so that link was read
+        -- as side lane, and the course's 1w, cleared a second time, kept a turn into its side road. Only
+        -- within 8 m of the middle, so a siding or yard entrance off the road further out is left alone.
+        local function nearMiddle(a, b)
+            return (a.x - cx) ^ 2 + (a.z - cz) ^ 2 <= 64 or (b.x - cx) ^ 2 + (b.z - cz) ^ 2 <= 64
+        end
+        local function offRoad(w, o, ref)   -- leaves the through road at `ref` by more than 25 degrees
+            local ax, az = wayOnRoute(ref)
+            local lx, lz = o.x - w.x, o.z - w.z
+            local ln = math.sqrt(lx * lx + lz * lz)
+            return ax ~= nil and ln > 1e-6 and (ax * lx + az * lz) / ln < 0.906
+        end
+        local function consider(w, o)
+            local k = stepKey(w.id, o.id)
+            if have[k] or protectedLink[k] or protectedLink[stepKey(o.id, w.id)] then return end
+            if not (isOwnForClear(w) or isOwnForClear(o)) then return end
+            local cut = false
+            if protectedNodes[w.id] and protectedNodes[o.id] then
+                cut = offRoad(w, o, w)
+            elseif nearMiddle(w, o) and skeleton[w.id] and skeleton[o.id]
+                and not table.contains(o.out or {}, w.id) then   -- one-way only: farm tracks (j101) kept theirs
+                if protectedNodes[w.id] then cut = offRoad(w, o, w) else cut = offRoad(w, o, o) end
+            end
+            if cut then
+                have[k] = true
+                staleLinks[#staleLinks + 1] = { w, o, isThrough = false }
+            end
+        end
         for id in jxByPlace(protectedNodes) do
             local w = inside[id]
             if w ~= nil then
                 for _, nid in ipairs(w.out or {}) do
-                    local k = stepKey(id, nid)
-                    if protectedNodes[nid] and not protectedLink[k] and not protectedLink[stepKey(nid, id)] and not have[k] then
-                        local o = inside[nid] or ADGraphManager:getWayPointById(nid)
-                        if o ~= nil and (isOwnForClear(w) or isOwnForClear(o)) then
-                            local ax, az = wayOnRoute(w)
-                            local lx, lz = o.x - w.x, o.z - w.z
-                            local ln = math.sqrt(lx * lx + lz * lz)
-                            if ax ~= nil and ln > 1e-6 and (ax * lx + az * lz) / ln < 0.906 then
-                                have[k] = true
-                                staleLinks[#staleLinks + 1] = { w, o, isThrough = false }
-                            end
-                        end
-                    end
+                    local o = inside[nid] or ADGraphManager:getWayPointById(nid)
+                    if o ~= nil then consider(w, o) end
+                end
+                for _, iid in ipairs(w.incoming or {}) do
+                    local i = inside[iid] or ADGraphManager:getWayPointById(iid)
+                    if i ~= nil and not protectedNodes[iid] then consider(i, w) end
                 end
             end
         end

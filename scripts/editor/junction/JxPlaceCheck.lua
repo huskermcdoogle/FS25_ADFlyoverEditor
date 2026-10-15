@@ -120,18 +120,41 @@ end
 --- where it fitted. 15 m is what every survey result was measured at. Worked out with the road, obstacle
 --- and swept checks off: they refuse turns but never change which there are. At 15 m from the click
 --- itself the build's own count is that already.
+--- A TWIN CLOSER THAN 30 M (step A, 2026-10-15): at a part of a split junction the circle shrinks to half
+--- the way to the other part, 8 m at the least, and does not grow to cut lane ends - built after its twin,
+--- 1e's 15 m circle took in 1w's T 20 m off and was refused, laid turn by turn, and those wide turns were
+--- then cut away by 1w's next clear. Only for twins: shrunk for any neighbour, survey j86 counted 6 of its
+--- 14 movements and was given a T.
 function ADFlyoverEditor:junctionMovementsAt15(jp, ox, oz)
     if self._jxCountAt15 or ox == nil then return #(jp.movements or {}) end
+    local R = 15
+    tryCall("junction build: the twin part for the count", function()
+        for _, e in ipairs(self:junctionRegistry() or {}) do
+            if e.decision == "split" and e.parts ~= nil and #e.parts >= 2 then
+                local here = nil
+                for _, q in ipairs(e.parts) do
+                    if (q.x - ox) ^ 2 + (q.z - oz) ^ 2 <= 6 * 6 then here = q end
+                end
+                for _, q in ipairs(here and e.parts or {}) do
+                    local d = math.sqrt((q.x - here.x) ^ 2 + (q.z - here.z) ^ 2)
+                    if q ~= here and d < 30 then R = math.min(R, math.max(8, d / 2)) end
+                end
+            end
+        end
+    end)
     local a = self.junctionArmed
-    if math.abs(self:junctionRadiusValue() - 15) < 0.5 and a ~= nil and math.abs(a.cx - ox) < 0.01
+    if R == 15 and math.abs(self:junctionRadiusValue() - 15) < 0.5 and a ~= nil and math.abs(a.cx - ox) < 0.01
         and math.abs(a.cz - oz) < 0.01 then
         return #(jp.movements or {})
     end
     local keep = { self.junctionRadius, self.junctionPreview, self.junctionPreviewKey, self.junctionSite,
         self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles,
-        self.junctionArmed }
+        self.junctionArmed, AutoDrive.FLYOVER_JUNCTION_GROW_TO_ENDS }
     self._jxCountAt15 = true
-    self.junctionRadius, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = 15, false, false, false
+    -- The circle still grows to the lane ends a clear cut (j86's far roads are found only that way),
+    -- except beside a twin, where it would reach into the twin.
+    if R < 15 then AutoDrive.FLYOVER_JUNCTION_GROW_TO_ENDS = false end
+    self.junctionRadius, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = R, false, false, false
     self.junctionArmed = { cx = ox, cz = oz, cy = (keep[9] ~= nil and keep[9].cy) or 0 }
     self.junctionPreview, self.junctionPreviewKey = nil, nil
     local n = #(jp.movements or {})
@@ -143,6 +166,7 @@ function ADFlyoverEditor:junctionMovementsAt15(jp, ox, oz)
     self.junctionRadius, self.junctionPreview, self.junctionPreviewKey, self.junctionSite = keep[1], keep[2], keep[3], keep[4]
     self.junctionRefused, self.junctionSwept, self.junctionCheckSurface, self.junctionCheckObstacles = keep[5], keep[6], keep[7], keep[8]
     self.junctionArmed = keep[9]
+    AutoDrive.FLYOVER_JUNCTION_GROW_TO_ENDS = keep[10]
     self._jxCountAt15 = false
     return n
 end
