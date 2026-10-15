@@ -3,15 +3,15 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="shape runs + no T links + spline snap" build="@BUILD@">
+<testPlan title="road runs shaping: colours + fixes" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="noTee" title="No link at a T with a road"
-          hint="Road runs: build the field track to the road, and the lane that had the diagonal link. Each ends at the road's edge with no link into the road's lanes."/>
-    <test id="shapeRun" title="Shape a picked run with handles" passLog="road runs %- handle %d+ moved"
-          hint="Road runs: pick a road - handles appear on it. Drag one (ticks itself), click the line to add one, ctrl-click one to remove, drag an end onto a waypoint (yellow). Click another pick to select it; 'drop selected run' on the card. Build: the shaped line is laid."/>
-    <test id="splineSnap" title="Spline snap is tighter; Alt places without snapping"
-          hint="Spline tool: near a waypoint the point only snaps when right on it (yellow marker). Hold Alt: it never snaps (white marker)."/>
-    <test id="splineInsert" title="Click on the curve adds a point"
-          hint="Spline tool: click on the drawn curve (green marker): a point goes into the line there."/>
+    <test id="colours" title="Colours easy to see"
+          hint="Road runs: handles magenta, the one under the mouse yellow, the selected run thick white, the road under the mouse orange, picks cyan."/>
+    <test id="shapeBuild" title="Build lays the shaped line" passLog="road runs %- built"
+          hint="Drag a handle, build: the laid line follows the shape (ticks on the build - check it by eye)."/>
+    <test id="ctrlRemove" title="Ctrl-click removes a handle" passLog="road runs %- handle %d+ removed"
+          hint="Ctrl-click a handle, including one you dragged or added (ticks itself)."/>
+    <test id="dropUnbuilt" title="Unbuilt edits drop" passLog="unbuilt pick%(s%) dropped"
+          hint="Shape a run, do not build, leave the tool: it is gone when you come back. Same after an undo (ticks itself)."/>
 </testPlan>
