@@ -72,9 +72,11 @@ TOOLS = [
                 "it will lay before you commit it. An end clicked on a waypoint joins the road there "
                 "and follows its heading; an end on bare ground gets a new waypoint.",
         "how": [
-            "Click points in order - on the ground, or on a waypoint to join the road there.",
-            "Drag a point to move it. Click near the curve to add a point in between. Ctrl-click a "
-            "point to remove it.",
+            "Click points in order - on the ground, or right on a waypoint to join the road there. "
+            "Hold Alt to place a point without snapping. A marker under the mouse shows what a click "
+            "does: yellow joins a waypoint, white is bare ground, green goes into the line.",
+            "Click on the curve to put a point into the line there. Drag a point to move it. "
+            "Ctrl-click a point to remove it.",
             "Right-click lays it as one undo step; Esc throws it away.",
         ],
         "controls": [
