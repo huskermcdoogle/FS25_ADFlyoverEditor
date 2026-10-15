@@ -153,7 +153,8 @@ What changed:
 
 On the survey map: j38 gets the mod's X; j56, j58 and j83 the square X piece, all 12 routes each.
 
-**Open:** redoing a split junction's part (the course's pair) with clear + build is not stable - the
-second clear reaches the other part. Build the pair once on a cleared or unbuilt course; redoing it is
-the next fix. Slot 10's junctions were built by older builds and leave odd leftovers (doubled points, a
+**Redoing a split junction's part** (fixed offline 2026-10-15, becce72): a cleared part is found as
+itself (it had gone to its wired twin), the count beside a twin part stays out of the twin, and the clear
+takes a pattern's last left-turn link. The pair redoes cleanly in either order, three rounds, at the user's
+settings (`tools/junction-harness/dbgrounds.lua`). Not yet tried in game. Slot 10's junctions were built by older builds and leave odd leftovers (doubled points, a
 turning loop in the build's circle), so the clean test is the course's own unbuilt network.
