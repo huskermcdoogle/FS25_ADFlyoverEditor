@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.0.3.0 — Road runs, multi-point spline, junction tool (beta)
+
+### Road runs (new tool, CREATE group)
+
+- **Lays AutoDrive runs along map roads and farm tracks that have no path yet.** It reads the ground
+  paint round the mouse - asphalt and concrete, gravel, dirt tracks - and lights up the roads with no
+  path. A click follows the road on through junctions where it carries straight on and stops at T's,
+  real ends and existing paths; double-click carries it on through forks too. It lays one-way, one
+  two-way line, or two lanes keeping right, stops short at forks for the junction tool, and runs a
+  track that meets a road right to the asphalt.
+- **Shape before you build:** click a pick for handles - drag one, click the line to add one,
+  Ctrl-click one to remove it; an end dragged onto a waypoint joins it (Alt: no snap).
+- **Reshape roads already built:** click any AutoDrive road and shape it the same way. A two-lane road
+  is shaped by its middle, both lanes together. The selection carries on through junctions (card
+  toggle); junction points move with it, short turns bend and stay joined, side roads ease back into
+  place within about 20 m. Right-click applies; one undo.
+- Card: lay as, priority, roads to find, lane gap. Light up, side check, rig width and fork gap are in
+  the settings dialog's ROAD RUNS section.
+
+### Spline: a multi-point curve of the editor's own
+
+- **Click any number of points** - on the ground, or on a waypoint to join the road there. Drag a point
+  to move it, click the curve to add one, Ctrl-click to remove one, Alt places without snapping.
+  Spacing sets how far apart the waypoints are laid. Right-click lays it as one undo step.
+- AutoDrive's own two-point spline is still there: "curve by: AutoDrive" on the card.
+
+### Junction tool (BETA)
+
+- **Clear, build, or clear + build a road junction in one right-click.** Click a junction to lock it;
+  clear takes out the old turn wiring and trims the lanes back, build lays the mod's X or T pattern
+  where it fits every road (turn by turn where it does not, as the advanced setting says). One undo.
+- It is a **beta**: plain X and T road junctions are what it does well today; two-way farm tracks, Y's
+  and skewed junctions are still to come. It is on by default and its button says BETA; switch it off
+  in the settings dialog (BETA section).
+- Junction numbers are drawn over the junctions and kept with the savegame.
+
+### Left Alt + V opens the editor too
+
+- **Left Alt + V now opens the editor as well as Left Alt + F.** Left Alt + F stays, so nobody has to
+  relearn anything - but it has a weakness we could not see from inside the mod: it is also the base
+  game's key for toggling a vehicle's lights from outside (`TOGGLE_LIGHTS_EXTERNAL`). Whenever you
+  stand at a vehicle on foot, the game registers that key, the clash switches ours off, and Alt + F
+  flicks the lights instead of opening the editor until the game next rebuilds its bindings. That
+  was the "lost Left Alt key". Alt + V has no such clash. Anyone who rebound the key in the controls
+  menu keeps their own binding.
+
+## 1.0.2.2 — Field loop: stays in its own field, keeps clear of fences and other loops (2026-10-08)
+
+Reported on issues 14 and 15: a field loop jumped into the next field across a narrow strip, and loops
+of neighbouring fields overlapped. Looking into that turned up more, all in the field loop.
+
+### Stays in its own field
+
+- **Combo gap is a plain number** from 0 to 50 m and **defaults to 0**: the loop stays in the field you
+  clicked. Raise it only for a field split by a lane. (It used to be a list of steps with 3 m as the
+  smallest, and 8 m as the default.)
+- **Two fields with a narrow strip between them are no longer read as one.** The boundary tracer looked
+  only at a point 5 m ahead, so a field beyond a strip narrower than that looked like the same field
+  continuing. It now checks the whole line, forgiving gaps under about a metre (the density map is a
+  grid, so a field edge is a stair). Two fields that truly touch, with no gap at all, still read as one.
+
+### Turning radius
+
+- **Turning radius is a plain number** from 2 to 20 m (the floor was 5), and **with avoid obstacles on,
+  a smaller radius now gives a tighter corner**. A tidy-up pass that runs only with obstacle avoidance
+  on rounded small corners off into much bigger ones (a setting of 2 came out near 23 m).
+- **A tree on a rounded corner no longer folds it into a hook.** The loop used to be pushed inward round
+  the tree along each point's own direction, which converge on the corner's centre. The field's corner
+  is now moved in before the corners are rounded, so every corner keeps the radius you set.
+
+### Fences
+
+- **The loop stays on the field side of a fence.** A fence along a field edge used to make the loop
+  detour round every post and panel, give up, and leave points on the fence ("could not route around a
+  tree"), or drift away from the edge. The fences are now read from the game, each section with its
+  exact ends, and each field edge keeps clear of them - running inside the field outline where the fence
+  stands inside it, which is common. Replaying the real fences of the Helden map, one field went from 278
+  loop points touching a fence to 2.
+- The obstacle test is a square box, so the distance kept from a fence section running at an angle is
+  larger than the clearance you set; it is worked out for each section.
+- When the loop gives up on an obstacle anyway, the log now names what it hit (a fence panel, a pole,
+  an invisible collision post), instead of "a tree".
+
+### Neighbouring loops
+
+- **A new loop pulls its margin in to stay about a metre clear of another field loop beside it**, so
+  two loops round neighbouring fields do not overlap or cross (crossing at under 80 degrees lets
+  AutoDrive switch from one loop to the other). Only as far as needed, never past the field's own edge;
+  the log says so, and warns if the strip is too narrow even then. A loop still joined to a road is
+  found too, and earlier loops of the same field are ignored.
+
 ## 1.0.2.1 — AutoDrive 3.0.1.4's field points kept intact, warnings you can read (2026-10-06)
 
 AutoDrive 3.0.1.4 (5 October 2026) can lay a loop of points round a field from its own editor

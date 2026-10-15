@@ -11,7 +11,7 @@ attaches at runtime, and it refuses to load (and says why) if AutoDrive isn't th
 
 *Top-down editing of an AutoDrive route — the grouped tool panel with live theme settings, a run's context menu, and the network drawn over the map.*
 
-> **Status:** build 1.0.2.1 · single player only · English / Deutsch · requires `FS25_AutoDrive`
+> **Status:** build 1.0.3.0 · single player only · English / Deutsch · requires `FS25_AutoDrive`
 
 ## Install
 
@@ -30,7 +30,7 @@ Bugs, ideas, or questions are welcome on [Discord](https://discord.gg/w6mvhuaa9k
 
 ## Opening the editor
 
-- **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
+- **Left Alt + V** or **Left Alt + F** (rebindable in the controls menu), or the button beside AutoDrive's HUD.
 - **Esc** to leave. Every edit is undoable — **Q** undo, **E** redo.
 
 ## Works with placeable junctions too

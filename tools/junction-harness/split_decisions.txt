@@ -1,0 +1,24 @@
+# The user's split decisions (2026-09-29), by registry number. Each line is one PART of a junction the
+# user wants split: part name, kind as the parts reader saw it (confirm after the split), meeting point x z.
+# Naming (the user's rule): compass letters, 8-point (n ne e se s sw w nw), by direction from the midpoint
+# of two parts; with three parts the MIDDLE one keeps the bare number and the outer ones get letters.
+# Numbers never change; a split junction keeps its number and its parts carry the letters.
+20n  T square   -947.1   32.4
+20s  T square   -947.0   46.0
+72w  T square   -860.3  445.7
+72e  Y merge    -849.5  445.9
+73nw Y merge    -757.4  481.1
+73se T skew     -749.4  489.9
+26n  T          -933.0  481.4
+26s  T          -933.8  493.3
+14nw T square   -816.2   42.1
+14se T square   -806.0   60.8
+39   ?            6.9  -13.6   # the north road's junction, the middle of three
+39se T square    22.5    0.1
+39nw T square   -15.0  -24.5   # a one-way lane (labelled "SW" on the decision page; it sits north-west)
+40w  T square   -71.7  -47.8   # today's 40
+40e  T          -51.8  -42.5
+# 40's third meeting point (-44.1, -66.4) is NOT a junction (user).
+# Kept whole: 30 (one staggered crossroads), 24 and 31 (Corner T), 36, 35, cleared 70, 71, 74, 75.
+# The same, for split_registry.lua to read:
+whole 24 30 31 35 36 70 71 74 75

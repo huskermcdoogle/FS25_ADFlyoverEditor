@@ -77,6 +77,42 @@ local function TR(s)
     return s
 end
 
+--- How wide a piece of text renders, or 0 where the engine cannot say. Wrapped so the callers that
+--- only want to know whether something fits do not each have to guard getTextWidth themselves.
+function ADFlyoverHud:measure(fontSize, text)
+    if text == nil or text == "" or getTextWidth == nil then return 0 end
+    local ok, w = pcall(getTextWidth, fontSize, text)
+    return (ok and w) or 0
+end
+
+--- Fit `text` into `maxW`, and say at what size to draw it. Shrunk first, down to three quarters of
+--- the size asked for, because a slightly smaller line that can be read beats a full-size one that
+--- cannot; only then cut short, with an ellipsis so it is obvious something was cut rather than the
+--- reader being left to wonder what the rest of it said.
+---
+--- Returns the text unchanged and the size unchanged whenever it already fits, which is almost
+--- always - nothing is measured twice for the sake of the one row in fifty that overruns.
+function ADFlyoverHud:fitToWidth(text, fontSize, maxW)
+    if text == nil or text == "" then return text, fontSize end
+    if maxW == nil or maxW <= 0 or getTextWidth == nil then return text, fontSize end
+    if self:measure(fontSize, text) <= maxW then return text, fontSize end
+
+    local floorSize = fontSize * 0.75
+    local size = fontSize
+    for _ = 1, 6 do
+        size = size - fontSize * 0.05
+        if size <= floorSize then break end
+        if self:measure(size, text) <= maxW then return text, size end
+    end
+
+    size = floorSize
+    local cut = text
+    while #cut > 1 and self:measure(size, cut .. "...") > maxW do
+        cut = cut:sub(1, #cut - 1)
+    end
+    return cut .. "...", size
+end
+
 function ADFlyoverHud:ensureOverlays()
     if self.background == nil then
         self.background = Overlay.new(g_baseUIFilename, 0, 0, 1, 1)
@@ -113,15 +149,17 @@ function ADFlyoverHud:ensureOverlays()
     end
 end
 
---- Draw one tool glyph from the atlas: cell 0..14, row-major in a 4x4 grid of 128px cells, tinted to
---- the button. Guarded so an unexpected UV/render API drops to label-only rather than erroring.
+--- Draw one tool glyph from the atlas: row-major in an ICON_GRID x ICON_GRID grid of 128px cells
+--- (tools/make_tool_icons.py; 8x8 on 1024 px since 1.0.3.0), tinted to the button. Guarded so an
+--- unexpected UV/render API drops to label-only rather than erroring.
+local ICON_GRID, ICON_ATLAS = 8, 1024
 function ADFlyoverHud:renderIcon(cell, x, y, w, h, r, g, b, a)
     if self.iconOverlay == nil or GuiUtils == nil then
         return
     end
-    local col, row = cell % 4, math.floor(cell / 4)
+    local col, row = cell % ICON_GRID, math.floor(cell / ICON_GRID)
     local ok = pcall(function()
-        self.iconOverlay:setUVs(GuiUtils.getUVs({ col * 128, row * 128, 128, 128 }, { 512, 512 }))
+        self.iconOverlay:setUVs(GuiUtils.getUVs({ col * 128, row * 128, 128, 128 }, { ICON_ATLAS, ICON_ATLAS }))
         self.iconOverlay:setColor(r, g, b, a)
         self.iconOverlay:setPosition(x, y)
         self.iconOverlay:setDimension(w, h)
@@ -206,6 +244,42 @@ end
 --- left of them. The buttons overlap the field's full-width box, so isMouseOver scans back-to-front:
 --- the buttons are appended after the field and therefore win the click that lands on them.
 ---
+--- How wide a piece of text renders, or 0 where the engine cannot say. Wrapped so the callers that
+--- only want to know whether something fits do not each have to guard getTextWidth themselves.
+function ADFlyoverHud:measure(fontSize, text)
+    if text == nil or text == "" or getTextWidth == nil then return 0 end
+    local ok, w = pcall(getTextWidth, fontSize, text)
+    return (ok and w) or 0
+end
+
+--- Fit `text` into `maxW`, and say at what size to draw it. Shrunk first, down to three quarters of
+--- the size asked for, because a slightly smaller line that can be read beats a full-size one that
+--- cannot; only then cut short, with an ellipsis so it is obvious something was cut rather than the
+--- reader being left to wonder what the rest of it said.
+---
+--- Returns the text unchanged and the size unchanged whenever it already fits, which is almost
+--- always - nothing is measured twice for the sake of the one row in fifty that overruns.
+function ADFlyoverHud:fitToWidth(text, fontSize, maxW)
+    if text == nil or text == "" then return text, fontSize end
+    if maxW == nil or maxW <= 0 or getTextWidth == nil then return text, fontSize end
+    if self:measure(fontSize, text) <= maxW then return text, fontSize end
+
+    local floorSize = fontSize * 0.75
+    local size = fontSize
+    for _ = 1, 6 do
+        size = size - fontSize * 0.05
+        if size <= floorSize then break end
+        if self:measure(size, text) <= maxW then return text, size end
+    end
+
+    size = floorSize
+    local cut = text
+    while #cut > 1 and self:measure(size, cut .. "...") > maxW do
+        cut = cut:sub(1, #cut - 1)
+    end
+    return cut .. "...", size
+end
+
 --- Appends to self.rows, so the caller's render loop MUST freeze its length first (numeric for over
 --- a frozen count), or it will walk into the buttons it just added.
 function ADFlyoverHud:drawNumberField(row, x, y, w, h, fontSize, mx, my, labelRoleName, valueRoleName)
@@ -348,24 +422,24 @@ function ADFlyoverHud:buildRows(editor)
     local T = editor.TOOL
     local GROUPS = {
         { "MODE", { T.NONE } },
-        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING } },
+        { "CREATE", { T.DRAW, T.SPLINE, T.FIELDLOOP, T.PARALLEL, T.SIDING, T.ROADRUNS } },
         { "SHAPE", { T.MOVE, T.SMOOTH, T.STRAIGHTEN, T.DIVIDE, T.GROUND } },
-        -- JUNCTION is disconnected in this release (see the 0.31.0.1 patch notes) - left out of
-        -- this group entirely so there is no button for it, on top of setTool's own refusal.
-        { "CONNECT", { T.CONVERT, T.MERGE } },
+        -- the junction tool is a beta (settings dialog: BETA - junction tool); off, it has no button
+        { "CONNECT", ADFlyoverSettings.get("junctionBeta") and { T.CONVERT, T.MERGE, T.JUNCTION } or { T.CONVERT, T.MERGE } },
         { "UTILITY", { T.NAME, T.DELETE } },
     }
-    -- Atlas cell per tool (row-major in the 4x4 tool_icons.dds), independent of grouping/order.
+    -- Atlas cell per tool (row-major in tool_icons.dds, see renderIcon), independent of grouping/order.
     local ICON_CELL = {
         [T.NONE] = 0, [T.DRAW] = 1, [T.SPLINE] = 2, [T.FIELDLOOP] = 3,
         [T.PARALLEL] = 4, [T.SIDING] = 5, [T.MOVE] = 6, [T.SMOOTH] = 7,
         [T.STRAIGHTEN] = 8, [T.DIVIDE] = 9, [T.CONVERT] = 10, [T.MERGE] = 11,
-        [T.NAME] = 12, [T.DELETE] = 13, [T.GROUND] = 14,
+        [T.NAME] = 12, [T.DELETE] = 13, [T.GROUND] = 14, [T.ROADRUNS] = 16, [T.JUNCTION] = 17,
     }
     for _, grp in ipairs(GROUPS) do
         add("section", grp[1])
         for _, id in ipairs(grp[2]) do
             local name = (id == T.NONE) and "select" or editor.TOOL_NAMES[id]
+            if id == T.JUNCTION then name = "junction BETA" end
             add("tool", name, editor:toolKeyLabel(id), editor.tool == id, function() editor:setTool(id) end)
             rows[#rows].iconCell = ICON_CELL[id]
         end
@@ -635,6 +709,27 @@ function ADFlyoverHud:buildRows(editor)
     end
 
     if editor.tool == editor.TOOL.SPLINE then
+        segFlip("curve by", "multi-point", "AutoDrive", not editor:splineIsMultiPoint(), function() editor:toggleSplineMode() end)
+    end
+    if editor.tool == editor.TOOL.SPLINE and editor:splineIsMultiPoint() then
+        numberAfter("spacing")
+        local pts = editor.splinePoints or {}
+        -- The flips only mean something on an end that is joined to a road; on a free end the curve
+        -- picks its own heading, so they grey out there.
+        local startJoined = pts[1] ~= nil and pts[1].wpId ~= nil
+        local endJoined = #pts >= 2 and pts[#pts].wpId ~= nil
+        segFlip("start heading", "auto", "flipped", editor.splineFlipStartTangent,
+            function() editor:toggleSplineStartTangent() end, not startJoined)
+        segFlip("end heading", "auto", "flipped", editor.splineFlipEndTangent,
+            function() editor:toggleSplineEndTangent() end, not endJoined)
+        if #pts > 0 then
+            local laid = editor.splineLaid
+            add("cursor", "points", tostring(#pts))
+            if laid ~= nil then
+                add("cursor", "waypoints", string.format("%d, %.0f m", #laid, editor.splineLength or 0))
+            end
+        end
+    elseif editor.tool == editor.TOOL.SPLINE then
         -- Read-only: the wheel drives this while a preview is up, and the mod clamps it to
         -- 0.49-3.5. Showing the live value beats a list of preset steps.
         local c = AutoDrive.splineInterpolationUserCurvature
@@ -644,7 +739,6 @@ function ADFlyoverHud:buildRows(editor)
         -- without touching the shape.
         segFlip("spline direction", "as clicked", "reversed", editor.splineSwapEnds, function() editor:toggleSplineEnds() end)
         add("hint", "reversed builds the curve from the far end")
-        add("hint", "(shape, and on one-way the way it runs)")
         -- Which way the curve lies against the track where it arrives. On a two-way track the
         -- automatic choice is a guess between two equally valid tangents.
         segFlip("end tangent", "auto", "flipped", editor.splineFlipEndTangent, function() editor:toggleSplineEndTangent() end)
@@ -664,10 +758,6 @@ function ADFlyoverHud:buildRows(editor)
                 flow = string.format("%d -> %d", a, b)
             end
             add("cursor", "flow", flow)
-            if mode == editor.CONNECTION.TWOWAY then
-                add("hint", "two-way: set direction to one-way")
-                add("hint", "if you want to flip it")
-            end
         end
     elseif editor.tool == editor.TOOL.SMOOTH then
         segCycle("mode", editor.SMOOTH_MODE_NAMES, function(i) return i == 1 and "relax" or "rebuild" end,
@@ -680,6 +770,9 @@ function ADFlyoverHud:buildRows(editor)
         if editor.groundPreview ~= nil then
             add("cursor", "off the ground", string.format("%d of %d", #editor.groundPreview, editor.groundChecked or 0))
         end
+    elseif editor.tool == editor.TOOL.ROADRUNS then
+        -- RoadRunsTool.lua builds its own rows from the same kit
+        editor:roadRunsCard({ tgl = tgl, seg = seg, segFlip = segFlip, btn = btn, add = add, numberAfter = numberAfter })
     elseif editor.tool == editor.TOOL.FIELDLOOP then
         segFlip("priority", "primary", "secondary", editor.fieldLoopSubPrio, function() editor:toggleFieldLoopPriority() end)
         segCycle("track", editor.FIELD_LOOP_DIR_NAMES, nil, editor.fieldLoopDirection,
@@ -721,78 +814,316 @@ function ADFlyoverHud:buildRows(editor)
             add("header", string.format("%d selected - right-click deletes them, Esc clears", editor.selectionCount))
         end
     elseif editor.tool == editor.TOOL.JUNCTION then
-        -- First slice: the scope-radius wheel plus a read-out of what the preview found. No apply yet.
-        addWheelNumber("search radius", string.format("%.0f m", editor.junctionRadius or 15))
-        add("number", "turn radius", string.format("%.0f m", editor.junctionTurnRadius or 12))
-        rows[#rows].stepAction = function(dir)
-            editor.junctionTurnRadius = math.max(AutoDrive.FLYOVER_JUNCTION_TURN_MIN,
-                math.min(AutoDrive.FLYOVER_JUNCTION_TURN_MAX,
-                    (editor.junctionTurnRadius or 12) + dir * AutoDrive.FLYOVER_JUNCTION_TURN_STEP))
+        -- WHICH JUNCTION: its name, "j39se" once the user has split 39 and the lock is on that part
+        -- (jp.junctionName, worked out from where the selection locked it), else the bare number.
+        local function junctionLabel(jp)
+            if jp.junctionName ~= nil then return jp.junctionName end
+            if jp.junctionNumber ~= nil then return string.format("j%02d", jp.junctionNumber) end
+            return "unnumbered"
         end
-        add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
-            function() editor:toggleJunctionCheckSurface() end)
-        add("toggle", "trim/extend", (editor.junctionExtendTrim ~= false) and "on" or "off (clamp at trim)", false,
-            function() editor:toggleJunctionExtendTrim() end)
-        add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
-            function() editor:toggleJunctionRebuild() end)
-        add("toggle", "curve", (editor.junctionUseDubins ~= false) and "dubins" or "biarc", false,
-            function() editor:toggleJunctionCurveEngine() end)
-        add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
-            function() editor:toggleJunctionCheckObstacles() end)
-        add("number", "corridor", string.format("%.1f m", editor.junctionCorridor or 4))
-        rows[#rows].stepAction = function(dir)
-            editor.junctionCorridor = math.max(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MIN,
-                math.min(AutoDrive.FLYOVER_JUNCTION_CORRIDOR_MAX,
-                    (editor.junctionCorridor or 4) + dir * AutoDrive.FLYOVER_JUNCTION_CORRIDOR_STEP))
-            editor.junctionPreviewKey = nil
+        -- SPLIT OR KEEP WHOLE: the user's call, made here. Only where there is something to decide -
+        -- a numbered site the tool thinks may be more than one junction, or one already decided - so
+        -- most cards do not change. One selector from the card kit; "not decided" is how a decision
+        -- is undone (Q/E stay the undo for the road network). Under it, what the choice means.
+        local function junctionDecisionRows(jp)
+            local n, d, note = jp.junctionNumber, jp.junctionDecision, jp.junctionPartsNote
+            -- The names the parts had when it was split, kept by "keep whole" and "not decided": a
+            -- split brings exactly these back.
+            local aside = jp.junctionNamesAside
+            if n == nil or jp.onSite ~= true or (note == nil and d == nil and aside == nil) then
+                -- The suggestion alone, as it has always been shown: no number to save a decision
+                -- to, build placing freely (no junction to decide about), or nothing to decide.
+                for _, line in ipairs(note or {}) do add("note", line) end
+                return
+            end
+            -- THE BUTTONS ONLY FOR A JUNCTION A CLICK HAS LOCKED. Only pointed at, the site follows
+            -- the cursor, and the cursor stays where it last was in the world while the mouse is on
+            -- this card - so a button would act on whatever junction the mouse last passed over, and
+            -- a decision saves to the savegame at once. Pointed at, the card still says what was
+            -- decided.
+            local locked = (jp.lockedOnSite == true)
+            local offer = jp.junctionOffer
+            local canSplit = aside ~= nil or (offer ~= nil and offer.parts ~= nil and #offer.parts >= 2)
+            if locked then
+                -- The lit choice does nothing when clicked again: picking "split" a second time
+                -- would move saved parts, and a saved part is only ever moved on purpose (not
+                -- decided, forget the names, then split).
+                local splitAction = nil
+                if canSplit and d ~= "split" then splitAction = function() editor:junctionDecide(n, "split") end end
+                local wholeAction = nil
+                if d ~= "whole" then wholeAction = function() editor:junctionDecide(n, "whole") end end
+                local undoAction = nil
+                if d ~= nil then undoAction = function() editor:junctionDecide(n, nil) end end
+                seg("decision", {
+                    { label = "not decided", active = (d == nil), action = undoAction },
+                    { label = "split", active = (d == "split"), action = splitAction,
+                      dull = (d ~= "split" and not canSplit) },
+                    { label = "keep whole", active = (d == "whole"), action = wholeAction },
+                })
+            end
+            if d == "split" then
+                add("note", "split: " .. table.concat(jp.junctionSplitNames or {}, ", "))
+                if jp.junctionNameNote ~= nil then add("note", jp.junctionNameNote) end
+            elseif aside ~= nil then
+                -- Not the roads' suggestion here: lettered afresh, it can put one of these names on
+                -- another place. Forgetting them is its own button, so no other click loses them.
+                if d == "whole" then add("note", "kept whole") end
+                add("note", "split brings back " .. table.concat(aside, ", "))
+                if locked then btn("forget these names", function() editor:junctionForgetParts(n) end, true) end
+            elseif d == "whole" then
+                add("note", "kept whole")
+            else
+                for _, line in ipairs(note or {}) do add("note", line) end
+                -- what the split button would do, said only where there is a button
+                if locked and canSplit then
+                    add("note", "split names them " .. table.concat(offer.names or {}, ", "))
+                elseif locked then
+                    add("note", jp.junctionOfferWhy or "these parts have no names yet - can't split here")
+                end
+            end
         end
-        add("number", "clearance", string.format("%.1f m", editor.junctionClearance or 5))
-        rows[#rows].stepAction = function(dir)
-            editor.junctionClearance = math.max(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MIN,
-                math.min(AutoDrive.FLYOVER_JUNCTION_CLEARANCE_MAX,
-                    (editor.junctionClearance or 5) + dir * AutoDrive.FLYOVER_JUNCTION_CLEARANCE_STEP))
-            editor.junctionPreviewKey = nil
+        -- A note row is one line and does not wrap: a longer sentence goes over several.
+        local function notes(text)
+            local line = ""
+            for word in tostring(text):gmatch("%S+") do
+                if #line + #word + 1 > 42 and #line > 0 then
+                    add("note", line)
+                    line = word
+                else
+                    line = (#line > 0) and (line .. " " .. word) or word
+                end
+            end
+            if #line > 0 then add("note", line) end
         end
+        -- THE SHORT CARD (doc 12, agreed 2026-10-11 from two clickable mocks): the action row; straight
+        -- under it, the options that belong to the action picked (the user: "through roads kept is a
+        -- dependent for clear, must fit is a dependent for clear+build and build", and the shape "needs
+        -- to be at this level, not advanced"); then what the tool found and will do; the rest under
+        -- "advanced", closed by default. Place is not on the row: build lays the pattern now.
+        local action = editor:junctionAction()
+        local clears = (action == "clear" or action == "both")
+        local builds = (action == "build" or action == "both")
+        seg("action", {
+            { label = "clear", active = (action == "clear"), action = function() editor:setJunctionAction("clear") end },
+            { label = "build", active = (action == "build"), action = function() editor:setJunctionAction("build") end },
+            { label = "clear + build", active = (action == "both"), action = function() editor:setJunctionAction("both") end },
+        })
+        if clears then
+            add("toggle", "through roads", (editor.junctionLeaveThrough ~= false) and "kept" or "cleared", false,
+                function() editor:toggleJunctionLeaveThrough() end)
+            rows[#rows].dep = true
+        end
+        if builds then
+            seg("shape", {
+                { label = "mod", active = (editor.junctionPattern ~= "smooth"), action = function() editor:setJunctionPattern("exact") end },
+                { label = "smooth", active = (editor.junctionPattern == "smooth"), action = function() editor:setJunctionPattern("smooth") end },
+            })
+            rows[#rows].dep = true
+            -- THE VEHICLE SET: which rigs every turn must fit. Only while the swept check runs.
+            if editor.junctionSwept ~= false and editor.junctionDesignRigs ~= nil then
+                local opts = {}
+                for _, g in ipairs(editor:junctionDesignRigs(true)) do
+                    local key = g.key
+                    opts[#opts + 1] = { label = g.short or tostring(key), active = editor:junctionRigOn(key),
+                        action = function() editor:toggleJunctionRig(key) end }
+                end
+                if #opts > 0 then
+                    seg("must fit", opts)
+                    rows[#rows].dep = true
+                end
+            end
+        end
+
         local jp = editor.junctionPreview
-        if jp ~= nil then
-            add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
-            add("toggle", "new movements", tostring(jp.nNew))
-            if (jp.nRebuild or 0) > 0 then
-                add("toggle", "rebuilt existing", tostring(jp.nRebuild))
+        local leave = editor.junctionLeaveThrough ~= false
+        if jp == nil then
+            -- A REFUSAL HAS TO SAY SO: with no site the card would otherwise look like the tool had
+            -- stopped working, and "that is not a junction" is a useful answer.
+            if editor.junctionRefused ~= nil then
+                add("toggle", "no junction here", "")
+                notes(editor.junctionRefused)
+            else
+                add("note", "point at a junction")
             end
-            if jp.debris ~= nil and #jp.debris > 0 then
-                add("toggle", "old points to clear", tostring(#jp.debris))
-            end
-            if jp.usedMin ~= nil and jp.usedMax ~= nil then
-                local used = (jp.usedMin == jp.usedMax) and string.format("%.0f m", jp.usedMin)
-                    or string.format("%.0f-%.0f m", jp.usedMin, jp.usedMax)
-                add("toggle", "radius used", used)
-            end
-            if (jp.nTight or 0) > 0 then
-                add("toggle", "too tight (refused)", tostring(jp.nTight))
-            end
-            if (editor.junctionCheckSurface ~= false) and (jp.nOffRoad or 0) > 0 then
-                add("toggle", "off road (refused)", tostring(jp.nOffRoad))
-            end
-            if (jp.nNoCurve or 0) > 0 then
-                add("toggle", "no joinable curve", tostring(jp.nNoCurve))
-            end
-            if (jp.nUTurn or 0) > 0 then
-                add("toggle", "skipped as U-turn", tostring(jp.nUTurn))
-            end
-            if (jp.nFar or 0) > 0 then
-                add("toggle", "too far apart", tostring(jp.nFar))
-            end
-            if (jp.nLane or 0) > 0 then
-                add("toggle", "redundant lane", tostring(jp.nLane))
-            end
-            if (jp.nBlocked or 0) > 0 then
-                add("toggle", "blocked (refused)", tostring(jp.nBlocked))
-            end
-            add("toggle", "already there", tostring(jp.nExisting))
-            add("toggle", "confidence", string.format("%d%%", math.floor(jp.confidence * 100 + 0.5)))
         else
-            add("note", "point at a crossing")
+            -- WHICH junction and WHAT KIND, on rows of their own: together they ran back through
+            -- their own label.
+            if jp.clearMode or jp.junctionNumber ~= nil or jp.junctionState ~= nil then
+                add("toggle", "junction", junctionLabel(jp))
+                if jp.junctionType ~= nil then
+                    add("toggle", "type", tostring(jp.junctionType))
+                elseif jp.junctionState ~= nil then
+                    add("toggle", "state", tostring(jp.junctionState))
+                end
+                junctionDecisionRows(jp)
+            elseif editor.junctionRefused ~= nil then
+                add("toggle", "free placement", "")
+                notes(editor.junctionRefused)
+            end
+            -- WHAT THE RIGHT-CLICK WILL DO.
+            if jp.clearMode then
+                local doomed = (leave and jp.turnDebris or jp.debris) or {}
+                local boxed = (type(jp.boxSweep) == "table") and #jp.boxSweep or 0
+                local n = #doomed + boxed
+                local cut = (n == 0) and editor:junctionOnePointCut(jp, leave) or 0
+                local clearText = "nothing to clear"
+                if n > 0 then
+                    clearText = string.format("clear %d point(s)", n)
+                elseif cut > 0 then
+                    clearText = string.format("cut %d track(s) off", cut)
+                end
+                add("toggle", "will do", clearText)
+                if builds then add("toggle", "then", "build") end
+                -- Said plainly: without a box the clear cannot empty the middle, and it looks half done.
+                if jp._box == nil then
+                    add("toggle", "no box here", "")
+                    add("note", "its roads do not cross at an angle a box can be made from")
+                end
+            else
+                local fit = jp.patternFit
+                local buildText
+                if fit == nil then
+                    buildText = string.format("%d new turn(s)", jp.nNew or 0)
+                elseif fit.ok then
+                    local shapeName = "mod's"
+                    if fit.shape == "smooth" then shapeName = "smooth" elseif fit.shape == "plain" then shapeName = "plain" end
+                    buildText = string.format("lay the %s %s", shapeName, tostring(fit.kind))
+                elseif editor.junctionNoFit == "refuse" then
+                    buildText = "nothing - no pattern fits"
+                else
+                    buildText = string.format("%d turn(s), turn by turn", jp.nNew or 0)
+                end
+                add("toggle", "will do", buildText)
+                if jp.nothingToClear then add("note", "nothing to clear here") end
+                if fit == nil then
+                    add("note", "lock it to see if the pattern fits")
+                elseif not fit.ok then
+                    notes("the pattern won't fit: " .. tostring(fit.why))
+                end
+            end
+            -- THE TURNS: the radius the solve used (it steps down from the turn radius until a turn
+            -- fits), and on a locked site how many of the turns fit each rig.
+            if builds then
+                if not jp.clearMode and jp.usedMin ~= nil and jp.usedMax ~= nil then
+                    local used = string.format("radius %.0f-%.0f m", jp.usedMin, jp.usedMax)
+                    if jp.usedMin == jp.usedMax then used = string.format("radius %.0f m", jp.usedMin) end
+                    add("toggle", "turns", used)
+                else
+                    add("toggle", "turns", string.format("from %.0f m, steps down", editor.junctionTurnRadius or 12))
+                end
+                local fits = nil
+                if not jp.clearMode then fits = jp.rigFits end
+                if fits ~= nil and editor.junctionDesignRigs ~= nil then
+                    local parts = {}
+                    for _, g in ipairs(editor:junctionDesignRigs(true)) do
+                        local f = fits[g.key]
+                        if editor:junctionRigOn(g.key) and f ~= nil and f.total > 0 then
+                            parts[#parts + 1] = string.format("%s %d/%d", TR(g.short or tostring(g.key)), f.fit, f.total)
+                        end
+                    end
+                    if #parts > 0 then add("toggle", "fit", table.concat(parts, ", ")) end
+                end
+                if not jp.clearMode then
+                    local refused = (jp.nTight or 0) + (jp.nNoCurve or 0) + (jp.nBlocked or 0)
+                        + (jp.nTrailerRoad or 0) + (jp.nTrailerHit or 0)
+                    if editor.junctionCheckSurface ~= false then refused = refused + (jp.nOffRoad or 0) end
+                    if refused > 0 then
+                        add("toggle", "refused", string.format("%d turn(s)", refused))
+                        add("note", "advanced says why")
+                    end
+                end
+            end
+        end
+        -- WHAT THE CHECKS SAID LAST TIME, display only, named by number since the cursor is usually on
+        -- the next junction by then; hidden once the network round it is no longer what was left (an
+        -- undo), back after a redo.
+        if clears then
+            local lastCheck = editor:junctionLastCheckShown()
+            if lastCheck ~= nil and lastCheck.card ~= nil then
+                local name = lastCheck.name
+                if name == nil and lastCheck.number ~= nil then name = string.format("j%02d", lastCheck.number) end
+                if name == nil then name = string.format("%.0f, %.0f", lastCheck.x or 0, lastCheck.z or 0) end
+                add("toggle", "last clear", name)
+                for _, line in ipairs(lastCheck.card) do add("note", line) end
+            end
+        end
+        if builds then
+            local lastBuild = editor.junctionLastBuildShown and editor:junctionLastBuildShown()
+            if lastBuild ~= nil and lastBuild.card ~= nil then
+                local name = string.format("%.0f, %.0f", lastBuild.x or 0, lastBuild.z or 0)
+                if lastBuild.number ~= nil then name = string.format("j%02d", lastBuild.number) end
+                add("toggle", "last build", name)
+                for _, line in ipairs(lastBuild.card) do add("note", line) end
+            end
+        end
+
+        -- ADVANCED: everything else, closed by default.
+        add("toggle", "advanced", editor.junctionAdvancedOpen and "hide" or "show", false,
+            function() editor:toggleJunctionAdvanced() end)
+        if editor.junctionAdvancedOpen then
+            if builds then
+                -- Typed boxes with steppers (getEditableNumbers), like every other tool's numbers.
+                numberAfter("search radius")
+                numberAfter("turn radius")
+                add("toggle", "pattern won't fit", (editor.junctionNoFit == "refuse") and "refuse" or "turn by turn", false,
+                    function() editor:toggleJunctionNoFit() end)
+                add("toggle", "road check", (editor.junctionCheckSurface ~= false) and "on" or "off (radius only)", false,
+                    function() editor:toggleJunctionCheckSurface() end)
+                add("toggle", "obstacles", (editor.junctionCheckObstacles ~= false) and "on" or "off", false,
+                    function() editor:toggleJunctionCheckObstacles() end)
+                add("toggle", "swept path", (editor.junctionSwept ~= false) and "on" or "off", false,
+                    function() editor:toggleJunctionSwept() end)
+                add("toggle", "existing turns", (editor.junctionRebuild == true) and "rebuild" or "keep", false,
+                    function() editor:toggleJunctionRebuild() end)
+                numberAfter("corridor")
+                numberAfter("clearance")
+            end
+            -- It writes a copy of the whole network on every change, so it has to be plain that it is
+            -- running; the count says it is actually managing to write.
+            do
+                local capOn = AutoDrive.FLYOVER_DEBUG_CAPTURE == true
+                local where, n = editor:debugCaptureWhere()
+                add("toggle", "debug capture", capOn and string.format("on  -  %d saved", n or 0) or "off", false,
+                    function() editor:toggleJunctionDebugCapture() end)
+                if capOn and where == nil then add("note", "nowhere to write yet - save the game once") end
+            end
+            -- The numbers over every junction in view (drawJunctionNumbers). Kept between sessions.
+            add("toggle", "junction numbers", (ADFlyoverSettings.get("junctionShowNumbers") ~= false) and "on" or "off", false,
+                function() ADFlyoverSettings.cycle("junctionShowNumbers", 1) end)
+            -- THE COUNTERS, for finding faults.
+            if jp ~= nil and jp.clearMode then
+                if jp.junctionSituation ~= nil then add("toggle", "situation", tostring(jp.junctionSituation)) end
+                add("toggle", "approaches found", tostring(#(jp.approaches or {})))
+                if leave and #(jp.throughDebris or {}) > 0 then
+                    add("toggle", "through points kept", tostring(#(jp.throughDebris or {})))
+                end
+                add("toggle", "lane ends to box edge", tostring((type(jp.tidyEnds) == "table") and #jp.tidyEnds or 0))
+            elseif jp ~= nil then
+                add("toggle", "approaches", string.format("%d  (in %d / out %d)", #jp.approaches, jp.nIn, jp.nOut))
+                add("toggle", "new movements", tostring(jp.nNew))
+                if (jp.nRebuild or 0) > 0 then add("toggle", "rebuilt existing", tostring(jp.nRebuild)) end
+                add("toggle", "already there", tostring(jp.nExisting))
+                if jp.debris ~= nil and #jp.debris > 0 then add("toggle", "old points to clear", tostring(#jp.debris)) end
+                if (jp.nTight or 0) > 0 then add("toggle", "too tight (refused)", tostring(jp.nTight)) end
+                if (editor.junctionCheckSurface ~= false) and (jp.nOffRoad or 0) > 0 then
+                    add("toggle", "off road (refused)", tostring(jp.nOffRoad))
+                end
+                if (jp.nNoCurve or 0) > 0 then add("toggle", "no joinable curve", tostring(jp.nNoCurve)) end
+                if (jp.nBlocked or 0) > 0 then add("toggle", "blocked (refused)", tostring(jp.nBlocked)) end
+                if (jp.nTrailerRoad or 0) > 0 then add("toggle", "rig off road (refused)", tostring(jp.nTrailerRoad)) end
+                if (jp.nTrailerHit or 0) > 0 then add("toggle", "rig hits obstacle (refused)", tostring(jp.nTrailerHit)) end
+                if (jp.nUTurn or 0) > 0 then add("toggle", "skipped as U-turn", tostring(jp.nUTurn)) end
+                if (jp.nFar or 0) > 0 then add("toggle", "too far apart", tostring(jp.nFar)) end
+                if (jp.nLane or 0) > 0 then add("toggle", "redundant lane", tostring(jp.nLane)) end
+                if (jp.nSweep or 0) > 0 then
+                    add("toggle", "laid wide", string.format("%d  (up to %.0f m)", jp.nSweep, jp.sweepMax or 0))
+                end
+                if jp.sweptMax ~= nil then
+                    add("toggle", "trailer cut-in", string.format("%.1f m", jp.sweptMax))
+                    if (jp.nSweptWide or 0) > 0 then add("toggle", "trailer past corridor", tostring(jp.nSweptWide)) end
+                end
+                add("toggle", "confidence", string.format("%d%%", math.floor((jp.confidence or 0) * 100 + 0.5)))
+            end
         end
     end
     -- MERGE's distance and divergence are the typed number fields above (getEditableNumbers), each
@@ -940,6 +1271,14 @@ function ADFlyoverHud:draw(editor)
                 i = i + 1
             end
         end
+        -- A row that depends on the one above it (row.dep: the junction card's options under the action
+        -- they belong to) sits indented, with an accent bar down its left edge (drawn below).
+        for di = first, last do
+            local row = rows[di]
+            if row.dep and row.x ~= nil then
+                row.x, row.w = row.x + pad * 1.2, row.w - pad * 1.2
+            end
+        end
         return (top - y) + pad
     end
 
@@ -980,6 +1319,8 @@ function ADFlyoverHud:draw(editor)
                     if self.frameW ~= nil and self.frameW > 0 then
                         avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                     end
+                    local tr = self.testRect   -- a test build's plan card, at the right edge
+                    if tr ~= nil then avoid[#avoid + 1] = { tr.x, tr.y, tr.w, tr.h } end
                     local found
                     sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, editor.cardSpawnCX, editor.cardSpawnCY, nil, nil, tsegs)
                 end
@@ -1017,6 +1358,8 @@ function ADFlyoverHud:draw(editor)
                         if self.frameW ~= nil and self.frameW > 0 then
                             avoid[1] = { self.frameX, self.frameY, self.frameW, self.frameH }
                         end
+                        local tr = self.testRect   -- a test build's plan card, at the right edge
+                        if tr ~= nil then avoid[#avoid + 1] = { tr.x, tr.y, tr.w, tr.h } end
                         local sx, sy, found = placeCardInOpenSpace(tpts, width, ch, avoid, nil, nil, shownX, shownY, tsegs)
                         if not found then
                             -- Nothing clear close by: it is sitting on the work, so go as far as it takes.
@@ -1093,6 +1436,10 @@ function ADFlyoverHud:draw(editor)
         local x, y, width, h = row.x, row.y, row.w, row.h
         local textY = y + (h - fontSize) * 0.5
         local textX = x + self.padding * 2
+        if row.dep then
+            -- Tall enough to meet the next one, so a run of dependent rows reads as one block.
+            fillRole(self.rowOverlay, x - self.padding * 0.8, y - self.padding * 0.4, 0.0018, h + self.padding * 0.4, "accent", 0.9)
+        end
 
         if row.kind == "header" then
             fillRole(self.headerOverlay, x, y, width, h, "headerBg", 1)
@@ -1267,8 +1614,16 @@ function ADFlyoverHud:draw(editor)
                 -- A wheel-driven number dressed as a toggle: give it steppers and per-field wheel too.
                 self:drawNumberField(row, x, y, width, h, fontSize, mx, my, "bodyText", "valueText")
             else
+                -- A ROW HOLDS WHAT IT HOLDS. The label is drawn from the left and the value from the
+                -- right, and until now nothing checked that the two did not meet: a value of "on"
+                -- always fitted, and a value like "j60  -  4W offset (14 m stagger)" printed straight
+                -- through its own label, leaving both unreadable. Fitted here rather than by
+                -- shortening each value at the point it is built, because every row is one long
+                -- value away from the same fault.
                 labelRole(textX, textY, fontSize, row.text, "bodyText")
-                labelRole(x + width - self.padding * 2, textY, fontSize, row.value, "valueText", 1,
+                local vText, vSize = self:fitToWidth(row.value, fontSize,
+                    (x + width - self.padding * 2) - textX - self:measure(fontSize, row.text) - self.padding * 2)
+                labelRole(x + width - self.padding * 2, textY, vSize, vText, "valueText", 1,
                     RenderText.ALIGN_RIGHT)
             end
         elseif row.kind == "action" then
@@ -1339,6 +1694,14 @@ function ADFlyoverHud:draw(editor)
     -- alone over a cleared screen - so help and a modal can never render at once.
     if editor.helpOpen and not editor.dialogOpen and not editor.manualOpen then
         self:drawHelp(editor)
+    end
+
+    -- A test build's plan (TestPanel.lua), at the right edge. Guarded: a fault in the test card must
+    -- never take the editor's own screen down with it - it is said once in the log instead.
+    local tpOk, tpErr = pcall(self.drawTestPanel, self, editor)
+    if not tpOk and not self.testPanelFaultSaid then
+        self.testPanelFaultSaid = true
+        Logging.warning("[FlyoverEditor]: test panel - the card could not be drawn: %s", tostring(tpErr))
     end
 
     -- Last, so it sits on top of whatever it hangs off, and its click row is found first.
@@ -1434,6 +1797,129 @@ function ADFlyoverHud:drawWarning(editor)
 
     table.insert(self.rows, { x = x - edge, y = y - edge, w = w + edge * 2, h = h + edge * 2,
         action = function() editor.warning = nil end })
+end
+
+-- Pass / fail / skip in fixed colours (sRGB): the themes have no "good" or "caution" role, and the
+-- three must read the same whichever theme is on.
+local TEST_COL = { pass = { 0.24, 0.80, 0.47 }, fail = { 1.00, 0.42, 0.42 }, skip = { 0.96, 0.65, 0.14 } }
+
+--- THE IN-GAME TEST PANEL (TestPanel.lua): a test build's plan as a card at the right edge. One row
+--- per test with pass / fail / skip buttons; the first test not yet done shows what to do; an
+--- automatic tick shows what it saw; the editor's last log lines below. The header folds it to one
+--- line. Only drawn when the build carries a plan (test builds) and FlyoverTestPanel has not hidden it.
+function ADFlyoverHud:drawTestPanel(editor)
+    local TP = ADFlyoverTestPanel
+    self.testRect = nil
+    if TP == nil or TP.plan == nil or not TP.shown then return end
+    pcall(TP.poll)
+
+    local modScale = (ADFlyoverTheme ~= nil and ADFlyoverTheme.scale) or 1
+    local uiScale = ((g_gameSettings ~= nil and g_gameSettings:getValue("uiScale")) or 1) * modScale
+    local W = 0.28 * uiScale
+    local rowH = 0.020 * uiScale
+    local smallH = rowH * 0.78
+    local pad = 0.005 * uiScale
+    local fontSize = 0.0102 * uiScale
+    local small = fontSize * 0.84
+    local btnW = 0.030 * uiScale
+    local chipW = (rowH * 0.5) / (g_screenAspectRatio or (16 / 9))
+    local mx, my = editor.mouseX, editor.mouseY
+    local edge = 0.0025
+    setTextBold(false)
+
+    -- Lay the lines out first (the background needs the height), then draw them.
+    local items = {}
+    local function item(kind, h, data) data = data or {}; data.kind, data.h = kind, h; items[#items + 1] = data end
+    item("head", rowH * 1.25)
+    local nextT = TP.nextTest()
+    if not TP.folded then
+        for _, t in ipairs(TP.plan.tests) do
+            item("test", rowH, { t = t })
+            local s = TP.state[t.id]
+            if t == nextT and t.hint ~= "" then
+                for _, l in ipairs(wrapToWidth(TR(t.hint), small, W - pad * 6 - chipW)) do item("hint", smallH, { text = l }) end
+            elseif s ~= nil and s.auto and s.evidence ~= nil and s.evidence ~= "" then
+                item("hint", smallH, { text = TR("seen") .. ": " .. s.evidence, muted = true })
+            end
+        end
+        item("section", rowH, { text = TR("log") })
+        local first = math.max(1, #TP.log - 5)
+        if #TP.log == 0 then item("log", smallH, { text = TR("(no editor lines yet)") }) end
+        for i = first, #TP.log do item("log", smallH, { text = TP.log[i].text }) end
+        item("foot", smallH, { text = TR("results") .. ": modSettings/FS25_ADFlyoverEditor/" .. TP.FILE })
+    end
+    local h = pad * 2
+    for _, it in ipairs(items) do h = h + it.h end
+    local x = 1 - W - 0.008
+    local top = 0.975
+    local y0 = top - h
+
+    fillRole(self.borderOverlay, x - edge, y0 - edge, W + edge * 2, h + edge * 2, "cardBorder", 0.96)
+    fillRoleSolid(self.background, x, y0, W, h, "cardBg")
+    self.testRect = { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2 }
+    -- Whole-card blocker first: a click on a label never reaches the world behind.
+    table.insert(self.rows, { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2 })
+
+    local y = top - pad
+    for _, it in ipairs(items) do
+        y = y - it.h
+        local ty = y + (it.h - fontSize) * 0.5
+        local sty = y + (it.h - small) * 0.5
+        if it.kind == "head" then
+            fillRole(self.headerOverlay, x, y, W, it.h, "headerBg", 1)
+            local done, total, _, fails = TP.counts()
+            local right = string.format("%d/%d%s  %s", done, total, fails > 0 and string.format(", %d %s", fails, TR("failed")) or "",
+                TP.folded and "+" or "-")
+            local rw = self:measure(fontSize, right)
+            local title, tsize = self:fitToWidth(TR("Test plan") .. ": " .. TR(TP.plan.title), fontSize, W - pad * 6 - rw)
+            labelRole(x + pad * 1.5, y + (it.h - tsize) * 0.5, tsize, title, "headerText")
+            labelRole(x + W - pad * 1.5, ty, fontSize, right, fails > 0 and "danger" or "mutedText", 1, RenderText.ALIGN_RIGHT)
+            table.insert(self.rows, { x = x, y = y, w = W, h = it.h, action = function() TP.folded = not TP.folded end })
+        elseif it.kind == "test" then
+            local t = it.t
+            local s = TP.state[t.id]
+            local status = s and s.status
+            local cy = y + (it.h - rowH * 0.5) * 0.5
+            if status ~= nil and TEST_COL[status] ~= nil then
+                fillC(self.rowOverlay, x + pad * 1.5, cy, chipW, rowH * 0.5, TEST_COL[status], 1)
+            else
+                fillRole(self.rowOverlay, x + pad * 1.5, cy, chipW, rowH * 0.5, "toolBorder", 1)
+            end
+            local bx0 = x + W - pad - btnW * 3 - pad
+            local tx = x + pad * 3 + chipW
+            local text, tsize = self:fitToWidth(TR(t.title), fontSize, bx0 - tx - pad)
+            labelRole(tx, y + (it.h - tsize) * 0.5, tsize, text, t == nextT and "headerText" or "bodyText")
+            for bi, v in ipairs({ "pass", "fail", "skip" }) do
+                local bx = bx0 + (bi - 1) * (btnW + pad * 0.5)
+                local by, bh = y + it.h * 0.12, it.h * 0.76
+                local on = status == v
+                local hov = mx ~= nil and mx >= bx and mx <= bx + btnW and my >= by and my <= by + bh
+                if on then
+                    fillC(self.rowOverlay, bx, by, btnW, bh, TEST_COL[v], 0.95)
+                    label(bx + btnW * 0.5, by + (bh - small) * 0.5, small, TR(v), 0.02, 0.02, 0.02, 1, RenderText.ALIGN_CENTER)
+                else
+                    fillRole(self.rowOverlay, bx, by, btnW, bh, hov and "hoverBg" or "toolBg", 0.95)
+                    labelRole(bx + btnW * 0.5, by + (bh - small) * 0.5, small, TR(v), hov and "bodyText" or "mutedText", 1,
+                        RenderText.ALIGN_CENTER)
+                end
+                local id = t.id
+                table.insert(self.rows, { x = bx, y = by, w = btnW, h = bh, action = function() TP.set(id, v, false) end })
+            end
+        elseif it.kind == "hint" then
+            local text, tsize = self:fitToWidth(it.text, small, W - pad * 6 - chipW)
+            labelRole(x + pad * 3 + chipW, y + (it.h - tsize) * 0.5, tsize, text, it.muted and "mutedText" or "hintText")
+        elseif it.kind == "section" then
+            fillRole(self.rowOverlay, x + pad, y + it.h - 0.0012, W - pad * 2, 0.0012, "toolBorder", 1)
+            labelRole(x + pad * 1.5, ty, small, it.text, "sectionText")
+        elseif it.kind == "log" then
+            local text, tsize = self:fitToWidth(it.text, small, W - pad * 3)
+            labelRole(x + pad * 1.5, y + (it.h - tsize) * 0.5, tsize, text,
+                (it.text:sub(1, 1) == "!") and "danger" or "mutedText")
+        elseif it.kind == "foot" then
+            local text, tsize = self:fitToWidth(it.text, small, W - pad * 3)
+            labelRole(x + pad * 1.5, y + (it.h - tsize) * 0.5, tsize, text, "mutedText", 0.8)
+        end
+    end
 end
 
 --- Screen-space bounding box of what a Select-mode menu is about to act on (point / span / run), or
@@ -2129,6 +2615,15 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         action = function() ADFlyoverSettings.cycle("launchButtonPosition", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("launchButtonPosition", d) end })
 
+    if editor.roadRunsSettingsItems ~= nil then editor:roadRunsSettingsItems(push) end
+
+    push({ kind = "section", text = "BETA" })
+    push({ kind = "field", text = "junction tool",
+        value = ADFlyoverSettings.get("junctionBeta") and "on" or "off",
+        action = function() editor:toggleJunctionBeta() end,
+        stepAction = function() editor:toggleJunctionBeta() end })
+    push({ kind = "note", text = "still being finished: clear and build plain X and T road junctions" })
+
     push({ kind = "section", text = "DEBUG" })
     push({ kind = "field", text = "verbose logging",
         value = ADFlyoverSettings.get("flyoverDebugLogging") and "on" or "off",
@@ -2567,6 +3062,8 @@ function ADFlyoverHud:coversPoint(x, y)
     if inRect(self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH) then return true end
     local r = self.helpRect
     if r ~= nil and inRect(r.x, r.y, r.w, r.h) then return true end
+    local tr = self.testRect
+    if tr ~= nil and inRect(tr.x, tr.y, tr.w, tr.h) then return true end
     return (self:isMouseOver(x, y))
 end
 

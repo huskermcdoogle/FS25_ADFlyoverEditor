@@ -137,7 +137,7 @@ function L.update()
             L.loggedNoContext = true
             Logging.warning("[ADFlyoverEditor] could not read the current input context, so the %s "
                 .. "binding cannot follow it between on-foot and vehicle. Falling back to watching "
-                .. "for Left Alt + F directly - that works everywhere but is not rebindable.", L.ACTION)
+                .. "for Left Alt + V or Left Alt + F directly - that works everywhere but is not rebindable.", L.ACTION)
         end
         return
     end
@@ -207,7 +207,12 @@ function L.keyEvent(unicode, sym, modifier, isDown)
     if not isDown or L.everRegistered then
         return
     end
-    if Input == nil or Input.KEY_f == nil or sym ~= Input.KEY_f then
+    if Input == nil or sym == nil then
+        return
+    end
+    local isLaunchKey = (Input.KEY_v ~= nil and sym == Input.KEY_v)
+        or (Input.KEY_f ~= nil and sym == Input.KEY_f)
+    if not isLaunchKey then
         return
     end
     local altHeld = Input.MOD_LALT ~= nil and modifier ~= nil and bitAND ~= nil
