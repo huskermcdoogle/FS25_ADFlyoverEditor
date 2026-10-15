@@ -3,13 +3,15 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="test course: the pair, and the pattern in the preview" build="@BUILD@">
+<testPlan title="test course: the pair, built and redone" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with. Slot 10 with the course's own network (nothing built yet)."/>
     <test id="pair" title="1e and 1w get the mod's T"
           passLog="the mod's exact T fits"
           failLog="the mod pattern won't fit here"
-          hint="Clear + build 1e, then 1w, once each. Ticks itself from the log."/>
-    <test id="preview" title="The preview shows the pattern"
-          hint="Lock J4 before building it: the white lines are the mod's T, not curved turns. Pointing without a lock draws no turns."/>
+          hint="Clear + build 1e, then 1w - click 1w a few metres up its side road. Ticks itself from the log."/>
+    <test id="redo" title="Redoing 1e and 1w stays clean"
+          passLog="junction clear %+ build %- cleared, built"
+          failLog="the mod pattern won't fit here"
+          hint="Clear + build 1e again, then 1w again, twice over. Each time the mod's T comes back. Ticks itself from the log."/>
 </testPlan>
