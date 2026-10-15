@@ -2161,8 +2161,10 @@ function E:drawRoadRunsInner(lw)
     local radius = AutoDrive.FLYOVER_DRAW_RADIUS or 200
     -- Saturated colours that hold after the linear conversion (mid-tones went dark and washed out
     -- against grass and asphalt - 2026-10-14 user: "the colors are still hard to see")
-    local pr, pg, pb = 0, 0.85, 1                                    -- picks, primary: cyan
-    if self.roadSubPrio then pr, pg, pb = 1, 0.85, 0 end             -- picks, secondary: yellow
+    -- each thing its own colour, clear of AutoDrive's own green and blue lines (cyan picks read as
+    -- AutoDrive's blue - 2026-10-14 user: "not very distinguishable")
+    local pr, pg, pb = 1, 0, 1                                       -- picks, primary: magenta
+    if self.roadSubPrio then pr, pg, pb = 0.55, 0, 1 end             -- picks, secondary: purple
 
     -- every unpathed road nearby, faint
     if self.roadShowAll and cx ~= nil then
@@ -2187,18 +2189,19 @@ function E:drawRoadRunsInner(lw)
     -- the selected pick's handles: ends larger, the one under the mouse (or dragged) bright
     local sel = s.sel
     if sel ~= nil and sel.handles ~= nil then
-        drawLine(sel.st.pts, 1, lw * 2.2, 1, 1, 1, 0.5)            -- the selected run: thick white
+        drawLine(sel.st.pts, 1, lw * 2.6, 1, 1, 1, 0.5)            -- the selected run: thickest, white
         for i, h in ipairs(sel.handles) do
             if finite(h.x) and finite(h.z) then
                 local y = (h.y or terrainY(h.x, h.z)) + 0.8
                 local isEnd = i == 1 or i == #sel.handles
                 local hot = i == s.handleHover or i == s.handleDrag
+                -- glow 0.10: more pushes the hue toward white and they all look alike
                 if hot then
-                    Draw:addSphereTask(h.x, y, h.z, isEnd and 6 or 5, 1, 1, 0, 0.20)          -- under the mouse: yellow
+                    Draw:addSphereTask(h.x, y, h.z, 7, 1, 1, 1, 0.10)                         -- under the mouse: white, big
                 elseif h.wpId ~= nil then
-                    Draw:addSphereTask(h.x, y, h.z, 6, 1, 0.4, 0, 0.20)                       -- joined to a waypoint: orange
+                    Draw:addSphereTask(h.x, y, h.z, 6, 1, 0, 0, 0.10)                         -- joined to a waypoint: red
                 else
-                    Draw:addSphereTask(h.x, y, h.z, isEnd and 5 or 4, 1, 0, 1, 0.20)          -- handle: magenta
+                    Draw:addSphereTask(h.x, y, h.z, isEnd and 6 or 5, 1, 1, 0, 0.10)          -- handle: yellow
                 end
             end
         end
