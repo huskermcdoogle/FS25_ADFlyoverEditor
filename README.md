@@ -90,6 +90,7 @@ and why:
 | [`docs/companion-build-plan.md`](docs/companion-build-plan.md) | how the mod is put together, stage by stage |
 | [`docs/flyover-input-context.md`](docs/flyover-input-context.md) | the input-context and camera pitfalls — **read before touching those** |
 | [`docs/flyover-gui-redesign.md`](docs/flyover-gui-redesign.md) | the GUI redesign spec |
+| [`docs/multiplayer-plan.md`](docs/multiplayer-plan.md) | the multiplayer research and implementation spec |
 | [`docs/bugs.md`](docs/bugs.md) | known bugs, and closed ones with their causes |
 | [`docs/probe-results.md`](docs/probe-results.md) | the raw in-game measurements the rest cite |
 | [`docs/build-log.md`](docs/build-log.md) | the staged bring-up log and its in-game verification steps |
