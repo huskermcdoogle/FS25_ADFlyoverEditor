@@ -6,6 +6,13 @@ Flyover Editor is a top-down editor for [AutoDrive](https://github.com/Stephan-S
 
 It runs as a **companion mod** beside *stock* AutoDrive. It does **not** modify AutoDrive's files or your savegame's config; it attaches to AutoDrive at runtime and politely refuses to load (and tells you why) if AutoDrive isn't installed. Everything you build goes through AutoDrive's own network API, so a route laid in the flyover editor is identical to one recorded from a vehicle.
 
+## New in 1.0.3.0
+
+- **Road runs** (new tool) — point at a map road or farm track with no AutoDrive path and it lights up; click to have the run laid for you, one-way, two-way or two lanes. Shape it with handles first, and reshape roads you've already built — through junctions, with the side roads following.
+- **Spline, rebuilt** — a smooth curve through as many points as you like, and **edit placed** to pick up a run that's already laid and reshape it.
+- **Junction tool (BETA)** — clear the old turn wiring at a plain X or T road junction and lay a clean set of turns, in one right-click.
+- **Left Alt + V** opens the editor too, and a first draft of **Brazilian Portuguese**.
+
 ## Why you'll want it
 
 - **See the whole picture.** A top-down camera over your farm means you plan routes looking at the actual field layout, junctions and yards — not the back of a tractor.
@@ -26,10 +33,11 @@ Tools are grouped by job on the panel. **Select** is the default mode — no too
 ### Create
 
 - **Draw** — Place waypoints one click at a time, joining each to the last so a route grows as you go. Click empty ground to drop a point; click an existing waypoint to draw *from* it and wire straight into the network; right-click ends the run. Options: one-way / two-way, primary / secondary (give-way), and whether new points snap to the terrain or any surface.
-- **Spline** — Connect two waypoints with a smooth curve instead of a straight segment, for sweeping bends a vehicle can take at speed. A live preview shows the curve before you commit; the wheel tightens or loosens the curvature, and endpoint/tangent controls flip which way the curve arrives.
+- **Spline** — Lay a smooth curve through as many points as you click, for sweeping bends a vehicle can take at speed. An end clicked on a waypoint joins the road and follows its heading. Drag a point to move it, click the curve to add one, Ctrl-click to remove one; a live preview shows the waypoints before you commit. **Edit placed** picks up a run that's already laid and reshapes it the same way, keeping its direction and priority. AutoDrive's own two-point spline is still there if you prefer it.
 - **Field loop** — Generate a complete, drivable two-way loop just outside a field's boundary, smoothed to a turning radius and nudged around any obstacles in the way (trees, poles, fences, buildings). It's a standalone loop — no map markers, not wired to the rest of the network — so you connect it in afterwards. Controls: margin, turning radius, obstacle clearance and vehicle height.
 - **Parallel** — Copy an existing span or run sideways by a set distance as a second track alongside it — a passing lane or a return leg. Pick the span or run, set the distance and side, and choose whether a track beside a one-way road runs the same way or opposite as a return lane.
 - **Siding** — Drop a short parallel stretch beside a run and curve it back in at both ends — a pull-off or passing siding — in a single action. Set the offset and length (the wheel drives the length) and the side.
+- **Road runs** — Lay AutoDrive runs along the map's own roads and farm tracks. Point at a road with no path and it lights up with its lanes previewed; click to pick it (a click follows the road straight on through junctions and stops at T's), double-click to carry it on through forks, right-click to build. Lay as one-way, one two-way line, or two lanes keeping right; runs stop short at forks so the junction tool can finish them, and a track meeting a road runs right to the asphalt. Drag handles to shape a pick before building — or click a road that's already built and reshape it: a two-lane road moves as one, junction points move with it, short turns bend and side roads ease back into place.
 
 ### Shape
 
@@ -43,6 +51,7 @@ Tools are grouped by job on the panel. **Select** is the default mode — no too
 
 - **Convert** — Rewrite existing connections: set the direction (two-way, one-way, other way, or AutoDrive's reverse-way) and the priority (primary or give-way secondary) and one click applies both — to a single point or a whole run.
 - **Merge** — Fold two separately-recorded parallel lanes into one shared track — the two directions of a road, or a lane you recorded twice. Pick the stretch on one track, then click the other track (or right-click when it's the only one); the part that will be absorbed turns green first. Merge distance and divergence keep it honest.
+- **Junction (BETA)** — Lock a road junction and, in one right-click, clear its old turn wiring (trimming the lanes back to clean ends), lay a fresh set of turns — the mod's own X or T pattern where it fits — or both at once. One undo takes it all back. It's a beta: plain X and T road junctions are what it does well today, with farm tracks, Y's and skewed junctions still to come. On by default; switch it off in the settings dialog.
 
 ### Utility
 
@@ -74,7 +83,7 @@ You're never lost. A **?** button (and the **/** key) shows contextual help for 
 
 ## Languages
 
-Fully localized in **English and Deutsch** — the panel, menus, on-screen guidance, help and the complete manual all follow your game language. Adding more languages is straightforward.
+Fully localized in **English and Deutsch** — the panel, menus, on-screen guidance, help and the complete manual all follow your game language. A first draft of **Brazilian Portuguese** is included too (anything not yet translated shows in English) — native speakers are welcome to help refine it.
 
 ## Compatibility & safety
 
