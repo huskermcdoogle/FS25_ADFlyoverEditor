@@ -3,13 +3,13 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="road runs + spline" build="@BUILD@">
+<testPlan title="road T-join + spline snap" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="bendLane" title="Lane bends stay in the middle"
-          hint="Road runs: hover the lane with the widening bends near (283,-440). The line keeps to the middle of the asphalt through the bends."/>
-    <test id="trackToRoad" title="Field track runs to the asphalt" passLog="road runs %- built"
-          hint="Road runs: build the field track at x 579. Straight, follows the bend at its south end, stops right at the asphalt."/>
-    <test id="spline" title="Multi-point spline"
-          hint="Spline tool: click 4-5 points, drag one, add one near the curve, ctrl-click one away, build. The curve passes every point."/>
+    <test id="teeJoin" title="Run joins the road in a T" passLog="T%-joined the lane"
+          hint="Road runs: build the lane that ends at the road (the one with the diagonal link). Its end goes straight on into the road's lane, no diagonal link (ticks itself)."/>
+    <test id="splineSnap" title="Spline snap is tighter; Alt places without snapping"
+          hint="Spline tool: near a waypoint the point only snaps when right on it (yellow marker). Hold Alt: it never snaps (white marker)."/>
+    <test id="splineInsert" title="Click on the curve adds a point"
+          hint="Spline tool: click on the drawn curve (green marker): a point goes into the line there."/>
 </testPlan>
