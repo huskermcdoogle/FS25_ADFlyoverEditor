@@ -345,6 +345,138 @@ if SYNTH then
     end
     print(string.format("drive west->east: %s; east->west: %s", tostring(reach(byId[west].x, byId[east].x)), tostring(reach(byId[east].x, byId[west].x))))
 end
+-- PHASE 2: reshape a built run - the chain of new points from the build, picked by a click on it,
+-- a middle handle dragged 3 m, an end handle tried (it must stay), applied with a right-click
+do
+    -- the editor's run walk, simplified: follow points with exactly two neighbours both ways from the seed
+    function ADFlyoverEditor:orderedRunThrough(seedId)
+        local function nb(w)
+            local r, have = {}, {}
+            for _, list in ipairs({ w.out, w.incoming }) do
+                for _, o in ipairs(list) do
+                    if byId[o] ~= nil and not byId[o].gone and not have[o] then have[o] = true r[#r + 1] = o end
+                end
+            end
+            return r
+        end
+        local ids = { seedId }
+        local seen = { [seedId] = true }
+        local n0 = nb(byId[seedId])
+        for side = 1, math.min(2, #n0) do
+            local cur, nxt = byId[seedId], n0[side]
+            for _ = 1, 2000 do
+                if nxt == nil or seen[nxt] then break end
+                cur = byId[nxt]
+                seen[cur.id] = true
+                if side == 2 then table.insert(ids, 1, cur.id) else ids[#ids + 1] = cur.id end
+                local n = nb(cur)
+                if #n ~= 2 then break end
+                nxt = seen[n[1]] and n[2] or n[1]
+            end
+        end
+        local pts = {}
+        for k, id in ipairs(ids) do local w = byId[id] pts[k] = { x = w.x, y = w.y, z = w.z, id = id } end
+        return pts
+    end
+    function ADFlyoverEditor:spanStyle(ids)
+        local a = byId[ids[1]]
+        local dual = false
+        for _, o in ipairs(a.incoming) do if o == ids[2] then dual = true end end
+        return dual, 0
+    end
+    function ADFlyoverEditor:replaceChainInterior(ids, newPoints, dual, flags)
+        for i = 2, #ids - 1 do byId[ids[i]].gone = true end
+        local a, b = byId[ids[1]], byId[ids[#ids]]
+        for _, w in ipairs({ a, b }) do
+            for _, list in ipairs({ w.out, w.incoming }) do
+                for i = #list, 1, -1 do if byId[list[i]].gone then table.remove(list, i) end end
+            end
+        end
+        local prev = a.id
+        for i = 2, #newPoints - 1 do prev = ADGraphManager:recordWayPoint(newPoints[i].x, 0, newPoints[i].z, true, dual, false, prev, flags).id end
+        link(byId[prev], b)
+        if dual then link(b, byId[prev]) end
+        return true
+    end
+    local seed, pts = nil, {}
+    for id = before + 1, count do
+        local w = byId[id]
+        if not w.gone then
+            local p = E:orderedRunThrough(id)
+            if #p > #pts then seed, pts = id, p end
+        end
+    end
+    if #pts >= 6 then
+        frames(1)
+        E:roadRunsSelect(nil)
+        E.hoverId = seed
+        s.hover, s.hoverPick = nil, nil
+        E:roadRunsClick()
+        local sel = s.sel
+        local ok1 = sel ~= nil and sel.built == true
+        local H = sel and sel.handles or {}
+        local endA, endB = { x = pts[1].x, z = pts[1].z }, { x = pts[#pts].x, z = pts[#pts].z }
+        -- try the end handle: it must not move
+        E.cursorX, E.cursorZ, E.mouseX, E.mouseY = H[1].x, H[1].z, 0, 0
+        E.leftDown = true
+        E:roadRunsPress()
+        E.mouseX = 0.1
+        E.cursorX = H[1].x + 3
+        frames(1)
+        E.leftDown = false
+        E:roadRunsClick()
+        local endKept = math.abs(H[1].x - endA.x) < 0.01 and math.abs(H[1].z - endA.z) < 0.01
+        -- a middle handle (or one added mid-line) moved 3 m sideways
+        if #H < 3 then
+            local m = sel.st.pts[math.floor(#sel.st.pts / 2) + 1]
+            E.cursorX, E.cursorZ = m.x, m.z
+            E:roadRunsClick()
+        end
+        local k = math.floor((#H + 1) / 2)
+        local h = H[k]
+        local a, b = H[k - 1], H[k + 1]
+        local nx, nz = -(b.z - a.z), b.x - a.x
+        local nl = math.sqrt(nx * nx + nz * nz)
+        E.cursorX, E.cursorZ, E.mouseX, E.mouseY = h.x, h.z, 0, 0
+        E.leftDown = true
+        E:roadRunsPress()
+        E.mouseX = 0.1
+        local tx, tz = h.x + 3 * nx / nl, h.z + 3 * nz / nl
+        E.cursorX, E.cursorZ = tx, tz
+        frames(1)
+        E.leftDown = false
+        E:roadRunsClick()
+        local snaps0, n0 = snapshots, count
+        E:roadRunsStop()
+        frames(1)
+        -- the rebuilt run: from the same first end, does it pass the drop and end where it did?
+        local again = E:orderedRunThrough(pts[1].id)
+        local near = math.huge
+        for j = 1, #again - 1 do
+            local a, b = again[j], again[j + 1]
+            local dx, dz = b.x - a.x, b.z - a.z
+            local l2 = dx * dx + dz * dz
+            local t = l2 > 0 and math.max(0, math.min(1, ((tx - a.x) * dx + (tz - a.z) * dz) / l2)) or 0
+            near = math.min(near, math.sqrt((tx - a.x - dx * t) ^ 2 + (tz - a.z - dz * t) ^ 2))
+        end
+        local last = again[#again]
+        local endsOk = again[1].id == pts[1].id and math.abs(last.x - endB.x) < 0.01 and math.abs(last.z - endB.z) < 0.01
+        local maxGap = 0
+        local gapAt = 0
+        for i = 2, #again do
+            local g = math.sqrt((again[i].x - again[i - 1].x) ^ 2 + (again[i].z - again[i - 1].z) ^ 2)
+            if g > maxGap then maxGap, gapAt = g, i end
+        end
+        print(string.format("built shape: longest step ends at point %d of %d", gapAt, #again))
+        print(string.format("built shape: selected %s (%d waypoints, %d handles); end handle kept %s; rebuilt %d -> %d waypoints, passes %.2f m from the drop, longest step %.1f m, ends kept %s, %d undo snapshot(s), selection %s",
+            tostring(ok1), #pts, #H, tostring(endKept), #pts, #again, near, maxGap, tostring(endsOk), snapshots - snaps0, s.sel == nil and "cleared" or "LEFT"))
+        print((ok1 and endKept and near < 1.0 and endsOk and maxGap <= 7.01 and snapshots - snaps0 == 1 and s.sel == nil and count > n0)
+            and "BUILT SHAPE PASS" or "BUILT SHAPE FAIL")
+    else
+        print("built shape: no built run to try (" .. #pts .. " points)")
+    end
+    E.hoverId = nil
+end
 -- a second window: move away and back
 local t1 = os.clock()
 settle(cx + 300, cz)

@@ -3,15 +3,15 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="road runs shaping: colours + fixes" build="@BUILD@">
+<testPlan title="road runs phase 2: reshape a built run" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="colours" title="Colours easy to tell apart (colour-blind safe)"
-          hint="Road under the mouse vermillion; picks reddish purple (secondary orange); selected run thick sky blue; handles yellow, the one under the mouse big vermillion, one joined to a waypoint bluish green. Not too bright."/>
-    <test id="shapeBuild" title="Build lays the shaped line" passLog="road runs %- built"
-          hint="Drag a handle, build: the laid line follows the shape (ticks on the build - check it by eye)."/>
-    <test id="ctrlRemove" title="Ctrl-click removes a handle" passLog="road runs %- handle %d+ removed"
-          hint="Ctrl-click a handle, including one you dragged or added (ticks itself)."/>
-    <test id="dropUnbuilt" title="Unbuilt edits drop" passLog="unbuilt pick%(s%) dropped"
-          hint="Shape a run, do not build, leave the tool: it is gone when you come back. Same after an undo (ticks itself)."/>
+    <test id="selectBuilt" title="Click a built run: it gets handles" passLog="selected a built run to shape"
+          hint="Road runs tool, hover an AutoDrive run (it outlines sky blue), click it (ticks itself)."/>
+    <test id="endsStay" title="Its end handles do not move"
+          hint="Try to drag an end handle, and ctrl-click it: it stays put."/>
+    <test id="reshape" title="Right-click rebuilds it along the new shape" passLog="reshaped the built run .- done"
+          hint="Drag a middle handle, add one, right-click: the run follows the shape, still joined at both ends, same direction (ticks itself - check by eye)."/>
+    <test id="undo" title="One undo puts it back"
+          hint="Undo once: the old run is back as it was."/>
 </testPlan>

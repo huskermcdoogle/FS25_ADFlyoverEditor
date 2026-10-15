@@ -726,8 +726,8 @@ function E:roadRunsRemoveHandleAtCursor()
     local pk = s.sel
     local idx = self:roadRunsHandleAtCursor()
     if pk == nil or idx == nil then return false end
-    if #pk.handles <= 2 then
-        self:warnPlayer("A run keeps its two end handles.")
+    if #pk.handles <= 2 or (pk.built and (idx == 1 or idx == #pk.handles)) then
+        self:warnPlayer(pk.built and "A built run's ends stay where they are." or "A run keeps its two end handles.")
         return true
     end
     table.remove(pk.handles, idx)
@@ -747,6 +747,10 @@ function E:roadRunsUpdateHandles()
         if math.sqrt(dx * dx + dy * dy) > (self.MOVE_DRAG_THRESHOLD or 0.004) then s.handleDrag = press.idx end
     end
     local idx = s.handleDrag
+    if idx ~= nil and pk.built and (idx == 1 or idx == #pk.handles) then
+        s.handleDrag, s.handlePress = nil, nil                  -- a built run's ends stay put
+        idx = nil
+    end
     if idx ~= nil then
         if not self.leftDown or pk.handles[idx] == nil then
             s.handleDrag, s.handlePress = nil, nil
@@ -1198,6 +1202,8 @@ function E:roadRunsClick()
     elseif s.hoverPick ~= nil then
         -- a click on a pick selects it for shaping (it is dropped with the card's button)
         self:roadRunsSelect(s.hoverPick)
+    elseif self.hoverId ~= nil and self:roadRunsSelectBuilt(self.hoverId) then
+        -- a built run, selected for shaping
     else
         self:roadRunsSelect(nil)                                -- empty ground: nothing selected
     end
@@ -1215,6 +1221,69 @@ function E:roadRunsForget(why)
     if had > 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - %d unbuilt pick(s) dropped (%s).", had, why or "?")
     end
+end
+
+--- PHASE 2 (2026-10-15): reshape a run that is already built - any AutoDrive run between junctions.
+--- A click on it (with no unbuilt road under the mouse) selects it with handles; its two end waypoints
+--- stay where they are (other roads meet there), so its end handles do not move. Apply (right-click or
+--- the card) rebuilds its middle along the new shape - one undo step, its direction, one-way/two-way
+--- and priority kept (replaceChainInterior, as smooth and straighten use).
+function E:roadRunsSelectBuilt(seedId)
+    if self.orderedRunThrough == nil then return false end
+    local cur = roadState(self).sel
+    if cur ~= nil and cur.built then
+        for _, id in ipairs(cur.ids) do
+            if id == seedId then return true end                -- already the one being shaped: keep its edits
+        end
+    end
+    local pts, _, _, why = self:orderedRunThrough(seedId)
+    if pts == nil or #pts < 2 then
+        if why ~= nil then self:warnPlayer("Cannot shape that run: " .. tostring(why)) end
+        return false
+    end
+    local ids, P = {}, {}
+    for i, q in ipairs(pts) do ids[i] = q.id; P[i] = { x = q.x, y = q.y, z = q.z } end
+    local dual, flags = false, AutoDrive.FLAG_NONE
+    if self.spanStyle ~= nil then dual, flags = self:spanStyle(ids) end
+    local len = 0
+    for i = 2, #P do len = len + math.sqrt((P[i].x - P[i - 1].x) ^ 2 + (P[i].z - P[i - 1].z) ^ 2) end
+    local st = { pts = P, len = len, class = "built", startTag = "end", endTag = "end", id = "built:" .. ids[1] .. ":" .. ids[#ids] }
+    st.refinedTo = st
+    local pk = { built = true, ids = ids, dual = dual, flags = flags, st = st, dir = 1 }
+    self:roadRunsSelect(pk)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - selected a built run to shape: %d waypoints (%d..%d), %.0f m, %s; %d handles.",
+        #ids, ids[1], ids[#ids], len, dual and "two-way" or "one-way", #pk.handles)
+    return true
+end
+
+--- Rebuild the selected built run along its handles' shape. True when it did.
+function E:roadRunsApplyBuilt()
+    local s = roadState(self)
+    local pk = s.sel
+    if pk == nil or not pk.built then return false end
+    if not pk.st.edited then
+        self:roadRunsSelect(nil)
+        return true
+    end
+    local newPoints = RF.resampleForDriving(pk.st.pts)
+    -- the ends are the run's own end waypoints, exactly
+    local a, b = ADGraphManager:getWayPointById(pk.ids[1]), ADGraphManager:getWayPointById(pk.ids[#pk.ids])
+    if a == nil or b == nil then
+        self:warnPlayer("The run's ends are gone - shape it again.")
+        self:roadRunsSelect(nil)
+        return true
+    end
+    newPoints[1] = { x = a.x, y = a.y, z = a.z }
+    newPoints[#newPoints] = { x = b.x, y = b.y, z = b.z }
+    ADEditorHistory:snapshot("road runs: reshape")
+    local ok = self:replaceChainInterior(pk.ids, newPoints, pk.dual, pk.flags)
+    if self.invalidateIdReferences ~= nil then self:invalidateIdReferences() end
+    ADGraphManager:markChanges()
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: road runs - reshaped the built run %d..%d: %d waypoints now (was %d), %s.",
+        pk.ids[1], pk.ids[#pk.ids], #newPoints, #pk.ids, ok and "done" or "FAILED")
+    self:roadRunsSelect(nil)
+    self:roadRunsRefreshStretches()
+    return true
 end
 
 --- Drop the selected pick (the card's button).
@@ -2188,6 +2257,17 @@ function E:drawRoadRunsInner(lw)
             drawLine(pk.st.pts, 1, lw * 2, 0.34, 0.71, 0.91, 0.4)  -- sky blue: a click selects it
         end
     end
+    -- a built run a click would select for shaping: outlined
+    if s.hover == nil and s.sel == nil and self.hoverId ~= nil and self.orderedRunThrough ~= nil then
+        if s.builtHoverSeed ~= self.hoverId then
+            s.builtHoverSeed = self.hoverId
+            local pts = self:orderedRunThrough(self.hoverId)
+            s.builtHoverPts = pts
+        end
+        if s.builtHoverPts ~= nil then drawLine(s.builtHoverPts, 1, lw * 2, 0.34, 0.71, 0.91, 0.5) end
+    else
+        s.builtHoverSeed, s.builtHoverPts = nil, nil
+    end
     -- the selected pick's handles: ends larger, the one under the mouse (or dragged) bright
     local sel = s.sel
     if sel ~= nil and sel.handles ~= nil then
@@ -2343,12 +2423,19 @@ function E:roadRunsCard(kit)
     if n > 0 then
         kit.btn("build (right-click)", function() editor:commitRoadRuns() end)
         kit.btn("clear picks", function() editor:roadRunsClearPicks() end)
-        if s.sel ~= nil then
+        if s.sel ~= nil and not s.sel.built then
             kit.add("cursor", "selected run", string.format("%d handles, %.0f m%s", #(s.sel.handles or {}), s.sel.st.len or 0,
                 s.sel.st.edited and ", shaped" or ""))
             kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; alt: ends do not snap")
             kit.btn("drop selected run", function() editor:roadRunsDropSelected() end)
         end
+    end
+    if s.sel ~= nil and s.sel.built then
+        kit.add("cursor", "built run", string.format("%d waypoints, %d handles, %.0f m%s", #s.sel.ids, #(s.sel.handles or {}),
+            s.sel.st.len or 0, s.sel.st.edited and ", shaped" or ""))
+        kit.add("hint", "drag a handle to shape; click the line to add one; ctrl-click one to remove; its ends stay put")
+        kit.btn("apply shape (right-click)", function() editor:roadRunsApplyBuilt() end)
+        kit.btn("cancel shaping", function() editor:roadRunsSelect(nil) end)
     end
     if RF.noRockCheck then
         kit.add("hint", "not the host: rock may light up as paved")
@@ -2393,6 +2480,7 @@ end
 function E:roadRunsStop()
     local s = self.roadRuns
     if self.roadView and self.roadDrawMid then return self:roadMidRemove() end
+    if s ~= nil and s.sel ~= nil and s.sel.built then return self:roadRunsApplyBuilt() end
     if s ~= nil and #s.picks > 0 then
         self:commitRoadRuns()
         return true
