@@ -2456,6 +2456,8 @@ RF.JUNCTION_HOLD = 12            -- metres either side of a bridged junction whe
 -- the old lane and the town road worse (lane worst 0.8 -> 1.7 m), so paved keeps the gated filter.
 RF.GUIDE_SMOOTH = { paved = 0, track = 5 }   -- points (2 m) either side the guide is averaged over before reading
 RF.EDGE_TOL = 0.75               -- an edge within this of where its neighbours put it has held its line
+RF.BEND_RESTORE = true           -- add back what the final smoothing takes off bends
+RF.BEND_RESTORE_R = 60           -- bends tighter than this radius get it all back (fading out to twice it)
 RF.BEND_WIDEN = 3                -- a reading widened evenly by up to this is a bend, not a junction
 RF.EDGE_REACH = 30               -- sections (2 m) either side searched for good readings to draw an edge from
 RF.EDGE_FOLLOW = true            -- suspect readings kept where one edge holds its line (false: all dropped)
@@ -3101,6 +3103,47 @@ function RF.refineStretchInner(st, isRoadOf, isStopOf)
         if bd > worst then worst = bd end
     end
     if worst > limit then S = resampleFixed(smoothPts(R, 2), 2) end
+    -- Put back what the smoothing took off the bends: the smoothed line's offset from the line read
+    -- (R), itself smoothed so the noise stays out, added back on. Measured on the user's lane bends
+    -- (2026-10-14): walker and filter sat within 0.1 m of the asphalt's middle, the smoothed line
+    -- 0.15-0.35 m toward each bend's inside.
+    if RF.BEND_RESTORE and #S >= 5 and #R >= 5 then
+        local D = {}
+        for i, q in ipairs(S) do
+            -- nearest point on R (the line as read)
+            local bx, bz, bd = q.x, q.z, math.huge
+            for k = max(1, i - 6), min(#R - 1, i + 6) do
+                local a, b = R[k], R[k + 1]
+                local dx, dz = b.x - a.x, b.z - a.z
+                local l2 = dx * dx + dz * dz
+                local t = l2 > 0 and max(0, min(1, ((q.x - a.x) * dx + (q.z - a.z) * dz) / l2)) or 0
+                local qx, qz = a.x + dx * t, a.z + dz * t
+                local d = (q.x - qx) ^ 2 + (q.z - qz) ^ 2
+                if d < bd then bx, bz, bd = qx, qz, d end
+            end
+            D[i] = { x = bx - q.x, z = bz - q.z }
+        end
+        local Ds = smoothPts(smoothPts(D, 2), 2)
+        -- only on bends (radius under BEND_RESTORE_R, fading out to twice that): on a straight the
+        -- difference is the paint's patchiness, and putting it back makes waves
+        local out = {}
+        for i, q in ipairs(S) do
+            local a, c = S[max(1, i - 3)], S[min(#S, i + 3)]
+            local hx, hz = c.x - a.x, c.z - a.z
+            local l = sqrt(hx * hx + hz * hz)
+            local f = 0
+            if l > 1e-6 then
+                local sag = abs(((a.x + c.x) / 2 - q.x) * (-hz / l) + ((a.z + c.z) / 2 - q.z) * (hx / l))
+                local radius = (l * l) / (8 * max(1e-6, sag))
+                f = max(0, min(1, (2 * RF.BEND_RESTORE_R - radius) / RF.BEND_RESTORE_R))
+            end
+            local nq = {}
+            for k, v in pairs(q) do nq[k] = v end
+            nq.x, nq.z = q.x + Ds[i].x * f, q.z + Ds[i].z * f
+            out[i] = nq
+        end
+        S = out
+    end
     out.pts = S
     local filtered = {}
     for i = 1, #R do filtered[i] = { x = R[i].x, z = R[i].z } end
