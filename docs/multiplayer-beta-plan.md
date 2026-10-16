@@ -76,8 +76,15 @@ new link. Nobody is refused.
     check by table from the vehicle's current index onward. A vehicle already on the old road just
     drives it out; new paths cannot use it, since it has no links;
   - no map marker sits on it.
+
   *Open: what to do with a vehicle that sits for a long time with the point still ahead (parked, or a
   stuck job). A time limit, then ask AutoDrive to work out its path again?*
+
+  The "tidy now" removes the whole batch in **one** pass: AutoDrive's own `removeWayPoint` renumbers the
+  network on every call (6.4 ms each at 17k points offline, so 300 deletes would freeze ~2 s).
+- **The door clears every link before a delete**, including reverse links into the point: AutoDrive's
+  delete misses those when the point has incoming links of its own, and the renumbering then rewires
+  the dangling link to the next point (found in step 0).
 
 ### 2.4 Undo per player, skip what is blocked, and say so
 
@@ -137,7 +144,7 @@ That takes no zone, and we do not block AutoDrive. Made as smooth as we can:
 
 | # | Step | Done when | Test with |
 |---|---|---|---|
-| 0 | **Measure + set up.** Whole-network push size at 17k points; check tags survive renumbering | Numbers in `docs/probe-results.md` | This PC (+ a second licence or a helper for a client) |
+| 0 | **Measure + set up.** Whole-network push size at 17k points; check tags survive renumbering | `docs/multiplayer-probe-results.md` (offline done 2026-10-16; in-game message size still open) | This PC (+ a second licence or a helper for a client) |
 | 1 | **One door, tags, self-undoing actions** — every graph write through `scripts/net/GraphOps.lua`; mm rounding; toggles become set/clear; new undo in single player | `reg75.sh` same as main (mm aside); undo/redo pass on every tool; grep finds no write outside the door | Offline harness + single player |
 | 2 | **Pack actions** — record, pack, cut into pieces, fingerprint; logged, not sent | Unpacking gives the same network | Single player |
 | 3 | **Server order, host → others** | Client matches host after every tool | Host + 1 client |

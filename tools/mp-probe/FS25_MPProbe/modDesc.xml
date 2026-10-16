@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8" standalone="no" ?>
+<modDesc descVersion="107">
+	<author>huskermcdoogle</author>
+	<title>
+		<en>MP Probe (Flyover Editor test tool)</en>
+	</title>
+	<description>
+		<en>
+<![CDATA[A test tool for the Flyover Editor multiplayer work. Not for normal play.
+
+Console: mpProbe <KB> sends one network message of that size from a client to the server and back, and writes what arrived to the log. mpProbe all runs 6, 64, 256, 512 and 1024 KB in a row.]]>
+		</en>
+	</description>
+	<version>0.1.0.0</version>
+	<multiplayer supported="true" />
+	<extraSourceFiles>
+		<sourceFile filename="MPProbe.lua" />
+	</extraSourceFiles>
+</modDesc>
