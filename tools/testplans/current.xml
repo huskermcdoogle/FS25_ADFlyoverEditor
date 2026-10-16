@@ -3,14 +3,15 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="1.0.3.0 final: spline edit placed" build="@BUILD@">
+<testPlan title="Issue 18: wheel zoom after the editor" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="splineEdit" title="Spline: edit a placed run" passLog="spline %- edited the run"
-          failLog="Spline%.lua:%d+: attempt"
-          hint="Spline card, action: edit placed. Click a run (it outlines), drag a point, right-click: the run follows, still joined at both ends (ticks itself)."/>
-    <test id="splineUndo" title="One undo puts the run back"
-          hint="Undo once after the edit: the old run is back."/>
-    <test id="splineNew" title="A new spline still lays" passLog="placed multi%-point spline"
-          hint="Action back to new: click points, right-click lays it (ticks itself)."/>
+    <test id="cycleScroll" title="In a vehicle: open, close, scroll" passLog="exit: the screen is on the vehicle's camera"
+          hint="In a vehicle: Alt+F, then Esc, then scroll the wheel. The camera zooms. Ticks itself on exit when the screen is on the vehicle's camera."/>
+    <test id="leaveInside" title="Leave the vehicle with the editor open, then Esc"
+          hint="In a vehicle: Alt+F, leave or switch vehicle however you can (E, Tab, a quick-select mod), then Esc. The screen is where you are and the wheel still zooms there. Skip if nothing leaves the vehicle."/>
+    <test id="report" title="FlyoverWheelReport prints one line"
+          hint="Console (~): FlyoverWheelReport. One line with context, cursor, renderCamera, zoomEvent, the AD flags and three wheel counts. In a vehicle renderCamera=same."/>
+    <test id="clickVehicle" title="Clicking a vehicle from above does not enter it"
+          hint="Editor open, Select tool: left-click a parked vehicle seen from above. You stay where you are and the editor stays open."/>
 </testPlan>
