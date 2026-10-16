@@ -36,10 +36,26 @@ W.counts = {
     wheelOffered = 0,
     topDownZoomOffered = 0,
     oldAutoDriveCurvature = 0,
+    -- The three-level wheel probe (docs/issue-18-wheel-zoom-log.md). One counter per link of the
+    -- in-vehicle zoom chain, always on, nothing written per event. When the wheel is dead, the three
+    -- numbers say which link dropped it:
+    --   rawWheel    the mouse event itself, which every mod gets (ADFlyoverEditor:mouseEvent);
+    --   zoomAction  the game's CAMERA_ZOOM_IN_OUT callback, Enterable.actionEventCameraZoomInOut;
+    --   adHook      AutoDrive's hook at the end of the chain (wrapper 4 below).
+    -- raw climbing while zoomAction stays put means the game's input binding dropped it; zoomAction
+    -- climbing while adHook stays put means it died between the action and AutoDrive's hook.
+    rawWheel = 0,
+    zoomAction = 0,
+    adHook = 0,
 }
 
 W.hudWrapped = false
 W.dialogWrapped = false
+W.zoomActionWrapped = false
+W.zoomActionWrapper = nil
+-- "absent" or "present": whether this game build has the FS22-style click-to-switch vehicle function
+-- (see 5c in install). Read by FlyoverWheelReport.
+W.clickToSwitch = "unchecked"
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, W.MOD_NAME, ...)
@@ -152,6 +168,10 @@ function W.install(AD)
     -- real answer, fixed at install time from what AD.handleSplineCurvature was BEFORE we touched it.
     local hadRealHandleSplineCurvature = (originalHandleSplineCurvature ~= nil)
     AD.handleSplineCurvature = function(selfArg, offset, ...)
+        -- Level 3 of the wheel probe: every arrival, editor open or not, in a vehicle or in the
+        -- flyover camera. AutoDrive calls this from its VehicleCamera:zoomSmoothly hook, so a wheel
+        -- counted here reached the end of the game's zoom chain.
+        W.counts.adHook = W.counts.adHook + 1
         if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
             W.counts.wheelOffered = W.counts.wheelOffered + 1
             if ADFlyoverEditor:handleWheel(offset) then
@@ -171,10 +191,10 @@ function W.install(AD)
             ADFlyoverEditor.wheelProbeRemaining = ADFlyoverEditor.wheelProbeRemaining - 1
             local swallowed = originalHandleSplineCurvature(selfArg, offset, ...)
             local spline = AD.splineInterpolation
-            log("wheel after exit: offset=%s swallowed=%s (mouseWheelActive=%s splineValid=%s pullDownExpanded=%s context=%s)",
+            log("wheel after exit: offset=%s swallowed=%s (mouseWheelActive=%s splineValid=%s pullDownExpanded=%s context=%s) %s",
                 tostring(offset), tostring(swallowed), tostring(AD.mouseWheelActive),
                 tostring(spline ~= nil and spline.valid), tostring(AD.pullDownListExpanded),
-                tostring(g_inputBinding ~= nil and g_inputBinding.currentContextName))
+                tostring(g_inputBinding ~= nil and g_inputBinding.currentContextName), W.wheelCounters())
             return swallowed
         end
         return originalHandleSplineCurvature(selfArg, offset, ...)
@@ -228,6 +248,45 @@ function W.install(AD)
                 return superFunc(cameraSelf, action, offset, ...)
             end)
         W.topDownZoomWrapped = true
+    end
+
+    -- 5b. Level 2 of the wheel probe: the game's own zoom action callback, counted.
+    -- Enterable.actionEventCameraZoomInOut is what CAMERA_ZOOM_IN_OUT calls when the wheel turns in
+    -- a vehicle; it calls VehicleCamera:zoomSmoothly, which AutoDrive hooks and wrapper 4 then sees.
+    -- The game's extracted scripts have no body for it, but the function is there at runtime, which
+    -- is why this is guarded on the type rather than assumed.
+    --
+    -- Limit: a vehicle hands the game this function BY REFERENCE when it registers its action events
+    -- (Enterable:onRegisterActionEvents), so only vehicles that register after this install - any
+    -- vehicle entered from now on - call the counted copy. A vehicle entered before the mod armed
+    -- and never left still calls the original and stays at 0; FlyoverWheelReport says so
+    -- (zoomEvent ... counted=false) so the 0 is not misread as a dead action.
+    if Enterable ~= nil and type(Enterable.actionEventCameraZoomInOut) == "function" then
+        local originalZoomAction = Enterable.actionEventCameraZoomInOut
+        W.zoomActionWrapper = function(...)
+            W.counts.zoomAction = W.counts.zoomAction + 1
+            return originalZoomAction(...)
+        end
+        Enterable.actionEventCameraZoomInOut = W.zoomActionWrapper
+        W.zoomActionWrapped = true
+    end
+
+    -- 5c. Click-to-switch (issue 18, step 4). In FS22 a left click on a vehicle with the cursor
+    -- shown entered it through the vehicle function enterVehicleRaycastClickToSwitch, and AutoDrive
+    -- still carries an override for it that only steps aside for AutoDrive's own editor mode - which
+    -- the flyover editor does not set. Checked against the game's own Enterable.lua for FS25: the
+    -- function is not among the ones Enterable registers, AutoDrive's override is guarded on it
+    -- existing and so never installs, and nothing else in the game's scripts enters a vehicle on a
+    -- mouse click. It cannot fire while the editor is open, so there is nothing to block. Recorded
+    -- rather than assumed: should a game build bring it back, FlyoverWheelReport says "present" and
+    -- a block is then needed - as an overwritten vehicle function at type load, the way AutoDrive
+    -- does it, not a wrap of the table here, because vehicle types copy the function when built.
+    W.clickToSwitch = (Enterable ~= nil and Enterable.enterVehicleRaycastClickToSwitch ~= nil)
+        and "present" or "absent"
+    if W.clickToSwitch == "present" then
+        Logging.warning("[%s] this game build has the click-to-switch vehicle function, which the "
+            .. "editor does not block yet - a left click on a vehicle from the flyover may enter it. "
+            .. "Worth reporting with your game version.", W.MOD_NAME)
     end
 
     -- 6. The proxy's ride. AutoDrive.draw is a mod event listener, so the engine looks it up by
@@ -514,7 +573,17 @@ function W.install(AD)
     log("wrappers installed: mouseEvent, onDrawUIInfo, %sisEditorShowEnabled, handleSplineCurvature, %sdraw%s",
         W.hudWrapped and "Hud.drawHud, " or "", W.topDownZoomWrapped and "GuiTopDownCamera.onZoom, " or "",
         W.dialogWrapped and ", EnterTargetNameGui" or "")
+    log("wheel probe: zoom action %s; click-to-switch %s on this game build",
+        W.zoomActionWrapped and "counted" or "NOT counted (Enterable.actionEventCameraZoomInOut not found)",
+        W.clickToSwitch)
     return true
+end
+
+--- The three wheel counters as one short string, for the exit probe line and FlyoverWheelReport.
+function W.wheelCounters()
+    return string.format("wheelRaw=%d wheelAction=%d wheelAdHook=%d%s",
+        W.counts.rawWheel, W.counts.zoomAction, W.counts.adHook,
+        W.zoomActionWrapped and "" or " (wheelAction not counted on this build)")
 end
 
 function W.describe()
@@ -523,4 +592,5 @@ function W.describe()
         tostring(W.installed), tostring(W.hudWrapped), tostring(W.topDownZoomWrapped), tostring(editorActive()), tostring(W.proxyOwnsNetwork),
         W.counts.mouseSuppressed, W.counts.onDrawUIInfo, W.counts.drawHud,
         W.counts.editorShowForced, W.counts.wheelOffered, W.counts.topDownZoomOffered, W.counts.oldAutoDriveCurvature)
+        .. " | " .. W.wheelCounters()
 end

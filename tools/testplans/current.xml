@@ -3,21 +3,34 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Settings page fits, launch button stays on screen (issue 28)" build="@BUILD@">
+<testPlan title="Issue 28 settings page + issue 18 wheel zoom" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
     <test id="bigScale" title="Make the editor big"
           hint="Open the editor settings (more settings...). Set ui scale to 1.5 x or more. Then click PASS."/>
     <test id="fits" title="The settings page fits"
-          hint="The title and the close button can both be reached. The page is not cut off top or bottom. PASS if so."/>
+          hint="Look at the page. You can reach the title and the close button, and nothing is cut off. PASS if so."/>
     <test id="wheelScrolls" title="The wheel scrolls the page"
-          hint="Roll the wheel over the rows. The page should move and a bar on the right should show where you are. No value should change. PASS if so."/>
-    <test id="stepsWork" title="The - and + buttons still work"
-          hint="Scroll down to LAUNCH BUTTON. Use + on position. It should change. Set ui scale back to 1.0 x. PASS if all fine."/>
-    <test id="smallWheel" title="Small page: wheel still changes values"
-          hint="At 1.0 x the page fits. Roll the wheel over a value: it should change, as before. PASS if so."/>
+          hint="Roll the wheel over the rows. The page moves, a bar on the right shows where you are, and no value changes. PASS if so."/>
+    <test id="stepsWork" title="The + button still works"
+          hint="Scroll down to LAUNCH BUTTON. Click + on position. The position changes. PASS if so."/>
+    <test id="scaleBack" title="Set the size back"
+          hint="Set ui scale back to 1.0 x. Then click PASS."/>
+    <test id="smallWheel" title="Small page: the wheel changes values"
+          hint="Roll the wheel over a value. The value changes, as before. PASS if so."/>
     <test id="buttonRight" title="Button set to right stays on screen"
-          hint="Set position to right. Close the editor. With AutoDrive's box at the right edge, the button should sit on its left, fully on screen. PASS if so."/>
-    <test id="buttonOthers" title="Above and below stay on screen"
-          hint="Try above and below too. Drag AutoDrive's box near the top or bottom edge. The button should never go off screen. Set it back the way you like it, then PASS."/>
+          hint="Set position to right. Close the editor. With AutoDrive's box at the right edge, the button sits on its left, fully on screen. PASS if so."/>
+    <test id="buttonEdge" title="Button near the top stays on screen"
+          hint="Set position to above. Drag AutoDrive's box to the top edge. The button stays on screen. Set it back the way you like it, then PASS."/>
+    <test id="cycleExit" title="In a vehicle: open and close the editor"
+          passLog="exit: the screen is on the vehicle's camera"
+          hint="Sit in a vehicle. Press Alt+F, then Esc. This ticks by itself."/>
+    <test id="wheelZooms" title="The wheel zooms the vehicle camera"
+          hint="Roll the wheel. The camera zooms in and out. PASS if so."/>
+    <test id="report" title="Run the wheel report"
+          hint="Open the console (~). Type FlyoverWheelReport and press Enter. One line appears. PASS if so."/>
+    <test id="clickVehicle" title="Clicking a vehicle from above does not enter it"
+          hint="Open the editor. With the Select tool, left-click a parked vehicle. You stay where you are and the editor stays open. PASS if so."/>
+    <test id="leaveInside" title="Leave the vehicle with the editor open"
+          hint="In a vehicle: Alt+F, then leave or switch vehicle any way you can, then Esc. The wheel still zooms where you are. SKIP if nothing lets you leave."/>
 </testPlan>

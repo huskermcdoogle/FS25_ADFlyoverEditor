@@ -1183,6 +1183,9 @@ function ADFlyoverEditor:enable()
     -- recognisable rather than at the map origin.
     local startX, startZ
     local vehicle = AutoDrive.getControlledVehicle()
+    -- Kept for the exit: if the player is in another vehicle, or on foot, by then, the camera the
+    -- flyover camera hands the screen back to is the wrong one (see restoreVehicleCamera).
+    self.vehicleOnEnter = vehicle
     if vehicle ~= nil and vehicle.rootNode ~= nil then
         startX, _, startZ = getWorldTranslation(vehicle.rootNode)
     elseif g_localPlayer ~= nil and g_localPlayer.rootNode ~= nil then
@@ -1334,6 +1337,61 @@ function ADFlyoverEditor:enable()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: ACTIVE - %s", self:describeBuild())
 end
 
+--- After the flyover camera is gone: put the screen on the camera of the vehicle the player is in
+--- now, not the one from entry.
+---
+--- GuiTopDownCamera:deactivate() restores the render camera it took over from, which is the entry
+--- vehicle's. rnap84's log for issue 18 (docs/issue-18-wheel-zoom-log.md) has three sessions that
+--- began in a vehicle and ended on foot; a vehicle change during a session leaves the player zooming
+--- a camera that is not on screen until something re-activates it (Tab, C, a reload) - which is the
+--- tester's own recovery recipe. setActiveCameraIndex is the game's own switch: its guard makes it a
+--- no-op when the vehicle's camera is already the one rendering, and otherwise it deactivates and
+--- re-activates that camera the way pressing C does (VehicleCamera:onActivate is what sets the render
+--- camera). On foot the player camera is the game's to restore, so nothing is touched.
+---
+--- Nothing in the editor leaves or switches a vehicle, so a change is logged as a warning: the log
+--- then says when it happened, which the issue's log could not.
+function ADFlyoverEditor:restoreVehicleCamera()
+    local okNow, vehicle = pcall(function() return AutoDrive.getControlledVehicle() end)
+    vehicle = okNow and vehicle or nil
+    local before = self.vehicleOnEnter
+    self.vehicleOnEnter = nil
+
+    local function describe(v)
+        if v == nil then
+            return "on foot"
+        end
+        local ok, name = pcall(function() return v:getName() end)
+        return "in " .. (ok and tostring(name) or "a vehicle")
+    end
+    if vehicle ~= before then
+        Logging.warning("[FlyoverEditor]: the player was %s when the editor opened and is %s now - the "
+            .. "vehicle changed while the editor was open. Nothing in the editor does that; worth a report "
+            .. "with the log, with what you pressed or clicked just before.", describe(before), describe(vehicle))
+    end
+    if vehicle == nil then
+        return
+    end
+
+    local spec = vehicle.spec_enterable
+    if spec == nil or spec.activeCamera == nil or spec.camIndex == nil or vehicle.setActiveCameraIndex == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: exit: the vehicle has no active camera to put back.")
+        return
+    end
+    local okRender, rendering = pcall(function() return g_cameraManager.activeCameraNode end)
+    if not okRender then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: exit: the render camera is not readable on this build; leaving the cameras alone.")
+        return
+    end
+    if rendering == spec.activeCamera.cameraNode then
+        Logging.info("[FlyoverEditor]: exit: the screen is on the vehicle's camera.")
+        return
+    end
+    Logging.warning("[FlyoverEditor]: exit: the screen was NOT on the vehicle's camera (this is the state "
+        .. "that loses the wheel zoom) - re-activating it.")
+    tryCall("vehicle:setActiveCameraIndex", function() vehicle:setActiveCameraIndex(spec.camIndex) end)
+end
+
 function ADFlyoverEditor:disable()
     if not self.active then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: not active.")
@@ -1374,6 +1432,9 @@ function ADFlyoverEditor:disable()
         tryCall("camera:deactivate", function() self.camera:deactivate() end)
         tryCall("camera:delete", function() self.camera:delete() end)
     end
+    -- The flyover camera gave the screen back to the camera it took it from at entry. Make sure the
+    -- vehicle the player is in NOW is the one rendering, and say so if the vehicle changed meanwhile.
+    self:restoreVehicleCamera()
 
     if self.actionEventIds ~= nil then
         for _, id in ipairs(self.actionEventIds) do

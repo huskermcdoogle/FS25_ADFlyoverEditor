@@ -638,6 +638,88 @@ function P:consoleHudToggleTest()
     return table.concat(results, " | ") .. " -- now scroll the wheel; the next 6 wheel events are logged."
 end
 
+--- Issue 18, for testers: one line about the in-vehicle wheel zoom to paste into the report - the
+--- input context, the cursor, the screen's camera against the vehicle's, the vehicle's zoom action
+--- event, AutoDrive's wheel flags and the three wheel counters (Wrappers.lua). Every read is guarded;
+--- a field this build cannot answer prints as "?". Works with the editor open or closed.
+function P:consoleWheelReport()
+    local parts = {}
+    local function put(label, fn)
+        local ok, value = pcall(fn)
+        parts[#parts + 1] = label .. "=" .. (ok and tostring(value) or "?")
+    end
+    put("build", function() return P.versionString() end)
+    put("editorOpen", function() return ADFlyoverEditor ~= nil and ADFlyoverEditor.active == true end)
+    put("context", function() return g_inputBinding.currentContextName end)
+    put("cursor", function() return g_inputBinding:getShowMouseCursor() end)
+
+    local okVehicle, vehicle = pcall(function() return AutoDrive.getControlledVehicle() end)
+    vehicle = okVehicle and vehicle or nil
+    if vehicle == nil then
+        parts[#parts + 1] = "vehicle=none(on foot)"
+    else
+        put("vehicle", function() return vehicle:getName() end)
+        local spec = vehicle.spec_enterable
+        -- The one that matters most: is the camera on screen the entered vehicle's? "DIFFERENT" is
+        -- the state where the wheel zooms a camera nobody is looking through.
+        put("renderCamera", function()
+            local camera = spec.activeCamera
+            if camera == nil then
+                return "vehicle has none"
+            end
+            local rendering = g_cameraManager.activeCameraNode
+            if rendering == camera.cameraNode then
+                return "same"
+            end
+            return string.format("DIFFERENT(screen=%s vehicle=%s)", tostring(rendering), tostring(camera.cameraNode))
+        end)
+        put("cameraActivated", function() return spec.activeCamera.isActivated end)
+        put("zoomEvent", function()
+            local entry = spec.actionEvents[InputAction.CAMERA_ZOOM_IN_OUT]
+            if entry == nil then
+                return "MISSING"
+            end
+            local text = "present"
+            -- The binding's own record of the event, where this build lets us read it: active or
+            -- not, and whether its callback is the counted wrapper. A vehicle entered before the mod
+            -- armed still calls the original, so its wheelAction count stays at 0 - counted=false
+            -- says that is why.
+            local events = g_inputBinding.events
+            local event
+            if type(events) == "table" then
+                event = events[entry.actionEventId]
+                if event == nil then
+                    for _, candidate in pairs(events) do
+                        if type(candidate) == "table" and candidate.id == entry.actionEventId then
+                            event = candidate
+                            break
+                        end
+                    end
+                end
+            end
+            if type(event) == "table" then
+                if event.isActive ~= nil then
+                    text = text .. " active=" .. tostring(event.isActive)
+                end
+                if event.callback ~= nil and ADFlyoverWrappers.zoomActionWrapper ~= nil then
+                    text = text .. " counted=" .. tostring(event.callback == ADFlyoverWrappers.zoomActionWrapper)
+                end
+            end
+            return text
+        end)
+    end
+
+    put("adWheelActive", function() return AutoDrive.mouseWheelActive end)
+    put("adPullDown", function() return AutoDrive.pullDownListExpanded end)
+    local okCounters, counters = pcall(ADFlyoverWrappers.wheelCounters)
+    parts[#parts + 1] = okCounters and counters or "wheel counters=?"
+    put("clickToSwitch", function() return ADFlyoverWrappers.clickToSwitch end)
+
+    local line = table.concat(parts, " ")
+    log("wheel report: %s", line)
+    return line
+end
+
 function P:consoleResetInput()
     if ADFlyoverEditor == nil then
         return "Editor not loaded."
@@ -689,6 +771,7 @@ addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
 addConsoleCommand("FlyoverHudOrder", "Whole-hud hide order: symmetric (default) or legacy (1.0.2.0)", "consoleHudOrder", P)
 addConsoleCommand("FlyoverHudToggleTest", "Flip the base-game HUD off and on with no editor, logging action events", "consoleHudToggleTest", P)
+addConsoleCommand("FlyoverWheelReport", "Issue 18: one line about the in-vehicle wheel zoom, to paste into the report", "consoleWheelReport", P)
 addConsoleCommand("FlyoverResetTheme", "Reset the editor's colours and scale to default", "consoleResetTheme", P)
 addConsoleCommand("FlyoverProbeMap", "Report the HUD map and hotspot classes (run with the map small, then large)", "consoleProbeMap", P)
 addConsoleCommand("FlyoverProbeMapFns", "List the map's and camera's functions, untruncated (editor open)", "consoleProbeMapFns", P)
