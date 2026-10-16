@@ -111,3 +111,20 @@ place/flags/field number, changed link lists (as tags), markers, groups - every 
 Cost at 17k points (Lua 5.1 offline): describing an action ~26 ms, playing one ~12 ms, once per action.
 
 "Exact" is strict: same number, tag, place, flags, field number, both link lists in order, markers.
+
+## 5. Step 2: actions as bytes (2026-10-16)
+
+`scripts/editor/ActionCodec.lua` packs an action to bytes and back, cuts the bytes into pieces of at most
+6 KB, and joins them again (an action is only handed on when its last piece is in). Numbers are varints;
+a coordinate that is a whole number of millimetres takes 2-4 bytes, any other its exact binary parts
+(~10 bytes), so replay is exact whether or not `GraphOps.QUANTIZE` is on.
+
+| Check | Result |
+|---|---|
+| `door_check.lua`, 150 random actions, played from the UNPACKED copy | 150/150 exact both ways; same with QUANTIZE on (150/150) |
+| `dbgdoor.lua` over 101 junctions, clear and clear + build, from the unpacked copy | 202/202 exact both ways |
+| `reg75undo.sh` with the pack check in the undo | 101/101 undo and redo exact |
+
+Sizes: random actions of 1-25 edits median 3.4 KB (largest 5 KB); junction clears mean 3.0 KB (largest
+6.2 KB), clear + build mean 3.4 KB (largest 8.0 KB, 2 pieces). Rounding to the millimetre saved only ~7%:
+coordinates read from a save (2 decimals) are already whole millimetres.

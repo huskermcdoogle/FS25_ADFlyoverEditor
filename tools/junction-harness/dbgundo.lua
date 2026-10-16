@@ -16,6 +16,7 @@ dofile(os.getenv("EH_SRC") or "../../scripts/editor/EditorHistory.lua")
 -- the undo records actions through the door (GraphOps.lua) since multiplayer step 1; GO_SRC=none runs
 -- an older EditorHistory without it
 if os.getenv("GO_SRC") ~= "none" then dofile(os.getenv("GO_SRC") or "../../scripts/editor/GraphOps.lua") end
+if os.getenv("GO_SRC") ~= "none" then dofile("../../scripts/editor/ActionCodec.lua") end
 
 local function key(a, b)
     local ta, tb = type(a), type(b)

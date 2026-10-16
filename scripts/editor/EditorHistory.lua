@@ -198,7 +198,10 @@ function ADEditorHistory:flush()
     end
     local open = self.open
     self.open = nil
+    local clock = getTimeSec
+    local t0 = clock ~= nil and clock() or 0
     local action, afterOrWhy = ADFlyoverGraphOps.diff(self.shadow, g, open and open.label or OUTSIDE_LABEL)
+    local tDiff = (clock ~= nil and clock() or 0) - t0
     if action == nil then
         if afterOrWhy ~= "nothing changed" then
             -- a change the door cannot describe: nothing recorded before it can be played any more
@@ -215,6 +218,21 @@ function ADEditorHistory:flush()
         self:push({ label = OUTSIDE_LABEL, actions = { action } })
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: recorded %s", ADFlyoverGraphOps.describe(action))
+    -- MULTIPLAYER STEP 2: pack every action the way the network will carry it, check it comes back the
+    -- same, and log the size. Nothing is sent. Never lets a fault here touch the undo.
+    if ADFlyoverActionCodec ~= nil then
+        self.packCount = (self.packCount or 0) + 1
+        local t1 = clock ~= nil and clock() or 0
+        local ok, bytes, pieces, same, why = pcall(ADFlyoverActionCodec.roundTrip, action, self.packCount)
+        local tPack = (clock ~= nil and clock() or 0) - t1
+        if not ok then
+            Logging.warning("[FlyoverEditor]: pack check - '%s' FAILED: %s", tostring(action.label), tostring(bytes))
+        else
+            Logging.info("[FlyoverEditor]: pack check - '%s' %s: %d byte(s) in %d piece(s); recorded in %.0f ms, packed in %.0f ms (%d points).",
+                tostring(action.label), same and "ok" or ("FAILED: " .. tostring(why)), #bytes, #pieces,
+                tDiff * 1000, tPack * 1000, #g.wayPoints)
+        end
+    end
     return action
 end
 

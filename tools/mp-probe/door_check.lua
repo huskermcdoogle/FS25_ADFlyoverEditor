@@ -42,7 +42,10 @@ AutoDrive = { Hud = { lastUIScale = 0 }, FLAG_NONE = 0, FLAG_SUBPRIO = 1,
 
 dofile(GM_PATH)
 dofile("../../scripts/editor/GraphOps.lua")
-local GM, G = ADGraphManager, ADFlyoverGraphOps
+dofile("../../scripts/editor/ActionCodec.lua")
+local GM, G, C = ADGraphManager, ADFlyoverGraphOps, ADFlyoverActionCodec
+-- QUANTIZE=1: round new and moved points to the millimetre, as GraphOps.QUANTIZE does in the game
+G.QUANTIZE = os.getenv("QUANTIZE") == "1"
 
 local net = dofile(NET_PATH)
 GM.wayPoints, GM.mapMarkers, GM.groups = {}, {}, { All = 1 }
@@ -108,6 +111,7 @@ local okF, okB, refused, empty, failures = 0, 0, 0, 0, 0
 local sizes = { adds = 0, dels = 0, sets = 0, lists = 0 }
 local t0 = os.clock()
 local tDiff, tApply = 0, 0
+packed, piecesTotal = {}, 0
 for n = 1, ACTIONS do
     local before = G.capture(graph())
     local beforeCopy = G.copyGraph(graph())
@@ -119,6 +123,12 @@ for n = 1, ACTIONS do
         if why == "nothing changed" then empty = empty + 1 else refused = refused + 1; print("REFUSED: " .. why) end
     else
         for k in pairs(sizes) do sizes[k] = sizes[k] + #a[k] end
+        -- step 2: the action goes through bytes and pieces, and the copy that comes back is what plays
+        local bytes, pieces, rok, rwhy = C.roundTrip(a, n)
+        if not rok then failures = failures + 1; print("PACK FAIL " .. n .. ": " .. tostring(rwhy)) end
+        packed[#packed + 1] = #bytes
+        piecesTotal = piecesTotal + #pieces
+        a = C.unpack(bytes)
         local fwd = G.copyGraph(beforeCopy)
         c = os.clock()
         local ok, err = G.apply(fwd, a, false)
@@ -140,4 +150,11 @@ print(string.format("in all: %d added, %d deleted, %d moved/flagged, %d relinked
     sizes.adds, sizes.dels, sizes.sets, sizes.lists, #GM.wayPoints))
 print(string.format("time: %.1f s; diff %.1f ms per action, apply %.1f ms per action (Lua 5.1, this PC)",
     os.clock() - t0, tDiff / ACTIONS * 1000, tApply / math.max(1, okF + failures) * 1000))
+table.sort(packed)
+local tot = 0
+for _, b in ipairs(packed) do tot = tot + b end
+if #packed > 0 then
+    print(string.format("packed: median %d B, largest %d B, %d KB in all; %d piece(s) for %d actions (6 KB each at most)",
+        packed[math.ceil(#packed / 2)], packed[#packed], math.floor(tot / 1024), piecesTotal, #packed))
+end
 if failures > 0 or refused > 0 then os.exit(1) end

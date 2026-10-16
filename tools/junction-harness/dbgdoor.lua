@@ -5,7 +5,8 @@
 -- Prints one line: "door ok | <what changed>" or "door FAIL | <why>".
 local H = dofile("harness.lua")
 dofile("../../scripts/editor/GraphOps.lua")
-local G = ADFlyoverGraphOps
+dofile("../../scripts/editor/ActionCodec.lua")
+local G, C = ADFlyoverGraphOps, ADFlyoverActionCodec
 local function graph()
     return { wayPoints = ADGraphManager:getWayPoints(), mapMarkers = ADGraphManager:getMapMarkers(),
              groups = ADGraphManager:getGroups() }
@@ -26,6 +27,11 @@ if a == nil then
     print((why == "nothing changed" and "door ok | nothing changed") or ("door FAIL | " .. tostring(why)))
     return
 end
+-- step 2: what plays is the copy that came back from bytes and pieces
+local bytes, pieces, rok, rwhy = C.roundTrip(a, 1)
+if not rok then print("door FAIL | pack: " .. tostring(rwhy)) return end
+a = C.unpack(bytes)
+local packedNote = string.format(" | %d B in %d piece(s)", #bytes, #pieces)
 local fwd = G.copyGraph(beforeCopy)
 local ok, err = G.apply(fwd, a, false)
 local same, d = false, err
@@ -36,4 +42,4 @@ ok, err = G.apply(back, a, true)
 same, d = false, err
 if ok then same, d = G.same(back, beforeCopy) end
 if not same then print("door FAIL | backwards: " .. tostring(d) .. " | " .. G.describe(a)) return end
-print("door ok | " .. G.describe(a))
+print("door ok | " .. G.describe(a) .. packedNote)

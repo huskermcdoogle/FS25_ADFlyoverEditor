@@ -104,6 +104,7 @@ P.EDITOR_FILES = {
     "scripts/editor/RoadFinder.lua",
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/GraphOps.lua",
+    "scripts/editor/ActionCodec.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",

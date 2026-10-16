@@ -3,16 +3,16 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="MP step 1: undo through the new door" build="@BUILD@">
+<testPlan title="MP step 2: every action packed (not sent)" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="moveUndo" title="Move: undo and redo" passLog="redid 'move waypoint'"
-          failLog="could not %a+ 'move waypoint'"
-          hint="Drag a few points with Move. Undo: they go back. Redo: they come back (ticks itself on the redo)."/>
-    <test id="junctionUndo" title="Junction clear: one undo puts it all back" passLog="undid 'clear junction'"
-          failLog="could not undo 'clear junction'"
-          hint="Clear a junction, then undo once: every point and link is back (ticks itself)."/>
-    <test id="mixUndo" title="Three different edits, undo all, redo all"
-          failLog="undo history cleared"
-          hint="Delete a span, lay a spline, lay a field loop. Undo three times, then redo three times: each step looks right."/>
+    <test id="packSmall" title="A small edit packs" passLog="pack check %- 'move waypoint' ok"
+          failLog="pack check %- .* FAILED"
+          hint="Move a point, then undo it. Ticks itself (the check runs when the next action starts)."/>
+    <test id="packJunction" title="A junction clear packs" passLog="pack check %- 'clear junction' ok"
+          failLog="pack check %- 'clear junction' FAILED"
+          hint="Clear a junction, then undo it. Ticks itself."/>
+    <test id="packBig" title="A big edit packs in pieces" passLog="pack check %- .* ok: %d+ byte%(s%) in [2-9]%d* piece"
+          failLog="pack check %- .* FAILED"
+          hint="Box-select a lot of points (hundreds) and move them, then undo. Ticks itself when it needed more than one piece."/>
 </testPlan>
