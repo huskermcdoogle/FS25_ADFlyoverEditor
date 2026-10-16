@@ -81,7 +81,10 @@ Edit messages in the new design (tags + undo info):
 **`FS25_MPProbe`** (`tools/mp-probe/`, built with `build_probe.py`) is a tiny test mod: on a client,
 `mpProbe all` sends one message each of 6, 64, 256, 512 and 1024 KB to the server and back, and both
 logs say what arrived. That answers whether a 230 KB message works or must go in pieces. It needs two
-peers: two PCs, or this PC running `dedicatedServer.exe` with the game joining it. AutoDrive also logs
+peers on **two licences**: Giants' dedicated server guide (`dedicatedServer_en.pdf`, system requirements)
+says a dedicated server needs its own licence and "You can't play with the same license key as a client
+on a server", so this PC's dedicated server plus this PC's game is not an option. Ways that work: a
+friend joins a game the user hosts, a second licence, or a rented server for a day. AutoDrive also logs
 the real whole-network size on every join (`[AutoDriveSync] Written … bits`), so the same session gives
 the exact number for section 2.
 
