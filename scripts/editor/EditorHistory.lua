@@ -129,9 +129,141 @@ local function restoreState(entry)
     ADGraphManager:markChanges()
 end
 
---- Capture the current graph before an edit. Call this BEFORE mutating, once per user-visible
---- action - not once per waypoint inside a loop, or undo becomes single-step-at-a-time.
+--[[ ACTIONS, NOT COPIES (multiplayer step 1, 2026-10-16)
+
+Undo now plays recorded actions backwards instead of swapping in a whole copy of the network. The
+recording is ADFlyoverGraphOps (GraphOps.lua): it compares the network at the start of an action with
+the network at the start of the next one, by tag, and keeps exactly what changed, before and after.
+The id problem described at the top of this file is gone because an action names points by tag, not
+by number. Proven exact forwards and backwards on a 17k network (tools/mp-probe/door_check.lua).
+
+The stack keeps the shape the tools rely on: an entry goes on the stack when an action STARTS
+(snapshot, or commit after capture), so a tool can still compare the top of the stack before and after
+to see whether its action did anything. The entry is filled in at the next boundary (the next action,
+an undo or redo, opening the editor) - flush() - with what changed in between.
+
+Each entry: { label, actions = { action, ... } }. Usually one action; foldOnto() joins entries.
+Changes nobody announced (AutoDrive recording a route, say) become their own entry, "changes made
+outside the editor", so undo never quietly takes them back together with an editor action.
+
+If GraphOps is missing, or ADFlyoverGraphOps.USE_FOR_UNDO is false, the old copy-based undo above
+runs unchanged.
+]]
+
+local OUTSIDE_LABEL = "changes made outside the editor"
+
+local function graphNow()
+    return { wayPoints = ADGraphManager:getWayPoints(), mapMarkers = ADGraphManager:getMapMarkers(),
+             groups = ADGraphManager:getGroups() }
+end
+
+local function useActions()
+    return ADFlyoverGraphOps ~= nil and ADFlyoverGraphOps.USE_FOR_UNDO ~= false
+end
+
+-- The network as it stood at the last boundary, and the table it was taken from: a different table
+-- means AutoDrive swapped the whole network (savegame load, route import), and nothing recorded
+-- before that can be played on it.
+ADEditorHistory.shadow = nil
+ADEditorHistory.shadowOf = nil
+ADEditorHistory.open = nil
+
+local function retake(self)
+    local g = graphNow()
+    self.shadow = ADFlyoverGraphOps.capture(g)
+    self.shadowOf = g.wayPoints
+end
+
+function ADEditorHistory:push(entry)
+    table.insert(self.stack, entry)
+    self.redoStack = {}
+    while #self.stack > self.MAX_ENTRIES do
+        table.remove(self.stack, 1)
+    end
+end
+
+--- Record whatever changed since the last boundary into the open entry (or a new "outside" entry).
+--- Returns the action recorded, or nil.
+function ADEditorHistory:flush()
+    if not useActions() then return nil end
+    local g = graphNow()
+    if self.shadow == nil or self.shadowOf ~= g.wayPoints then
+        if self.shadow ~= nil and (#self.stack > 0 or #self.redoStack > 0) then
+            Logging.info("[FlyoverEditor] ADEditorHistory: the whole network was replaced; the undo history no longer fits it and is cleared.")
+            self.stack, self.redoStack = {}, {}
+        end
+        retake(self)
+        self.open = nil
+        return nil
+    end
+    local open = self.open
+    self.open = nil
+    local action, afterOrWhy = ADFlyoverGraphOps.diff(self.shadow, g, open and open.label or OUTSIDE_LABEL)
+    if action == nil then
+        if afterOrWhy ~= "nothing changed" then
+            -- a change the door cannot describe: nothing recorded before it can be played any more
+            Logging.warning("[FlyoverEditor] ADEditorHistory: %s - undo history cleared.", tostring(afterOrWhy))
+            self.stack, self.redoStack = {}, {}
+            retake(self)
+        end
+        return nil
+    end
+    self.shadow = afterOrWhy
+    if open ~= nil then
+        table.insert(open.actions, action)
+    else
+        self:push({ label = OUTSIDE_LABEL, actions = { action } })
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: recorded %s", ADFlyoverGraphOps.describe(action))
+    return action
+end
+
+-- What a whole-network swap did besides the swap (restoreState above), for actions that touched
+-- markers or groups. Points keep their tables, so vehicles holding them are not disturbed.
+local function afterPlayback(actions)
+    local markers, groups = false, false
+    for _, a in ipairs(actions) do
+        if a.markers ~= nil then markers = true end
+        if a.groups ~= nil then groups = true end
+    end
+    if groups then ADGraphManager:setGroups(ADGraphManager:getGroups(), true) end
+    if markers then
+        for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
+            if vehicle ~= nil and vehicle.ad ~= nil and vehicle.ad.stateModule ~= nil
+                and vehicle.ad.stateModule.resetMarkersOnReload ~= nil then
+                vehicle.ad.stateModule:resetMarkersOnReload()
+            end
+        end
+        if AutoDrive.notifyDestinationListeners ~= nil then AutoDrive:notifyDestinationListeners() end
+    end
+    if AutoDrive.Hud ~= nil then AutoDrive.Hud.lastUIScale = 0 end
+    ADGraphManager:markChanges()
+end
+
+local function play(self, entry, backwards)
+    local g = graphNow()
+    local list = entry.actions
+    local from, to, step = 1, #list, 1
+    if backwards then from, to, step = #list, 1, -1 end
+    for i = from, to, step do
+        local ok, why = ADFlyoverGraphOps.apply(g, list[i], backwards)
+        if not ok then return why end
+    end
+    afterPlayback(list)
+    retake(self)
+    return true
+end
+
+--- Mark the start of an action. Call this BEFORE mutating, once per user-visible action - not once
+--- per waypoint inside a loop, or undo becomes single-step-at-a-time.
 function ADEditorHistory:snapshot(label)
+    if useActions() then
+        self:flush()
+        local entry = { label = label or "edit", actions = {} }
+        self:push(entry)
+        self.open = entry
+        return true
+    end
     return self:commit(self:capture(label))
 end
 
@@ -142,6 +274,11 @@ end
 --- it again would not do: a snapshot empties the redo stack, so an action that changed nothing would
 --- still throw the redo away. Returns nil if the graph could not be copied.
 function ADEditorHistory:capture(label)
+    if useActions() then
+        -- a boundary now; the changes from here until the next one belong to this capture once committed
+        self:flush()
+        return { label = label or "edit", actions = {}, captured = true }
+    end
     local ok, entry = pcall(captureState, label)
     if not ok then
         Logging.error("[FlyoverEditor] ADEditorHistory: failed to snapshot before '%s': %s", tostring(label), tostring(entry))
@@ -154,6 +291,12 @@ end
 --- capture that failed, as snapshot() returns.
 function ADEditorHistory:commit(entry)
     if entry == nil then return false end
+    if useActions() and entry.captured then
+        entry.captured = nil
+        self:push(entry)
+        self.open = entry
+        return true
+    end
     table.insert(self.stack, entry)
     self.redoStack = {}
 
@@ -166,13 +309,18 @@ function ADEditorHistory:commit(entry)
 end
 
 --- Fold every entry above `entry` into it, so one undo takes back a pair of actions done as one (the
---- junction tool's clear + build). An entry is the graph BEFORE its action, so keeping the lowest keeps
---- the graph from before the first. False when `entry` is no longer on the stack.
+--- junction tool's clear + build). False when `entry` is no longer on the stack.
 function ADEditorHistory:foldOnto(entry)
     if entry == nil then return false end
+    if useActions() then self:flush() end
     for i = #self.stack, 1, -1 do
         if self.stack[i] == entry then
-            while #self.stack > i do table.remove(self.stack) end
+            while #self.stack > i do
+                local above = table.remove(self.stack, i + 1)
+                if useActions() and entry.actions ~= nil and above.actions ~= nil then
+                    for _, a in ipairs(above.actions) do table.insert(entry.actions, a) end
+                end
+            end
             return true
         end
     end
@@ -187,17 +335,35 @@ function ADEditorHistory:depth()
     return #self.stack
 end
 
---- Restore the most recent snapshot. Returns the label of what was undone, or nil.
+--- Undo the most recent action. Returns the label of what was undone, or nil.
 function ADEditorHistory:undo()
+    if useActions() then self:flush() end
     if #self.stack == 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: nothing to undo.")
         return nil
+    end
+    local entry = self.stack[#self.stack]
+
+    if useActions() and entry.actions ~= nil then
+        local ok, result = pcall(play, self, entry, true)
+        if not ok or result ~= true then
+            Logging.error("[FlyoverEditor] ADEditorHistory: could not undo '%s' (%s) - undo history cleared.",
+                tostring(entry.label), tostring(result))
+            self.stack, self.redoStack = {}, {}
+            retake(self)
+            return nil
+        end
+        table.remove(self.stack)
+        table.insert(self.redoStack, entry)
+        -- always logged: the in-game test card ticks itself from it
+        Logging.info("[FlyoverEditor]: undo (actions) - undid '%s' in %d step(s) (%d undo, %d redo available).",
+            tostring(entry.label), #entry.actions, #self.stack, #self.redoStack)
+        return entry.label
     end
 
     -- COMPANION EDIT: peek, do not pop. Popping before the restore meant a throw inside
     -- setMapMarkers lost the snapshot AND left waypoints from one state with markers from
     -- another, with no way back. Only commit once the restore has actually succeeded.
-    local entry = self.stack[#self.stack]
     local ok, err = pcall(function()
         -- Keep where we are, so it can be redone.
         table.insert(self.redoStack, captureState(entry.label))
@@ -222,17 +388,35 @@ function ADEditorHistory:redoDepth()
     return #self.redoStack
 end
 
---- Put back the most recently undone state.
+--- Put back the most recently undone action.
 function ADEditorHistory:redo()
+    -- anything changed since the undo becomes an entry of its own, and that empties the redo stack
+    if useActions() then self:flush() end
     if #self.redoStack == 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: nothing to redo.")
         return nil
+    end
+    local entry = self.redoStack[#self.redoStack]
+
+    if useActions() and entry.actions ~= nil then
+        local ok, result = pcall(play, self, entry, false)
+        if not ok or result ~= true then
+            Logging.error("[FlyoverEditor] ADEditorHistory: could not redo '%s' (%s) - undo history cleared.",
+                tostring(entry.label), tostring(result))
+            self.stack, self.redoStack = {}, {}
+            retake(self)
+            return nil
+        end
+        table.remove(self.redoStack)
+        table.insert(self.stack, entry)
+        Logging.info("[FlyoverEditor]: undo (actions) - redid '%s' in %d step(s) (%d undo, %d redo available).",
+            tostring(entry.label), #entry.actions, #self.stack, #self.redoStack)
+        return entry.label
     end
 
     -- COMPANION EDIT: peek, do not pop. Popping before the restore meant a throw inside
     -- setMapMarkers lost the snapshot AND left waypoints from one state with markers from
     -- another, with no way back. Only commit once the restore has actually succeeded.
-    local entry = self.redoStack[#self.redoStack]
     local ok, err = pcall(function()
         -- Symmetric with undo: keep where we are so it can be undone again.
         table.insert(self.stack, captureState(entry.label))
@@ -252,4 +436,7 @@ end
 function ADEditorHistory:clear()
     self.stack = {}
     self.redoStack = {}
+    self.open = nil
+    -- the next boundary takes the network afresh; nothing before now is recorded
+    self.shadow, self.shadowOf = nil, nil
 end

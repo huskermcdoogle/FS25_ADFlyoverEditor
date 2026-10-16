@@ -136,7 +136,10 @@ function ADGraphManager:removeWayPoint(id)
             for i = 1, #lst do lst[i] = oldToNew[lst[i]] or lst[i] end
         end
     end
-    ordered = fresh
+    -- the same array, as AutoDrive's table.remove keeps it (the undo's door notices a swapped array)
+    local n0 = #ordered
+    for i = 1, #fresh do ordered[i] = fresh[i] end
+    for i = n0, #fresh + 1, -1 do ordered[i] = nil end
     byId = {}
     for i, w in ipairs(ordered) do
         w.id = i

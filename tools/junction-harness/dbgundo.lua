@@ -13,6 +13,9 @@
 -- after    a checksum of the network after the clear, to hold one build's clear against another's
 local H = dofile("harness.lua")
 dofile(os.getenv("EH_SRC") or "../../scripts/editor/EditorHistory.lua")
+-- the undo records actions through the door (GraphOps.lua) since multiplayer step 1; GO_SRC=none runs
+-- an older EditorHistory without it
+if os.getenv("GO_SRC") ~= "none" then dofile(os.getenv("GO_SRC") or "../../scripts/editor/GraphOps.lua") end
 
 local function key(a, b)
     local ta, tb = type(a), type(b)
@@ -88,9 +91,13 @@ if os.getenv("NOTHING_LEFT") == "1" then
         return r
     end
 end
+-- tag the points first: the undo tags them at its first capture, and the comparison is field by field
+if ADFlyoverGraphOps ~= nil then ADFlyoverGraphOps.tagAll(ADGraphManager:getWayPoints()) end
 local before = net()
 local d0 = ADEditorHistory:depth()
 local log = H.apply()
+-- new points get their tags at the undo's next boundary; give them now, so after and redo compare alike
+if ADFlyoverGraphOps ~= nil then ADFlyoverGraphOps.tagAll(ADGraphManager:getWayPoints()) end
 local after = net()
 local pushed = ADEditorHistory:depth() - d0
 local changed = not same(before, after)

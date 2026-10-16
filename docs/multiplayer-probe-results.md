@@ -91,3 +91,23 @@ the exact number for section 2.
 Until then the plan assumes the worst: **everything above 6 KB goes in pieces**, the whole network
 included. If the probe shows 1 MB arrives intact, the pieces stay for edits and the whole network can
 go in one.
+
+---
+
+## 4. Step 1: the one door (2026-10-16)
+
+`scripts/editor/GraphOps.lua` describes an action as the difference between the network before and after
+it, matched by tag: deleted points (with their old place in the order), added points (in order), changed
+place/flags/field number, changed link lists (as tags), markers, groups - every entry with before and after.
+`apply()` plays an action forwards or backwards: it reuses point tables, renumbers once, rewrites links once.
+
+| Check | Result |
+|---|---|
+| `tools/mp-probe/door_check.lua`, 200 random actions of 1-25 AutoDrive edits on 17k points | 200/200 exact forwards and backwards |
+| `tools/junction-harness/dbgdoor.lua` over all 101 registry junctions: clear (both modes), clear + build | 303/303 exact both ways |
+| `reg75undo.sh` with undo now playing actions | 101/101 undo and redo exact, both modes |
+| `reg75.sh` | identical to before the change |
+
+Cost at 17k points (Lua 5.1 offline): describing an action ~26 ms, playing one ~12 ms, once per action.
+
+"Exact" is strict: same number, tag, place, flags, field number, both link lists in order, markers.

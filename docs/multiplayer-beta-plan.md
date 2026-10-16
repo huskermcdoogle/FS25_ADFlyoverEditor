@@ -145,7 +145,7 @@ That takes no zone, and we do not block AutoDrive. Made as smooth as we can:
 | # | Step | Done when | Test with |
 |---|---|---|---|
 | 0 | **Measure + set up.** Whole-network push size at 17k points; check tags survive renumbering | `docs/multiplayer-probe-results.md` (offline done 2026-10-16; in-game message size still open) | This PC (+ a second licence or a helper for a client) |
-| 1 | **One door, tags, self-undoing actions** — every graph write through `scripts/net/GraphOps.lua`; mm rounding; toggles become set/clear; new undo in single player | `reg75.sh` same as main (mm aside); undo/redo pass on every tool; grep finds no write outside the door | Offline harness + single player |
+| 1 | **One door, tags, self-undoing actions** — `scripts/editor/GraphOps.lua` records each action by comparing the network by tag before and after it (no call-site changes needed); undo plays actions backwards (`EditorHistory.lua`) | DONE offline 2026-10-16: `door_check.lua` 200/200 exact on 17k; 303/303 junction clears/builds exact; undo+redo 202/202 exact; `reg75.sh` identical. In-game test card next | Offline harness + single player |
 | 2 | **Pack actions** — record, pack, cut into pieces, fingerprint; logged, not sent | Unpacking gives the same network | Single player |
 | 3 | **Server order, host → others** | Client matches host after every tool | Host + 1 client |
 | 4 | **Clients → server** with the quiet take-back-and-reapply; held-back deletes and "tidy now" (waits for vehicles and markers) | Two editors far apart, no drift after save + reload; a vehicle drives out a deleted road | Host + 2 clients |
@@ -156,8 +156,10 @@ That takes no zone, and we do not block AutoDrive. Made as smooth as we can:
 | 9 | **BETA round 1 on GitHub** — the user hosts, testers join | Testers' reports in issues, fixed | Testers |
 | 10 | **Dedicated server** — headless load, server-only apply; a tester's rented server, or rent one | No Lua errors in the server log; same tests as 9 | Dedicated server |
 
-Step 1 is the biggest and the only one that touches existing tools. It changes nothing a player sees
-except faster undo, so it can ship to main on its own.
+Step 1 turned out small: instead of moving ~80 write sites onto new functions, the door compares the
+network before and after each action (undo already marked where actions start), so it catches every
+write, including ones nobody listed. Millimetre rounding is built but off (`G.QUANTIZE`); note AutoDrive
+saves at 0.01 m, so rounding to the centimetre may be the better choice - decide in step 2.
 
 **Hosting first** (user, 2026-10-16): the user hosts the early test sessions (listen server). A
 dedicated server comes later, before leaving BETA: a tester's own rented server if anyone has one,
