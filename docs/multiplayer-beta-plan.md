@@ -30,6 +30,9 @@ the millimetre rounding (its §2, §4.2, §4.5, §6), but its line numbers preda
   server says no, it is cancelled within a moment and the other player's zone shows.
 - **Radius is a server setting**, default 15 m. Kept in our own server-side settings file, sent to every
   player on join. Never in `AutoDrive.settings` (that breaks stock clients, see `companion-build-plan.md`).
+- **What others see** (user, 2026-10-16): another player's zone is a **tint in their colour**, and a small
+  **legend in a corner of the screen** lists who is editing, by name and colour. Colours from the
+  colour-blind-safe set (Okabe-Ito), low glow.
 - Tools that read around themselves before building (junction clear/build read nearby roads) claim what
   they read, not only what they write.
 
@@ -64,9 +67,17 @@ new link. Nobody is refused.
   - if someone else's change reached the server first, your PC quietly takes yours back, applies theirs,
     and puts yours back on top. Zones mean they never touch the same place, so this always works.
 - **Deletes in multiplayer are held back.** The point is unlinked and hidden at once, and really removed
-  when nobody is mid-operation, by one "tidy now" message from the server. That keeps AutoDrive's
-  numbers still while people work, which makes AutoDrive's own events far less likely to hit the wrong
-  point.
+  later by one "tidy now" message from the server. That keeps AutoDrive's numbers still while people
+  work, which makes AutoDrive's own events far less likely to hit the wrong point. A held-back point (or
+  group of points) is only really removed when **all** of these hold (user, 2026-10-16):
+  - nobody is mid-operation;
+  - no AutoDrive vehicle still has it ahead of it on its path. Vehicles run on the server and hold their
+    path as a list of point tables (`DrivePathModule.wayPoints`, from `getPathTo`), so the server can
+    check by table from the vehicle's current index onward. A vehicle already on the old road just
+    drives it out; new paths cannot use it, since it has no links;
+  - no map marker sits on it.
+  *Open: what to do with a vehicle that sits for a long time with the point still ahead (parked, or a
+  stuck job). A time limit, then ask AutoDrive to work out its path again?*
 
 ### 2.4 Undo per player, skip what is blocked, and say so
 
@@ -126,28 +137,30 @@ That takes no zone, and we do not block AutoDrive. Made as smooth as we can:
 
 | # | Step | Done when | Test with |
 |---|---|---|---|
-| 0 | **Measure + set up.** Whole-network push size at 17k points; dedicated server on this PC; check tags survive renumbering | Numbers in `docs/probe-results.md` | This PC |
+| 0 | **Measure + set up.** Whole-network push size at 17k points; check tags survive renumbering | Numbers in `docs/probe-results.md` | This PC (+ a second licence or a helper for a client) |
 | 1 | **One door, tags, self-undoing actions** — every graph write through `scripts/net/GraphOps.lua`; mm rounding; toggles become set/clear; new undo in single player | `reg75.sh` same as main (mm aside); undo/redo pass on every tool; grep finds no write outside the door | Offline harness + single player |
 | 2 | **Pack actions** — record, pack, cut into pieces, fingerprint; logged, not sent | Unpacking gives the same network | Single player |
 | 3 | **Server order, host → others** | Client matches host after every tool | Host + 1 client |
-| 4 | **Clients → server** with the quiet take-back-and-reapply; held-back deletes and "tidy now" | Two editors far apart, no drift after save + reload | Local dedi + 2 clients |
-| 5 | **Zones** — claimed by the door at write time; others' zones drawn; radius setting | Two editors side by side, nothing lost | 2 clients |
-| 6 | **Per-player undo** — skip blocked, history list, messages | Undo stories in §2.4 all behave | 2 clients |
-| 7 | **Early zones** at gesture start, tool by tool; AutoDrive safety net (§3) | Recording vehicle next to an editor, nothing lost | 2 clients |
-| 8 | **Dedicated server + BETA build** — headless load, `supported="true"`, tester guide, issue form | No Lua errors in the server log | Local dedi |
-| 9 | **BETA on GitHub** — pre-release, testers report, fix rounds | Two clean rounds | Testers |
+| 4 | **Clients → server** with the quiet take-back-and-reapply; held-back deletes and "tidy now" (waits for vehicles and markers) | Two editors far apart, no drift after save + reload; a vehicle drives out a deleted road | Host + 2 clients |
+| 5 | **Zones** — claimed by the door at write time; tints + corner legend; radius setting | Two editors side by side, nothing lost | Host + 2 clients |
+| 6 | **Per-player undo** — skip blocked, history list, messages | Undo stories in §2.4 all behave | Host + 2 clients |
+| 7 | **Early zones** at gesture start, tool by tool; AutoDrive safety net (§3) | Recording next to an editor, nothing lost | Host + 2 clients |
+| 8 | **BETA build** — `supported="true"`, 1.0.4.0, tester guide, issue form | Hosted test session clean | User hosts |
+| 9 | **BETA round 1 on GitHub** — the user hosts, testers join | Testers' reports in issues, fixed | Testers |
+| 10 | **Dedicated server** — headless load, server-only apply; a tester's rented server, or rent one | No Lua errors in the server log; same tests as 9 | Dedicated server |
 
 Step 1 is the biggest and the only one that touches existing tools. It changes nothing a player sees
 except faster undo, so it can ship to main on its own.
 
-**Testing two clients needs two FS25 licences** (or a tester). One PC can run a dedicated server plus
-one game.
+**Hosting first** (user, 2026-10-16): the user hosts the early test sessions (listen server). A
+dedicated server comes later, before leaving BETA: a tester's own rented server if anyone has one,
+otherwise we rent one then. Until step 10 the tester guide says "listen server only".
 
 ## 7. The BETA release
 
 - **GitHub pre-release** (never "latest"), tag `v1.0.4.0-mp-beta.1`, zip built from this branch. Main
   stays the single-player release.
-- **Version** `1.0.4.0`, `1.0.4.1`, … one per round; title gets "(MP BETA)". *To confirm.*
+- **Version** `1.0.4.0` (user, 2026-10-16), then `1.0.4.1`, … one per round; title gets "(MP BETA)".
 - **Tester guide** `docs/multiplayer-beta-testers.md`: install the same zip everywhere, remove other
   copies, what to try, where `log.txt` is on PC and server, attach both plus `testresults.xml`.
 - **Issue form** `.github/ISSUE_TEMPLATE/mp-beta.yml`: host or dedi, players, AutoDrive version, what you did.
@@ -155,8 +168,6 @@ one game.
 
 ## 8. Still open
 
-1. Version scheme (above).
-2. How the other player's zone looks: tint only, or tint + name tag + what tool they are using?
-3. Should held-back deletes also wait for AutoDrive vehicles to be off those points?
-4. Whole-network push size (step 0).
-5. Testers: how many, and does anyone run a rented dedicated server?
+1. A vehicle that keeps a held-back point ahead of it for a long time (see §2.3).
+2. Whole-network push size (step 0).
+3. Testers: how many, and whether anyone rents a dedicated server. Crossed when we get there.
