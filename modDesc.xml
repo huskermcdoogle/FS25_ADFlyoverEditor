@@ -2,7 +2,7 @@
 <modDesc descVersion="107">
 	<author>huskermcdoogle</author>
 	<title>
-		<en>Flyover Editor for AutoDrive</en>
+		<en>Flyover Editor for AutoDrive (MP BETA)</en>
 	</title>
 	<description>
 		<en>
@@ -18,7 +18,7 @@ MULTIPLAYER BETA: several players can edit at once (hosted games; not yet on a d
 ]]>
 		</en>
 	</description>
-	<version>1.0.3.0</version>
+	<version>1.0.4.0</version>
 	<multiplayer supported="true" />
 	<iconFilename>modIcon.dds</iconFilename>
 	<actions>

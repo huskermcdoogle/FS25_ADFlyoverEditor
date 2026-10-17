@@ -40,7 +40,8 @@ Undo only ever takes back **your own** edits.
 
 ## When something goes wrong — what to send
 
-Open an issue on GitHub with the **MP BETA** form and attach:
+Open an issue at https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/issues with a title starting
+**[MP BETA]**, and attach:
 
 - `log.txt` from **every** PC (host and players):
   `Documents/My Games/FarmingSimulator2025/log.txt` — copy it **before** starting the game again
