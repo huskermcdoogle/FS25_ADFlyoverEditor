@@ -93,7 +93,10 @@ local server = { name = "server", graph = G.copyGraph(base), tagBase = 0, nextTa
 server.net = N.newServer({
     graph = server.graph,
     send = function(player, msg)
-        if DEBUG and msg.kind == "applied" and serverAt[msg.seq] == nil then serverAt[msg.seq] = G.copyGraph(server.graph) end
+        if DEBUG and msg.kind == "applied" and serverAt[msg.seq] == nil then
+            serverAt[msg.seq] = G.copyGraph(server.graph)
+            serverAt[msg.seq - 30] = nil   -- only the recent ones: a 17k copy each
+        end
         post("server", player, msg)
     end,
     now = function() return now end,
@@ -245,6 +248,8 @@ local function deliver(upTo)
 end
 
 local LATE = os.getenv("LATE") ~= "0"
+UNDO = tonumber(os.getenv("UNDO") or "0.15")
+REDO = tonumber(os.getenv("REDO") or "0.05")
 local function joinLate()
     local i = NPLAYERS + 1
     local name = "p" .. i .. " (late)"
@@ -269,6 +274,19 @@ for tick = 1, TICKS do
     as(peer)
     -- a player still waiting for the whole network has nothing to edit yet
     local waiting = peer.net ~= nil and peer.net.waitingForWhole
+    -- step 6: sometimes undo or redo instead of editing
+    local roll = math.random()
+    local undoing = not waiting and roll < UNDO
+    local redoing = not waiting and not undoing and roll < UNDO + REDO
+    if undoing or redoing then
+        if peer == server then
+            N.serverHostUndo(server.net, "server", redoing)
+            server.hostShadow = G.capture(server.graph)
+        else
+            N.clientUndo(peer.net, redoing)
+        end
+        waiting = true   -- no edits this turn
+    end
     if not waiting then for _ = 1, math.random(1, 6) do edit(peer) end end
     if waiting then
         -- nothing
@@ -297,12 +315,21 @@ local allSame = true
 for _, p in ipairs(players) do
     local same, why = G.same(p.graph, server.graph)
     local pend = #p.net.pending
-    print(string.format("%s: %s | sent %d, confirmed %d, refused %d, still pending %d, out of step %d",
-        p.name, same and "SAME AS SERVER" or ("DIFFERS: " .. tostring(why)), p.net.stats.sent,
-        p.net.stats.confirmed, p.net.stats.refused, pend, p.net.stats.outOfStep))
+    local st = p.net.stats
+    print(string.format("%s: %s | sent %d, confirmed %d, refused %d, still pending %d, out of step %d | undo asked %d, redo asked %d, skipped as blocked %d, blocked by server %d",
+        p.name, same and "SAME AS SERVER" or ("DIFFERS: " .. tostring(why)), st.sent,
+        st.confirmed, st.refused, pend, st.outOfStep, st.undoAsked or 0, st.redoAsked or 0,
+        st.skippedBlocked or 0, st.blockedByServer or 0))
+    for _, t in ipairs(p.net.said) do
+        if t:find("Skipped") and not shownSkip then print("  e.g. " .. p.name .. " was told: " .. t); shownSkip = true end
+    end
     if not same or pend > 0 then allSame = false end
 end
 local st = server.net.stats
+print(string.format("server undo: %d undos, %d redos played; %d blocked at the server; %d not exact afterwards (must be 0)",
+    st.undos or 0, st.redos or 0, st.undoBlocked or 0, st.undoNotExact or 0))
+if (st.undoNotExact or 0) > 0 then allSame = false end
+if (st.indescribable or 0) > 0 then print("server could not describe " .. st.indescribable .. " action(s) (must be 0)"); allSame = false end
 print(string.format("server: %d actions in order, %d refused by a zone (host %d), %d links skipped; network %d -> %d points",
     st.applied, st.refused, hostRefused, st.skipped, #base.wayPoints, #server.graph.wayPoints))
 print(string.format("wire: %d messages, %d KB; %.1f s", sentCount, math.floor(sentBytes / 1024), os.clock() - t0))

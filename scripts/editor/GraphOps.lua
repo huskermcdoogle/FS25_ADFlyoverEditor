@@ -398,7 +398,8 @@ after other players' actions got in first, or a player putting their own unconfi
 top of what the server sent. It works only by tag:
 
   deleted points   removed if still there; every link to them, anywhere, removed too
-  new points       added at the end, in order (unless a point with that tag is already there)
+  new points       added at the end, in order (unless a point with that tag is already there);
+                   played backwards, deleted points come back at the end too
   place / flags    set, if the point is still there
   links            as CHANGES, not whole lists: the tags the action took out of a list are taken out
                    (first match), the tags it added are added at the end - so another player's new link
@@ -488,11 +489,9 @@ function G.replay(graph, a, backwards)
             local t = { id = 0, x = p.x, y = p.y, z = p.z, out = {}, incoming = {}, flags = p.flags,
                         fieldID = p.fieldID, fxTag = p.tag }
             L[t] = { out = {}, incoming = {} }
-            if backwards and p.index ~= nil and p.index <= #order + 1 then
-                table.insert(order, p.index, t)
-            else
-                order[#order + 1] = t
-            end
+            -- always on the end: on a network others have changed, the old place in the list means
+            -- nothing, and the end is the one place the door can describe (survivors, then new points)
+            order[#order + 1] = t
             byTag[p.tag] = t
             bornLists[#bornLists + 1] = { t = t, out = p.out, incoming = p.incoming }
         end
@@ -605,4 +604,120 @@ function G.replay(graph, a, backwards)
         for k, v in pairs(backwards and a.groups.before or a.groups.after) do g[k] = v end
     end
     return true, skipped
+end
+
+-- ------------------------------------------------------------------ FITS: may this action be undone (redone)?
+--[[ Per-player undo (multiplayer step 6). An action may be undone only while everything it changed still
+looks exactly as the action left it - nobody, the player included, has changed those things since. Then
+undoing it takes back only what the player did. Redo is the same the other way: everything must still look
+as the undo left it.
+
+Judged on the network as it is NOW, not on who touched what: so when the player who got in the way
+undoes their own change, the blocked action fits again by itself.
+
+What "everything it changed" means:
+  points it added       still there, same place/flags/field, same links      (undo deletes them)
+  points it deleted     still gone                                             (undo brings them back)
+  place/flags it set    still those values
+  links it made/broke   still made/broken - the links only, another player's new link on the same point
+                        does not get in the way (a link belongs to whoever makes it)
+  names it added/removed  still added/removed
+
+G.fits(graph, a, backwards): backwards = true asks "may it be undone?" (graph must show the action's
+AFTER); false asks "may it be redone?" (graph must show its BEFORE). Returns true, or false, the tag of
+the first point in the way (for "who changed it") and a short reason.
+]]
+local function multiset(list)
+    local c = {}
+    for _, t in ipairs(list or {}) do c[t] = (c[t] or 0) + 1 end
+    return c
+end
+local function sameMultiset(a, b)
+    local ca, cb = multiset(a), multiset(b)
+    for k, v in pairs(ca) do if cb[k] ~= v then return false end end
+    for k, v in pairs(cb) do if ca[k] ~= v then return false end end
+    return true
+end
+
+function G.fits(graph, a, backwards)
+    local wps = graph.wayPoints
+    local byTag, tagAt = {}, {}
+    for i = 1, #wps do
+        local wp = wps[i]
+        if wp.fxTag ~= nil then byTag[wp.fxTag] = wp; tagAt[i] = wp.fxTag end
+    end
+    local function tagsOfList(list)
+        local t = {}
+        for i, id in ipairs(list or {}) do t[i] = tagAt[id] or -id end
+        return t
+    end
+    local function samePoint(wp, v)
+        return wp.x == v.x and wp.y == v.y and wp.z == v.z and wp.flags == v.flags and wp.fieldID == v.fieldID
+    end
+
+    -- the points that must be there (with these values and links), and the ones that must be gone
+    local mustBe, mustGo = a.adds, a.dels
+    if not backwards then mustBe, mustGo = a.dels, a.adds end
+    for _, p in ipairs(mustBe) do
+        local wp = byTag[p.tag]
+        if wp == nil then return false, p.tag, "a point it made is gone" end
+        if not samePoint(wp, p) then return false, p.tag, "a point it made was moved" end
+        if not sameMultiset(tagsOfList(wp.out), p.out) or not sameMultiset(tagsOfList(wp.incoming), p.incoming) then
+            return false, p.tag, "a point it made was linked to or from"
+        end
+    end
+    for _, p in ipairs(mustGo) do
+        if byTag[p.tag] ~= nil then return false, p.tag, "a point it deleted is back" end
+    end
+    for _, s in ipairs(a.sets) do
+        local wp = byTag[s.tag]
+        if wp == nil then return false, s.tag, "a point it moved is gone" end
+        if not samePoint(wp, backwards and s.after or s.before) then return false, s.tag, "a point it moved was moved again" end
+    end
+    -- links: what it added must still be there, what it took away must still be away
+    for _, l in ipairs(a.lists) do
+        local wp = byTag[l.tag]
+        if wp == nil then return false, l.tag, "a point it linked is gone" end
+        local fromO, toO, fromI, toI = l.bo, l.ao, l.bi, l.ai
+        if not backwards then fromO, toO, fromI, toI = l.ao, l.bo, l.ai, l.bi end
+        for _, pair in ipairs({ { fromO, toO, wp.out }, { fromI, toI, wp.incoming } }) do
+            local before, after, now = multiset(pair[1]), multiset(pair[2]), multiset(tagsOfList(pair[3]))
+            for t, n in pairs(after) do
+                if n > (before[t] or 0) and (now[t] or 0) < n then return false, l.tag, "a link it made was taken away" end
+            end
+            for t, n in pairs(before) do
+                if n > (after[t] or 0) and (now[t] or 0) > (after[t] or 0) then return false, l.tag, "a link it took away was made again" end
+            end
+        end
+    end
+    if a.markers ~= nil then
+        local want, other = a.markers.after, a.markers.before
+        if not backwards then want, other = a.markers.before, a.markers.after end
+        local have = {}
+        for _, m in ipairs(graph.mapMarkers or {}) do have[tostring(tagAt[m.id]) .. "|" .. tostring(m.name)] = true end
+        local inWant = {}
+        for _, m in ipairs(want) do inWant[tostring(m.tag) .. "|" .. tostring(m.name)] = true end
+        for _, m in ipairs(want) do
+            if not have[tostring(m.tag) .. "|" .. tostring(m.name)] then return false, m.tag, "a name it gave was changed" end
+        end
+        for _, m in ipairs(other) do
+            local k = tostring(m.tag) .. "|" .. tostring(m.name)
+            if not inWant[k] and have[k] then return false, m.tag, "a name it took away is back" end
+        end
+    end
+    return true
+end
+
+--- Every tag an action touches (for "who changed it last"): points added, deleted, moved, relinked, named.
+function G.touched(a)
+    local t = {}
+    for _, p in ipairs(a.adds) do t[#t + 1] = p.tag end
+    for _, p in ipairs(a.dels) do t[#t + 1] = p.tag end
+    for _, s in ipairs(a.sets) do t[#t + 1] = s.tag end
+    for _, l in ipairs(a.lists) do t[#t + 1] = l.tag end
+    if a.markers ~= nil then
+        for _, m in ipairs(a.markers.before) do if m.tag then t[#t + 1] = m.tag end end
+        for _, m in ipairs(a.markers.after) do if m.tag then t[#t + 1] = m.tag end end
+    end
+    return t
 end

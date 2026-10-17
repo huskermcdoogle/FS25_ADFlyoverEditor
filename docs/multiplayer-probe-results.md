@@ -175,3 +175,32 @@ line; a game connection does not do that) - fixed.
 
 **Not done yet:** the game side - one event class carrying these messages (registered early, see the
 plan), the editor calling the boundaries, and undo after another player's change (step 6).
+
+## 7. Step 6 offline: per-player undo (2026-10-16)
+
+An action may be undone while everything it changed still looks exactly as it left it (`GraphOps.fits`):
+its new points still there and unchanged (no one linked to them), its deleted points still gone, its moves
+still in place, its links still made/broken (another player's new link on the same point does not count),
+its names still given/taken. Judged on the network NOW, so a blocked action fits again by itself once the
+blocker undoes. The player picks its newest own action that fits, skipping and naming the blocked ones;
+the server checks again (final say), plays it by tag, sends it as a numbered action (undoOf/redoOf).
+Returned points go on the end (their old place means nothing on a shared network).
+
+`tools/mp-probe/undo_story.lua` - the story, 9 steps, all as told:
+Anna moves P and Q; Bob moves P; Anna's undo takes back Q, then skips P with
+"Skipped 1: Bob changed that spot (Straighten)"; Bob undoes; Anna's undo now takes back P; redo both;
+Anna moves P again and Bob's redo is skipped naming Anna; Anna undoes and Bob's redo goes through.
+
+`sim.lua` with undo 15-25% and redo 5-10% of turns, 3 players + late joiner, 250 ticks each:
+
+| Run | Undos | Redos | Skipped as blocked | Blocked at the server | Not exact after | Result |
+|---|---|---|---|---|---|---|
+| shared 60% (41) | 50 | 3 | 5 | 4 | 0 | all identical |
+| shared 80%, zones off (42) | 62 | 4 | 2 | 1 | 0 | all identical |
+| default (43) | 39 | 2 | 3 | 0 | 0 | all identical |
+
+Found and fixed on the way: replay put undone deletes back at their old place in the list, which the door
+cannot describe, so the server's record of that undo came out empty and the players never got it. Points
+now come back at the end, and the server counts any change it cannot describe (must be 0; it was 0).
+
+Single-player undo is unchanged (`reg75undo.sh`: 101/101 undo and redo exact).

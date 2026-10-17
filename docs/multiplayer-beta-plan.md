@@ -150,7 +150,7 @@ That takes no zone, and we do not block AutoDrive. Made as smooth as we can:
 | 3 | **Server order, host → others** | Client matches host after every tool. Logic DONE offline 2026-10-16 (NetCore.lua, sim.lua): all players identical to the server in every run. Game events not wired yet | Host + 1 client |
 | 4 | **Clients → server** with the quiet take-back-and-reapply; held-back deletes and "tidy now" (waits for vehicles and markers) | Two editors far apart, no drift after save + reload; a vehicle drives out a deleted road. Logic DONE offline (catch-up, late joiner, reload). Held-back deletes not done | Host + 2 clients |
 | 5 | **Zones** — claimed by the door at write time; tints + corner legend; radius setting | Two editors side by side, nothing lost. Logic DONE offline (zones claimed at write time, 15 m, 2 s hold). Tints/legend not done | Host + 2 clients |
-| 6 | **Per-player undo** — skip blocked, history list, messages | Undo stories in §2.4 all behave | Host + 2 clients |
+| 6 | **Per-player undo** — skip blocked, history list, messages | Undo stories in §2.4 all behave. Logic DONE offline 2026-10-16 (GraphOps.fits, NetCore undo; undo_story.lua all as told; sim 151 undos/9 redos, 0 not exact). History list UI not done | Host + 2 clients |
 | 7 | **Early zones** at gesture start, tool by tool; AutoDrive safety net (§3) | Recording next to an editor, nothing lost | Host + 2 clients |
 | 8 | **BETA build** — `supported="true"`, 1.0.4.0, tester guide, issue form | Hosted test session clean | User hosts |
 | 9 | **BETA round 1 on GitHub** — the user hosts, testers join | Testers' reports in issues, fixed | Testers |
