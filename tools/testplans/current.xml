@@ -3,14 +3,13 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="1.0.3.1: parking spots stay put (issue 24)" build="@BUILD@">
+<testPlan title="1.0.3.1: launch key stays in the vehicle" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="setup" title="Two names, vehicle parked at the second"
-          hint="NAME tool: name one point Test A, then another Test B (in that order). Set a vehicle's AutoDrive parking spot to Test B."/>
-    <test id="deleteUndo" title="Delete Test A, then undo" passLog="parking spot%(s%) kept on their name"
-          failLog="parking spots not checked"
-          hint="NAME tool: click Test A, press Delete. Then undo once: Test A comes back (ticks itself)."/>
-    <test id="stillB" title="The parking spot still says Test B"
-          hint="Get in the vehicle: the AutoDrive park button's tooltip says Test B, not Test A."/>
+    <test id="keyBack" title="The key was put back" passLog="AD_FLYOVER_TOGGLE was gone from context"
+          hint="Ticks itself if the game drops the key and the editor puts it back. Fine to skip if it never happens."/>
+    <test id="altInVehicle" title="Alt+F opens the editor in a vehicle"
+          hint="Get in a vehicle, drive about a minute, then press Alt+F (not the HUD button). Close the editor, then try Alt+V."/>
+    <test id="altOnFoot" title="Alt+F still works on foot"
+          hint="Get out, press Alt+F: the editor opens."/>
 </testPlan>
