@@ -232,3 +232,10 @@ other side.
 
 What only a real session can check: the engine's own event handling (registration, sizes), user ids,
 timing with real latency, the editor UI while things change underneath, AutoDrive vehicles on edited roads.
+
+**First game check, build 701 (829c514), 2026-10-17, one PC:** single player - move, undo, redo as before
+(undo through the door, ~9 ms). Hosted multiplayer game with nobody joined - "multiplayer - started as the
+host", "watching 16 of AutoDrive's own network messages", the host's move numbered by the server, undo / redo
+/ "Nothing to undo" through the per-player undo. No Lua errors. (The engine's own "Startup with port while
+already running" line appears when a hosted game is started after a single-player one in the same run; it
+comes before our mod loads.) A second player is still the open test.
