@@ -92,10 +92,90 @@ local function captureState(label)
     }
 end
 
+--[[ PARKING SPOTS FOLLOW THEIR NAME (issue #24, 2026-10-16)
+
+AutoDrive keeps a vehicle's parking spot as a NUMBER: its place in the list of names, not the name.
+When a name is deleted, AutoDrive moves every later parking spot up one place to match. An undo that
+puts the deleted name back did not move them down again, so every parking spot after it now named the
+name before it - and each delete + undo stepped them one further through the list.
+
+Before an undo or redo changes the list, note the name (and where it stands) each parking spot points
+at; afterwards point each one at that name's new place. A name the undo took away clears the parking
+spot (-1), the same as AutoDrive does when a name is deleted. Two places hold it: the vehicle's own
+(stateModule) and each tool's (advd) - AutoDrive's removeMapMarker shifts both.
+]]
+local function rememberParkSpots()
+    local held = {}
+    local markers, wps = ADGraphManager:getMapMarkers(), ADGraphManager:getWayPoints()
+    local function note(vehicle, kind, index)
+        local m = type(index) == "number" and markers[index] or nil
+        if m == nil or m.name == nil then return end
+        local wp = wps[m.id]
+        table.insert(held, { vehicle = vehicle, kind = kind, index = index, name = m.name,
+            x = wp ~= nil and wp.x or nil, z = wp ~= nil and wp.z or nil })
+    end
+    for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
+        if vehicle ~= nil then
+            local sm = vehicle.ad ~= nil and vehicle.ad.stateModule or nil
+            if sm ~= nil and sm.getParkDestinationAtJobFinished ~= nil then
+                note(vehicle, "vehicle", sm:getParkDestinationAtJobFinished())
+            end
+            if vehicle.advd ~= nil then
+                note(vehicle, "tool", vehicle.advd.parkDestination)
+            end
+        end
+    end
+    return held
+end
+
+local function putParkSpotsBack(held)
+    if held == nil or #held == 0 then return end
+    local markers, wps = ADGraphManager:getMapMarkers(), ADGraphManager:getWayPoints()
+    local moved, cleared = 0, 0
+    for _, h in ipairs(held) do
+        -- the same name; if several carry it, the one nearest where it stood
+        local best, bestD = -1, math.huge
+        for i = 1, #markers do
+            local m = markers[i]
+            if m ~= nil and m.name == h.name and m.isADDebug ~= true then
+                local wp = wps[m.id]
+                local d = 0
+                if wp ~= nil and h.x ~= nil then d = (wp.x - h.x) ^ 2 + (wp.z - h.z) ^ 2 end
+                if d < bestD then best, bestD = i, d end
+            end
+        end
+        if best ~= h.index then
+            if h.kind == "vehicle" then
+                h.vehicle.ad.stateModule:setParkDestinationAtJobFinished(best)
+            else
+                -- the field, not setParkDestination: that one sends an event and also overwrites the
+                -- root vehicle's own spot with the tool's
+                h.vehicle.advd.parkDestination = best
+            end
+            if best == -1 then cleared = cleared + 1 else moved = moved + 1 end
+        end
+    end
+    if moved + cleared > 0 then
+        Logging.info("[FlyoverEditor]: undo - %d parking spot(s) kept on their name, %d cleared (their name is gone).",
+            moved, cleared)
+    end
+end
+
+-- Never lets a fault here stop the undo itself.
+local function safely(f, ...)
+    local ok, result = pcall(f, ...)
+    if not ok then
+        Logging.warning("[FlyoverEditor] ADEditorHistory: parking spots not checked: %s", tostring(result))
+        return nil
+    end
+    return result
+end
+
 --- COMPANION EDIT: a full graph swap has to do more than swap the graph. AutoDrive's own
 --- equivalent is AutoDriveRoutesUploadEvent:run, which does six things here; this did two, and the
 --- comment justifying the `false` was simply wrong.
 local function restoreState(entry)
+    local parks = safely(rememberParkSpots)
     ADGraphManager:setWayPoints(entry.wayPoints)
     ADGraphManager:setMapMarkers(entry.mapMarkers)
 
@@ -114,6 +194,7 @@ local function restoreState(entry)
             vehicle.ad.stateModule:resetMarkersOnReload()
         end
     end
+    safely(putParkSpotsBack, parks)
 
     -- setMapMarkers deliberately does not notify, on the grounds that its caller will. We are the
     -- caller. The listener is what rebuilds the map hotspots, so without this the map keeps
@@ -260,6 +341,7 @@ end
 
 local function play(self, entry, backwards)
     local g = graphNow()
+    local parks = safely(rememberParkSpots)
     local list = entry.actions
     local from, to, step = 1, #list, 1
     if backwards then from, to, step = #list, 1, -1 end
@@ -268,6 +350,7 @@ local function play(self, entry, backwards)
         if not ok then return why end
     end
     afterPlayback(list)
+    safely(putParkSpotsBack, parks)
     retake(self)
     return true
 end
