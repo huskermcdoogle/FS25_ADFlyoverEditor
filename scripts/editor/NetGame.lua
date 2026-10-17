@@ -299,6 +299,10 @@ local function clientReceive(ev)
     if msg.kind == "whole" then
         log("loaded the whole network from the server (%d points)", #NG.graph.wayPoints)
         if ADEditorHistory ~= nil then ADEditorHistory:clear() end
+        if not NG.loadedOnce then
+            NG.loadedOnce = true
+            say("Route network loaded from the host - the flyover editor is ready.")
+        end
     end
     tellPlayer()
 end
@@ -342,7 +346,7 @@ function NG.start()
 end
 
 function NG.stop()
-    NG.active = false
+    NG.active, NG.loadedOnce = false, nil
     NG.server, NG.client, NG.hostId, NG.hostShadow, NG.lastWps = nil, nil, nil, nil, nil
 end
 

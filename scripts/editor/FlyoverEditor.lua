@@ -1109,6 +1109,8 @@ function ADFlyoverEditor:enable()
     if not ADFlyoverEditor.canEditHere() then
         if ADFlyoverNetGame ~= nil and ADFlyoverNetGame.active then
             Logging.warning("[FlyoverEditor] not opening yet: still loading the route network from the server.")
+            -- on screen too: a key that silently does nothing reads as broken
+            pcall(ADFlyoverEditor.showWarning, ADFlyoverEditor, "Loading the route network from the host - try again in a moment.")
         else
             Logging.warning("[FlyoverEditor] refusing to open on a multiplayer client: edits here are "
                 .. "not sent to the server and would be lost. Host or single-player only.")
