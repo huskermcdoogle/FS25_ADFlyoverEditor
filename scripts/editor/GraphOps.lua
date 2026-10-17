@@ -42,16 +42,29 @@ local function q(v)
     return math.floor(v * 1000 + 0.5) / 1000
 end
 
+-- TAG SPACES (multiplayer): each player numbers the points THEY make from their own block, so two
+-- players adding points at the same moment can never hand out the same tag. Block = player slot * 2^24;
+-- the server (and single player) is slot 0, which also holds the tags of the network as loaded.
+G.TAG_BLOCK = 2 ^ 24
+G.tagBase = G.tagBase or 0
+
+--- Use player slot `slot`'s block for new tags from now on.
+function G.setTagSpace(slot)
+    G.tagBase = slot * G.TAG_BLOCK
+    G.nextTag = G.tagBase
+end
+
 --- Give every untagged point a tag, in id order (so two PCs holding the same network tag it the same).
 function G.tagAll(wayPoints)
     local fresh = 0
+    local top = G.tagBase + G.TAG_BLOCK
     for i = 1, #wayPoints do
         local wp = wayPoints[i]
         if wp.fxTag == nil then
             G.nextTag = G.nextTag + 1
             wp.fxTag = G.nextTag
             fresh = fresh + 1
-        elseif wp.fxTag > G.nextTag then
+        elseif wp.fxTag > G.nextTag and wp.fxTag < top then
             G.nextTag = wp.fxTag
         end
     end
@@ -374,4 +387,222 @@ function G.describe(a)
     if a == nil then return "nothing" end
     return string.format("%s: %d added, %d deleted, %d moved/flagged, %d relinked%s%s", tostring(a.label),
         #a.adds, #a.dels, #a.sets, #a.lists, a.markers and ", markers" or "", a.groups and ", groups" or "")
+end
+
+-- ------------------------------------------------------------------ REPLAY: apply by tag, forgivingly
+--[[ apply() above is EXACT: it needs the very network the action was made on, and rebuilds the order
+from it. That is right for undo in single player and for a client applying what the server sends.
+
+replay() is for an action made on a slightly different network: the server applying a player's action
+after other players' actions got in first, or a player putting their own unconfirmed actions back on
+top of what the server sent. It works only by tag:
+
+  deleted points   removed if still there; every link to them, anywhere, removed too
+  new points       added at the end, in order (unless a point with that tag is already there)
+  place / flags    set, if the point is still there
+  links            as CHANGES, not whole lists: the tags the action took out of a list are taken out
+                   (first match), the tags it added are added at the end - so another player's new link
+                   on the same point survives. A link to a point that is gone is skipped.
+  markers          names the action removed are removed, names it added are added
+  groups           set to the action's
+
+Points keep their tables. Returns true and a list of what it had to skip (each a short text).
+]]
+local function counts(list)
+    local c = {}
+    for _, t in ipairs(list) do c[t] = (c[t] or 0) + 1 end
+    return c
+end
+
+-- the change from list b to list a, as removals (multiset) and additions (in a's order)
+local function delta(b, a)
+    local cb, ca = counts(b), counts(a)
+    local rem, add = {}, {}
+    for t, n in pairs(cb) do
+        local k = n - (ca[t] or 0)
+        if k > 0 then rem[t] = k end
+    end
+    local seen = {}
+    for _, t in ipairs(a) do
+        seen[t] = (seen[t] or 0) + 1
+        if seen[t] > (cb[t] or 0) then add[#add + 1] = t end
+    end
+    return rem, add
+end
+
+local function applyDelta(list, rem, add, exists, skipped, what)
+    if next(rem) ~= nil then
+        local left = {}
+        for t, n in pairs(rem) do left[t] = n end
+        local out = {}
+        for _, t in ipairs(list) do
+            if (left[t] or 0) > 0 then left[t] = left[t] - 1 else out[#out + 1] = t end
+        end
+        for i = #list, 1, -1 do list[i] = nil end
+        for i, t in ipairs(out) do list[i] = t end
+    end
+    for _, t in ipairs(add) do
+        if exists(t) then list[#list + 1] = t else skipped[#skipped + 1] = what .. " to a point that is gone" end
+    end
+end
+
+function G.replay(graph, a, backwards)
+    local wps = graph.wayPoints
+    local skipped = {}
+    local gone, born = {}, nil
+    if backwards then
+        born = a.dels
+        for _, p in ipairs(a.adds) do gone[p.tag] = true end
+    else
+        born = a.adds
+        for _, p in ipairs(a.dels) do gone[p.tag] = true end
+    end
+
+    -- the network in tags
+    local byTag, tagAt = {}, {}
+    for i = 1, #wps do
+        local wp = wps[i]
+        if wp.fxTag == nil then return false, { "untagged point " .. i } end
+        byTag[wp.fxTag] = wp
+        tagAt[i] = wp.fxTag
+    end
+    local L = {}   -- table -> { out = tags, incoming = tags }
+    for i = 1, #wps do
+        local wp = wps[i]
+        local o, n = {}, {}
+        for k, id in ipairs(wp.out or {}) do o[k] = tagAt[id] or -id end
+        for k, id in ipairs(wp.incoming or {}) do n[k] = tagAt[id] or -id end
+        L[wp] = { out = o, incoming = n }
+    end
+
+    -- order: survivors, then the born (backwards: the deleted go back where they were, if they can)
+    local order = {}
+    for i = 1, #wps do
+        if not gone[wps[i].fxTag] then order[#order + 1] = wps[i] end
+    end
+    local bornLists = {}
+    for _, p in ipairs(born) do
+        if byTag[p.tag] ~= nil and not gone[p.tag] then
+            skipped[#skipped + 1] = "a point that is already there"
+        else
+            local t = { id = 0, x = p.x, y = p.y, z = p.z, out = {}, incoming = {}, flags = p.flags,
+                        fieldID = p.fieldID, fxTag = p.tag }
+            L[t] = { out = {}, incoming = {} }
+            if backwards and p.index ~= nil and p.index <= #order + 1 then
+                table.insert(order, p.index, t)
+            else
+                order[#order + 1] = t
+            end
+            byTag[p.tag] = t
+            bornLists[#bornLists + 1] = { t = t, out = p.out, incoming = p.incoming }
+        end
+    end
+    for tag in pairs(gone) do byTag[tag] = nil end
+    local function exists(t) return t > 0 and byTag[t] ~= nil end
+
+    -- place and flags
+    for _, s in ipairs(a.sets) do
+        local v = backwards and s.before or s.after
+        local wp = byTag[s.tag]
+        if wp == nil then
+            skipped[#skipped + 1] = "a move of a point that is gone"
+        else
+            wp.x, wp.y, wp.z, wp.flags, wp.fieldID = v.x, v.y, v.z, v.flags, v.fieldID
+        end
+    end
+
+    -- links to deleted points go, wherever they are
+    for _, wp in ipairs(order) do
+        for _, key in ipairs({ "out", "incoming" }) do
+            local keep = {}
+            for _, t in ipairs(L[wp][key]) do
+                if t <= 0 or not gone[t] then keep[#keep + 1] = t end
+            end
+            L[wp][key] = keep
+        end
+    end
+    -- the action's link changes
+    for _, l in ipairs(a.lists) do
+        local wp = byTag[l.tag]
+        if wp == nil then
+            skipped[#skipped + 1] = "links of a point that is gone"
+        else
+            local bo, bi, ao, ai = l.bo, l.bi, l.ao, l.ai
+            if backwards then bo, bi, ao, ai = ao, ai, bo, bi end
+            local r1, a1 = delta(bo, ao)
+            applyDelta(L[wp].out, r1, a1, exists, skipped, "a link")
+            local r2, a2 = delta(bi, ai)
+            applyDelta(L[wp].incoming, r2, a2, exists, skipped, "a link")
+        end
+    end
+    -- the born points' own lists
+    for _, b in ipairs(bornLists) do
+        for _, t in ipairs(b.out or {}) do
+            if exists(t) then table.insert(L[b.t].out, t) else skipped[#skipped + 1] = "a link to a point that is gone" end
+        end
+        for _, t in ipairs(b.incoming or {}) do
+            if exists(t) then table.insert(L[b.t].incoming, t) else skipped[#skipped + 1] = "a link to a point that is gone" end
+        end
+    end
+
+    -- renumber, write the lists back as numbers
+    local newId = {}
+    for i, wp in ipairs(order) do
+        wp.id = i
+        newId[wp.fxTag] = i
+    end
+    for _, wp in ipairs(order) do
+        local o, n = {}, {}
+        for _, t in ipairs(L[wp].out) do o[#o + 1] = (t > 0 and newId[t]) or -t end
+        for _, t in ipairs(L[wp].incoming) do n[#n + 1] = (t > 0 and newId[t]) or -t end
+        wp.out, wp.incoming = o, n
+    end
+    for i = 1, math.max(#wps, #order) do wps[i] = order[i] end
+
+    -- markers: keep the ones not touched (renumbered), take out what the action removed, add what it added
+    local markers = graph.mapMarkers or {}
+    local mb, ma
+    if a.markers ~= nil then
+        mb, ma = a.markers.before, a.markers.after
+        if backwards then mb, ma = ma, mb end
+    end
+    local function mkey(tag, name) return tostring(tag) .. "|" .. tostring(name) end
+    local removeM, addM = {}, {}
+    if mb ~= nil then
+        local inA, inB = {}, {}
+        for _, m in ipairs(ma) do inA[mkey(m.tag, m.name)] = true end
+        for _, m in ipairs(mb) do inB[mkey(m.tag, m.name)] = true end
+        for _, m in ipairs(mb) do if not inA[mkey(m.tag, m.name)] then removeM[mkey(m.tag, m.name)] = true end end
+        for _, m in ipairs(ma) do if not inB[mkey(m.tag, m.name)] then addM[#addM + 1] = m end end
+    end
+    local kept = {}
+    for _, m in ipairs(markers) do
+        local t = tagAt[m.id]
+        if not removeM[mkey(t, m.name)] and (t == nil or not gone[t]) then
+            if t ~= nil then m.id = newId[t] or m.id end
+            kept[#kept + 1] = m
+        end
+    end
+    for _, m in ipairs(addM) do
+        if m.tag ~= nil and newId[m.tag] ~= nil then
+            local c = {}
+            for k, v in pairs(m) do c[k] = v end
+            c.tag = nil
+            c.id = newId[m.tag]
+            kept[#kept + 1] = c
+        else
+            skipped[#skipped + 1] = "a name on a point that is gone"
+        end
+    end
+    for i = #markers, 1, -1 do markers[i] = nil end
+    for i, m in ipairs(kept) do
+        m.markerIndex = i
+        markers[i] = m
+    end
+    if a.groups ~= nil then
+        local g = graph.groups
+        for k in pairs(g) do g[k] = nil end
+        for k, v in pairs(backwards and a.groups.before or a.groups.after) do g[k] = v end
+    end
+    return true, skipped
 end

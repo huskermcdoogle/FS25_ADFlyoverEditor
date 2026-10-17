@@ -112,6 +112,7 @@ local sizes = { adds = 0, dels = 0, sets = 0, lists = 0 }
 local t0 = os.clock()
 local tDiff, tApply = 0, 0
 packed, piecesTotal = {}, 0
+replayExact, replayDiff = 0, 0
 for n = 1, ACTIONS do
     local before = G.capture(graph())
     local beforeCopy = G.copyGraph(graph())
@@ -136,6 +137,14 @@ for n = 1, ACTIONS do
         local same, d = false, err
         if ok then same, d = G.same(fwd, graph()) end
         if same then okF = okF + 1 else failures = failures + 1; print("FORWARD FAIL " .. n .. ": " .. tostring(d) .. " | " .. G.describe(a)) end
+        -- replay (by tag, forgiving) on the very network the action was made on: same as exact?
+        local rp = G.copyGraph(beforeCopy)
+        local rok, rskipped = G.replay(rp, a, false)
+        local rsame, rd = false, "replay refused"
+        if rok then rsame, rd = G.same(rp, graph()) end
+        if rsame then replayExact = replayExact + 1 else replayDiff = replayDiff + 1
+            if replayDiff <= 3 then print("replay differs " .. n .. ": " .. tostring(rd) .. " | skipped " .. #(rskipped or {})) end
+        end
         local back = G.copyGraph(graph())
         ok, err = G.apply(back, a, true)
         same, d = false, err
@@ -150,6 +159,7 @@ print(string.format("in all: %d added, %d deleted, %d moved/flagged, %d relinked
     sizes.adds, sizes.dels, sizes.sets, sizes.lists, #GM.wayPoints))
 print(string.format("time: %.1f s; diff %.1f ms per action, apply %.1f ms per action (Lua 5.1, this PC)",
     os.clock() - t0, tDiff / ACTIONS * 1000, tApply / math.max(1, okF + failures) * 1000))
+print(string.format("replay on the same network: %d same as exact, %d different", replayExact, replayDiff))
 table.sort(packed)
 local tot = 0
 for _, b in ipairs(packed) do tot = tot + b end

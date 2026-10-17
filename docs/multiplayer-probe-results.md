@@ -138,3 +138,40 @@ In game, build 694 (2026-10-16, savegame with 12.9k points): card passed 4/4, no
 
 Faster than offline (26 ms to record at 17k points in plain Lua 5.1). Note for step 3: an undo or redo is
 played locally and not packed; in multiplayer it must be sent too, as the same action with a "backwards" flag.
+
+## 6. Steps 3-5 offline: a server and players in one process (2026-10-16)
+
+`scripts/editor/NetCore.lua` holds the rules; `tools/mp-probe/sim.lua` plays them: a host-server and 2-3
+players, each with its own copy of the 17k network, editing with AutoDrive's real GraphManager code (deletes,
+records, moves, flags, toggles, splines, names, hand-made links), messages delayed 30-250 ms at random but
+in order on each line, players mostly in their own slice of the map and sometimes in a shared strip.
+
+- **Server:** replays each player's action by tag (`GraphOps.replay`, new), writes down exactly what that did,
+  numbers it, sends it to everyone. The host's actions are already on the server's network.
+- **Player:** applies its own edits at once; on anything from the server it takes its unconfirmed actions
+  back, applies the server's, and puts its own back on top.
+- **Zones:** squares the size of the radius (15 m); an action takes the squares around every point whose
+  place it changes; another player's squares, held for 2 s after their last action, bounce it.
+- **Joining / out of step:** "hello" gets the whole network with its tags (~400 KB at 17k, in pieces), then
+  every action after it on the same line.
+
+| Run (seed) | Players | Applied | Bounced by zone | Result |
+|---|---|---|---|---|
+| 60 ticks (1) | 2 | 43 | 15 | all identical to the server |
+| 60 ticks + late joiner (21) | 2 + 1 | 42 | 17 | all identical, the late joiner too |
+| 250 ticks (11) | 3 | 165 | 75 | all identical |
+| 250 ticks, shared strip 60% (12) | 3 | 170 | 71 | all identical |
+| 250 ticks, shared 60%, zones off (13) | 3 | 242 | 0 | all identical |
+
+No player was ever out of step. `GraphOps.replay` on the network an action was made on gives the same as the
+exact apply (80/80, `door_check.lua`).
+
+The bounce rate is high because the simulator is harsh: an action every 50 ms from a random player, zones
+of 3x3 squares (45 m) held 2 s, the host editing anywhere. Claiming at the start of a gesture (step 7) is
+what makes bounces rare and visible beforehand; until then they are the thing to watch in testing.
+
+The simulator found one bug of its own (messages due at the same moment could overtake each other on a
+line; a game connection does not do that) - fixed.
+
+**Not done yet:** the game side - one event class carrying these messages (registered early, see the
+plan), the editor calling the boundaries, and undo after another player's change (step 6).
