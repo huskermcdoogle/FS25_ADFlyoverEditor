@@ -128,3 +128,13 @@ a coordinate that is a whole number of millimetres takes 2-4 bytes, any other it
 Sizes: random actions of 1-25 edits median 3.4 KB (largest 5 KB); junction clears mean 3.0 KB (largest
 6.2 KB), clear + build mean 3.4 KB (largest 8.0 KB, 2 pieces). Rounding to the millimetre saved only ~7%:
 coordinates read from a save (2 decimals) are already whole millimetres.
+
+In game, build 694 (2026-10-16, savegame with 12.9k points): card passed 4/4, no Lua errors.
+
+| Action | Bytes | Pieces | Recorded | Packed |
+|---|---|---|---|---|
+| Move, box of ~160 points | 7,925 | 2 | 10 ms | 3 ms |
+| Junction clear | 3,682 | 1 | 12 ms | 1 ms |
+
+Faster than offline (26 ms to record at 17k points in plain Lua 5.1). Note for step 3: an undo or redo is
+played locally and not packed; in multiplayer it must be sent too, as the same action with a "backwards" flag.
