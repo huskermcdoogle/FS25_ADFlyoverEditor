@@ -3,14 +3,13 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="1.0.3.0 final: spline edit placed" build="@BUILD@">
+<testPlan title="1.0.3.1: launch key stays in the vehicle" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="splineEdit" title="Spline: edit a placed run" passLog="spline %- edited the run"
-          failLog="Spline%.lua:%d+: attempt"
-          hint="Spline card, action: edit placed. Click a run (it outlines), drag a point, right-click: the run follows, still joined at both ends (ticks itself)."/>
-    <test id="splineUndo" title="One undo puts the run back"
-          hint="Undo once after the edit: the old run is back."/>
-    <test id="splineNew" title="A new spline still lays" passLog="placed multi%-point spline"
-          hint="Action back to new: click points, right-click lays it (ticks itself)."/>
+    <test id="keyBack" title="The key was put back" passLog="AD_FLYOVER_TOGGLE was gone from context"
+          hint="Ticks itself if the game drops the key and the editor puts it back. Fine to skip if it never happens."/>
+    <test id="altInVehicle" title="Alt+F opens the editor in a vehicle"
+          hint="Get in a vehicle, drive about a minute, then press Alt+F (not the HUD button). Close the editor, then try Alt+V."/>
+    <test id="altOnFoot" title="Alt+F still works on foot"
+          hint="Get out, press Alt+F: the editor opens."/>
 </testPlan>
