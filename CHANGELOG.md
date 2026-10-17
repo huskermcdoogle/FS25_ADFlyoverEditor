@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.3.1 — Parking spots stay put
+
+- **Undo no longer moves AutoDrive parking spots** (issue #24). Deleting a name, or a point with a
+  name on it, and then undoing it left every vehicle parked at a later name pointing one name earlier
+  in the list - and each delete + undo moved them one further. Parking spots now stay on their name
+  through undo and redo. A vehicle parked at the deleted name itself stays cleared, as AutoDrive
+  clears it.
+- **Alt+F / Alt+V keep working in a vehicle.** The key could drop out of a vehicle's controls a little
+  after getting in, leaving only the HUD button until you got out and back in. The editor now notices
+  and puts the key back.
+
 ## 1.0.3.0 — Road runs, multi-point spline, junction tool (beta)
 
 ### Road runs (new tool, CREATE group)
