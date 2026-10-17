@@ -3,14 +3,14 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="1.0.3.0 final: spline edit placed" build="@BUILD@">
+<testPlan title="1.0.3.1: parking spots stay put (issue 24)" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="splineEdit" title="Spline: edit a placed run" passLog="spline %- edited the run"
-          failLog="Spline%.lua:%d+: attempt"
-          hint="Spline card, action: edit placed. Click a run (it outlines), drag a point, right-click: the run follows, still joined at both ends (ticks itself)."/>
-    <test id="splineUndo" title="One undo puts the run back"
-          hint="Undo once after the edit: the old run is back."/>
-    <test id="splineNew" title="A new spline still lays" passLog="placed multi%-point spline"
-          hint="Action back to new: click points, right-click lays it (ticks itself)."/>
+    <test id="setup" title="Two names, vehicle parked at the second"
+          hint="NAME tool: name one point Test A, then another Test B (in that order). Set a vehicle's AutoDrive parking spot to Test B."/>
+    <test id="deleteUndo" title="Delete Test A, then undo" passLog="parking spot%(s%) kept on their name"
+          failLog="parking spots not checked"
+          hint="NAME tool: click Test A, press Delete. Then undo once: Test A comes back (ticks itself)."/>
+    <test id="stillB" title="The parking spot still says Test B"
+          hint="Get in the vehicle: the AutoDrive park button's tooltip says Test B, not Test A."/>
 </testPlan>
