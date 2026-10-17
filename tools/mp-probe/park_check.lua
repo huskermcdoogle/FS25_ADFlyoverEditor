@@ -37,7 +37,9 @@ AutoDrive = { Hud = { lastUIScale = 0 }, FLAG_NONE = 0, FLAG_SUBPRIO = 1,
               getAllVehicles = function() return vehicles end, notifyDestinationListeners = function() end }
 
 dofile(GM_PATH)
-dofile("../../scripts/editor/GraphOps.lua")
+-- main (1.0.3.x) has no GraphOps: only the whole-copy undo is checked there
+local hasOps = io.open("../../scripts/editor/GraphOps.lua") ~= nil
+if hasOps then dofile("../../scripts/editor/GraphOps.lua") end
 dofile("../../scripts/editor/EditorHistory.lua")
 local GM, H = ADGraphManager, ADEditorHistory
 GM.createDebugMarkers = function() end
@@ -90,8 +92,8 @@ local function expect(what, want)
 end
 
 local START = "Shed, Yard, Silo, Yard"
-for _, actions in ipairs({ true, false }) do
-    ADFlyoverGraphOps.USE_FOR_UNDO = actions
+for _, actions in ipairs(hasOps and { true, false } or { false }) do
+    if hasOps then ADFlyoverGraphOps.USE_FOR_UNDO = actions end
     local kind = actions and "actions" or "copies"
 
     print(kind .. ": delete the name Silo")
