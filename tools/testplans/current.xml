@@ -2,17 +2,19 @@
 <!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
-     matched against the editor's own log lines. A click always wins. -->
-<testPlan title="MP step 2: every action packed (not sent)" build="@BUILD@">
+     matched against the editor's own log lines. A click always wins.
+     MULTIPLAYER: the host and the player each run this card on their own PC. -->
+<testPlan title="MP BETA: two players editing" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="packSmall" title="A small edit packs" passLog="pack check %- 'move waypoint' ok"
-          failLog="pack check %- .* FAILED"
-          hint="Move a point, then undo it. Ticks itself (the check runs when the next action starts)."/>
-    <test id="packJunction" title="A junction clear packs" passLog="pack check %- 'clear junction' ok"
-          failLog="pack check %- 'clear junction' FAILED"
-          hint="Clear a junction, then undo it. Ticks itself."/>
-    <test id="packBig" title="A big edit packs in pieces" passLog="pack check %- .* ok: %d+ byte%(s%) in [2-9]%d* piece"
-          failLog="pack check %- .* FAILED"
-          hint="Box-select a lot of points (hundreds) and move them, then undo. Ticks itself when it needed more than one piece."/>
+    <test id="mpStarted" title="Multiplayer side started" passLog="multiplayer %- started as"
+          failLog="multiplayer could not start"
+          hint="Ticks itself when the game starts the multiplayer side (host or player)."/>
+    <test id="shared" title="An edit shows on the other PC"
+          failLog="applying a change failed"
+          hint="One of you moves or adds a few points. The other sees them within a second."/>
+    <test id="sameSpot" title="Same spot: one of you is told" passLog="is working there"
+          hint="Both edit the same few points at the same moment. One edit goes through; the other is told who is working there (ticks itself)."/>
+    <test id="undoOther" title="Undo after the other changed your spot" passLog="changed that spot"
+          hint="You move a point, the other moves it again, you press undo: it skips that move and names them (ticks itself)."/>
 </testPlan>

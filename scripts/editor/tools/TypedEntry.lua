@@ -702,7 +702,7 @@ function ADFlyoverEditor:deleteSelection()
 end
 
 function ADFlyoverEditor:placeWaypointAtCursor()
-    if g_server == nil then
+    if not ADFlyoverEditor.canEditHere() then
         Logging.error("[FlyoverEditor]: waypoints can only be placed on the server (host/singleplayer).")
         return
     end

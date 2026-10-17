@@ -35,6 +35,9 @@ local G = ADFlyoverGraphOps
 local C = ADFlyoverActionCodec
 
 N.ZONE_RADIUS = 15
+
+--- A player's name for the screen; the game side sets this (ids are user ids there).
+N.nameOf = N.nameOf or function(player) return tostring(player) end
 N.ZONE_LINGER_MS = 2000
 
 -- ---------------------------------------------------------------- zones
@@ -124,6 +127,13 @@ function N.wholeNetwork(graph)
     local empty = { order = {}, pts = {}, markers = {}, groups = {} }
     local a = G.diff(empty, graph, "whole network")
     return a
+end
+
+--- Everyone gets the whole network again (AutoDrive replaced it - a route import - so no action can
+--- describe the change). Their unconfirmed actions are lost with it, and they are told.
+function N.serverWholeToAll(s)
+    local bytes = C.pack(N.wholeNetwork(s.graph))
+    for p in pairs(s.players) do s.send(p, { kind = "whole", seq = s.seq, bytes = bytes }) end
 end
 
 --- A message from a player.
@@ -444,7 +454,7 @@ function N.sayUndo(redo, label, skipped)
         or string.format("Nothing to %s.", redo and "redo" or "undo")
     if #skipped > 0 then
         local first = skipped[1]
-        local who = first.byPlayer ~= nil and string.format("%s changed that spot%s", tostring(first.byPlayer),
+        local who = first.byPlayer ~= nil and string.format("%s changed that spot%s", N.nameOf(first.byPlayer),
             first.byLabel ~= nil and (" (" .. tostring(first.byLabel) .. ")") or "") or "that spot changed since"
         text = text .. string.format(" Skipped %d: %s", #skipped, who)
         if #skipped > 1 then text = text .. " and more" end

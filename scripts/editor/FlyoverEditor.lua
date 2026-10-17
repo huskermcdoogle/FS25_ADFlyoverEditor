@@ -307,6 +307,13 @@ ADFlyoverEditor.KEY_SLOTS = {
 --- point put into a link - is still that field's loop, so `fieldID` (from ADFlyoverEditor.fieldOf) passes
 --- the number on and the bit stays. Any other new point drops the bit: without the number it is one
 --- AutoDrive can never find again, a stray when the loop is laid anew.
+--- May this PC change the route network? The server and single player always; a player who joined
+--- only through the multiplayer network side, once it has the server's network.
+function ADFlyoverEditor.canEditHere()
+    if g_server ~= nil then return true end
+    return ADFlyoverNetGame ~= nil and ADFlyoverNetGame.canEdit ~= nil and ADFlyoverNetGame.canEdit() == true
+end
+
 function ADFlyoverRecordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId, flags, sendEvent, fieldID)
     local f = flags or 0
     if math.floor(f / 2) % 2 == 1 then f = f - 2 end   -- AutoDrive.FLAG_TRAFFIC_SYSTEM
@@ -1097,9 +1104,15 @@ function ADFlyoverEditor:enable()
     -- sendEvent = false, and AutoDrive only writes the route file when g_server is present - so a
     -- client could edit for an hour and lose all of it with no signal. One refusal is better than
     -- eleven silent no-ops.
-    if g_server == nil then
-        Logging.warning("[FlyoverEditor] refusing to open on a multiplayer client: edits here are "
-            .. "not sent to the server and would be lost. Host or single-player only.")
+    -- MULTIPLAYER: a player who joined may edit once the network side is running and the server's
+    -- network has arrived (NetGame.lua); before that, or with the network side off, the old refusal.
+    if not ADFlyoverEditor.canEditHere() then
+        if ADFlyoverNetGame ~= nil and ADFlyoverNetGame.active then
+            Logging.warning("[FlyoverEditor] not opening yet: still loading the route network from the server.")
+        else
+            Logging.warning("[FlyoverEditor] refusing to open on a multiplayer client: edits here are "
+                .. "not sent to the server and would be lost. Host or single-player only.")
+        end
         return false
     end
 

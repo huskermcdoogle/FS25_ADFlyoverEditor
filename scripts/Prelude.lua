@@ -43,6 +43,9 @@ source(Utils.getFilename("scripts/Launch.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapProbe.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/MapMarker.lua", g_currentModDirectory))
 source(Utils.getFilename("scripts/SweptPath.lua", g_currentModDirectory))
+-- MULTIPLAYER: the network message is registered HERE, at mod load, before any player joins - never with
+-- the editor files, which come in later (see NetEvent.lua).
+source(Utils.getFilename("scripts/NetEvent.lua", g_currentModDirectory))
 
 P.MOD_NAME = "ADFlyoverEditor"
 P.MOD_DIRECTORY = g_currentModDirectory
@@ -105,6 +108,8 @@ P.EDITOR_FILES = {
     "scripts/editor/EditorHistory.lua",
     "scripts/editor/GraphOps.lua",
     "scripts/editor/ActionCodec.lua",
+    "scripts/editor/NetCore.lua",
+    "scripts/editor/NetGame.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",
@@ -212,6 +217,13 @@ function P:update(dt)
     if editorLoaded() then
         ADFlyoverEditor:update(dt)
     end
+    if ADFlyoverNetGame ~= nil and ADFlyoverNetGame.active then
+        local ok, err = pcall(ADFlyoverNetGame.update, dt)
+        if not ok and not P.netFaulted then
+            P.netFaulted = true
+            logError("multiplayer update faulted: %s", tostring(err))
+        end
+    end
     -- Before the arming early-return below: the launch key has to follow the input context from the
     -- first frame the player can press it, not only once everything else has settled.
     if ADFlyoverLaunch ~= nil then
@@ -287,6 +299,12 @@ function P:update(dt)
     P.state = "armed"
     log("ARMED (build %s). %d editor file(s) sourced. Settings: %s",
         P.versionString(), #P.sourcedFiles, ADFlyoverSettings.describe())
+    -- MULTIPLAYER: start the network side (a no-op in single player). Guarded: a fault here must leave
+    -- the editor as it was.
+    if ADFlyoverNetGame ~= nil and ADFlyoverNetGame.start ~= nil then
+        local ok, err = pcall(ADFlyoverNetGame.start)
+        if not ok then logError("multiplayer could not start: %s", tostring(err)) end
+    end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -353,6 +371,7 @@ function P:draw()
 end
 
 function P:deleteMap()
+    if ADFlyoverNetGame ~= nil and ADFlyoverNetGame.stop ~= nil then pcall(ADFlyoverNetGame.stop) end
     P.state = "waiting"
     P.sourcedFiles = {}
     ADFlyoverArming.armed = false

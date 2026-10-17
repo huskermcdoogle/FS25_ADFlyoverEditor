@@ -399,7 +399,7 @@ function ADFlyoverEditor:commitMultiSpline()
         self:cancelMultiSpline()
         return
     end
-    if g_server == nil then
+    if not ADFlyoverEditor.canEditHere() then
         self:warnPlayer("Waypoints can only be placed on the server (host/singleplayer).")
         return
     end
@@ -539,7 +539,7 @@ function ADFlyoverEditor:splineEditApply()
         self:cancelMultiSpline()
         return
     end
-    if g_server == nil then
+    if not ADFlyoverEditor.canEditHere() then
         self:warnPlayer("Waypoints can only be changed on the server (host/singleplayer).")
         return
     end

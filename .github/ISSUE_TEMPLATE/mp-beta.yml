@@ -1,0 +1,52 @@
+name: Multiplayer BETA report
+description: Something happened while testing the multiplayer BETA of the flyover editor.
+title: "[MP BETA] "
+labels: ["multiplayer beta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. The tester guide is docs/multiplayer-beta-testers.md.
+        Please attach log.txt from EVERY PC (copy it before restarting the game - it is overwritten).
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: The build the test card shows (or the version in the mod list).
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: How was the game run?
+      options:
+        - Hosted from the game
+        - Dedicated / rented server
+    validations:
+      required: true
+  - type: input
+    id: players
+    attributes:
+      label: How many players, and who hosted?
+    validations:
+      required: true
+  - type: input
+    id: autodrive
+    attributes:
+      label: AutoDrive version
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What did you do, and what happened?
+      description: Roughly when (game clock or real time), who was editing where, what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Logs and test results
+      description: Drag log.txt from every PC here, and testresults.xml (modSettings/FS25_ADFlyoverEditor/).
+    validations:
+      required: true

@@ -355,9 +355,22 @@ local function play(self, entry, backwards)
     return true
 end
 
+-- MULTIPLAYER (NetGame.lua): actions go to the server at each boundary and undo is per player
+-- (NetCore). The stack still gets a light entry per action, because tools compare its top before and
+-- after to see whether they changed anything; nothing is copied or recorded here.
+local function mp()
+    return ADFlyoverNetGame ~= nil and ADFlyoverNetGame.active == true
+end
+
 --- Mark the start of an action. Call this BEFORE mutating, once per user-visible action - not once
 --- per waypoint inside a loop, or undo becomes single-step-at-a-time.
 function ADEditorHistory:snapshot(label)
+    if mp() then
+        ADFlyoverNetGame.boundary()
+        ADFlyoverNetGame.label = label or "edit"
+        self:push({ label = label or "edit", actions = {} })
+        return true
+    end
     if useActions() then
         self:flush()
         local entry = { label = label or "edit", actions = {} }
@@ -375,6 +388,11 @@ end
 --- it again would not do: a snapshot empties the redo stack, so an action that changed nothing would
 --- still throw the redo away. Returns nil if the graph could not be copied.
 function ADEditorHistory:capture(label)
+    if mp() then
+        ADFlyoverNetGame.boundary()
+        ADFlyoverNetGame.label = label or "edit"
+        return { label = label or "edit", actions = {}, captured = true }
+    end
     if useActions() then
         -- a boundary now; the changes from here until the next one belong to this capture once committed
         self:flush()
@@ -392,6 +410,12 @@ end
 --- capture that failed, as snapshot() returns.
 function ADEditorHistory:commit(entry)
     if entry == nil then return false end
+    if mp() and entry.captured then
+        entry.captured = nil
+        self:push(entry)
+        ADFlyoverNetGame.label = entry.label
+        return true
+    end
     if useActions() and entry.captured then
         entry.captured = nil
         self:push(entry)
@@ -413,6 +437,7 @@ end
 --- junction tool's clear + build). False when `entry` is no longer on the stack.
 function ADEditorHistory:foldOnto(entry)
     if entry == nil then return false end
+    if mp() then return true end   -- per-player undo takes each action on its own
     if useActions() then self:flush() end
     for i = #self.stack, 1, -1 do
         if self.stack[i] == entry then
@@ -429,6 +454,7 @@ function ADEditorHistory:foldOnto(entry)
 end
 
 function ADEditorHistory:canUndo()
+    if mp() then return true end
     return #self.stack > 0
 end
 
@@ -438,6 +464,7 @@ end
 
 --- Undo the most recent action. Returns the label of what was undone, or nil.
 function ADEditorHistory:undo()
+    if mp() then return ADFlyoverNetGame.undo(false) end
     if useActions() then self:flush() end
     if #self.stack == 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor] ADEditorHistory: nothing to undo.")
@@ -482,6 +509,7 @@ function ADEditorHistory:undo()
 end
 
 function ADEditorHistory:canRedo()
+    if mp() then return true end
     return #self.redoStack > 0
 end
 
@@ -491,6 +519,7 @@ end
 
 --- Put back the most recently undone action.
 function ADEditorHistory:redo()
+    if mp() then return ADFlyoverNetGame.undo(true) end
     -- anything changed since the undo becomes an entry of its own, and that empties the redo stack
     if useActions() then self:flush() end
     if #self.redoStack == 0 then
@@ -540,4 +569,12 @@ function ADEditorHistory:clear()
     self.open = nil
     -- the next boundary takes the network afresh; nothing before now is recorded
     self.shadow, self.shadowOf = nil, nil
+end
+
+--- Run `fn` (a change to the network made outside undo - another player's action in multiplayer) with
+--- every parking spot kept on its name across it (issue #24). Never lets a fault here stop `fn`.
+function ADEditorHistory.keepParkSpots(fn)
+    local parks = safely(rememberParkSpots)
+    fn()
+    safely(putParkSpotsBack, parks)
 end

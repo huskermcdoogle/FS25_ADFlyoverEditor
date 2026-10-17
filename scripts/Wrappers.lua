@@ -56,6 +56,14 @@ end
 
 W.editorActive = editorActive
 
+--- In multiplayer with our network side running, the editor's marker changes are made locally only
+--- (sendEvent = false) and reach everyone through our own network, as every other edit does; sending
+--- AutoDrive's own event as well would make the name twice. Otherwise nil: AutoDrive's own way.
+function W.netSendEvent()
+    if ADFlyoverNetGame ~= nil and ADFlyoverNetGame.active then return false end
+    return nil
+end
+
 function W.install(AD)
     if W.installed then
         return false
@@ -435,7 +443,7 @@ function W.install(AD)
                 end
                 if text:len() >= 1 then
                     log("new marker '%s' on clicked waypoint id=%s (not the vehicle's nearest)", text, tostring(overrideId))
-                    return manager:createMapMarker(overrideId, text)
+                    return manager:createMapMarker(overrideId, text, W.netSendEvent())
                 end
             end
         end
@@ -453,13 +461,15 @@ function W.install(AD)
                     -- Treat it as removing the marker, the same as the dialog's Delete button.
                     if text == "" then
                         log("blank rename on marker %s - removing the marker", tostring(markerId))
-                        return manager:removeMapMarker(markerId)
+                        return manager:removeMapMarker(markerId, W.netSendEvent())
                     end
                     local duplicate = findDuplicate(manager, text, markerId)
                     if duplicate ~= nil then
                         return refuseDuplicate(duplicate)
                     end
                     newName = text
+                    -- multiplayer: the editor's own rename goes through our network (the door sees it)
+                    if W.netSendEvent() == false then sendEvent = false end
                 end
                 return originalRename(manager, newName, markerId, sendEvent, ...)
             end
@@ -483,7 +493,7 @@ function W.install(AD)
                     return
                 end
                 if text:len() >= 1 then
-                    ADGraphManager:createMapMarker(overrideId, text)
+                    ADGraphManager:createMapMarker(overrideId, text, W.netSendEvent())
                 end
                 Dialog.overrideWayPointId = nil
                 if dialogSelf.superClass ~= nil then

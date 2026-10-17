@@ -26,7 +26,7 @@ end
 -- margin becomes `-nil` inside the offset, which is a hard Lua error on the first click, on a path
 -- with no pcall around it.
 function ADFlyoverEditor:generateFieldLoopAtCursor()
-    if g_server == nil then
+    if not ADFlyoverEditor.canEditHere() then
         Logging.error("[FlyoverEditor]: field loops can only be generated on the server (host/singleplayer).")
         return
     end

@@ -204,3 +204,31 @@ cannot describe, so the server's record of that undo came out empty and the play
 now come back at the end, and the server counts any change it cannot describe (must be 0; it was 0).
 
 Single-player undo is unchanged (`reg75undo.sh`: 101/101 undo and redo exact).
+
+## 8. The game side (2026-10-16) - built, run offline on three "PCs", NOT yet in a real session
+
+- `scripts/NetEvent.lua` - the one network message (kind, 7 numbers, 2 strings, a piece of bytes), sourced at
+  mod load from Prelude so it is registered before anyone joins.
+- `scripts/editor/NetGame.lua` - host/server/player roles, pieces in and out, boundaries (every
+  EditorHistory snapshot, and a quiet moment of 150 ms with no mouse button held), per-player undo, after
+  someone else's change (HUD, markers, parking spots, the editor's ids), and the safety net for AutoDrive's
+  own editing (its 16 network messages wrapped: taken in without being sent again; a player whose network
+  got points that way reloads the whole network 3-15 s later).
+- EditorHistory in multiplayer: light entries only (tools still see the stack move), undo/redo go to NetGame.
+- The "server only" refusals (opening the editor, spline, field loop, place) now ask `canEditHere()`.
+- Naming in multiplayer is made locally and sent through our network, not AutoDrive's as well.
+- `modDesc.xml`: multiplayer supported = true on this branch.
+
+`tools/mp-probe/game_sim.lua` loads the REAL NetEvent.lua, NetGame.lua and everything under them into three
+separate Lua environments (a host and two players), each with AutoDrive's real GraphManager on its own copy
+of the 17k network, and a fake FS network that writes every message field by field and reads it back on the
+other side.
+
+| Run (seed) | Editor actions | Undo/redo | AutoDrive recordings | Result |
+|---|---|---|---|---|
+| 20 rounds (1) | 17 | 3 | 0 | both players identical to the host, 0 errors |
+| 120 rounds (2) | 97 | 17 | 6 | identical, 0 errors; players reloaded after AutoDrive's points |
+| 120 rounds (3) | 93 | 16 | 11 | identical, 0 errors |
+
+What only a real session can check: the engine's own event handling (registration, sizes), user ids,
+timing with real latency, the editor UI while things change underneath, AutoDrive vehicles on edited roads.
