@@ -124,6 +124,26 @@ local function onSettingsAction()
     end
 end
 
+--- Is our toggle among the current context's action events? True or false; nil when this build's
+--- events table cannot be read (then nothing is re-registered on its word).
+function L.isOurEventPresent()
+    local ok, found = pcall(function()
+        local events = rawget(g_inputBinding, "events")
+        if type(events) ~= "table" then return nil end
+        if events[L.eventId] ~= nil then return true end
+        for _, event in pairs(events) do
+            if type(event) == "table" then
+                local name = event.actionName
+                if name == nil and type(event.action) == "table" then name = event.action.name end
+                if name == L.ACTION then return true end
+            end
+        end
+        return false
+    end)
+    if not ok then return nil end
+    return found
+end
+
 --- Keep the toggle registered in whatever context is current. Called every frame; does real work
 --- only when the context has changed since last time.
 function L.update()
@@ -142,7 +162,32 @@ function L.update()
         return
     end
     if context == L.registeredContext then
-        return
+        -- THE KEY CAN VANISH WITHOUT A CONTEXT CHANGE (1.0.3.1 test, 2026-10-16): registered in
+        -- 'VEHICLE' on getting in, yet a minute later the vehicle's events held no AD_FLYOVER_TOGGLE and
+        -- Alt+F / Alt+V did nothing until the next context change. Something rebuilds the context's
+        -- events under us. So twice a second, check ours is still there and register again if not.
+        local t = nowMs()
+        if t - (L.lastCheckMs or -math.huge) < 500 then
+            return
+        end
+        L.lastCheckMs = t
+        local present = nil
+        if L.eventId ~= nil then present = L.isOurEventPresent() end
+        if present ~= false then
+            -- seen there again: a later wipe gets its full set of tries
+            if present == true then L.reRegistered = 0 end
+            return
+        end
+        -- at most 5 tries in a row that never show up, so a build that lists events differently
+        -- cannot spam the log
+        L.reRegistered = (L.reRegistered or 0) + 1
+        if L.reRegistered > 5 then
+            return
+        end
+        Logging.info("[ADFlyoverEditor] %s was gone from context '%s' - registering it again.",
+            L.ACTION, tostring(context))
+        L.registeredContext = nil
+        L.keepRetryCount = true
     end
 
     -- Drop the previous registration before making a new one. If the context we left is later
@@ -189,6 +234,8 @@ function L.update()
     end
 
     L.registeredContext = context
+    if not L.keepRetryCount then L.reRegistered = 0 end
+    L.keepRetryCount = nil
     if ok and L.eventId ~= nil then
         L.everRegistered = true
         -- The key does its job whether or not it is advertised; keeping it out of the help box
