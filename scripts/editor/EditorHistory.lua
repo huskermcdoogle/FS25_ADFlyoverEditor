@@ -39,39 +39,67 @@ end
 --- any field a newer AutoDrive adds would be stripped from every waypoint by one keypress, marked
 --- dirty, and written to the player's route file. That is a bad trade for a guest mod, and copying
 --- generically costs the same.
-local function copyWayPoints(wayPoints)
-    local copy = {}
-    for i = 1, #wayPoints do
-        local wp = wayPoints[i]
-        local c = {}
-        for k, v in pairs(wp) do
-            if k == "out" or k == "incoming" then
-                c[k] = copyIdList(v)
-            elseif type(v) == "table" then
-                local t = {}
-                for tk, tv in pairs(v) do
-                    t[tk] = tv
-                end
-                c[k] = t
-            else
-                c[k] = v
+-- The values of one graph object (a waypoint or a marker), copied. Lists of ids are copied as lists.
+local function copyFields(obj)
+    local c = {}
+    for k, v in pairs(obj) do
+        if k == "out" or k == "incoming" then
+            c[k] = copyIdList(v)
+        elseif type(v) == "table" then
+            local t = {}
+            for tk, tv in pairs(v) do
+                t[tk] = tv
             end
+            c[k] = t
+        else
+            c[k] = v
         end
-        copy[i] = c
     end
-    return copy
+    return c
 end
 
-local function copyMapMarkers(markers)
-    local copy = {}
-    for index, marker in pairs(markers) do
-        local m = {}
-        for k, v in pairs(marker) do
-            m[k] = v
-        end
-        copy[index] = m
+--[[ IN PLACE (issue #26, 2026-10-18)
+
+A snapshot used to hold COPIES of every waypoint and marker, and undo swapped those copies in. Vehicles
+hold the real objects (their route and their destinations), so after the swap they pointed at objects the
+graph no longer had. AutoDrive could then only find a destination again by a number, and the delete had
+already shifted that number: the vehicle went back to marker 1 (Main Farm).
+
+A snapshot now keeps the real object AND a copy of its values. Undo writes the values back into that same
+object, so every vehicle still holds the right one and nothing has to be repointed or paused.
+]]
+local function recordObjects(objects)
+    local records = {}
+    for key, obj in pairs(objects) do
+        records[key] = { ref = obj, fields = copyFields(obj) }
     end
-    return copy
+    return records
+end
+
+-- Writes each record's values back into its own object, and returns the list the graph should hold.
+local function restoreObjects(records)
+    local list = {}
+    for key, rec in pairs(records) do
+        local obj = rec.ref
+        for k in pairs(obj) do
+            if rec.fields[k] == nil then obj[k] = nil end
+        end
+        -- a copy of the record's values, so later edits can never change the record itself
+        for k, v in pairs(copyFields(rec.fields)) do
+            obj[k] = v
+        end
+        list[key] = obj
+    end
+    return list
+end
+
+-- The values of each record, for the log lines.
+local function fieldsOf(records)
+    local out = {}
+    for key, rec in pairs(records or {}) do
+        out[key] = rec.fields
+    end
+    return out
 end
 
 local function copyGroups(groups)
@@ -82,12 +110,12 @@ local function copyGroups(groups)
     return copy
 end
 
---- A copy of the graph as it stands right now.
+--- The graph as it stands right now: the real objects, each with a copy of its values.
 local function captureState(label)
     return {
         label = label or "edit",
-        wayPoints = copyWayPoints(ADGraphManager:getWayPoints()),
-        mapMarkers = copyMapMarkers(ADGraphManager:getMapMarkers()),
+        wayPoints = recordObjects(ADGraphManager:getWayPoints()),
+        mapMarkers = recordObjects(ADGraphManager:getMapMarkers()),
         groups = copyGroups(ADGraphManager:getGroups())
     }
 end
@@ -252,9 +280,9 @@ local function restoreState(entry)
     local parks = safely(rememberParkSpots)
     local dests = safely(destinationsNow)
     safely(logMarkerList, "markers before this undo or redo", ADGraphManager:getMapMarkers())
-    safely(logMarkerList, "markers this undo or redo puts back", entry.mapMarkers)
-    ADGraphManager:setWayPoints(entry.wayPoints)
-    ADGraphManager:setMapMarkers(entry.mapMarkers)
+    safely(logMarkerList, "markers this undo or redo puts back", fieldsOf(entry.mapMarkers))
+    ADGraphManager:setWayPoints(restoreObjects(entry.wayPoints))
+    ADGraphManager:setMapMarkers(restoreObjects(entry.mapMarkers))
 
     -- true, not false. The updateVehicles branch is the ONLY code that rewrites vehicle.ad.groups
     -- from the new list - the waypoint swap does not touch it. Without it, undoing a group creation
@@ -262,9 +290,9 @@ local function restoreState(entry)
     -- serialised per vehicle, so the phantom survives a save and reload.
     ADGraphManager:setGroups(entry.groups, true)
 
-    -- Vehicles hold map markers as direct TABLE references into ADGraphManager's list, and the
-    -- snapshot built brand-new tables. Without this every vehicle keeps an orphan whose marker
-    -- index may now name a different destination - and it is the wrong index that gets saved.
+    -- Vehicles hold their markers as direct TABLE references. Undo writes each marker back into its
+    -- own table (restoreObjects), so these already point at the right marker. This still runs for a
+    -- marker the undo removed: the vehicle is moved to whatever AutoDrive finds for its number.
     for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
         if vehicle ~= nil and vehicle.ad ~= nil and vehicle.ad.stateModule ~= nil
             and vehicle.ad.stateModule.resetMarkersOnReload ~= nil then
