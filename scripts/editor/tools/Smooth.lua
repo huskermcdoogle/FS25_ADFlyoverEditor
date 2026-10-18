@@ -535,7 +535,7 @@ function ADFlyoverEditor:findWayPointExact(pos)
     local wayPoints = ADGraphManager:getWayPoints()
     for i = 1, #wayPoints do
         local wp = wayPoints[i]
-        if math.abs(wp.x - pos.x) < 0.03 and math.abs(wp.z - pos.z) < 0.03 then
+        if math.abs(wp.x - pos.x) < 0.03 and math.abs(wp.z - pos.z) < 0.03 and not wp.held then
             return wp.id
         end
     end
@@ -549,7 +549,7 @@ function ADFlyoverEditor:findWayPointAt(pos)
         local wp = wayPoints[i]
         local dx, dz = wp.x - pos.x, wp.z - pos.z
         local d = dx * dx + dz * dz
-        if d < bestSq then
+        if d < bestSq and not wp.held then
             best, bestSq = wp.id, d
         end
     end
@@ -613,16 +613,31 @@ function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
     end
     table.sort(doomed, function(a, b) return a > b end)
 
+    -- A point a driving vehicle still has ahead is HELD, not removed (HeldRemovals.lua): it stays where
+    -- it is, with its id, until no vehicle needs it. Only the points really removed renumber anything.
+    local ahead = ADHeldRemovals.pointsAhead()
+    local removed = {}
     for _, id in ipairs(doomed) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil and ahead[wp] and not ADHeldRemovals.hasMarker(id) then
+            ADHeldRemovals.hold(wp)
+        else
+            table.insert(removed, id)
+        end
+    end
+    for _, id in ipairs(removed) do
         ADGraphManager:removeWayPoint(id, false)
+    end
+    if #doomed > #removed then
+        Logging.info("[FlyoverEditor]: held removals: kept %d point(s) a vehicle still drives through (issue 26).", #doomed - #removed)
     end
 
     -- Every removal renumbers the ids above it, so the endpoints have almost certainly moved.
-    -- Their new ids are their old ones less the number of deleted points that sat below them:
-    -- exact, and cheaper than trying to find them again by position.
+    -- Their new ids are their old ones less the number of REMOVED points that sat below them. Held
+    -- points are still in the array, so they do not count. Exact, and cheaper than finding them by position.
     local function shifted(id)
         local shift = 0
-        for _, deletedId in ipairs(doomed) do
+        for _, deletedId in ipairs(removed) do
             if deletedId < id then
                 shift = shift + 1
             end

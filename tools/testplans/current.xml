@@ -3,15 +3,17 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="Issue 26: do destinations survive undo?" build="@BUILD@">
+<testPlan title="Issue 26: smooth under a driving vehicle" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="setup" title="A vehicle has a destination set"
-          hint="AutoDrive: set a destination for any vehicle. Click pass when it is set."/>
-    <test id="smoothUndo" title="Smooth a short stretch, then undo once"
-          passLog="undo or redo kept the destinations"
-          failLog="undo or redo CHANGED destinations"
-          hint="Smooth tool on a short stretch of road, then undo once. Ticks itself from the log."/>
-    <test id="hud" title="The destination name is still the same"
-          hint="Look at the vehicle's destination on the HUD. It should show the same name as before the smooth."/>
+    <test id="setup" title="A vehicle is driving along a stretch of road"
+          hint="AutoDrive: send a vehicle along a stretch of road and wait until it is on that stretch. Click pass when it is driving."/>
+    <test id="held" title="Smooth that stretch while the vehicle is on it"
+          passLog="held removals: kept"
+          hint="Smooth tool on the stretch the vehicle is driving. Ticks itself from the log."/>
+    <test id="driveOn" title="The vehicle carries on without stopping or turning"
+          hint="Watch it drive through the smoothed stretch. It should keep going on the old road: no stop, no swerve. Click pass if it does."/>
+    <test id="released" title="Once it is past, the held points go"
+          passLog="held removals: released"
+          hint="Let the vehicle drive past the stretch. Ticks itself from the log."/>
 </testPlan>
