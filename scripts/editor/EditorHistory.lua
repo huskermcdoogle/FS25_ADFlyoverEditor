@@ -184,15 +184,23 @@ local function destinationNames(vehicle)
     local sm = vehicle.ad ~= nil and vehicle.ad.stateModule or nil
     if sm == nil then return nil end
     local function nameOf(m) return m ~= nil and m.name or "(none)" end
-    return { nameOf(sm.firstMarker), nameOf(sm.secondMarker), nameOf(sm.currentDestination) }
+    -- the waypoint number the vehicle holds for each destination, for the log line
+    local function textOf(m)
+        if m == nil then return "(none)" end
+        return string.format("%s at waypoint %s", tostring(m.name), tostring(m.id))
+    end
+    return {
+        names = { nameOf(sm.firstMarker), nameOf(sm.secondMarker), nameOf(sm.currentDestination) },
+        texts = { textOf(sm.firstMarker), textOf(sm.secondMarker), textOf(sm.currentDestination) },
+    }
 end
 
 local function destinationsNow()
     local held = {}
     for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
         if vehicle ~= nil then
-            local names = destinationNames(vehicle)
-            if names ~= nil then table.insert(held, { vehicle = vehicle, names = names }) end
+            local d = destinationNames(vehicle)
+            if d ~= nil then table.insert(held, { vehicle = vehicle, names = d.names, texts = d.texts }) end
         end
     end
     return held
@@ -204,9 +212,13 @@ local function reportDestinations(held)
     for _, h in ipairs(held or {}) do
         local now = destinationNames(h.vehicle)
         checked = checked + 1
+        if now ~= nil then
+            Logging.info("[FlyoverEditor]: destinations of %s before: first %s; second %s; current %s. After: first %s; second %s; current %s.",
+                vehicleLabel(h.vehicle), h.texts[1], h.texts[2], h.texts[3], now.texts[1], now.texts[2], now.texts[3])
+        end
         for i, slot in ipairs(DESTINATION_SLOTS) do
-            if now ~= nil and now[i] ~= h.names[i] then
-                table.insert(moved, string.format("%s %s %s -> %s", vehicleLabel(h.vehicle), slot, h.names[i], now[i]))
+            if now ~= nil and now.names[i] ~= h.names[i] then
+                table.insert(moved, string.format("%s %s %s -> %s", vehicleLabel(h.vehicle), slot, h.names[i], now.names[i]))
             end
         end
     end
