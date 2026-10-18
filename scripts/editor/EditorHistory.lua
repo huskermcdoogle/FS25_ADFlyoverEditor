@@ -231,12 +231,28 @@ local function reportDestinations(held)
     end
 end
 
+-- Issue #26 CHECK, LOG ONLY: every marker's name and waypoint number, so the log shows where each
+-- marker sits before an undo or redo and where the undo puts it back. Changes nothing.
+local function logMarkerList(label, list)
+    if list == nil then return end
+    local keys, parts = {}, {}
+    for k in pairs(list) do table.insert(keys, k) end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+        local m = list[k]
+        if m ~= nil then table.insert(parts, string.format("%d %s@%s", k, tostring(m.name), tostring(m.id))) end
+    end
+    Logging.info("[FlyoverEditor]: %s: %s", label, table.concat(parts, ", "))
+end
+
 --- COMPANION EDIT: a full graph swap has to do more than swap the graph. AutoDrive's own
 --- equivalent is AutoDriveRoutesUploadEvent:run, which does six things here; this did two, and the
 --- comment justifying the `false` was simply wrong.
 local function restoreState(entry)
     local parks = safely(rememberParkSpots)
     local dests = safely(destinationsNow)
+    safely(logMarkerList, "markers before this undo or redo", ADGraphManager:getMapMarkers())
+    safely(logMarkerList, "markers this undo or redo puts back", entry.mapMarkers)
     ADGraphManager:setWayPoints(entry.wayPoints)
     ADGraphManager:setMapMarkers(entry.mapMarkers)
 
@@ -257,6 +273,7 @@ local function restoreState(entry)
     end
     safely(putParkSpotsBack, parks)
     safely(reportDestinations, dests)
+    safely(logMarkerList, "markers after this undo or redo", ADGraphManager:getMapMarkers())
 
     -- setMapMarkers deliberately does not notify, on the grounds that its caller will. We are the
     -- caller. The listener is what rebuilds the map hotspots, so without this the map keeps
