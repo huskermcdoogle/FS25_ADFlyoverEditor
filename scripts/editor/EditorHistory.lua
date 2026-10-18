@@ -171,11 +171,60 @@ local function safely(f, ...)
     return result
 end
 
+-- Issue #26 CHECK, LOG ONLY. Before an undo or redo swaps the graph, note each vehicle's first,
+-- second and current destination BY NAME (the names survive the swap, the table references do not).
+-- Afterwards report whether any of them moved. Changes nothing; the in-game test card reads the line.
+local function vehicleLabel(vehicle)
+    local ok, name = pcall(function() return vehicle:getName() end)
+    if ok and name ~= nil then return tostring(name) end
+    return "vehicle"
+end
+
+local function destinationNames(vehicle)
+    local sm = vehicle.ad ~= nil and vehicle.ad.stateModule or nil
+    if sm == nil then return nil end
+    local function nameOf(m) return m ~= nil and m.name or "(none)" end
+    return { nameOf(sm.firstMarker), nameOf(sm.secondMarker), nameOf(sm.currentDestination) }
+end
+
+local function destinationsNow()
+    local held = {}
+    for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
+        if vehicle ~= nil then
+            local names = destinationNames(vehicle)
+            if names ~= nil then table.insert(held, { vehicle = vehicle, names = names }) end
+        end
+    end
+    return held
+end
+
+local DESTINATION_SLOTS = { "first", "second", "current" }
+local function reportDestinations(held)
+    local moved, checked = {}, 0
+    for _, h in ipairs(held or {}) do
+        local now = destinationNames(h.vehicle)
+        checked = checked + 1
+        for i, slot in ipairs(DESTINATION_SLOTS) do
+            if now ~= nil and now[i] ~= h.names[i] then
+                table.insert(moved, string.format("%s %s %s -> %s", vehicleLabel(h.vehicle), slot, h.names[i], now[i]))
+            end
+        end
+    end
+    if checked == 0 then
+        Logging.info("[FlyoverEditor]: undo or redo checked no vehicle destinations.")
+    elseif #moved == 0 then
+        Logging.info("[FlyoverEditor]: undo or redo kept the destinations of %d vehicle(s).", checked)
+    else
+        Logging.warning("[FlyoverEditor]: undo or redo CHANGED destinations (issue 26): %s", table.concat(moved, "; "))
+    end
+end
+
 --- COMPANION EDIT: a full graph swap has to do more than swap the graph. AutoDrive's own
 --- equivalent is AutoDriveRoutesUploadEvent:run, which does six things here; this did two, and the
 --- comment justifying the `false` was simply wrong.
 local function restoreState(entry)
     local parks = safely(rememberParkSpots)
+    local dests = safely(destinationsNow)
     ADGraphManager:setWayPoints(entry.wayPoints)
     ADGraphManager:setMapMarkers(entry.mapMarkers)
 
@@ -195,6 +244,7 @@ local function restoreState(entry)
         end
     end
     safely(putParkSpotsBack, parks)
+    safely(reportDestinations, dests)
 
     -- setMapMarkers deliberately does not notify, on the grounds that its caller will. We are the
     -- caller. The listener is what rebuilds the map hotspots, so without this the map keeps
