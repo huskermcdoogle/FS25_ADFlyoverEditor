@@ -176,6 +176,28 @@ local function putBackDestinations(records, presentBefore, markers)
     return restored
 end
 
+--[[ CURRENT DESTINATION OF A REMOVED MARKER (issue #26, 2026-10-18)
+
+An undo that removes a marker (undoing a name that made it) leaves AutoDrive's resetMarkersOnReload to
+move the first and second destinations. It does not touch the current one, so a vehicle could keep
+heading for a marker that no longer exists. Put the current destination on the slot it was in before
+the undo: second if it was the second, otherwise first. Only when that marker is gone.
+]]
+local function fixCurrentDestinations(before, markers)
+    local inGraph = markerSet(markers)
+    for _, rec in ipairs(before or {}) do
+        local sm = rec.vehicle ~= nil and rec.vehicle.ad ~= nil and rec.vehicle.ad.stateModule or nil
+        if sm ~= nil and rec.current ~= nil and not inGraph[rec.current] then
+            local wanted = (rec.current == rec.second) and sm.secondMarker or sm.firstMarker
+            if wanted ~= nil and inGraph[wanted] then
+                sm:setCurrentDestination(wanted)
+                Logging.info("[FlyoverEditor]: undo - a vehicle's current destination was a marker the undo removed; it now goes to %s.",
+                    tostring(wanted.name))
+            end
+        end
+    end
+end
+
 --- The graph as it stands right now: the real objects, each with a copy of its values, and where
 --- every vehicle's destinations stand.
 local function captureState(label)
@@ -352,6 +374,7 @@ local function restoreState(entry)
     safely(logMarkerList, "markers before this undo or redo", ADGraphManager:getMapMarkers())
     safely(logMarkerList, "markers this undo or redo puts back", fieldsOf(entry.mapMarkers))
     local presentBefore = markerSet(ADGraphManager:getMapMarkers())
+    local currentBefore = safely(recordDestinations)
     ADGraphManager:setWayPoints(restoreObjects(entry.wayPoints))
     local markers = restoreObjects(entry.mapMarkers)
     ADGraphManager:setMapMarkers(markers)
@@ -372,6 +395,7 @@ local function restoreState(entry)
         end
     end
     local restored = safely(putBackDestinations, entry.vehicles, presentBefore, markers)
+    safely(fixCurrentDestinations, currentBefore, markers)
     safely(putParkSpotsBack, parks)
     safely(reportDestinations, dests, restored)
     safely(logMarkerList, "markers after this undo or redo", ADGraphManager:getMapMarkers())

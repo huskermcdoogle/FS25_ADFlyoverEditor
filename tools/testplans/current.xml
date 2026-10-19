@@ -3,21 +3,14 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
-<testPlan title="Issue 26: undo of a smooth under a driving vehicle" build="@BUILD@">
+<testPlan title="Issue 26: undo of a name that a vehicle drives to" build="@BUILD@">
     <test id="build" title="The game loaded this build" auto="build"
           hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="setup" title="A vehicle is driving along a stretch of road"
-          hint="AutoDrive: send a vehicle along a stretch of road and wait until it is on that stretch. Click pass when it is driving."/>
-    <test id="held" title="Smooth that stretch while the vehicle is on it"
-          passLog="held removals: kept"
-          hint="Smooth tool on the stretch the vehicle is driving. Ticks itself from the log."/>
-    <test id="undone" title="Undo once: the stretch goes back and the destinations are kept"
-          passLog="undo or redo kept the destinations"
-          failLog="undo or redo CHANGED destinations"
-          hint="Undo once. The smoothed stretch goes back to its old points. Ticks itself from the log."/>
-    <test id="redoneDriveOn" title="Redo once: the vehicle carries on without stopping or turning"
-          hint="Redo once. The smoothed stretch comes back. Watch the vehicle: it should keep going on the old road with no stop and no swerve. Click pass if it does."/>
-    <test id="released" title="Once it is past, the held points go"
-          passLog="held removals: released"
-          hint="Let the vehicle drive past the stretch. Ticks itself from the log."/>
+    <test id="driving" title="A vehicle is driving to a waypoint you named"
+          hint="Name a waypoint in the editor (that makes a marker), then send a vehicle to that name with AutoDrive. Click pass when it is driving there."/>
+    <test id="nameUndone" title="Undo the name: the vehicle is moved to a marker that still exists"
+          passLog="current destination was a marker the undo removed"
+          hint="Undo the name. Ticks itself from the log."/>
+    <test id="stillDrives" title="The vehicle keeps going after the undo"
+          hint="Watch the vehicle for a moment. It should carry on toward a marker that still exists, with no stop. Click pass if it does."/>
 </testPlan>
