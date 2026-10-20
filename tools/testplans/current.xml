@@ -8,9 +8,9 @@
           hint="Ticks itself: the running build is the one this plan was packed with."/>
     <test id="driving" title="A vehicle is driving to a waypoint you named"
           hint="Name a waypoint in the editor (that makes a marker), then send a vehicle to that name with AutoDrive. Click pass when it is driving there."/>
-    <test id="nameUndone" title="Undo the name: the vehicle is moved to a marker that still exists"
+    <test id="nameUndone" title="Undo the name: the vehicle's current destination moves to a marker that still exists"
           passLog="current destination was a marker the undo removed"
           hint="Undo the name. Ticks itself from the log."/>
-    <test id="stillDrives" title="The vehicle keeps going after the undo"
-          hint="Watch the vehicle for a moment. It should carry on toward a marker that still exists, with no stop. Click pass if it does."/>
+    <test id="finishesOldRun" title="The vehicle finishes its old run and stops at the old point"
+          hint="Watch the vehicle reach the point the name was on. It should stop there, with no swerve, and not head on to Main Farm. Click pass if it does. Its next trip should start from Main Farm."/>
 </testPlan>
