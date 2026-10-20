@@ -4,13 +4,15 @@
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. -->
 <testPlan title="Undo a name a vehicle is heading to" build="@BUILD@">
-    <test id="build" title="The game loaded this test version" auto="build"
+    <test id="build" title="Step 1: the game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
-    <test id="driving" title="Send a vehicle to a name you just made"
-          hint="1. In the editor, make a new name for a spot on a road. 2. Use AutoDrive to send a vehicle to that name. 3. Click PASS once the vehicle is on its way there."/>
-    <test id="nameUndone" title="Undo the name"
+    <test id="makeName" title="Step 2: make a new name"
+          hint="In the editor, name a spot on a road. Then click PASS."/>
+    <test id="sendVehicle" title="Step 3: send a vehicle there"
+          hint="Use AutoDrive to send a vehicle to that name. Then click PASS."/>
+    <test id="undoName" title="Step 4: undo the name"
           passLog="current destination was a marker the undo removed"
-          hint="Press undo once. This name is taken back. The test ticks by itself when the game records it. Nothing to click."/>
-    <test id="stopsAtSpot" title="The vehicle stops where the name was"
-          hint="Keep watching the vehicle. It should drive on to the spot where the name was, then stop there. It should NOT turn round or drive off to Main Farm. AutoDrive may switch off when it stops; that is expected. A message may say it reached Main Farm; ignore that message. Click PASS if the vehicle stopped at the spot. Click FAIL if it did anything else."/>
+          hint="Press undo once. Nothing to click. This ticks by itself."/>
+    <test id="watchStop" title="Step 5: watch the vehicle"
+          hint="The vehicle should drive to the spot and stop there. A message may say Main Farm. Ignore it. Click PASS if it stopped at the spot. Click FAIL if not."/>
 </testPlan>
