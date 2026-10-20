@@ -2,17 +2,17 @@
 <!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
-     matched against the editor's own log lines. A click always wins. -->
+     matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
 <testPlan title="Undo a name a vehicle is heading to" build="@BUILD@">
-    <test id="build" title="Step 1: the game loaded this test version" auto="build"
+    <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
-    <test id="makeName" title="Step 2: make a new name"
+    <test id="makeName" title="Make a new name"
           hint="In the editor, name a spot on a road. Then click PASS."/>
-    <test id="sendVehicle" title="Step 3: send a vehicle there"
+    <test id="sendVehicle" title="Send a vehicle there"
           hint="Use AutoDrive to send a vehicle to that name. Then click PASS."/>
-    <test id="undoName" title="Step 4: undo the name"
+    <test id="undoName" title="Undo the name"
           passLog="current destination was a marker the undo removed"
           hint="Press undo once. Nothing to click. This ticks by itself."/>
-    <test id="watchStop" title="Step 5: watch the vehicle"
-          hint="The vehicle should drive to the spot and stop there. A message may say Main Farm. Ignore it. Click PASS if it stopped at the spot. Click FAIL if not."/>
+    <test id="watchStop" title="Watch the vehicle"
+          hint="It should drive to the spot and stop there. Click PASS if it does, FAIL if not. Ignore any message about Main Farm."/>
 </testPlan>

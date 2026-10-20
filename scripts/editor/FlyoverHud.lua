@@ -1841,11 +1841,14 @@ function ADFlyoverHud:drawTestPanel(editor)
             item("test", rowH, { t = t })
             local s = TP.state[t.id]
             if t == nextT and t.hint ~= "" then
+                item("hint", smallH, { text = TP.stepLabel(t) })
                 for _, l in ipairs(wrapToWidth(TR(t.hint), small, W - pad * 6 - chipW)) do item("hint", smallH, { text = l }) end
             elseif s ~= nil and s.auto and s.evidence ~= nil and s.evidence ~= "" then
                 item("hint", smallH, { text = TR("seen") .. ": " .. s.evidence, muted = true })
             end
         end
+        local progress = TP.progressText()
+        if progress ~= "" then item("hint", smallH, { text = progress }) end
         item("section", rowH, { text = TR("log") })
         local first = math.max(1, #TP.log - 5)
         if #TP.log == 0 then item("log", smallH, { text = TR("(no editor lines yet)") }) end
