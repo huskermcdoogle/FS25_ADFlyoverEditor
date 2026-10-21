@@ -110,6 +110,7 @@ P.EDITOR_FILES = {
     "scripts/editor/ActionCodec.lua",
     "scripts/editor/NetCore.lua",
     "scripts/editor/NetGame.lua",
+    "scripts/editor/HeldRemovals.lua",
     "scripts/editor/Theme.lua",
     "scripts/editor/Help.lua",
     "scripts/editor/Locale.lua",

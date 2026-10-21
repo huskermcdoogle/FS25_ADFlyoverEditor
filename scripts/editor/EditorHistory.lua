@@ -39,39 +39,58 @@ end
 --- any field a newer AutoDrive adds would be stripped from every waypoint by one keypress, marked
 --- dirty, and written to the player's route file. That is a bad trade for a guest mod, and copying
 --- generically costs the same.
-local function copyWayPoints(wayPoints)
-    local copy = {}
-    for i = 1, #wayPoints do
-        local wp = wayPoints[i]
-        local c = {}
-        for k, v in pairs(wp) do
-            if k == "out" or k == "incoming" then
-                c[k] = copyIdList(v)
-            elseif type(v) == "table" then
-                local t = {}
-                for tk, tv in pairs(v) do
-                    t[tk] = tv
-                end
-                c[k] = t
-            else
-                c[k] = v
+-- The values of one graph object (a waypoint or a marker), copied. Lists of ids are copied as lists.
+local function copyFields(obj)
+    local c = {}
+    for k, v in pairs(obj) do
+        if k == "out" or k == "incoming" then
+            c[k] = copyIdList(v)
+        elseif type(v) == "table" then
+            local t = {}
+            for tk, tv in pairs(v) do
+                t[tk] = tv
             end
+            c[k] = t
+        else
+            c[k] = v
         end
-        copy[i] = c
     end
-    return copy
+    return c
 end
 
-local function copyMapMarkers(markers)
-    local copy = {}
-    for index, marker in pairs(markers) do
-        local m = {}
-        for k, v in pairs(marker) do
-            m[k] = v
-        end
-        copy[index] = m
+--[[ IN PLACE (issue #26, 2026-10-18)
+
+A snapshot used to hold COPIES of every waypoint and marker, and undo swapped those copies in. Vehicles
+hold the real objects (their route and their destinations), so after the swap they pointed at objects the
+graph no longer had. AutoDrive could then only find a destination again by a number, and the delete had
+already shifted that number: the vehicle went back to marker 1 (Main Farm).
+
+A snapshot now keeps the real object AND a copy of its values. Undo writes the values back into that same
+object, so every vehicle still holds the right one and nothing has to be repointed or paused.
+]]
+local function recordObjects(objects)
+    local records = {}
+    for key, obj in pairs(objects) do
+        records[key] = { ref = obj, fields = copyFields(obj) }
     end
-    return copy
+    return records
+end
+
+-- Writes each record's values back into its own object, and returns the list the graph should hold.
+local function restoreObjects(records)
+    local list = {}
+    for key, rec in pairs(records) do
+        local obj = rec.ref
+        for k in pairs(obj) do
+            if rec.fields[k] == nil then obj[k] = nil end
+        end
+        -- a copy of the record's values, so later edits can never change the record itself
+        for k, v in pairs(copyFields(rec.fields)) do
+            obj[k] = v
+        end
+        list[key] = obj
+    end
+    return list
 end
 
 local function copyGroups(groups)
@@ -82,13 +101,103 @@ local function copyGroups(groups)
     return copy
 end
 
---- A copy of the graph as it stands right now.
+local function markerSet(list)
+    local set = {}
+    for _, m in pairs(list or {}) do set[m] = true end
+    return set
+end
+
+-- Each vehicle's first, second and current destination, as the marker objects it holds right now.
+local function recordDestinations()
+    local out = {}
+    for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
+        local sm = vehicle ~= nil and vehicle.ad ~= nil and vehicle.ad.stateModule or nil
+        if sm ~= nil then
+            table.insert(out, { vehicle = vehicle, first = sm.firstMarker, second = sm.secondMarker,
+                current = sm.currentDestination })
+        end
+    end
+    return out
+end
+
+local PUT_BACK_SLOTS = {
+    { key = "first", field = "firstMarker" },
+    { key = "second", field = "secondMarker" },
+    { key = "current", field = "currentDestination" },
+}
+
+--[[ DELETED MARKERS (issue #26, 2026-10-18)
+
+Deleting a marker makes AutoDrive send every vehicle that was going to it to marker 1, and an undo does
+not send them back. So after an undo, a destination that is marker 1 NOW, whose marker was missing BEFORE
+the undo, goes back to its own marker. A vehicle that is driving is left as it is: its route was planned
+to marker 1, and changing its destination under it would disturb the run. Returns what it put back, so the
+destination log does not call those a change.
+]]
+local function putBackDestinations(records, presentBefore, markers)
+    local inGraph = markerSet(markers)
+    local first = ADGraphManager:getMapMarkerById(1)
+    local restored, back, left = {}, 0, 0
+    for _, rec in ipairs(records or {}) do
+        local sm = rec.vehicle ~= nil and rec.vehicle.ad ~= nil and rec.vehicle.ad.stateModule or nil
+        if sm ~= nil and first ~= nil then
+            local driving = sm.isActive ~= nil and sm:isActive()
+            for _, slot in ipairs(PUT_BACK_SLOTS) do
+                local wanted = rec[slot.key]
+                if wanted ~= nil and wanted ~= first and not presentBefore[wanted] and inGraph[wanted]
+                    and sm[slot.field] == first then
+                    if driving then
+                        left = left + 1
+                    else
+                        if slot.key == "first" then sm:setFirstMarker(wanted.markerIndex)
+                        elseif slot.key == "second" then sm:setSecondMarker(wanted.markerIndex)
+                        else sm:setCurrentDestination(wanted) end
+                        restored[rec.vehicle] = restored[rec.vehicle] or {}
+                        restored[rec.vehicle][slot.key] = true
+                        back = back + 1
+                    end
+                end
+            end
+        end
+    end
+    if back + left > 0 then
+        Logging.info("[FlyoverEditor]: undo - %d destination(s) put back on their marker (issue 26); %d left on marker 1 because the vehicle is driving.",
+            back, left)
+    end
+    return restored
+end
+
+--[[ CURRENT DESTINATION OF A REMOVED MARKER (issue #26, 2026-10-18)
+
+An undo that removes a marker (undoing a name that made it) leaves AutoDrive's resetMarkersOnReload to
+move the first and second destinations. It does not touch the current one, so a vehicle could keep
+heading for a marker that no longer exists. Put the current destination on the slot it was in before
+the undo: second if it was the second, otherwise first. Only when that marker is gone.
+]]
+local function fixCurrentDestinations(before, markers)
+    local inGraph = markerSet(markers)
+    for _, rec in ipairs(before or {}) do
+        local sm = rec.vehicle ~= nil and rec.vehicle.ad ~= nil and rec.vehicle.ad.stateModule or nil
+        if sm ~= nil and rec.current ~= nil and not inGraph[rec.current] then
+            local wanted = (rec.current == rec.second) and sm.secondMarker or sm.firstMarker
+            if wanted ~= nil and inGraph[wanted] then
+                sm:setCurrentDestination(wanted)
+                Logging.info("[FlyoverEditor]: undo - a vehicle's current destination was a marker the undo removed; it now goes to %s.",
+                    tostring(wanted.name))
+            end
+        end
+    end
+end
+
+--- The graph as it stands right now: the real objects, each with a copy of its values, and where
+--- every vehicle's destinations stand.
 local function captureState(label)
     return {
         label = label or "edit",
-        wayPoints = copyWayPoints(ADGraphManager:getWayPoints()),
-        mapMarkers = copyMapMarkers(ADGraphManager:getMapMarkers()),
-        groups = copyGroups(ADGraphManager:getGroups())
+        wayPoints = recordObjects(ADGraphManager:getWayPoints()),
+        mapMarkers = recordObjects(ADGraphManager:getMapMarkers()),
+        groups = copyGroups(ADGraphManager:getGroups()),
+        vehicles = recordDestinations()
     }
 end
 
@@ -171,13 +280,70 @@ local function safely(f, ...)
     return result
 end
 
+-- Issue #26 CHECK, LOG ONLY. Before an undo or redo swaps the graph, note each vehicle's first,
+-- second and current destination BY NAME (the names survive the swap, the table references do not).
+-- Afterwards report whether any of them moved. Changes nothing; the in-game test card reads the line.
+local function vehicleLabel(vehicle)
+    local ok, name = pcall(function() return vehicle:getName() end)
+    if ok and name ~= nil then return tostring(name) end
+    return "vehicle"
+end
+
+local function destinationNames(vehicle)
+    local sm = vehicle.ad ~= nil and vehicle.ad.stateModule or nil
+    if sm == nil then return nil end
+    local function nameOf(m) return m ~= nil and m.name or "(none)" end
+    return {
+        names = { nameOf(sm.firstMarker), nameOf(sm.secondMarker), nameOf(sm.currentDestination) },
+    }
+end
+
+local function destinationsNow()
+    local held = {}
+    for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
+        if vehicle ~= nil then
+            local d = destinationNames(vehicle)
+            if d ~= nil then table.insert(held, { vehicle = vehicle, names = d.names }) end
+        end
+    end
+    return held
+end
+
+local DESTINATION_SLOTS = { "first", "second", "current" }
+local function reportDestinations(held, restored)
+    local moved, checked = {}, 0
+    for _, h in ipairs(held or {}) do
+        local now = destinationNames(h.vehicle)
+        checked = checked + 1
+        for i, slot in ipairs(DESTINATION_SLOTS) do
+            -- put back on purpose by putBackDestinations: not a change to report
+            local putBack = restored ~= nil and restored[h.vehicle] ~= nil and restored[h.vehicle][slot] == true
+            if now ~= nil and now.names[i] ~= h.names[i] and not putBack then
+                table.insert(moved, string.format("%s %s %s -> %s", vehicleLabel(h.vehicle), slot, h.names[i], now.names[i]))
+            end
+        end
+    end
+    if checked == 0 then
+        Logging.info("[FlyoverEditor]: undo or redo checked no vehicle destinations.")
+    elseif #moved == 0 then
+        Logging.info("[FlyoverEditor]: undo or redo kept the destinations of %d vehicle(s).", checked)
+    else
+        Logging.warning("[FlyoverEditor]: undo or redo CHANGED destinations (issue 26): %s", table.concat(moved, "; "))
+    end
+end
+
+
 --- COMPANION EDIT: a full graph swap has to do more than swap the graph. AutoDrive's own
 --- equivalent is AutoDriveRoutesUploadEvent:run, which does six things here; this did two, and the
 --- comment justifying the `false` was simply wrong.
 local function restoreState(entry)
     local parks = safely(rememberParkSpots)
-    ADGraphManager:setWayPoints(entry.wayPoints)
-    ADGraphManager:setMapMarkers(entry.mapMarkers)
+    local dests = safely(destinationsNow)
+    local presentBefore = markerSet(ADGraphManager:getMapMarkers())
+    local currentBefore = safely(recordDestinations)
+    ADGraphManager:setWayPoints(restoreObjects(entry.wayPoints))
+    local markers = restoreObjects(entry.mapMarkers)
+    ADGraphManager:setMapMarkers(markers)
 
     -- true, not false. The updateVehicles branch is the ONLY code that rewrites vehicle.ad.groups
     -- from the new list - the waypoint swap does not touch it. Without it, undoing a group creation
@@ -185,16 +351,19 @@ local function restoreState(entry)
     -- serialised per vehicle, so the phantom survives a save and reload.
     ADGraphManager:setGroups(entry.groups, true)
 
-    -- Vehicles hold map markers as direct TABLE references into ADGraphManager's list, and the
-    -- snapshot built brand-new tables. Without this every vehicle keeps an orphan whose marker
-    -- index may now name a different destination - and it is the wrong index that gets saved.
+    -- Vehicles hold their markers as direct TABLE references. Undo writes each marker back into its
+    -- own table (restoreObjects), so these already point at the right marker. This still runs for a
+    -- marker the undo removed: the vehicle is moved to whatever AutoDrive finds for its number.
     for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
         if vehicle ~= nil and vehicle.ad ~= nil and vehicle.ad.stateModule ~= nil
             and vehicle.ad.stateModule.resetMarkersOnReload ~= nil then
             vehicle.ad.stateModule:resetMarkersOnReload()
         end
     end
+    local restored = safely(putBackDestinations, entry.vehicles, presentBefore, markers)
+    safely(fixCurrentDestinations, currentBefore, markers)
     safely(putParkSpotsBack, parks)
+    safely(reportDestinations, dests, restored)
 
     -- setMapMarkers deliberately does not notify, on the grounds that its caller will. We are the
     -- caller. The listener is what rebuilds the map hotspots, so without this the map keeps

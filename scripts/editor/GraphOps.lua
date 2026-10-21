@@ -109,9 +109,14 @@ function G.capture(graph)
     local wps = graph.wayPoints
     G.tagAll(wps)
     local s = { order = {}, pts = {}, markers = {}, groups = copyGroups(graph.groups) }
+    -- every point and marker is remembered by its table here too: a delete that is about to be
+    -- undone must find the table it had, even if no action has run since it was made (issue #26)
+    graph.tableOf = graph.tableOf or {}
+    graph.markerOf = graph.markerOf or {}
     for i = 1, #wps do
         local wp = wps[i]
         s.order[i] = wp.fxTag
+        graph.tableOf[wp.fxTag] = wp
         s.pts[wp.fxTag] = { x = wp.x, y = wp.y, z = wp.z, flags = wp.flags, fieldID = wp.fieldID,
                             out = tagsOf(wp.out, wps), incoming = tagsOf(wp.incoming, wps), index = i }
     end
@@ -122,6 +127,7 @@ function G.capture(graph)
         local w = wps[m.id]
         c.id = nil
         c.tag = w ~= nil and w.fxTag or nil
+        if c.tag ~= nil then graph.markerOf[c.tag] = m end
         s.markers[i] = c
     end
     return s
@@ -226,6 +232,11 @@ end
 --- Returns true, or false and why (the graph is not the one the action was made on).
 function G.apply(graph, a, backwards)
     local wps = graph.wayPoints
+    -- the table each point and each marker had, by tag, kept across actions: an undo that brings one
+    -- back reuses its table, so anything still holding it (a vehicle's route, its destination) keeps
+    -- the live one. Without this the undo built new tables and those holders lost them (issue #26).
+    graph.tableOf = graph.tableOf or {}
+    graph.markerOf = graph.markerOf or {}
     local gone, born, sets, lists
     if backwards then
         gone, born = {}, a.dels
@@ -246,6 +257,11 @@ function G.apply(graph, a, backwards)
         if wp.fxTag == nil then return false, "untagged point " .. i end
         tagAt[i] = wp.fxTag
         byTag[wp.fxTag] = wp
+        graph.tableOf[wp.fxTag] = wp
+    end
+    for _, m in ipairs(graph.mapMarkers or {}) do
+        local t = tagAt[m.id]
+        if t ~= nil then graph.markerOf[t] = m end
     end
 
     -- the new order
@@ -254,8 +270,13 @@ function G.apply(graph, a, backwards)
         if not gone[wps[i].fxTag] then order[#order + 1] = wps[i] end
     end
     local function make(p)
-        return { id = 0, x = p.x, y = p.y, z = p.z, out = {}, incoming = {}, flags = p.flags,
-                 fieldID = p.fieldID, fxTag = p.tag }
+        -- the point's own table when it has one (see the top of apply): cleared, then filled in
+        local t = graph.tableOf[p.tag] or {}
+        for k in pairs(t) do t[k] = nil end
+        t.id, t.x, t.y, t.z, t.out, t.incoming = 0, p.x, p.y, p.z, {}, {}
+        t.flags, t.fieldID, t.fxTag = p.flags, p.fieldID, p.tag
+        graph.tableOf[p.tag] = t
+        return t
     end
     if backwards then
         -- deleted points go back where they were, lowest number first
@@ -325,11 +346,14 @@ function G.apply(graph, a, backwards)
         local markers = graph.mapMarkers
         for i = #markers, 1, -1 do markers[i] = nil end
         for i, m in ipairs(list) do
-            local c = {}
+            -- the marker's own table when it has one (see the top of apply), so vehicles keep it
+            local c = (m.tag ~= nil and graph.markerOf[m.tag]) or {}
+            for k in pairs(c) do c[k] = nil end
             for k, v in pairs(m) do c[k] = v end
             c.tag = nil
             c.id = m.tag ~= nil and newId[m.tag] or -1
             c.markerIndex = i
+            if m.tag ~= nil then graph.markerOf[m.tag] = c end
             markers[i] = c
         end
     else
