@@ -100,6 +100,8 @@ end
 --- names across it (issue #24), markers and HUD refreshed.
 local function changeUnder(run)
     local sig0 = markerSignature()
+    -- where each vehicle's destinations stood before the change (issue #26: GraphOps.fixCurrentDestinations)
+    local heading = ADFlyoverGraphOps.destinationsOf(AutoDrive.getAllVehicles())
     NG.applying = true
     local ok, err
     if ADEditorHistory ~= nil and ADEditorHistory.keepParkSpots ~= nil then
@@ -114,6 +116,10 @@ local function changeUnder(run)
                 and vehicle.ad.stateModule.resetMarkersOnReload ~= nil then
                 pcall(vehicle.ad.stateModule.resetMarkersOnReload, vehicle.ad.stateModule)
             end
+        end
+        -- the vehicles are driven on the server, so the destinations are settled there only
+        if NG.server ~= nil then
+            pcall(ADFlyoverGraphOps.fixCurrentDestinations, heading, ADGraphManager:getMapMarkers())
         end
         if AutoDrive.notifyDestinationListeners ~= nil then pcall(AutoDrive.notifyDestinationListeners, AutoDrive) end
     end

@@ -370,6 +370,41 @@ function G.apply(graph, a, backwards)
     return true
 end
 
+--- Each vehicle's three destinations, read before an undo or redo changes the markers. Plain tables: the
+--- vehicle's ad.stateModule must have firstMarker, secondMarker, currentDestination and setCurrentDestination.
+function G.destinationsOf(vehicles)
+    local out = {}
+    for _, v in pairs(vehicles or {}) do
+        local sm = v ~= nil and v.ad ~= nil and v.ad.stateModule or nil
+        if sm ~= nil then
+            out[#out + 1] = { sm = sm, first = sm.firstMarker, second = sm.secondMarker, current = sm.currentDestination }
+        end
+    end
+    return out
+end
+
+--- After the markers changed: a vehicle whose CURRENT destination is a marker that is no longer in the list
+--- goes to its first destination, or to its second if that was the slot it was in. AutoDrive's own marker
+--- reset moves the first and second destinations only, so without this the vehicle keeps a marker that is
+--- gone (issue #26). Returns how many were moved.
+function G.fixCurrentDestinations(before, markers)
+    local present = {}
+    for _, m in ipairs(markers or {}) do present[m] = true end
+    local moved = 0
+    for _, r in ipairs(before or {}) do
+        local sm = r.sm
+        if r.current ~= nil and not present[r.current] then
+            local wanted
+            if r.current == r.second then wanted = sm.secondMarker else wanted = sm.firstMarker end
+            if wanted ~= nil and present[wanted] then
+                sm:setCurrentDestination(wanted)
+                moved = moved + 1
+            end
+        end
+    end
+    return moved
+end
+
 --- Two graphs the same, point by point (number, tag, place, flags, field, both lists) and markers.
 --- For tests: returns true, or false and the first difference.
 function G.same(ga, gb)
