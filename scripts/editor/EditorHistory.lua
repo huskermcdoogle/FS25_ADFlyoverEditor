@@ -93,15 +93,6 @@ local function restoreObjects(records)
     return list
 end
 
--- The values of each record, for the log lines.
-local function fieldsOf(records)
-    local out = {}
-    for key, rec in pairs(records or {}) do
-        out[key] = rec.fields
-    end
-    return out
-end
-
 local function copyGroups(groups)
     local copy = {}
     for name, id in pairs(groups or {}) do
@@ -302,14 +293,8 @@ local function destinationNames(vehicle)
     local sm = vehicle.ad ~= nil and vehicle.ad.stateModule or nil
     if sm == nil then return nil end
     local function nameOf(m) return m ~= nil and m.name or "(none)" end
-    -- the waypoint number the vehicle holds for each destination, for the log line
-    local function textOf(m)
-        if m == nil then return "(none)" end
-        return string.format("%s at waypoint %s", tostring(m.name), tostring(m.id))
-    end
     return {
         names = { nameOf(sm.firstMarker), nameOf(sm.secondMarker), nameOf(sm.currentDestination) },
-        texts = { textOf(sm.firstMarker), textOf(sm.secondMarker), textOf(sm.currentDestination) },
     }
 end
 
@@ -318,7 +303,7 @@ local function destinationsNow()
     for _, vehicle in pairs(AutoDrive.getAllVehicles()) do
         if vehicle ~= nil then
             local d = destinationNames(vehicle)
-            if d ~= nil then table.insert(held, { vehicle = vehicle, names = d.names, texts = d.texts }) end
+            if d ~= nil then table.insert(held, { vehicle = vehicle, names = d.names }) end
         end
     end
     return held
@@ -330,10 +315,6 @@ local function reportDestinations(held, restored)
     for _, h in ipairs(held or {}) do
         local now = destinationNames(h.vehicle)
         checked = checked + 1
-        if now ~= nil then
-            Logging.info("[FlyoverEditor]: destinations of %s before: first %s; second %s; current %s. After: first %s; second %s; current %s.",
-                vehicleLabel(h.vehicle), h.texts[1], h.texts[2], h.texts[3], now.texts[1], now.texts[2], now.texts[3])
-        end
         for i, slot in ipairs(DESTINATION_SLOTS) do
             -- put back on purpose by putBackDestinations: not a change to report
             local putBack = restored ~= nil and restored[h.vehicle] ~= nil and restored[h.vehicle][slot] == true
@@ -351,19 +332,6 @@ local function reportDestinations(held, restored)
     end
 end
 
--- Issue #26 CHECK, LOG ONLY: every marker's name and waypoint number, so the log shows where each
--- marker sits before an undo or redo and where the undo puts it back. Changes nothing.
-local function logMarkerList(label, list)
-    if list == nil then return end
-    local keys, parts = {}, {}
-    for k in pairs(list) do table.insert(keys, k) end
-    table.sort(keys)
-    for _, k in ipairs(keys) do
-        local m = list[k]
-        if m ~= nil then table.insert(parts, string.format("%d %s@%s", k, tostring(m.name), tostring(m.id))) end
-    end
-    Logging.info("[FlyoverEditor]: %s: %s", label, table.concat(parts, ", "))
-end
 
 --- COMPANION EDIT: a full graph swap has to do more than swap the graph. AutoDrive's own
 --- equivalent is AutoDriveRoutesUploadEvent:run, which does six things here; this did two, and the
@@ -371,8 +339,6 @@ end
 local function restoreState(entry)
     local parks = safely(rememberParkSpots)
     local dests = safely(destinationsNow)
-    safely(logMarkerList, "markers before this undo or redo", ADGraphManager:getMapMarkers())
-    safely(logMarkerList, "markers this undo or redo puts back", fieldsOf(entry.mapMarkers))
     local presentBefore = markerSet(ADGraphManager:getMapMarkers())
     local currentBefore = safely(recordDestinations)
     ADGraphManager:setWayPoints(restoreObjects(entry.wayPoints))
@@ -398,7 +364,6 @@ local function restoreState(entry)
     safely(fixCurrentDestinations, currentBefore, markers)
     safely(putParkSpotsBack, parks)
     safely(reportDestinations, dests, restored)
-    safely(logMarkerList, "markers after this undo or redo", ADGraphManager:getMapMarkers())
 
     -- setMapMarkers deliberately does not notify, on the grounds that its caller will. We are the
     -- caller. The listener is what rebuilds the map hotspots, so without this the map keeps
