@@ -175,6 +175,23 @@ function T.nextTest()
     return nil
 end
 
+--- "Step 2 of 5": the card numbers the steps itself, so the plan's titles carry no numbers.
+function T.stepLabel(t)
+    if T.plan == nil or t == nil then return "" end
+    for i, x in ipairs(T.plan.tests) do
+        if x == t then return string.format("Step %d of %d", i, #T.plan.tests) end
+    end
+    return ""
+end
+
+--- What the card says once every step has a status: "" until then.
+function T.progressText()
+    local done, total, pass, fail = T.counts()
+    if total == 0 or done < total then return "" end
+    return string.format("All %d steps done: %d passed, %d failed, %d skipped.",
+        total, pass, fail, done - pass - fail)
+end
+
 --- An editor log line: kept for the card's log and the results, and matched against the plan.
 function T.capture(text, level)
     if T.plan == nil or type(text) ~= "string" or T.capturing then return end

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.3.2 — Undo keeps destinations
+
+- **Undo and redo keep vehicle destinations after a smooth** (issue #26). Smoothing, dividing or
+  straightening a stretch of road could send a vehicle back to the first marker (Main Farm) when you
+  undid or redid it. Undo and redo now keep each vehicle's destinations.
+- **Smoothing a road a vehicle is driving on.** Road points the vehicle still has ahead are kept until
+  it has passed them, so its current trip does not change. The new road is used from its next trip.
+- **Undoing a name a vehicle is heading to.** The vehicle's current destination moves to a marker that
+  still exists. It finishes its current trip and stops at the old point; AutoDrive may switch off there.
+- **A vehicle AutoDrive has stopped for 60 seconds next to a kept point** is restarted, the way
+  AutoDrive restarts a stuck one.
+
+Known limits in this version:
+
+- Kept points stay visible and clickable until they are removed.
+- The delete, merge and junction tools still remove points at once, which can still disturb a vehicle
+  that is driving on them.
+- Multiplayer is not included.
+
 ## 1.0.3.1 — Parking spots stay put
 
 - **Undo no longer moves AutoDrive parking spots** (issue #24). Deleting a name, or a point with a

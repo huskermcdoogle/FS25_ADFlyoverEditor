@@ -2,14 +2,17 @@
 <!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
-     matched against the editor's own log lines. A click always wins. -->
-<testPlan title="1.0.3.1: launch key stays in the vehicle" build="@BUILD@">
-    <test id="build" title="The game loaded this build" auto="build"
-          hint="Ticks itself: the running build is the one this plan was packed with."/>
-    <test id="keyBack" title="The key was put back" passLog="AD_FLYOVER_TOGGLE was gone from context"
-          hint="Ticks itself if the game drops the key and the editor puts it back. Fine to skip if it never happens."/>
-    <test id="altInVehicle" title="Alt+F opens the editor in a vehicle"
-          hint="Get in a vehicle, drive about a minute, then press Alt+F (not the HUD button). Close the editor, then try Alt+V."/>
-    <test id="altOnFoot" title="Alt+F still works on foot"
-          hint="Get out, press Alt+F: the editor opens."/>
+     matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
+<testPlan title="Undo a name a vehicle is heading to" build="@BUILD@">
+    <test id="build" title="The game loaded this test version" auto="build"
+          hint="This ticks by itself. Nothing to do."/>
+    <test id="makeName" title="Make a new name"
+          hint="In the editor, name a spot on a road. Then click PASS."/>
+    <test id="sendVehicle" title="Send a vehicle there"
+          hint="Use AutoDrive to send a vehicle to that name. Then click PASS."/>
+    <test id="undoName" title="Undo the name"
+          passLog="current destination was a marker the undo removed"
+          hint="Press undo once. Nothing to click. This ticks by itself."/>
+    <test id="watchStop" title="Watch the vehicle"
+          hint="It should drive to the spot and stop there. Click PASS if it does, FAIL if not. Ignore any message about Main Farm."/>
 </testPlan>

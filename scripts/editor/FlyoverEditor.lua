@@ -1831,6 +1831,10 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
 end
 
 function ADFlyoverEditor:update(dt)
+    -- Held removals (HeldRemovals.lua) release and restart on their own clock, whatever the editor is doing.
+    if ADHeldRemovals ~= nil then
+        ADHeldRemovals.update(dt)
+    end
     -- Before anything else, so it happens whatever the editor is doing: see junctionCheckRecordOff.
     self:junctionCheckRecordOff()
     -- Also whether the editor is open or not: junction numbers and split decisions made before this
