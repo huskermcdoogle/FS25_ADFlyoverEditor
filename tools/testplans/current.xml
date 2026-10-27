@@ -3,16 +3,21 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Undo a name a vehicle is heading to" build="@BUILD@">
+<testPlan title="Settings page fits, launch button stays on screen (issue 28)" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
-    <test id="makeName" title="Make a new name"
-          hint="In the editor, name a spot on a road. Then click PASS."/>
-    <test id="sendVehicle" title="Send a vehicle there"
-          hint="Use AutoDrive to send a vehicle to that name. Then click PASS."/>
-    <test id="undoName" title="Undo the name"
-          passLog="current destination was a marker the undo removed"
-          hint="Press undo once. Nothing to click. This ticks by itself."/>
-    <test id="watchStop" title="Watch the vehicle"
-          hint="It should drive to the spot and stop there. Click PASS if it does, FAIL if not. Ignore any message about Main Farm."/>
+    <test id="bigScale" title="Make the editor big"
+          hint="Open the editor settings (more settings...). Set ui scale to 1.5 x or more. Then click PASS."/>
+    <test id="fits" title="The settings page fits"
+          hint="The title and the close button can both be reached. The page is not cut off top or bottom. PASS if so."/>
+    <test id="wheelScrolls" title="The wheel scrolls the page"
+          hint="Roll the wheel over the rows. The page should move and a bar on the right should show where you are. No value should change. PASS if so."/>
+    <test id="stepsWork" title="The - and + buttons still work"
+          hint="Scroll down to LAUNCH BUTTON. Use + on position. It should change. Set ui scale back to 1.0 x. PASS if all fine."/>
+    <test id="smallWheel" title="Small page: wheel still changes values"
+          hint="At 1.0 x the page fits. Roll the wheel over a value: it should change, as before. PASS if so."/>
+    <test id="buttonRight" title="Button set to right stays on screen"
+          hint="Set position to right. Close the editor. With AutoDrive's box at the right edge, the button should sit on its left, fully on screen. PASS if so."/>
+    <test id="buttonOthers" title="Above and below stay on screen"
+          hint="Try above and below too. Drag AutoDrive's box near the top or bottom edge. The button should never go off screen. Set it back the way you like it, then PASS."/>
 </testPlan>

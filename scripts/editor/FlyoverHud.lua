@@ -2650,8 +2650,20 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         elseif it.kind == "section" or it.kind == "note" then return rowH * 0.85
         else return rowH end
     end
-    local h = pad * 2
-    for _, it in ipairs(items) do h = h + itemH(it) end
+    -- The title stays put; everything under it scrolls. The height is CAPPED to the screen so a big
+    -- UI scale (the game's times ours) cannot push the top or bottom off it (issue 28); the wheel
+    -- then scrolls the page instead of stepping the field under the cursor, so reaching the bottom
+    -- does not quietly change settings on the way.
+    local titleH = itemH(items[1])
+    local contentH = 0
+    for i = 2, #items do contentH = contentH + itemH(items[i]) end
+    local margin = 0.02
+    local visibleH = math.min(contentH, math.max(rowH * 3, 1 - margin * 2 - pad * 2 - titleH))
+    local maxScroll = math.max(0, contentH - visibleH)
+    local scroll = math.max(0, math.min(editor.settingsScroll or 0, maxScroll))
+    editor.settingsScroll = scroll
+    self.dialogMaxScroll = maxScroll
+    local h = pad * 2 + titleH + visibleH
 
     local x = 0.5 - W * 0.5
     local top = 0.5 + h * 0.5
@@ -2661,12 +2673,25 @@ function ADFlyoverHud:drawSettingsDialog(editor)
     fillRole(self.borderOverlay, x - edge, top - h - edge, W + edge * 2, h + edge * 2, "cardBorder", 1)
     fillRoleSolid(self.background, x, top - h, W, h, "panelBg")
 
-    local y = top - pad
-    for _, it in ipairs(items) do
+    -- Rows fully outside the viewport are skipped (no partial clipping, same as the help card), and
+    -- so are their click targets.
+    local viewTop = top - pad - titleH
+    local viewBottom = viewTop - visibleH
+    local cursor = -titleH
+    for i, it in ipairs(items) do
         local ih = itemH(it)
-        y = y - ih
+        local y
+        if i == 1 then
+            y = top - pad - ih
+        else
+            y = viewTop - (cursor - scroll) - ih
+        end
+        cursor = cursor + ih
+        local visible = i == 1 or (y >= viewBottom - 0.0002 and y + ih <= viewTop + 0.0002)
         local textY = y + (ih - fontSize) * 0.5
-        if it.kind == "title" then
+        if not visible then
+            -- scrolled out of view
+        elseif it.kind == "title" then
             fillRole(self.headerOverlay, x, y, W, ih, "headerBg", 1)
             local titleText = TR("FLYOVER EDITOR")
             labelRole(x + pad * 2, textY, fontSize, titleText, "headerText")
@@ -2707,6 +2732,16 @@ function ADFlyoverHud:drawSettingsDialog(editor)
             table.insert(self.dialogRows, { x = bx0, y = y, w = bw0, h = ih, action = it.action })
         end
     end
+
+    -- scrollbar on the right edge of the viewport when there is more than fits
+    if maxScroll > 0 then
+        local sbW = 0.003 * uiScale
+        local sbX = x + W - sbW - pad * 0.3
+        fillRole(self.rowOverlay, sbX, viewBottom, sbW, visibleH, "toolBg", 0.9)
+        local thumbH = math.max(rowH * 0.8, visibleH * (visibleH / contentH))
+        local thumbTopY = viewTop - (scroll / maxScroll) * (visibleH - thumbH)
+        fillRole(self.rowOverlay, sbX, thumbTopY - thumbH, sbW, thumbH, "accent", 0.9)
+    end
 end
 
 --- Modal click: back-to-front over dialogRows so a stepper on top wins over the field beneath it.
@@ -2724,8 +2759,13 @@ function ADFlyoverHud:dialogClick(mx, my)
     return true
 end
 
---- Modal wheel: steps whichever field the cursor is over. Always consumes, so nothing zooms behind.
-function ADFlyoverHud:dialogWheel(mx, my, step)
+--- Modal wheel: scrolls the settings page when it is taller than fits, otherwise steps whichever
+--- field the cursor is over. Always consumes, so nothing zooms behind.
+function ADFlyoverHud:dialogWheel(mx, my, step, editor)
+    if editor ~= nil and editor.dialogOpen and (self.dialogMaxScroll or 0) > 0 then
+        editor.settingsScroll = math.max(0, (editor.settingsScroll or 0) - step * 0.06)
+        return true
+    end
     if self.dialogRows ~= nil and mx ~= nil then
         for i = #self.dialogRows, 1, -1 do
             local r = self.dialogRows[i]
