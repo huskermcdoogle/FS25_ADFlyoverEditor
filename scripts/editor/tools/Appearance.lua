@@ -29,6 +29,7 @@ end
 function ADFlyoverEditor:openSettingsDialog()
     self.dialogOpen = true
     self.manualOpen = false   -- the two modals are mutually exclusive
+    self.settingsScroll = 0
     self:cancelEditNumber()
 end
 

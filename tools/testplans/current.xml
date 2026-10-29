@@ -3,16 +3,34 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Undo a name a vehicle is heading to" build="@BUILD@">
+<testPlan title="Issue 28 settings page + issue 18 wheel zoom" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
-    <test id="makeName" title="Make a new name"
-          hint="In the editor, name a spot on a road. Then click PASS."/>
-    <test id="sendVehicle" title="Send a vehicle there"
-          hint="Use AutoDrive to send a vehicle to that name. Then click PASS."/>
-    <test id="undoName" title="Undo the name"
-          passLog="current destination was a marker the undo removed"
-          hint="Press undo once. Nothing to click. This ticks by itself."/>
-    <test id="watchStop" title="Watch the vehicle"
-          hint="It should drive to the spot and stop there. Click PASS if it does, FAIL if not. Ignore any message about Main Farm."/>
+    <test id="bigScale" title="Make the editor big"
+          hint="Open the editor settings (more settings...). Set ui scale to 1.5 x or more. Then click PASS."/>
+    <test id="fits" title="The settings page fits"
+          hint="Look at the page. You can reach the title and the close button, and nothing is cut off. PASS if so."/>
+    <test id="wheelScrolls" title="The wheel scrolls the page"
+          hint="Roll the wheel over the rows. The page moves, a bar on the right shows where you are, and no value changes. PASS if so."/>
+    <test id="stepsWork" title="The + button still works"
+          hint="Scroll down to LAUNCH BUTTON. Click + on position. The position changes. PASS if so."/>
+    <test id="scaleBack" title="Set the size back"
+          hint="Set ui scale back to 1.0 x. Then click PASS."/>
+    <test id="smallWheel" title="Small page: the wheel changes values"
+          hint="Roll the wheel over a value. The value changes, as before. PASS if so."/>
+    <test id="buttonRight" title="Button set to right stays on screen"
+          hint="Set position to right. Close the editor. With AutoDrive's box at the right edge, the button sits on its left, fully on screen. PASS if so."/>
+    <test id="buttonEdge" title="Button near the top stays on screen"
+          hint="Set position to above. Drag AutoDrive's box to the top edge. The button stays on screen. Set it back the way you like it, then PASS."/>
+    <test id="cycleExit" title="In a vehicle: open and close the editor"
+          passLog="exit: the screen is on the vehicle's camera"
+          hint="Sit in a vehicle. Press Alt+F, then Esc. This ticks by itself."/>
+    <test id="wheelZooms" title="The wheel zooms the vehicle camera"
+          hint="Roll the wheel. The camera zooms in and out. PASS if so."/>
+    <test id="report" title="Run the wheel report"
+          hint="Open the console (~). Type FlyoverWheelReport and press Enter. One line appears. PASS if so."/>
+    <test id="clickVehicle" title="Clicking a vehicle from above does not enter it"
+          hint="Open the editor. With the Select tool, left-click a parked vehicle. You stay where you are and the editor stays open. PASS if so."/>
+    <test id="leaveInside" title="Leave the vehicle with the editor open"
+          hint="In a vehicle: Alt+F, then leave or switch vehicle any way you can, then Esc. The wheel still zooms where you are. SKIP if nothing lets you leave."/>
 </testPlan>

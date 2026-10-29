@@ -1924,12 +1924,13 @@ function ADFlyoverEditor:handleWheel(offset)
     local step = offset > 0 and -1 or 1
 
     -- A modal owns the wheel while it is up, and consumes it so nothing zooms behind. In the manual
-    -- the wheel pages; in the settings dialog it adjusts the field under the cursor (via dialogWheel).
+    -- the wheel pages; in the settings dialog it scrolls a page too tall for the screen, else adjusts the field
+    -- under the cursor (via dialogWheel).
     if self:isModalOpen() then
         if self.manualOpen then
             self:manualScrollBy(step)
         elseif ADFlyoverHud ~= nil then
-            ADFlyoverHud:dialogWheel(self.mouseX, self.mouseY, step)
+            ADFlyoverHud:dialogWheel(self.mouseX, self.mouseY, step, self)
         end
         return true
     end

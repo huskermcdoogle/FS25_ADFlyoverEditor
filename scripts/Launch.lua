@@ -353,6 +353,21 @@ function L.drawHudButton(hud)
             x = hx + hw + gapX
         end
     end
+    -- Never off screen, whatever side was picked (issue 28: "right" with the HUD against the right
+    -- edge drew it out of sight). A side with no room flips to the other side of the HUD; anything
+    -- still hanging over an edge is pulled back in.
+    if x + w > 1 then
+        x = hx - w - gapX
+    elseif x < 0 then
+        x = hx + hw + gapX
+    end
+    if y + h > 1 then
+        y = hy - h - gapY
+    elseif y < 0 then
+        y = hy + hh + gapY
+    end
+    x = math.max(0, math.min(x, 1 - w))
+    y = math.max(0, math.min(y, 1 - h))
 
     L.buttonRect = { x = x, y = y, w = w, h = h }
     L.buttonDrawnAt = nowMs()

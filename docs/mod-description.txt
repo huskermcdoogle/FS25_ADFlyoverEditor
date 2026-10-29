@@ -1,0 +1,130 @@
+FLYOVER EDITOR FOR AUTODRIVE (1.0.3.3)
+
+Build and repair your AutoDrive route network from above - on foot or in a vehicle, without driving every metre of it.
+
+Flyover Editor is a top-down editor for AutoDrive route networks in Farming Simulator 25. Instead of recording track from a vehicle a metre at a time, you fly a free overhead camera and edit the whole network like a map: place waypoints with a click, lay roads along the map's own roads, curve connections, add parallel lanes, straighten and smooth runs, put points back on the ground, and clean up the tangle every long-running save collects - all from a clear, clickable panel.
+
+It runs as a companion mod beside stock AutoDrive. It does not change AutoDrive's files or your savegame's config. It attaches to AutoDrive while the game runs, and refuses to load (and tells you why) if AutoDrive is not installed. Everything goes through AutoDrive's own network functions, so a route laid in the editor is the same as one recorded from a vehicle.
+
+
+WHAT'S NEW SINCE 1.0.2.1
+
+New tools
+- Road runs (new tool). Point at a map road or farm track that has no AutoDrive path and it lights up. Click to lay a run along it: one-way, one two-way line, or two lanes keeping right. A click follows the road straight on through junctions and stops at T's; double-click carries it on through forks. Drag handles to shape it before you build. You can also click a road you already built and reshape it, through junctions: a two-lane road moves as one, junction points move with it, and side roads ease back into place.
+- Spline, rebuilt. A smooth curve through as many points as you like. Drag a point to move it, click the curve to add one, Ctrl-click to remove one. "Edit placed" picks up a run that is already laid and reshapes it, keeping its direction and priority. AutoDrive's own two-point spline is still there.
+- Junction tool (BETA). Lock a road junction and, in one right-click, clear its old turn wiring, lay a fresh set of turns, or both. One undo takes it all back. Plain X and T road junctions work well today; farm tracks, Y's and skewed junctions are still to come. Switch it off in the settings if you don't want it.
+
+Field loop (issues 14 and 15)
+- The loop stays in the field you clicked. Combo gap is now a plain number from 0 to 50 m and starts at 0. Two fields with a narrow strip between them are no longer read as one.
+- Turning radius is a plain number from 2 to 20 m, and a smaller radius now really gives a tighter corner.
+- A tree on a rounded corner no longer folds the corner into a hook.
+- The loop stays on the field side of a fence instead of weaving round every post.
+- A new loop keeps about a metre clear of a neighbouring field's loop, so the two don't overlap or cross.
+
+Undo you can trust with vehicles driving
+- Undo no longer moves AutoDrive parking spots (issue 24).
+- Undo and redo keep every vehicle's destinations after a smooth, divide or straighten (issue 26). Before, a vehicle could be sent back to the first marker.
+- Smoothing a road a vehicle is driving on keeps the points it still has ahead until it has passed them, so its current trip does not change.
+- Undoing a name a vehicle is heading to lets it finish its trip and stop at the old spot.
+- A vehicle AutoDrive has stopped for 60 seconds next to a kept point is restarted.
+
+Screen and keys
+- Left Alt + V opens the editor as well as Left Alt + F. Left Alt + F is also the game's key for a vehicle's lights from outside, which could block it.
+- Left Alt + F and Left Alt + V keep working after you get into a vehicle.
+- The settings page fits the screen at any ui scale, and scrolls with a scroll bar (issue 28).
+- The launch button stays on screen. If your chosen side has no room next to AutoDrive's box, it moves to the other side.
+- Leaving the editor puts the screen back on the vehicle you are in (issue 18).
+- New console command FlyoverWheelReport: if the mouse wheel zoom ever stops working in a vehicle, run it and paste the line into a GitHub issue.
+
+Languages
+- A first draft of Brazilian Portuguese. Anything not translated yet shows in English.
+
+
+WHY YOU'LL WANT IT
+
+- See the whole picture. Plan routes looking at the real fields, junctions and yards, not the back of a tractor.
+- Fix, don't re-record. Straighten a wobbly pass, smooth a jumpy lane, re-seat floating points or delete a dead end in seconds.
+- A real interface, not a wall of hotkeys. A panel lists every tool, each tool has a card with its options, and a hint line tells you the next step.
+- Undo everything. Every edit can be undone (Q) and redone (E).
+
+
+OPENING IT
+
+- Left Alt + V or Left Alt + F (change them in the controls menu), or the button beside AutoDrive's HUD.
+- Esc to leave.
+- 1-9 and 0 pick tools. Q undo, E redo. H hides or shows the tool card. Comma and full stop nudge the Move falloff.
+
+
+THE TOOLS
+
+Select is the default mode: no tool held, click things to edit them.
+
+Create
+- Draw - place waypoints one click at a time, each joined to the last. Click a waypoint to draw from it into the network; right-click ends the run. Options: one-way or two-way, primary or secondary (give way), snap to terrain or any surface.
+- Spline - a smooth curve through the points you click. An end on a waypoint joins the road and follows its heading. Edit placed reshapes a run already laid.
+- Field loop - a complete two-way loop just outside a field's edge, rounded to a turning radius and kept clear of trees, poles, fences and buildings. It is not wired to the network, so you connect it afterwards. Options: margin, turning radius, obstacle clearance, vehicle height, combo gap.
+- Parallel - copy a span or run sideways by a set distance, as a passing lane or a return leg.
+- Siding - a short parallel stretch beside a run that curves back in at both ends, in one action.
+- Road runs - lay runs along the map's own roads and farm tracks, and reshape roads already built (see above).
+
+Shape
+- Move - drag a point, span, run or selection and re-seat it on the ground. Falloff bends a stretch smoothly. Copy leaves the original, disconnect cuts it loose, offset slides a run sideways, R + wheel rotates while you drag, and auto-hookup joins loose ends where you drop them.
+- Smooth - ease small kinks out of a stretch. Either nudge the points into line (keeping junctions and markers) or rebuild the stretch at even spacing.
+- Straighten - drop points that sit close to a straight line, keeping real corners and junctions.
+- Divide - add evenly spaced waypoints along a span or run.
+- Ground - put floating or buried points back on the surface. Points already on a ramp or bridge are left alone.
+
+Connect
+- Convert - set direction (two-way, one-way, other way, reverse) and priority (primary or secondary) for a point or a whole run in one click.
+- Merge - fold two parallel lanes recorded separately into one shared track. The part that will go turns green first.
+- Junction (BETA) - clear and rebuild the turns at a road junction in one right-click (see above).
+
+Utility
+- Name - give a waypoint a name, so it becomes an AutoDrive destination.
+- Delete - remove a point, a whole run between junctions, or a selection. Undoable.
+
+
+SELECT MODE AND MENUS
+
+Click a point for its menu. Click a second point for the span between them, or double-click for the whole run between junctions. Draw a box, circle or freehand shape, or Ctrl-click, to select a set and get a menu for all of it. Picking a tool from a menu opens that tool's card right there.
+
+
+WORKING WITH IT
+
+- Tool cards: toggles, choices, and numbers you can type, scroll or step with - and +. Anything that can't apply right now is greyed out. Cards stay where you put them, step aside when they would cover your work, and Esc backs out one step at a time.
+- Undo count on the panel.
+- Field readout: the panel shows which field or farmland is under the cursor.
+
+
+SCALING, THEMES AND COLOURS
+
+- UI scale from 0.70x to 2.00x, separate from the rest of the HUD.
+- 7 colour presets and 7 accent colours, starting on a high-contrast dark theme.
+- A colour editor for 15 parts of the interface, with live swatches.
+- Everything applies at once and saves itself. Open it from the gear on the panel header. If a choice ever makes the panel hard to read, the console command FlyoverResetTheme puts colours and scale back to default.
+
+
+BUILT-IN HELP
+
+A ? button (or the / key) shows help for the tool you have now. From there, open the full in-game manual: a page per tool plus keys, mouse, camera and settings.
+
+
+LANGUAGES
+
+English and Deutsch in full: panel, menus, hints, help and the manual. A first draft of Brazilian Portuguese; native speakers are welcome to help.
+
+
+COMPATIBILITY
+
+- Uses only AutoDrive's own functions. AutoDrive's files are not changed.
+- Its settings live in modSettings and never touch AutoDrive's config or your savegame.
+- Single player only.
+- Requires FS25_AutoDrive (tested with 3.0.1.4). Don't run it next to a changed AutoDrive build that has its own flyover editor built in.
+
+
+INSTALL
+
+Put FS25_ADFlyoverEditor.zip in your FS25 mods folder and turn it on alongside FS25_AutoDrive.
+
+Feedback, bugs and ideas: Discord https://discord.gg/w6mvhuaa9k or GitHub https://github.com/huskermcdoogle/FS25_ADFlyoverEditor/issues
+Free and open source (MIT). By huskermcdoogle. Not made or endorsed by the AutoDrive team.

@@ -15,6 +15,14 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     -- Every event, moves included: update() needs to know whether the mouse is over the panel.
     self.mouseX, self.mouseY = posX, posY
 
+    -- Level 1 of the wheel probe (Wrappers.lua, W.counts): every wheel notch the game hands to mods,
+    -- counted before any guard, editor open or closed. A count only; the probe lines live in the
+    -- wrapper. Down only, so a notch is not counted twice.
+    if isDown and ADFlyoverWrappers ~= nil
+        and (button == Input.MOUSE_BUTTON_WHEEL_UP or button == Input.MOUSE_BUTTON_WHEEL_DOWN) then
+        ADFlyoverWrappers.counts.rawWheel = ADFlyoverWrappers.counts.rawWheel + 1
+    end
+
     -- Logged BEFORE the guard, and only for real button presses, so a click that is being thrown
     -- away still leaves a trace. A siding previewed on foot and then did nothing, with no log line
     -- at all - which means the code never reached the commit, and there was no way to tell whether

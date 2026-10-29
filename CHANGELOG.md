@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.3.3 — Settings page fits, wheel zoom check
+
+- **The settings page fits the screen** (issue #28). With a large ui scale the page could run off the
+  screen. It is now never taller than the screen, and everything below the title scrolls, with a scroll
+  bar. While the page is taller than the screen the wheel scrolls it instead of changing a setting.
+- **The launch button stays on screen.** When the side you chose has no room next to AutoDrive's box,
+  the button moves to the other side, and it is kept on screen for every position.
+- **Leaving the editor puts the screen back on the vehicle you are in** (issue #18). Before, it went back
+  to the camera from when you opened the editor.
+- **New console command `FlyoverWheelReport`** (issue #18). It prints one line about the mouse wheel
+  zoom in a vehicle. If the wheel zoom stops working, run it and paste the line into the issue.
+
 ## 1.0.3.2 — Undo keeps destinations
 
 - **Undo and redo keep vehicle destinations after a smooth** (issue #26). Smoothing, dividing or
