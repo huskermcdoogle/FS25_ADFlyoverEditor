@@ -1178,6 +1178,9 @@ function ADFlyoverEditor:enable()
         return
     end
     self.camera, self.cursor = camera, cursor
+    -- Before activate(), which already positions the camera: with "camera through buildings" on,
+    -- this instance keeps clear of the terrain only, so it can fly under roofs (tools/Camera.lua).
+    tryCall("installCameraThroughBuildings", function() self:installCameraThroughBuildings(camera) end)
 
     -- Start the camera over whatever the player is currently at, so the mode opens somewhere
     -- recognisable rather than at the map origin.
@@ -1929,6 +1932,7 @@ function ADFlyoverEditor:update(dt)
     end
 
     tryCall("camera:update", function() self.camera:update(dt) end)
+    tryCall("cameraCoverCheck", function() self:cameraCoverCheck(dt) end)
     tryCall("cursor:setCameraRay", function() self.cursor:setCameraRay(self.camera:getPickRay()) end)
     tryCall("cursor:update", function()
         if self.cursor.update ~= nil then self.cursor:update(dt) end
@@ -1950,7 +1954,7 @@ function ADFlyoverEditor:update(dt)
     local overPanel = self.mouseX ~= nil and ADFlyoverHud ~= nil
         and ADFlyoverHud:isMouseOver(self.mouseX, self.mouseY)
     if not overPanel or self.dragId ~= nil then
-        local ok, x, y, z = pcall(function() return self.cursor:getPosition() end)
+        local ok, x, y, z = pcall(function() return self:cursorPosition() end)
         if ok and x ~= nil and z ~= nil then
             self.cursorX, self.cursorZ, self.cursorY = x, z, y
         end

@@ -138,6 +138,7 @@ P.EDITOR_FILES = {
     "scripts/editor/junction/JxCheck.lua",
     "scripts/editor/junction/JxCheckCard.lua",
     "scripts/editor/tools/Appearance.lua",
+    "scripts/editor/tools/Camera.lua",   -- camera through buildings (issue #30)
     "scripts/editor/tools/Convert.lua",
     "scripts/editor/tools/Merge.lua",
     "scripts/editor/tools/FieldLoop.lua",

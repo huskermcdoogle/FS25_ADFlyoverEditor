@@ -2578,6 +2578,11 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         value = ADFlyoverSettings.get("toolCardStatic") and "stays put" or "follows work",
         action = function() ADFlyoverSettings.cycle("toolCardStatic", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("toolCardStatic", d) end })
+    push({ kind = "field", text = "camera through buildings",
+        value = TR(ADFlyoverSettings.get("cameraThroughBuildings") and "on" or "off"),
+        action = function() editor:toggleCameraThroughBuildings() end,
+        stepAction = function() editor:toggleCameraThroughBuildings() end })
+    push({ kind = "note", text = "on: the camera flies under roofs, to place points inside sheds" })
     push({ kind = "section", text = "THEME" })
     push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
         action = function() editor:cycleThemePreset(1) end,

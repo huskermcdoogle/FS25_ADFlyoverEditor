@@ -124,6 +124,10 @@ S.settings.junctionBeta = { values = { false, true }, default = 2, current = 2 }
 -- lays its waypoints, in metres (evenly along the curve, as near this as a whole number of steps).
 S.settings.splineMode = { values = { "multi", "autodrive" }, default = 1, current = 1 }
 S.settings.splineSpacing = { range = { min = 1, max = 20, step = 0.5 }, value = 4 }
+-- Camera through buildings (issue #30, on by default - the user, 2026-10-30): the editor's camera
+-- keeps clear of the terrain only, so it can fly under a shed roof to place points inside. Off is
+-- the game's camera exactly, which lifts itself above every roof (tools/Camera.lua).
+S.settings.cameraThroughBuildings = { values = { false, true }, default = 2, current = 2 }
 
 local function log(fmt, ...)
     Logging.info("[%s] " .. fmt, S.MOD_NAME, ...)
@@ -290,7 +294,7 @@ function S.describe()
                             "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "junctionRadius", "junctionTurnRadius",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
-                            "splineMode", "splineSpacing",
+                            "splineMode", "splineSpacing", "cameraThroughBuildings",
                             "flyoverDebugLogging",
                             "launchButtonHidden", "launchButtonPosition" }) do
         parts[#parts + 1] = string.format("%s=%s", name, tostring(S.get(name)))
