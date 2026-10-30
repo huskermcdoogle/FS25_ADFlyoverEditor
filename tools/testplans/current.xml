@@ -3,17 +3,20 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Issue 30 camera through buildings" build="@BUILD@">
+<testPlan title="Issue 30 camera through buildings + height slice" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
     <test id="underRoof" title="Fly under a shed roof"
           passLog="camera went under a roof"
           hint="Open the editor at a shed. Zoom all the way in and fly in under the roof. This ticks by itself."/>
-    <test id="floorPoint" title="Place a point on the floor inside"
+    <test id="sliceVehicle" title="Height slice in a tractor with a trailer"
+          passLog="with [1-9]%d* attached"
+          hint="Sit in a tractor with a trailer attached. Open the editor and press X. This ticks by itself."/>
+    <test id="sliceInside" title="The slice shows inside the shed"
+          hint="Fly over the shed. The roof is gone, you see the floor, and the AutoDrive lines still show. PASS if so."/>
+    <test id="floorPoint" title="Place a point on the shed floor"
           passLog="placed a point under a roof"
-          hint="Draw tool. Click the floor inside the shed. This ticks by itself."/>
+          hint="Slice still on. Draw tool: click the shed floor. This ticks by itself."/>
     <test id="parking" title="Make it a parking spot"
-          hint="Name tool: click the new point and name it. Then set that name as a vehicle's parking spot in AutoDrive. PASS if it takes."/>
-    <test id="switchOff" title="Switch off: the old camera"
-          hint="Settings: set camera through buildings to off, then close. The camera jumps up over the roof. PASS if so. Then set it back on."/>
+          hint="Name tool: click the new point and name it. Then set that name as the tractor's parking spot in AutoDrive. PASS if it takes."/>
 </testPlan>

@@ -1432,6 +1432,8 @@ function ADFlyoverEditor:disable()
         -- rather than by the ids the camera created, taking the player's bindings for those same
         -- actions with it - attach/detach stopped responding until this was dropped. The camera's
         -- events belong to our context and go when it is reverted.
+        -- The height slice's near clip goes back first (the camera is deleted next anyway).
+        tryCall("sliceRestore", function() self:sliceRestore() end)
         tryCall("camera:deactivate", function() self.camera:deactivate() end)
         tryCall("camera:delete", function() self.camera:delete() end)
     end
@@ -1863,6 +1865,13 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
     -- Hide/show the floating tool card. A keyboard key rather than middle mouse, which is the camera.
     if isKey("KEY_h") then
         self:toggleCard()
+        return
+    end
+
+    -- Height slice on/off (tools/Camera.lua). X is free in our context: the camera has Z, C, Home
+    -- and WASD.
+    if isKey("KEY_x") then
+        self:toggleHeightSlice()
         return
     end
 
