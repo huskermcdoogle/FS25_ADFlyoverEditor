@@ -1953,7 +1953,7 @@ local function menuSelectionBox(m)
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                 x0 = x0 and math.min(x0, sx) or sx
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
@@ -2216,7 +2216,7 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
         local wp = ADGraphManager:getWayPointById(ids[i])
         if wp ~= nil then
             local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
                 x0 = x0 and math.min(x0, sx) or sx
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy

@@ -1982,6 +1982,9 @@ function ADFlyoverEditor:update(dt)
 
     -- Nothing in the world is under the mouse while it is on the panel, so nothing is highlighted.
     self.hoverId = not overPanel and self:findWayPointNearCursor() or nil
+    if self.hoverId ~= nil and self.sliceApplied then
+        tryCall("noteSliceHover", function() self:noteSliceHover(self.hoverId) end)
+    end
     -- Remember the last waypoint pointed at while the move tool is up, so the falloff preview keeps a
     -- centre after the cursor moves onto the tool card to wheel the radius.
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
@@ -2099,11 +2102,13 @@ function ADFlyoverEditor:findWayPointNearCursor()
             local wdx, wdz = wp.x - self.cursorX, wp.z - self.cursorZ
             -- Only project what is plausibly on screen; projecting the whole graph every frame is
             -- wasted work on a network of several thousand waypoints.
-            if wdx * wdx + wdz * wdz < searchRadiusSq then
+            -- Under the height slice a point above the cut is not drawn, so it does not pick either
+            -- (a road over a shed would otherwise take the clicks meant for the floor under it).
+            if wdx * wdx + wdz * wdz < searchRadiusSq and not self:hiddenBySlice(wp.y) then
                 local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.5, wp.z)
-                -- depth <= 0 means the point is behind the camera, where project still returns
-                -- coordinates but mirrored ones - they would pick as if in front.
-                if ok and sx ~= nil and depth ~= nil and depth > 0 then
+                -- A point behind the camera still projects, but mirrored - it would pick as if in
+                -- front. inFrontDepth (tools/Camera.lua) says which.
+                if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                     local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
                     local distSq = dx * dx + dy * dy
                     if distSq < bestDistSq then

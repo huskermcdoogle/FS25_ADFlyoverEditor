@@ -281,6 +281,7 @@ function ADFlyoverEditor:toggleHeightSlice()
     ADFlyoverSettings.cycle("heightSlice", 1)
     self.sliceSource = nil      -- say where the cut comes from again, right away
     self.sliceVehicleMs = nil
+    self.sliceHoverLogged = nil
     Logging.info("[FlyoverEditor]: height slice: %s.", ADFlyoverSettings.get("heightSlice") and "on" or "off")
 end
 
@@ -392,6 +393,34 @@ function ADFlyoverEditor:cameraCoverCheck(dt)
             self.coverLowest or -1)
     end
     self.cameraUnderCover = under
+end
+
+--- Picking: is a point with this project() depth in front of the camera? The game's own test for
+--- "behind" is depth > 1 (DebugText.lua). The editor used to test depth > 0, which only held with
+--- the game's 1 m near clip: under the slice the near clip is metres long, and points on a shed
+--- floor came back with depth 0 or below, so none of them could be picked (test of build 716,
+--- 2026-10-30: drawing worked, clicking a point did nothing). Every screen-space pick uses this.
+function ADFlyoverEditor.inFrontDepth(depth)
+    return depth ~= nil and depth <= 1
+end
+
+--- Slice on: is a point at this height above the cut, so not drawn?
+function ADFlyoverEditor:hiddenBySlice(y)
+    return self.sliceApplied == true and self.sliceCutY ~= nil and y ~= nil and y > self.sliceCutY
+end
+
+--- Slice on: the mouse is on a point. Logged once each time the slice is switched on, so the test
+--- card can see that points under the cut pick.
+function ADFlyoverEditor:noteSliceHover(id)
+    if self.sliceHoverLogged or self.sliceCutY == nil then
+        return
+    end
+    self.sliceHoverLogged = true
+    local wp = ADGraphManager:getWayPointById(id)
+    if wp ~= nil then
+        Logging.info("[FlyoverEditor]: height slice: the mouse is on point id=%s, %.1f m under the cut.",
+            tostring(id), self.sliceCutY - wp.y)
+    end
 end
 
 --- Slice on: where the pick ray, carried on from the cut, first meets the floor. Nil if it can't say.
