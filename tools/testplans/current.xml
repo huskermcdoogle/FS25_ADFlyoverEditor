@@ -15,7 +15,7 @@
     <test id="hoverPoint" title="Point at a point on the shed floor"
           passLog="the mouse is on point id="
           hint="Slice still on. Hold the mouse on a floor point. This ticks by itself."/>
-    <test id="resetInput" title="FlyoverResetInput gives no error"
-          passLog="input state after reset"
-          hint="Close the editor. In the console type FlyoverResetInput. PASS if no red Error line follows it."/>
+    <test id="resetInput" title="FlyoverResetInput keeps your controls"
+          passLog="input reset: undid 0"
+          hint="Close the editor. In the console type FlyoverResetInput. This ticks by itself. Then walk or drive: FAIL if any key is dead."/>
 </testPlan>

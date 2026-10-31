@@ -1048,8 +1048,12 @@ end
 
 --- Last-resort recovery for a stranded input context, from the console.
 ---
---- Reverting more than once is normally wrong, which is why this is a deliberate command and not
---- something disable() does. It exists because the alternative has twice been restarting the game.
+--- It only ever undoes OUR context. It used to revert five times whatever was on top: run on foot
+--- after a clean exit (2026-10-30, build 719 test card), that popped the game's own PLAYER context
+--- and left ROOT, where none of the player's controls exist - the very thing it was meant to mend.
+--- If it finds the game on ROOT (stranded by that, or by anything else), it puts the gameplay
+--- context back: VEHICLE in a vehicle, PLAYER on foot. setContext with createNew false re-uses the
+--- existing context, so the game's own action events in it come back with it.
 function ADFlyoverEditor:resetInput()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: input state before reset - %s", self:describeInputState())
 
@@ -1058,18 +1062,40 @@ function ADFlyoverEditor:resetInput()
         self:disable()
     end
 
-    for i = 1, 5 do
-        local reverted = tryCall("revertContext " .. i, function() g_inputBinding:revertContext(false) end)
-        if not reverted then
-            break
-        end
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: reverted a context (%d) - %s", i, self:describeInputState())
+    local function current()
+        return g_inputBinding ~= nil and g_inputBinding.currentContextName or nil
     end
 
+    local undone = 0
+    for i = 1, 5 do
+        if current() ~= self.INPUT_CONTEXT then
+            break
+        end
+        if not tryCall("revertContext " .. i, function() g_inputBinding:revertContext(false) end) then
+            break
+        end
+        undone = undone + 1
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: reverted the editor's context (%d) - %s", i, self:describeInputState())
+    end
     self.contextPushed = false
+
+    local putBack = nil
+    local root = (InputBinding ~= nil and InputBinding.ROOT_CONTEXT_NAME) or "ROOT"
+    if current() == root then
+        local okVehicle, vehicle = pcall(function() return AutoDrive.getControlledVehicle() end)
+        local name = (okVehicle and vehicle ~= nil) and "VEHICLE"
+            or (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
+        if g_inputBinding.contexts ~= nil and g_inputBinding.contexts[name] ~= nil
+            and tryCall("setContext " .. name, function() g_inputBinding:setContext(name, false, false) end) then
+            putBack = name
+        end
+    end
+
     ADFlyoverSettings.debugLog("[FlyoverEditor]: input state after reset - %s", self:describeInputState())
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: if movement is still dead, the gameplay action events are gone rather than shadowed, and only a reload restores them.")
-    return "Input reset. " .. self:describeInputState()
+    Logging.info("[FlyoverEditor]: input reset: undid %d editor context(s)%s; now in '%s'.", undone,
+        putBack ~= nil and (", put '" .. putBack .. "' back over '" .. root .. "'") or "", tostring(current()))
+    return string.format("Input reset: undid %d editor context(s)%s. Now in '%s'.", undone,
+        putBack ~= nil and (", put " .. putBack .. " back") or "", tostring(current()))
 end
 
 function ADFlyoverEditor:isAvailable()
