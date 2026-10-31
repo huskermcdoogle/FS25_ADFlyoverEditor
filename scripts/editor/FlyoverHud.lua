@@ -790,7 +790,11 @@ function ADFlyoverHud:buildRows(editor)
         -- the card is exactly as before.
         if AutoDrive.hasCourseplayCustomFields ~= nil and AutoDrive:hasCourseplayCustomFields() then
             tgl("Courseplay field", ADFlyoverSettings.get("fieldLoopUseCourseplayField"),
-                function() ADFlyoverSettings.cycle("fieldLoopUseCourseplayField", 1) end)
+                function()
+                    ADFlyoverSettings.cycle("fieldLoopUseCourseplayField", 1)
+                    Logging.info("[FlyoverEditor]: field loop - Courseplay field turned %s.",
+                        ADFlyoverSettings.get("fieldLoopUseCourseplayField") and "on" or "off")
+                end)
         end
         -- Off skips the tree/pole/fence/building detour entirely, taking the offset boundary as
         -- laid rather than nudging it clear of whatever the obstacle check is flagging.

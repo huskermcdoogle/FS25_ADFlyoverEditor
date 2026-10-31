@@ -12,7 +12,7 @@
     <test id="cpShape" title="The loop follows the custom field"
           hint="The new loop runs just outside the custom field's outline, and the card says last loop: Courseplay custom field. PASS if so."/>
     <test id="cpOff" title="Toggle off uses the old boundary"
-          passLog="field loop boundary: [pt]"
+          passLog="field loop boundary: .*%(Courseplay field off%)"
           hint="Press Q (undo). Turn Courseplay field off on the card. Click the same spot again. This ticks by itself."/>
     <test id="undoOne" title="One undo removes the whole loop"
           hint="Press Q (undo) once. The whole loop is gone, nothing else changed. Turn Courseplay field back on. PASS if so."/>

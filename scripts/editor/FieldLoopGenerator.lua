@@ -1542,7 +1542,13 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     -- Always logged (one line per loop): which of the three boundaries this loop is built on.
     local boundaryText = ({ courseplay = fieldLabel, traced = "plowed ground (our tracer)" })[boundaryKind]
         or string.format("the game's field (%s)", tostring(fieldLabel))
-    Logging.info("[FlyoverEditor]: field loop boundary: %s, %d points.", boundaryText, #rawPoints)
+    -- With Courseplay there and its toggle off, the line says so: then a non-Courseplay boundary is
+    -- the player's choice, not a click that just missed every custom field.
+    local cpNote = ""
+    if not ADFlyoverSettings.get("fieldLoopUseCourseplayField") and AutoDrive:hasCourseplayCustomFields() then
+        cpNote = " (Courseplay field off)"
+    end
+    Logging.info("[FlyoverEditor]: field loop boundary: %s, %d points%s.", boundaryText, #rawPoints, cpNote)
 
     -- A Courseplay custom field is the outline the player drew: take it as it is, without
     -- auto-discovering other tilled patches next to it.
