@@ -8,7 +8,7 @@
           hint="This ticks by itself. Nothing to do."/>
     <test id="sliceOn" title="Slice on over the shed"
           passLog="height slice: cut at"
-          hint="In the tractor, open the editor over the shed and press X. This ticks by itself."/>
+          hint="In the tractor, open the editor over the shed and press G. This ticks by itself."/>
     <test id="hoverPoint" title="Point at a point on the shed floor"
           passLog="the mouse is on point id="
           hint="Draw a few points on the floor if none are left. Then hold the mouse on one. It lights up, and this ticks by itself."/>

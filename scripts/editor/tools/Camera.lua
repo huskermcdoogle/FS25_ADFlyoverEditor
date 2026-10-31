@@ -13,7 +13,7 @@
 -- * THROUGH BUILDINGS (on by default): the instance gets its own updatePosition - the game's steps,
 --   but it keeps clear of the terrain only, and at the closest zoom it comes lower and nearer, so
 --   it fits inside a shed.
--- * HEIGHT SLICE (off by default, X key): the camera looks straight down and its near clip is set
+-- * HEIGHT SLICE (off by default, G key): the camera looks straight down and its near clip is set
 --   every frame so the picture starts at a flat cut over the ground. Everything above the cut -
 --   roofs, trees - is not drawn. The cut is the ground under the screen centre plus the height of
 --   the vehicle you are in with everything attached (its highest top), or a set height on foot.
@@ -112,16 +112,32 @@ local downPitch = nil
 --- The near clip for a slice: the cut as a distance from the camera, raised over the highest ground
 --- in view so a hill at the screen edge is never cut open. Returns the near clip and the cut's
 --- height actually used.
+---
+--- "In view" is the screen's own rectangle on the ground, along the camera's right and up axes
+--- (straight down, both are level). It used to be a square of the screen's width on each side, so
+--- its corners reached about 2.1 x the camera's height away against 1.2 x for the screen's corners,
+--- and ground well off screen raised the cut (build 717 test: 3.3 m set, 7.5 m used at the start
+--- zoom, beside a shed).
 local function sliceNearClip(cam, camX, camY, camZ, cutY)
     local half = math.tan((getFovY ~= nil and getFovY(cam.camera) or math.rad(60)) * 0.5)
     local aspect = (type(g_screenAspectRatio) == "number" and g_screenAspectRatio > 1) and g_screenAspectRatio or 1
     local groundC = getTerrainHeightAtWorldPos(cam.terrainRootNode, camX, 0, camZ)
-    local r = math.max(0, camY - groundC) * half * aspect * 1.42  -- the square's corners, any yaw
+    local h = math.max(0, camY - groundC)
+    local halfUp, halfRight = h * half, h * half * aspect
+    local okR, rx, _, rz = pcall(localDirectionToWorld, cam.camera, 1, 0, 0)
+    local okU, ux, _, uz = pcall(localDirectionToWorld, cam.camera, 0, 1, 0)
+    if not (okR and okU and type(rx) == "number" and type(ux) == "number") then
+        -- No axes: a level square round the screen's farthest corner, whatever the yaw.
+        rx, rz, ux, uz = 1, 0, 0, 1
+        halfRight = h * half * math.sqrt(aspect * aspect + 1)
+        halfUp = halfRight
+    end
     local highest = groundC
     for i = -CAM.SLICE_GRID, CAM.SLICE_GRID do
         for j = -CAM.SLICE_GRID, CAM.SLICE_GRID do
-            local d = r / CAM.SLICE_GRID
-            highest = math.max(highest, getTerrainHeightAtWorldPos(cam.terrainRootNode, camX + i * d, 0, camZ + j * d))
+            local a, b = halfRight * i / CAM.SLICE_GRID, halfUp * j / CAM.SLICE_GRID
+            highest = math.max(highest, getTerrainHeightAtWorldPos(cam.terrainRootNode,
+                camX + rx * a + ux * b, 0, camZ + rz * a + uz * b))
         end
     end
     local cut = math.max(cutY, highest + CAM.SLICE_OVER_GROUND)
@@ -276,7 +292,7 @@ end
 -- Height slice
 -- ---------------------------------------------------------------------------------------------
 
---- The X key and the settings row.
+--- The G key and the settings row.
 function ADFlyoverEditor:toggleHeightSlice()
     ADFlyoverSettings.cycle("heightSlice", 1)
     self.sliceSource = nil      -- say where the cut comes from again, right away

@@ -1868,9 +1868,11 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return
     end
 
-    -- Height slice on/off (tools/Camera.lua). X is free in our context: the camera has Z, C, Home
-    -- and WASD.
-    if isKey("KEY_x") then
+    -- Height slice on/off (tools/Camera.lua). G, because the top-down camera takes Z/X (zoom),
+    -- C/V (turn), Home/End (tilt) and WASD (AXIS_CONSTRUCTION_CAMERA_* and AXIS_MOVE_*_PLAYER in the
+    -- player's inputBinding.xml), and X was its zoom out (build 717 test). G is bound to nothing in
+    -- our context and sits beside F, so the left hand stays on WASD.
+    if isKey("KEY_g") then
         self:toggleHeightSlice()
         return
     end

@@ -2583,7 +2583,7 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         action = function() editor:toggleCameraThroughBuildings() end,
         stepAction = function() editor:toggleCameraThroughBuildings() end })
     push({ kind = "note", text = "on: the camera flies under roofs, to place points inside sheds" })
-    push({ kind = "field", text = "height slice (X)",
+    push({ kind = "field", text = "height slice (G)",
         value = TR(ADFlyoverSettings.get("heightSlice") and "on" or "off"),
         action = function() editor:toggleHeightSlice() end,
         stepAction = function() editor:toggleHeightSlice() end })

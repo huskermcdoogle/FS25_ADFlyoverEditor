@@ -128,7 +128,7 @@ S.settings.splineSpacing = { range = { min = 1, max = 20, step = 0.5 }, value = 
 -- keeps clear of the terrain only, so it can fly under a shed roof to place points inside. Off is
 -- the game's camera exactly, which lifts itself above every roof (tools/Camera.lua).
 S.settings.cameraThroughBuildings = { values = { false, true }, default = 2, current = 2 }
--- Height slice (issue #30, X key): the camera looks straight down and hides everything above a flat
+-- Height slice (issue #30, G key): the camera looks straight down and hides everything above a flat
 -- cut - the vehicle's height with all it pulls, or this many metres on foot (tools/Camera.lua).
 S.settings.heightSlice = { values = { false, true }, default = 1, current = 1 }
 S.settings.heightSliceOnFoot = { range = { min = 1, max = 20, step = 0.5 }, value = 4 }
