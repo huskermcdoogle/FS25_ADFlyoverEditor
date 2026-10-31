@@ -46,6 +46,8 @@ local CAM = {
     SLICE_OVER_VEHICLE = 0.1,
     SLICE_OVER_GROUND = 0.3,
     SLICE_GRID = 4,           -- the view is sampled on a (2 x SLICE_GRID + 1)^2 terrain grid
+    WHEEL_PROBE_EVENTS = 6,   -- wheel probe: lines per stage, each time the editor opens
+    WHEEL_WINDOW_MS = 300,    -- a zoom this soon after a wheel notch counts as the wheel's
 }
 ADFlyoverEditor.CAMERA_THROUGH = CAM
 
@@ -523,5 +525,76 @@ function ADFlyoverEditor:notePlacedUnderRoof(id, x, y, z)
     if roofY ~= nil then
         Logging.info("[FlyoverEditor]: placed a point under a roof: id=%s, %.2f m over the terrain, the roof %.1f m above it.",
             tostring(id), y - getTerrainHeightAtWorldPos(g_terrainNode, x, 0, z), roofY - y)
+    end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Wheel zoom probe
+--
+-- Build 717: the wheel did not zoom the editor camera while Z / X did, and both reach the camera
+-- through the same action (AXIS_CONSTRUCTION_CAMERA_ZOOM -> GuiTopDownCamera.onZoom). Reading the
+-- code did not show where the wheel goes, so the first few wheel notches after every open log each
+-- stage: "raw" (our mouseEvent: the notch arrived, which modifiers we think are held), "zoom"
+-- (Wrappers 5, the camera's onZoom: isMouse, mouseDisabled, what took it, inputZoom), "hook"
+-- (Wrappers 4, AutoDrive's handleSplineCurvature: spline preview, mouseWheelActive) and "after"
+-- (the camera's own update: did targetZoomFactor move). A notch that logs "raw" and nothing else
+-- never reached the camera's zoom action.
+-- ---------------------------------------------------------------------------------------------
+
+local function nowMs(editor)
+    return type(g_time) == "number" and g_time or (editor.elapsedMs or 0)
+end
+
+function ADFlyoverEditor:wheelProbeArm()
+    local n = CAM.WHEEL_PROBE_EVENTS
+    self.wheelProbe = { raw = n, zoom = n, hook = n, after = n }
+    self.lastWheelMs = nil
+    self.wheelZoomSeen = false
+end
+
+--- One probe line for a stage, while that stage has lines left. Stages other than "raw" only log
+--- close to a wheel notch, so held zoom keys do not use the lines up.
+function ADFlyoverEditor:wheelProbeNote(stage, fmt, ...)
+    local p = self.wheelProbe
+    if p == nil or (p[stage] or 0) <= 0 then
+        return
+    end
+    if stage ~= "raw" and (self.lastWheelMs == nil
+        or math.abs(nowMs(self) - self.lastWheelMs) > CAM.WHEEL_WINDOW_MS) then
+        return
+    end
+    p[stage] = p[stage] - 1
+    Logging.info("[FlyoverEditor]: wheel probe " .. stage .. ": " .. fmt, ...)
+end
+
+function ADFlyoverEditor:wheelProbeRaw(posX, posY, button)
+    self.lastWheelMs = nowMs(self)
+    self:wheelProbeNote("raw", "%s, leftAlt=%s ctrl=%s shift=%s, over the panel=%s, modal=%s, tool=%s",
+        button == Input.MOUSE_BUTTON_WHEEL_UP and "up" or "down",
+        tostring(self.leftAltHeld), tostring(self.leftCtrlHeld or self.rightCtrlHeld),
+        tostring(self.leftShiftHeld or self.rightShiftHeld),
+        tostring(ADFlyoverHud ~= nil and ADFlyoverHud:isMouseOver(posX, posY)),
+        tostring(self:isModalOpen()), tostring(self.tool))
+end
+
+--- After the camera's update: did the zoom target move? before = inputZoom / targetZoomFactor /
+--- zoomFactor read just before camera:update. Also says once per open that the wheel zoomed, for
+--- the test card.
+function ADFlyoverEditor:wheelProbeAfterUpdate(before)
+    local cam = self.camera
+    if before == nil or cam == nil or self.lastWheelMs == nil
+        or math.abs(nowMs(self) - self.lastWheelMs) > CAM.WHEEL_WINDOW_MS then
+        return
+    end
+    local moved = type(before.target) == "number" and type(cam.targetZoomFactor) == "number"
+        and math.abs(cam.targetZoomFactor - before.target) > 1e-6
+    if moved or (type(before.input) == "number" and before.input ~= 0) then
+        self:wheelProbeNote("after", "inputZoom %s; target %s -> %s, zoom %s -> %s", tostring(before.input),
+            tostring(before.target), tostring(cam.targetZoomFactor), tostring(before.zoom), tostring(cam.zoomFactor))
+    end
+    if moved and not self.wheelZoomSeen then
+        self.wheelZoomSeen = true
+        Logging.info("[FlyoverEditor]: the wheel zoomed the editor camera (zoom target %.2f -> %.2f).",
+            before.target, cam.targetZoomFactor)
     end
 end

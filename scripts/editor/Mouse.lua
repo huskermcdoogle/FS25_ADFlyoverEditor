@@ -22,6 +22,9 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
         and (button == Input.MOUSE_BUTTON_WHEEL_UP or button == Input.MOUSE_BUTTON_WHEEL_DOWN) then
         ADFlyoverWrappers.counts.rawWheel = ADFlyoverWrappers.counts.rawWheel + 1
     end
+    if isDown and self.active and (button == Input.MOUSE_BUTTON_WHEEL_UP or button == Input.MOUSE_BUTTON_WHEEL_DOWN) then
+        tryCall("wheelProbeRaw", function() self:wheelProbeRaw(posX, posY, button) end)
+    end
 
     -- Logged BEFORE the guard, and only for real button presses, so a click that is being thrown
     -- away still leaves a trace. A siding previewed on foot and then did nothing, with no log line

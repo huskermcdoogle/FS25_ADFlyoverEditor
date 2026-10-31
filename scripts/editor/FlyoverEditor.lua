@@ -1069,6 +1069,7 @@ function ADFlyoverEditor:resetInput()
     self.contextPushed = false
     ADFlyoverSettings.debugLog("[FlyoverEditor]: input state after reset - %s", self:describeInputState())
     ADFlyoverSettings.debugLog("[FlyoverEditor]: if movement is still dead, the gameplay action events are gone rather than shadowed, and only a reload restores them.")
+    return "Input reset. " .. self:describeInputState()
 end
 
 function ADFlyoverEditor:isAvailable()
@@ -1181,6 +1182,7 @@ function ADFlyoverEditor:enable()
     -- Before activate(), which already positions the camera: with "camera through buildings" on,
     -- this instance keeps clear of the terrain only, so it can fly under roofs (tools/Camera.lua).
     tryCall("installCameraThroughBuildings", function() self:installCameraThroughBuildings(camera) end)
+    tryCall("wheelProbeArm", function() self:wheelProbeArm() end)
 
     -- Start the camera over whatever the player is currently at, so the mode opens somewhere
     -- recognisable rather than at the map origin.
@@ -1942,7 +1944,10 @@ function ADFlyoverEditor:update(dt)
         return
     end
 
+    local zoomBefore = self.camera ~= nil and {
+        input = self.camera.inputZoom, target = self.camera.targetZoomFactor, zoom = self.camera.zoomFactor } or nil
     tryCall("camera:update", function() self.camera:update(dt) end)
+    tryCall("wheelProbeAfterUpdate", function() self:wheelProbeAfterUpdate(zoomBefore) end)
     tryCall("cameraCoverCheck", function() self:cameraCoverCheck(dt) end)
     tryCall("cursor:setCameraRay", function() self.cursor:setCameraRay(self.camera:getPickRay()) end)
     tryCall("cursor:update", function()
