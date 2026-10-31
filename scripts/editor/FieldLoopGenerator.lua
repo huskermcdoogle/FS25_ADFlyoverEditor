@@ -250,17 +250,26 @@ function AutoDrive:traceFieldBoundary(x, z)
     return points, nil
 end
 
---- Returns points, label, err. Falls back to the base-game farmland lookup if the trace finds
---- nothing or the toggle is off - a report of this misbehaving on a particular map/save can be
---- isolated by switching it off without a rollback.
+--- Returns points, label, err, kind. kind says which boundary was used: "courseplay" (a Courseplay
+--- custom field), "traced" (our tilled-ground tracer) or "map" (the game's field). A Courseplay
+--- custom field under the cursor wins when that toggle is on; then the trace; then the base-game
+--- farmland lookup if the trace finds nothing or its toggle is off - a report of this misbehaving
+--- on a particular map/save can be isolated by switching it off without a rollback.
 function AutoDrive:getFieldPolygonAtPosition(x, z)
+    if ADFlyoverSettings.get("fieldLoopUseCourseplayField") then
+        local cpPoints, cpName = AutoDrive:findCourseplayCustomField(x, z)
+        if cpPoints ~= nil then
+            return cpPoints, string.format("Courseplay custom field '%s'", cpName), nil, "courseplay"
+        end
+    end
+
     if ADFlyoverSettings.get("fieldLoopDetectCustomField") then
         local traced, traceErr = AutoDrive:traceFieldBoundary(x, z)
         if traced == nil then
             ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop trace failed, using the map field: %s", tostring(traceErr))
         else
             ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop traced a %d-point tilled-ground contour.", #traced)
-            return traced, "Traced field", nil
+            return traced, "Traced field", nil, "traced"
         end
     end
 
@@ -307,7 +316,7 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         fieldLabel = "Field " .. tostring(fieldId)
     end
 
-    return points, fieldLabel, nil
+    return points, fieldLabel, nil, "map"
 end
 
 local function pointInPolygon(px, pz, poly)
@@ -322,6 +331,55 @@ local function pointInPolygon(px, pz, poly)
         j = i
     end
     return inside
+end
+
+--- True when Courseplay has published its custom field list (it is installed and loaded a map).
+function AutoDrive:hasCourseplayCustomFields()
+    local ok, fields = pcall(function() return g_fieldManager.cpCustomFields end)
+    return ok and type(fields) == "table"
+end
+
+--- The Courseplay custom field at (x, z), read only. Returns points, name - or nil.
+---
+--- Courseplay (8.x, scripts/field/CustomFieldManager.lua) publishes the custom fields it loaded on
+--- the base-game field manager "for extern mod support": g_fieldManager.cpCustomFields, a list whose
+--- entries carry .name and .vertices ({x, z} tables, the saved boundary). Only those plain fields are
+--- read here - no Courseplay function is called, nothing is hooked - and every access is guarded, so
+--- no Courseplay, an older one, or a changed one just means no custom field is found. When fields
+--- overlap, the smallest one holding the point wins: it is the one the player drew around this spot.
+function AutoDrive:findCourseplayCustomField(x, z)
+    local okList, fields = pcall(function() return g_fieldManager.cpCustomFields end)
+    if not okList or type(fields) ~= "table" then
+        return nil
+    end
+    local best, bestName, bestArea = nil, nil, math.huge
+    local looked = 0
+    for _, field in pairs(fields) do
+        local okRead, vertices, name = pcall(function() return field.vertices, field.name end)
+        if okRead and type(vertices) == "table" then
+            local poly = {}
+            local okCopy = pcall(function()
+                for i = 1, #vertices do
+                    local v = vertices[i]
+                    if type(v) == "table" and type(v.x) == "number" and type(v.z) == "number" then
+                        poly[#poly + 1] = { x = v.x, z = v.z }
+                    end
+                end
+            end)
+            looked = looked + 1
+            if okCopy and #poly >= 3 and pointInPolygon(x, z, poly) then
+                local area = math.abs(ADPolygonUtils.getSignedArea(poly))
+                if area > 1 and area < bestArea then
+                    best, bestArea = poly, area
+                    bestName = (type(name) == "string" and name ~= "") and name or "?"
+                end
+            end
+        end
+    end
+    if best == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop - no Courseplay custom field here (%d looked at).", looked)
+    end
+    return best, bestName
 end
 
 -- Auto-discovery is bounded on both axes: FIELD_LOOP_MAX_REGIONS caps how many disconnected
@@ -1468,19 +1526,30 @@ end
 --- actually gets placed (AutoDrive:spliceFieldLoopRings) - one click, one course, no follow-up
 --- clicks and no separate loops left for the player to connect by hand.
 ---
---- Returns true on success, false on failure. Everything interesting is already logged here.
+--- Returns true and the boundary used (as text) on success, false on failure. Everything interesting
+--- is already logged here.
 function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turningRadius, source, flags, direction)
     -- Clamped here, not just inside buildFieldLoopRing, so the summary log line below reports the
     -- radius actually used rather than a setting that got silently overridden.
     turningRadius = math.max(turningRadius, AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS)
 
-    local rawPoints, fieldLabel, fieldErr = AutoDrive:getFieldPolygonAtPosition(x, z)
+    local rawPoints, fieldLabel, fieldErr, boundaryKind = AutoDrive:getFieldPolygonAtPosition(x, z)
     if rawPoints == nil then
         Logging.error("[AD] %s: %s", source, tostring(fieldErr))
         return false
     end
 
-    local rawRegions = AutoDrive:findConnectedFieldRegions(x, z, rawPoints)
+    -- Always logged (one line per loop): which of the three boundaries this loop is built on.
+    local boundaryText = ({ courseplay = fieldLabel, traced = "plowed ground (our tracer)" })[boundaryKind]
+        or string.format("the game's field (%s)", tostring(fieldLabel))
+    Logging.info("[FlyoverEditor]: field loop boundary: %s, %d points.", boundaryText, #rawPoints)
+
+    -- A Courseplay custom field is the outline the player drew: take it as it is, without
+    -- auto-discovering other tilled patches next to it.
+    local rawRegions = { rawPoints }
+    if boundaryKind ~= "courseplay" then
+        rawRegions = AutoDrive:findConnectedFieldRegions(x, z, rawPoints)
+    end
 
     -- Loops already in the network near this field, so a new loop can keep clear of them (a narrow
     -- strip between two fields otherwise gets two loops that overlap and cross - issue 15).
@@ -1593,5 +1662,5 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         treeStats.smoothMoves,
         summary.networkErrorCount
     )
-    return true
+    return true, boundaryText
 end

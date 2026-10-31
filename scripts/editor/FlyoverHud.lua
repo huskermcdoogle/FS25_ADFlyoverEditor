@@ -786,10 +786,19 @@ function ADFlyoverHud:buildRows(editor)
         -- that can be isolated per-site without a settings-dialog trip.
         tgl("detect custom field", ADFlyoverSettings.get("fieldLoopDetectCustomField"),
             function() ADFlyoverSettings.cycle("fieldLoopDetectCustomField", 1) end)
+        -- Only offered when Courseplay is installed and has published its custom fields; without it
+        -- the card is exactly as before.
+        if AutoDrive.hasCourseplayCustomFields ~= nil and AutoDrive:hasCourseplayCustomFields() then
+            tgl("Courseplay field", ADFlyoverSettings.get("fieldLoopUseCourseplayField"),
+                function() ADFlyoverSettings.cycle("fieldLoopUseCourseplayField", 1) end)
+        end
         -- Off skips the tree/pole/fence/building detour entirely, taking the offset boundary as
         -- laid rather than nudging it clear of whatever the obstacle check is flagging.
         tgl("avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles"),
             function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
+        if editor.fieldLoopLastBoundary ~= nil then
+            add("note", "last loop: " .. editor.fieldLoopLastBoundary)
+        end
     elseif editor.tool == editor.TOOL.CONVERT then
         -- Two kinds of change, two rows: which way traffic runs, and the road's priority. Configure both;
         -- one click converts to both at once.

@@ -49,9 +49,11 @@ function ADFlyoverEditor:generateFieldLoopAtCursor()
     -- covers all of it.
     ADEditorHistory:snapshot("field loop")
 
-    local ok = AutoDrive:generateFieldLoopAt(self.cursorX, self.cursorZ,
+    local ok, boundary = AutoDrive:generateFieldLoopAt(self.cursorX, self.cursorZ,
         marginDistance, treeClearance, turningRadius, "ADFlyoverEditor field loop", flags, direction)
 
+    -- Shown on the card: which boundary the last loop was built on.
+    self.fieldLoopLastBoundary = ok and boundary or nil
     if ok then
         self:invalidateIdReferences()
         ADGraphManager:markChanges()

@@ -118,6 +118,9 @@ TOOLS = [
                                      "separate map fields into one, not just a field shipped with "
                                      "the map. Turn it off to fall back to the map-field-only "
                                      "lookup if it ever misreads a field on your save."),
+            ("Courseplay field", "only shown when Courseplay is installed. On by default; when the "
+                                  "cursor is inside one of your Courseplay custom fields, the loop "
+                                  "follows that outline. The card says which boundary the last loop used."),
             ("avoid obstacles", "on by default; nudges the loop away from trees, poles, fences and "
                                  "buildings instead of laying it straight through them. Turn it "
                                  "off to take the offset boundary as laid if the obstacle check "

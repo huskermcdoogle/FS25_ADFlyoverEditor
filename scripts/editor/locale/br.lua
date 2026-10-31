@@ -182,6 +182,7 @@ ADFlyoverLocale.STRINGS.br = {
     ["rotate pivot"] = "pivô de giro",
     ["offset falloff"] = "atenuação do desloc.",
     ["detect custom field"] = "detectar campo próprio",
+    ["Courseplay field"] = "campo do Courseplay",
     ["avoid obstacles"] = "evitar obstáculos",
     ["combo gap"] = "vão do combo",
 
