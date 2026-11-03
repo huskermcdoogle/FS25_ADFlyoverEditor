@@ -125,6 +125,9 @@ TOOLS = [
                                  "buildings instead of laying it straight through them. Turn it "
                                  "off to take the offset boundary as laid if the obstacle check "
                                  "keeps flagging something that isn't really in the way."),
+            ("leave out islands", "on by default; a map can cut a pylon or tree patch out of a field "
+                                   "with a slit in its outline. The loop then runs round the field, not "
+                                   "into each patch. Turn it off to follow the outline as the map draws it."),
             ("combo gap", "how far to auto-search for another disconnected patch of the same "
                           "field when it's split by a lane, and combine it into the same course - "
                           "a live scan can only ever return the one piece a click lands on, so "

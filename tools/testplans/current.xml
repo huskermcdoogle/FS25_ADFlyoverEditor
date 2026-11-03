@@ -3,17 +3,17 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Field loop on a Courseplay custom field" build="@BUILD@">
+<testPlan title="Field loop: leave out islands (issue 31, Welcome to Lehndorf)" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
-    <test id="cpLoop" title="Field loop inside a Courseplay custom field"
-          passLog="field loop boundary: Courseplay custom field"
-          hint="Courseplay on, with a custom field saved. Field loop tool: click inside that custom field. This ticks by itself."/>
-    <test id="cpShape" title="The loop follows the custom field"
-          hint="The new loop runs just outside the custom field's outline, and the card says last loop: Courseplay custom field. PASS if so."/>
-    <test id="cpOff" title="Toggle off uses the old boundary"
-          passLog="field loop boundary: .*%(Courseplay field off%)"
-          hint="Press Q (undo). Turn Courseplay field off on the card. Click the same spot again. This ticks by itself."/>
-    <test id="undoOne" title="One undo removes the whole loop"
-          hint="Press Q (undo) once. The whole loop is gone, nothing else changed. Turn Courseplay field back on. PASS if so."/>
+    <test id="islandsKept" title="Islands kept: the old loop"
+          passLog="field loop islands kept"
+          hint="On Lehndorf, field loop tool: margin -2, detect custom field off, leave out islands off. Click a field with tree patches. Ticks by itself."/>
+    <test id="islandsLeftOut" title="Islands left out"
+          passLog="field loop left out [1-9]%d* island"
+          hint="Press Q (undo). Turn leave out islands on. Click the same spot again. This ticks by itself."/>
+    <test id="roundField" title="The loop runs round the field only"
+          hint="The new loop follows the field edge and runs into no tree patch or pylon. PASS if so."/>
+    <test id="pylonField" title="The field with the lone pylon"
+          hint="Find the field with one pylon patch in it. Click inside it. The loop goes round the whole field. PASS if so."/>
 </testPlan>

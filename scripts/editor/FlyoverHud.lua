@@ -800,6 +800,13 @@ function ADFlyoverHud:buildRows(editor)
         -- laid rather than nudging it clear of whatever the obstacle check is flagging.
         tgl("avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles"),
             function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
+        -- Off follows a field outline into the islands a map cuts into it (issue 31).
+        tgl("leave out islands", ADFlyoverSettings.get("fieldLoopLeaveOutIslands"),
+            function()
+                ADFlyoverSettings.cycle("fieldLoopLeaveOutIslands", 1)
+                Logging.info("[FlyoverEditor]: field loop - leave out islands turned %s.",
+                    ADFlyoverSettings.get("fieldLoopLeaveOutIslands") and "on" or "off")
+            end)
         if editor.fieldLoopLastBoundary ~= nil then
             add("note", "last loop: " .. editor.fieldLoopLastBoundary)
         end

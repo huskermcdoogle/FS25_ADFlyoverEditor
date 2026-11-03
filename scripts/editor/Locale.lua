@@ -228,6 +228,7 @@ L.STRINGS = {
         ["offset falloff"] = "Versatz-Abnahme",
         ["detect custom field"] = "eigenes Feld erkennen",
         ["Courseplay field"] = "Courseplay-Feld",
+        ["leave out islands"] = "Inseln auslassen",
         ["avoid obstacles"] = "Hindernisse meiden",
         ["combo gap"] = "Kombi-Lücke",
 

@@ -65,6 +65,10 @@ AutoDrive.FIELD_LOOP_OUTLIER_SPACING_RATIO = 0.5
 -- smoothly represent. Lowered from 5 to 2 on request (small vehicles turn tighter); keep the
 -- fieldLoopTurningRadius setting's range floor in Settings.lua equal to this.
 AutoDrive.FIELD_LOOP_MIN_CORNER_RADIUS = 2
+-- Where a field outline passes this close to itself it is checked for an island cut into it by a slit
+-- (ADPolygonUtils.removeSlitIslands, issue 31). Mappers draw the slit's two sides close together; a
+-- strip of real field this narrow is not one a loop could use anyway.
+AutoDrive.FIELD_LOOP_SLIT_WIDTH = 3
 
 -- ---------------------------------------------------------------------------------------------
 -- Live tilled-ground boundary tracer, no Courseplay involved. Confirmed live (2026-09-22):
@@ -273,6 +277,12 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         end
     end
 
+    local points, fieldLabel, err = AutoDrive:getMapFieldPolygonAt(x, z)
+    return points, fieldLabel, err, points ~= nil and "map" or nil
+end
+
+--- The game's own field outline at (x, z), as the map draws it. Returns points, label, err.
+function AutoDrive:getMapFieldPolygonAt(x, z)
     if g_farmlandManager == nil then
         return nil, nil, "g_farmlandManager is not available."
     end
@@ -316,7 +326,50 @@ function AutoDrive:getFieldPolygonAtPosition(x, z)
         fieldLabel = "Field " .. tostring(fieldId)
     end
 
-    return points, fieldLabel, nil, "map"
+    return points, fieldLabel, nil
+end
+
+--- Writes the outline a field loop was built on to modSettings/FS25_ADFlyoverEditor/fieldloop_outline.xml
+--- (overwritten by every loop), so a report of an odd loop on someone's map can be drawn offline
+--- (tools/fieldloop/plot_outline.py). raw = the outline as its source gave it, used = after leaving out
+--- islands, loop = the ring that was placed, map = the game's own field outline there when the loop
+--- used another one.
+function AutoDrive:writeFieldLoopOutline(x, z, kind, label, rings, islands, slivers)
+    if getUserProfileAppPath == nil or createXMLFile == nil then
+        return nil
+    end
+    local folder = getUserProfileAppPath() .. "modSettings/FS25_ADFlyoverEditor/"
+    local path = folder .. "fieldloop_outline.xml"
+    local ok, err = pcall(function()
+        createFolder(getUserProfileAppPath() .. "modSettings/")
+        createFolder(folder)
+        local xml = createXMLFile("ADFlyoverFieldLoopOutline", path, "fieldLoopOutline")
+        setXMLString(xml, "fieldLoopOutline#kind", tostring(kind))
+        setXMLString(xml, "fieldLoopOutline#label", tostring(label))
+        setXMLFloat(xml, "fieldLoopOutline#x", x)
+        setXMLFloat(xml, "fieldLoopOutline#z", z)
+        setXMLInt(xml, "fieldLoopOutline#islandsLeftOut", islands or 0)
+        setXMLInt(xml, "fieldLoopOutline#sliversLeftOut", slivers or 0)
+        local okMap, mapId = pcall(function() return g_currentMission.missionInfo.mapId end)
+        setXMLString(xml, "fieldLoopOutline#map", okMap and tostring(mapId) or "?")
+        for _, name in ipairs({ "raw", "used", "loop", "map" }) do
+            local ring = rings[name]
+            if ring ~= nil then
+                for i, p in ipairs(ring) do
+                    local key = string.format("fieldLoopOutline.%s.p(%d)", name, i - 1)
+                    setXMLFloat(xml, key .. "#x", p.x)
+                    setXMLFloat(xml, key .. "#z", p.z)
+                end
+            end
+        end
+        saveXMLFile(xml)
+        delete(xml)
+    end)
+    if not ok then
+        Logging.warning("[FlyoverEditor]: field loop - could not write the outline (%s): %s", path, tostring(err))
+        return nil
+    end
+    return path
 end
 
 local function pointInPolygon(px, pz, poly)
@@ -1550,11 +1603,34 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
     end
     Logging.info("[FlyoverEditor]: field loop boundary: %s, %d points%s.", boundaryText, #rawPoints, cpNote)
 
+    -- Islands a map cuts into its field outline (a slit in, round the patch, back out - issue 31) are
+    -- left out, so the loop runs round the field and not into each patch. Always logged.
+    local outline, islands, slivers = rawPoints, 0, 0
+    if ADFlyoverSettings.get("fieldLoopLeaveOutIslands") then
+        outline, islands, slivers = ADPolygonUtils.removeSlitIslands(rawPoints, AutoDrive.FIELD_LOOP_SLIT_WIDTH)
+        Logging.info("[FlyoverEditor]: field loop left out %d island(s) and %d sliver(s) cut into the outline.", islands, slivers)
+    else
+        Logging.info("[FlyoverEditor]: field loop islands kept (leave out islands is off).")
+    end
+
+    local function writeOutline(loopRing)
+        local mapRing = nil
+        if boundaryKind ~= "map" then
+            local okMap, mapPoints = pcall(function() return AutoDrive:getMapFieldPolygonAt(x, z) end)
+            mapRing = okMap and mapPoints or nil
+        end
+        local path = AutoDrive:writeFieldLoopOutline(x, z, boundaryKind, fieldLabel,
+            { raw = rawPoints, used = outline ~= rawPoints and outline or nil, loop = loopRing, map = mapRing }, islands, slivers)
+        if path ~= nil then
+            Logging.info("[FlyoverEditor]: field loop outline written to %s", path)
+        end
+    end
+
     -- A Courseplay custom field is the outline the player drew: take it as it is, without
     -- auto-discovering other tilled patches next to it.
-    local rawRegions = { rawPoints }
+    local rawRegions = { outline }
     if boundaryKind ~= "courseplay" then
-        rawRegions = AutoDrive:findConnectedFieldRegions(x, z, rawPoints)
+        rawRegions = AutoDrive:findConnectedFieldRegions(x, z, outline)
     end
 
     -- Loops already in the network near this field, so a new loop can keep clear of them (a narrow
@@ -1628,6 +1704,7 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
 
     if #rings == 0 then
         Logging.error("[AD] %s: %s", source, tostring(lastRingErr))
+        writeOutline(nil)
         return false
     end
 
@@ -1643,6 +1720,7 @@ function AutoDrive:generateFieldLoopAt(x, z, marginDistance, treeClearance, turn
         ADFlyoverSettings.debugLog("[FlyoverEditor]: field loop removed %d spike point(s) from the finished ring.", spikesRemoved)
     end
 
+    writeOutline(cleanedRing)
     local summary = AutoDrive:createFieldLoopGraph(cleanedRing, flags, direction)
 
     local regionNote = #rings > 1 and string.format(", %d region(s) combined", #rings) or ""

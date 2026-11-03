@@ -174,3 +174,124 @@ function ADPolygonUtils.simplifyClosedPolygonRDP(points, epsilon)
     return result
 end
 
+
+--- Field outlines with islands cut into them. A mapper leaves a pylon or a tree patch out of a field
+--- by running the field's one outline ring in along a thin slit, around the patch, and back out right
+--- beside where it went in. A loop that follows that ring drives the slit and rings the patch (issue 31).
+---
+--- Where the ring passes within `width` of itself, it splits there into two rings. The part that is an
+--- island goes round the other way (the field stays on the same side of the line, so a patch inside it
+--- is walked the opposite way round) - that part is dropped, slit and all. A part thinner than half of
+--- `width` on average (a slit left on its own, a needle) is dropped too. A narrow neck of real field is
+--- neither, so it stays. Returns the ring and the number of islands and slivers left out; the input
+--- comes back untouched when nothing was left out.
+function ADPolygonUtils.removeSlitIslands(points, width)
+    width = width or 3
+    local n0 = #points
+    if n0 < 6 then
+        return points, 0, 0
+    end
+    -- Even spacing first, so a slit whose two sides have their points at different places still has
+    -- a pair of points close together across it.
+    local step = width / 2
+    local ring = {}
+    for i = 1, n0 do
+        local a, b = points[i], points[(i % n0) + 1]
+        local d = dist2D(a, b)
+        local parts = math.max(1, math.ceil(d / step))
+        for k = 0, parts - 1 do
+            local t = k / parts
+            ring[#ring + 1] = { x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t }
+        end
+    end
+
+    local islands, slivers = 0, 0
+    for _ = 1, 500 do
+        local n = #ring
+        if n < 6 then
+            break
+        end
+        -- Running sums: the cross terms and the path length from point 1, so any part's area and length
+        -- cost nothing.
+        local cross, len = { 0 }, { 0 }
+        for k = 2, n do
+            local a, b = ring[k - 1], ring[k]
+            cross[k] = cross[k - 1] + (a.x * b.z - b.x * a.z)
+            len[k] = len[k - 1] + dist2D(a, b)
+        end
+        local last, first = ring[n], ring[1]
+        local total = (cross[n] + (last.x * first.z - first.x * last.z)) * 0.5
+        local totalLen = len[n] + dist2D(last, first)
+        local sign = total >= 0 and 1 or -1
+
+        local grid = {}
+        for k = 1, n do
+            local key = math.floor(ring[k].x / width) .. "," .. math.floor(ring[k].z / width)
+            local cellList = grid[key]
+            if cellList == nil then
+                cellList = {}
+                grid[key] = cellList
+            end
+            cellList[#cellList + 1] = k
+        end
+
+        local best = nil
+        local function consider(i, j, area, path, inner)
+            if math.abs(area) >= math.abs(total) * 0.5 or path < 1e-6 then
+                return
+            end
+            local isIsland = area * sign < 0
+            local isSliver = 2 * math.abs(area) / path < width / 2
+            if (isIsland or isSliver) and (best == nil or path > best.path) then
+                best = { i = i, j = j, path = path, inner = inner,
+                    island = isIsland and math.abs(area) > width * width }
+            end
+        end
+        for i = 1, n do
+            local p = ring[i]
+            local cx, cz = math.floor(p.x / width), math.floor(p.z / width)
+            for dx = -1, 1 do
+                for dz = -1, 1 do
+                    local cellList = grid[(cx + dx) .. "," .. (cz + dz)]
+                    if cellList ~= nil then
+                        for _, j in ipairs(cellList) do
+                            local q = ring[j]
+                            if j > i and dist2D(p, q) < width then
+                                local innerLen = len[j] - len[i]
+                                local outerLen = totalLen - innerLen
+                                -- Two points just along the line from each other are not a pinch.
+                                if innerLen > 4 * width and outerLen > 4 * width then
+                                    local areaA = (cross[j] - cross[i] + (q.x * p.z - p.x * q.z)) * 0.5
+                                    consider(i, j, areaA, innerLen, true)
+                                    consider(i, j, total - areaA, outerLen, false)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if best == nil then
+            break
+        end
+        local nextRing = {}
+        if best.inner then
+            -- drop i+1 .. j, the ring goes straight from point i on to point j+1
+            for k = 1, best.i do nextRing[#nextRing + 1] = ring[k] end
+            for k = best.j + 1, n do nextRing[#nextRing + 1] = ring[k] end
+        else
+            for k = best.i, best.j do nextRing[#nextRing + 1] = ring[k] end
+        end
+        ring = nextRing
+        if best.island then
+            islands = islands + 1
+        else
+            slivers = slivers + 1
+        end
+    end
+
+    if islands + slivers == 0 then
+        return points, 0, 0
+    end
+    return ring, islands, slivers
+end
