@@ -110,7 +110,7 @@ Spline lays a smooth curve that passes through every point you click, for sweepi
 
 **How to use it**
 
-1. Click points in order - on the ground, or right on a waypoint to join the road there. Hold Alt to place a point without snapping. A marker under the mouse shows what a click does: yellow joins a waypoint, white is bare ground, green goes into the line.
+1. Click points in order - on the ground, or right on a waypoint to join the road there. The two ends reach further: the first click joins a waypoint within about 1.5 m (a lane end first), and on right-click a last point that close to a waypoint moves onto it and joins it - never onto the spline's own start. Middle points snap only right on a waypoint. Hold Alt to place a point without snapping. A marker under the mouse shows what a click does: yellow joins a waypoint, white is bare ground, green goes into the line.
 1. Click on the curve to put a point into the line there. Drag a point to move it. Ctrl-click a point to remove it.
 1. Right-click lays it as one undo step; Esc throws it away.
 1. To reshape a run already laid, set action to edit placed and click the run: its shape becomes points to drag, add (click the curve) or remove (Ctrl-click). Its two ends stay, as other roads meet there. Right-click lays it again, keeping its direction, one-way or two-way and priority; one undo takes it back.
