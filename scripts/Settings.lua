@@ -45,6 +45,15 @@ S.settings.fieldLoopTurningRadius = { range = { min = 2, max = 20, step = 1 }, v
 -- always-on change so a report of it misbehaving on a particular map/save can be isolated by
 -- switching back to the map-field-only path without a rollback.
 S.settings.fieldLoopDetectCustomField = { values = { false, true }, default = 2, current = 2 }
+-- On by default, tried before the trace: when Courseplay is installed and the cursor is inside one of
+-- its custom fields, that saved outline is the boundary (read only from g_fieldManager.cpCustomFields,
+-- see FieldLoopGenerator's findCourseplayCustomField). Without Courseplay it never finds anything and
+-- its card toggle is not shown, so the editor works exactly as before.
+S.settings.fieldLoopUseCourseplayField = { values = { false, true }, default = 2, current = 2 }
+-- On by default: islands a map cuts into a field's outline (a slit in, round a pylon or tree patch, back
+-- out) are left out of the outline, so the loop runs round the field instead of into each patch
+-- (issue 31, ADPolygonUtils.removeSlitIslands). Off keeps the outline exactly as its source gave it.
+S.settings.fieldLoopLeaveOutIslands = { values = { false, true }, default = 2, current = 2 }
 -- On by default (matches what this always did before it was optional): nudges the loop away from
 -- trees/poles/fences/buildings (FIELD_LOOP_OBSTACLE_MASK) rather than laying it straight through
 -- them. Off skips that pass entirely - useful on a field this obstacle check keeps flagging
@@ -294,7 +303,7 @@ end
 function S.describe()
     local parts = {}
     for _, name in ipairs({ "sidingOffset", "sidingLength", "fieldLoopMargin", "fieldLoopTreeClearance", "fieldLoopVehicleHeight",
-                            "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopAvoidObstacles", "toolCardStatic",
+                            "fieldLoopTurningRadius", "fieldLoopDetectCustomField", "fieldLoopUseCourseplayField", "fieldLoopLeaveOutIslands", "fieldLoopAvoidObstacles", "toolCardStatic",
                             "fieldLoopMaxGap", "fieldLoopMinPointSpacing", "flyoverMergeDistance", "flyoverMergeDivergence",
                             "junctionRadius", "junctionTurnRadius",
                             "flyoverAutoHookupDistance", "flyoverAutoHookupDivergence",
