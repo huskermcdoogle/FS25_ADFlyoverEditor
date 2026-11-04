@@ -3,17 +3,15 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Junction: new X/T, and your farm-road T built by the tool" build="@BUILD@">
+<testPlan title="Junction: a new road-runs T gets the mod's T first time" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
     <test id="newT" title="A new two-lane T: clear + build"
           passLog="a new junction %(no number yet.*the mod's T fitted"
+          failLog="the mod pattern won't fit here"
           hint="Lay a new two-lane side road onto a two-lane road with road runs (no turns, no number). Lock it (card: junction: new). Right-click. Ticks by itself."/>
-    <test id="farmT" title="Welker j06: clear + build"
-          passLog="farm%-road T %(two%-way side road%)"
-          hint="Lock j06, your slanted farm-road T at x 277 z 40. Clear + build, right-click. Ticks by itself."/>
-    <test id="farmLooks" title="It is your farm-road T"
-          hint="The farm road stays two-way across the near lane to a point between the lanes; rights cut at the mouth. PASS if it looks like yours."/>
+    <test id="newTlooks" title="It is the mod's T"
+          hint="Look at the T you just built. It is the mod's T pattern, not separate curved turns. PASS if so."/>
     <test id="undo" title="Undo puts it back"
-          hint="Press undo once. j06 is back as it was before the right-click. PASS if so. Redo if you want to keep it."/>
+          hint="Press undo once. The side road is back as road runs left it. PASS if so. Redo if you want to keep it."/>
 </testPlan>
