@@ -1174,7 +1174,9 @@ function ADFlyoverHud:draw(editor)
     end
 
     -- Cleared each frame; drawHelp sets it again only when the help card is actually up. Otherwise a
-    -- stale rect would keep suppressing world labels over an area with no help panel on it.
+    -- stale rect would keep suppressing world labels over an area with no help panel on it. Last
+    -- frame's rect is kept while the help is open: the tool card has to keep clear of it (below).
+    local helpWas = editor.helpOpen and self.helpRect or nil
     self.helpRect = nil
 
     local rows = self:buildRows(editor)
@@ -1385,8 +1387,51 @@ function ADFlyoverHud:draw(editor)
                 cardY = math.max(ch, math.min(1, self.cardShift[2]))
             end
         end
-        local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
-        self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
+        -- The help card sits where the tool card's home is (both beside the corner panel), and engine
+        -- text draws in a pass above every overlay, so the help's background cannot hide the card's
+        -- text: it read straight through the help page (2026-11-03). While the help is open the card
+        -- steps clear of it - right of it, else left, else below - and only if none fits is it left
+        -- out until the help closes. Not saved: it goes back to its own spot when the help closes.
+        local hideCard = false
+        if helpWas ~= nil and not self.ctxDragging then
+            local function overlaps(x, y, w, h, r)
+                return r ~= nil and x < r.x + r.w and x + w > r.x and y < r.y + r.h and y + h > r.y
+            end
+            local hr, gap = helpWas, 0.012
+            local tr = self.testRect
+            local function clear(x, y)
+                return x >= 0 and x + width <= 1 and y - ch >= 0 and y <= 1
+                    and not overlaps(x, y - ch, width, ch, hr) and not overlaps(x, y - ch, width, ch, tr)
+                    and not overlaps(x, y - ch, width, ch, { x = self.frameX or 0, y = self.frameY or 0,
+                        w = self.frameW or 0, h = self.frameH or 0 })
+            end
+            if overlaps(cardX, cardY - ch, width, ch, hr) then
+                local tries = {
+                    { hr.x + hr.w + gap, cardY },
+                    { hr.x - width - gap, cardY },
+                    { cardX, hr.y - gap },
+                    { hr.x + hr.w + gap, math.min(1, hr.y + hr.h) },
+                }
+                local moved = false
+                for _, p in ipairs(tries) do
+                    if clear(p[1], p[2]) then
+                        cardX, cardY, moved = p[1], p[2], true
+                        break
+                    end
+                end
+                hideCard = not moved
+            end
+        end
+        if hideCard then
+            -- Its rows go too, so no button of a card that is not drawn can be clicked.
+            for k = #rows, split + 1, -1 do
+                table.remove(rows, k)
+            end
+            hasContext = false
+        else
+            local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
+            self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
+        end
     end
 
     local edge = 0.0025

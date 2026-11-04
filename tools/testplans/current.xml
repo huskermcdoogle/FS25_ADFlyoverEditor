@@ -8,10 +8,10 @@
           hint="This ticks by itself. Nothing to do."/>
     <test id="cardHints" title="The card says how to pick"
           hint="Smooth tool. Read the lines under picks and in NEXT, before and after picking a span. They say how to move an end. PASS if they read well."/>
+    <test id="helpClear" title="Help open: the card stays clear"
+          hint="Hold Smooth and open its help. The tool card moves beside it, and nothing shows through the help. PASS if so."/>
     <test id="smoothHelp" title="Smooth's help reads right"
           hint="Hold the Smooth tool and open its help. It says the first click stays put and the end follows a loop. PASS if it reads well."/>
-    <test id="manualPage" title="The manual page scrolls to the end"
-          hint="Open the manual on Smooth. Scroll down. You can read the whole page. PASS if so."/>
     <test id="movePopup" title="Move from the popup: carry the end round"
           hint="Select mode: click two points on the loop, choose move. Click on past the far end round the loop. The first point stays. PASS if so."/>
 </testPlan>

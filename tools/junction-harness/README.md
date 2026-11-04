@@ -31,6 +31,8 @@ One offline clear takes under a second; these run many side by side (PAR, defaul
   real map, kept or refused, to compare two checkouts.
 - `lua spantools.lua` - every span tool's own click handler on a loop beside a junction: the span each
   tool acts on must be the one carried round, not a short cut.
+- `lua cardhelp.lua` - the real HUD draw with engine calls stubbed: with the help page open, the tool card
+  must not overlap it (game text draws through any background), or is left out with its buttons.
 
 Harness switches these use: `ADOPT=<capture meta.txt>` (the game's settings), `TURNR=<m>` (the card's
 turn radius, which the clear reads too).
