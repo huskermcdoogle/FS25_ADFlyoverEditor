@@ -50,6 +50,7 @@ this page is not proven** - check the code before building on it, then add it he
 | 2026-10-08 | A turn between two two-way roads is one two-way line. |
 | 2026-10-08 | No shared point with a two-way line unless the angle stops AutoDrive switching onto it (80-100 degrees). |
 | 2026-10-09 | Where a two-way farm track meets a road of one-way lanes, each turn is two-way as solved, all the way to the merge. Its link onto (or off) the road's one-way lane is one-way, so nobody can drive into it backwards from the road. |
+| 2026-11-03 | The build lays the user's own farm-road T (built by hand on Welker Farms) where a two-way side road meets a road of one-way lanes: the side road stays two-way from its mouth across the near lane, sharing a point with it square on, to a point half way to the far lane; rights are one-way cuts at the mouth, lefts join or leave the far lane at that top point. A one-way side road gets "same pattern but pruned". |
 | 2026-10-02 (replaced 2026-10-08) | No two-way turns: each direction one-way, tied at the two-way road's mouth. |
 
 ## Claims that were wrong
