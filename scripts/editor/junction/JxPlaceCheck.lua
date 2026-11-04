@@ -276,6 +276,7 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     end
     if res.shape == "plain" and res.kind ~= "X" then
         return nil, nil, "only the plain piece would go here"
+            .. ((res.fitWhy ~= nil) and string.format(" (the fitted T: %s)", tostring(res.fitWhy)) or "")
     end
     return site, res
 end

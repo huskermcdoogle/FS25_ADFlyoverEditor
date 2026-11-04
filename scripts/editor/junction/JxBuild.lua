@@ -1083,6 +1083,14 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
         local stub, forward = sideOut, false
         if ddz < 0 then stub, forward = sideIn, true end
         local ahead = (px - stub.x) * dx + (pz - stub.z) * dz
+        -- The lane already ends (or starts) about where the point goes: it is the point. A side road laid
+        -- by road runs stops 1 m past the main road's near lane - just where the mod's T puts its side
+        -- points - and the fit gave up on it, though the same junction fitted once a clear had moved the
+        -- ends to the box edge (Welker, build 718: fresh -206.7, -925.9 turn by turn, numbered j10 the T).
+        if (px - stub.x) ^ 2 + (pz - stub.z) ^ 2 <= 0.6 * 0.6 then
+            if dry then return true end
+            return stub
+        end
         if (forward and ahead <= 0.3) or (not forward and ahead >= -0.3) then return nil end
         if math.sqrt((px - stub.x) ^ 2 + (pz - stub.z) ^ 2) > 2.5 * L then return nil end
         if dry then return true end

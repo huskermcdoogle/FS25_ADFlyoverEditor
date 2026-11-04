@@ -8,7 +8,7 @@
           hint="This ticks by itself. Nothing to do."/>
     <test id="newT" title="A new two-lane T: clear + build"
           passLog="a new junction %(no number yet.*the mod's T fitted"
-          hint="Pick a two-lane T you have not built on: side road lanes stop short, no turns. Lock it (the card says junction: new). Right-click. Ticks by itself."/>
+          hint="Lay a new two-lane side road onto a two-lane road with road runs (no turns, no number). Lock it (card: junction: new). Right-click. Ticks by itself."/>
     <test id="farmT" title="Welker j06: clear + build"
           passLog="farm%-road T %(two%-way side road%)"
           hint="Lock j06, your slanted farm-road T at x 277 z 40. Clear + build, right-click. Ticks by itself."/>
