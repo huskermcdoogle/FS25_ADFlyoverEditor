@@ -661,7 +661,10 @@ function ADFlyoverEditor:replaceChainInterior(chainIds, newPoints, dual, flags)
     local previousId = newStartId
     for i = 2, #newPoints - 1 do
         local p = newPoints[i]
-        local y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z)
+        -- 2026-11-04: the shared surface rule (Ground.lua), with the caller's height as the reference.
+        -- This used AutoDrive's own lookup, which sees no building floors and threw away the height
+        -- every caller (Divide, Smooth, Straighten, Ground, spline edit, road runs) had worked out.
+        local y = self:resolveHeightAt(p.x, p.z, p.y)
         local wp = ADFlyoverRecordWayPoint(p.x, y, p.z, true, dual, false, previousId, flags, false, fieldID)
         -- New waypoints are appended, so their ids sit above everything already there and nothing
         -- shifts underneath us for the rest of this loop.

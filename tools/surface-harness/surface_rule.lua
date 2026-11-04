@@ -7,11 +7,14 @@
 -- presets (shared/collisionMaskFlags.xml): no DEFAULT bit.
 --
 -- Usage (Lua 5.1, from the repo root):
---   lua tools/surface-harness/surface_rule.lua [Ground.lua] [Move.lua]
+--   lua tools/surface-harness/surface_rule.lua [Ground.lua] [Move.lua] [Smooth.lua]
 -- Pass the old files (git show HEAD~1:...) to see the same cases under the old code.
+-- The last part rebuilds a span with the real replaceChainInterior (Smooth.lua), the step Divide,
+-- Smooth, Straighten, Ground, spline edit and road runs all end in, and checks the new points' heights.
 
 local groundPath = arg[1] or "scripts/editor/tools/Ground.lua"
 local movePath = arg[2] or "scripts/editor/tools/Move.lua"
+local smoothPath = arg[3] or "scripts/editor/tools/Smooth.lua"
 
 -- ---- engine stubs ---------------------------------------------------------------------------
 CollisionFlag = { DEFAULT = 1, STATIC_OBJECT = 2, CAMERA_BLOCKING = 4, GROUND_TIP_BLOCKING = 8,
@@ -203,3 +206,85 @@ if E.describeSurfaces ~= nil then
     print("")
     for _, l in ipairs(LOG) do print(l) end
 end
+
+-- ---- rebuilding a span: replaceChainInterior (Smooth.lua) -------------------------------------
+-- A small graph whose removals renumber the ids above them, as AutoDrive's do.
+local wps = {}
+local function renumber() for i, wp in ipairs(wps) do wp.id = i end end
+local function idsOf(list) local r = {} for _, wp in ipairs(list) do r[#r + 1] = wp.id end return r end
+function table.contains(t, v) for _, x in pairs(t) do if x == v then return true end end return false end
+ADGraphManager = {
+    getWayPointById = function(_, id) return wps[id] end,
+    getWayPointsCount = function() return #wps end,
+    isDualRoad = function() return false end,
+    removeWayPoint = function(_, id)
+        local gone = table.remove(wps, id)
+        for _, wp in ipairs(wps) do
+            for _, k in ipairs({ "outW", "inW" }) do
+                for i = #wp[k], 1, -1 do if wp[k][i] == gone then table.remove(wp[k], i) end end
+            end
+        end
+        renumber()
+        for _, wp in ipairs(wps) do wp.out, wp.incoming = idsOf(wp.outW), idsOf(wp.inW) end
+    end,
+    toggleConnectionBetween = function(_, a, b)
+        a.outW[#a.outW + 1] = b; b.inW[#b.inW + 1] = a
+        a.out, b.incoming = idsOf(a.outW), idsOf(b.inW)
+    end,
+}
+ADHeldRemovals = { pointsAhead = function() return {} end, hasMarker = function() return false end, hold = function() end }
+function ADFlyoverRecordWayPoint(x, y, z, connectPrevious, dual, reverse, previousId)
+    local wp = { x = x, y = y, z = z, outW = {}, inW = {}, out = {}, incoming = {} }
+    wps[#wps + 1] = wp
+    renumber()
+    if connectPrevious and wps[previousId] ~= nil then ADGraphManager:toggleConnectionBetween(wps[previousId], wp) end
+    return wp
+end
+E.fieldOf = function() return nil end
+do
+    local f = assert(io.open(smoothPath, "r"))
+    local src = f:read("*a")
+    f:close()
+    local a = src:find("local function spanRunsForward", 1, true)
+    local b = src:find("function ADFlyoverEditor:replaceChainInterior", a, true)
+    b = src:find("\nend\n", b, true)
+    assert(loadstring(src:sub(a, b + 4)))()
+end
+-- name, x from, x to, height of the old points, height each new point comes with (nil = none), right height
+local rebuilds = {
+    { "divide on the 5 cm floor",          2,  18, TERRAIN_Y,       TERRAIN_Y + 0.05, TERRAIN_Y + 0.05 },
+    { "divide on the 5 cm floor, no y",    2,  18, TERRAIN_Y,       nil,              TERRAIN_Y + 0.05 },
+    { "smooth in the shed",              202, 218, TERRAIN_Y,       TERRAIN_Y + 0.10, TERRAIN_Y + 0.10 },
+    { "straighten on the bridge deck",   302, 318, TERRAIN_Y + 6.0, TERRAIN_Y + 6.0,  TERRAIN_Y + 6.0 },
+    { "smooth on the road under it",     302, 318, TERRAIN_Y + 0.04, TERRAIN_Y + 0.04, TERRAIN_Y + 0.04 },
+    { "divide on open ground",           942, 958, TERRAIN_Y,       TERRAIN_Y,        TERRAIN_Y },
+}
+print("")
+print("Rebuilding a span (replaceChainInterior): heights of the new points, metres over the terrain.")
+local rwrong = 0
+for _, c in ipairs(rebuilds) do
+    local name, x0, x1, oldY, newY, right = c[1], c[2], c[3], c[4], c[5], c[6]
+    wps = {}
+    -- the old span: 5 points; the rebuild lays 7 between the same two ends
+    local prev = nil
+    for i = 0, 4 do
+        local wp = ADFlyoverRecordWayPoint(x0 + (x1 - x0) * i / 4, oldY, 5, prev ~= nil, false, false, prev and prev.id)
+        prev = wp
+    end
+    local chain, newPoints = { 1, 2, 3, 4, 5 }, {}
+    for i = 0, 8 do
+        newPoints[#newPoints + 1] = { x = x0 + (x1 - x0) * i / 8, y = newY, z = 5 }
+    end
+    newPoints[1].y, newPoints[#newPoints].y = oldY, oldY
+    local ok = E:replaceChainInterior(chain, newPoints, false, 0)
+    local heights, bad = {}, 0
+    for i = 3, #wps do                                   -- 1 and 2 are the kept ends after the removals
+        heights[#heights + 1] = f(wps[i].y)
+        if math.abs(wps[i].y - right) > 0.005 then bad = bad + 1 end
+    end
+    if not ok or #heights ~= 7 or bad > 0 then rwrong = rwrong + 1 end
+    print(string.format("%-34s right %s  got %s %s", name, f(right), table.concat(heights, " "),
+        (ok and #heights == 7 and bad == 0) and "ok" or "WRONG"))
+end
+print(string.format("%d wrong rebuild(s).", rwrong))
+if wrong + rwrong > 0 then os.exit(1) end
