@@ -102,8 +102,25 @@ end
 function ADFlyoverEditor:spanPickNextStep(fromId, toId, picked, opts)
     local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
     opts = opts or {}
+    -- Armed from a Select popup: a click off the popup cancels it, so none of the pick's clicks apply.
+    -- The tool's own line already says how to apply, so only Esc is added to it.
+    if self.ctxMenu ~= nil and self.ctxMenu.kind == "armed" then
+        if picked ~= nil and picked ~= "" then
+            return picked .. " " .. L("Esc goes back to the menu.")
+        end
+        return L("Right-click applies; Esc goes back to the menu.")
+    end
+    -- The picks row can be locked: "run" takes the whole run in one click, "span" never does.
+    local lock = self.pickFilter
     if fromId == nil then
-        local s = L("Click one end of the span, or double-click for the whole run.")
+        local s
+        if lock == "run" then
+            s = L("Click a run to take all of it.")
+        elseif lock == "span" then
+            s = L("Click one end of the span.")
+        else
+            s = L("Click one end of the span, or double-click for the whole run.")
+        end
         if opts.selectToo then
             s = s .. " " .. L("Or select points (box, circle, Ctrl-click).")
         end
@@ -117,8 +134,14 @@ function ADFlyoverEditor:spanPickNextStep(fromId, toId, picked, opts)
         return s
     end
     local carry
-    if self.spanPickedUpId ~= nil and self.spanPickedUpId == self.spanMovingEndId then
+    if lock == "run" then
+        carry = L("A click takes the run through that point instead.")
+    elseif self.spanPickedUpId ~= nil and self.spanPickedUpId == self.spanMovingEndId then
         carry = L("End picked up: click where it should go.")
+    elseif self.spanMovingEndId == nil then
+        -- A whole run (double-click) has no end set last: a click moves whichever end is nearer it.
+        carry = opts.sameTrack and L("A click on your own track moves the nearer end there.")
+            or L("A click moves the nearer end there, along the track.")
     elseif opts.sameTrack then
         carry = L("Clicks on your own track move the last end set. Click the other end to move that one.")
     else
@@ -183,22 +206,35 @@ function ADFlyoverEditor:getNextStepLines()
             end
             return string.format(L("Release to %s."), verb)
         end
-        if self.moveSelectMode == self.MOVE_SELECT.SPAN then
-            if self.moveSpanFromId == nil then
-                return L("Click a waypoint to start the span.")
-            end
-            if self.moveSpanToId == nil then
-                return L("Click the far end of the span.")
-            end
-            if self.hoverId ~= nil and self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId] then
-                return L("Drag the highlighted span.")
-            end
-            return L("Click on past the far end to carry it, or drag the span.")
+        -- What is picked now - a selection, a run, a span, a first click - rather than the select mode,
+        -- which a single click resets to point (so the old span lines were never shown).
+        if self.selectionCount > 0 then
+            return L("Drag any selected point to move the set.")
         end
-        if self.hoverId ~= nil then
-            return L("Drag the highlighted waypoint.")
+        if self.moveSpanIds ~= nil and self.moveSpanToId ~= nil then
+            if self.pickFilter == "run" then
+                return L("Drag any point of the run to move all of it.") .. " "
+                    .. L("A click takes the run through that point instead.")
+            end
+            if self.spanMovingEndId == nil then
+                return L("Drag any point of the run to move all of it.") .. " "
+                    .. L("A click moves the nearer end there, along the track.")
+            end
+            if self.spanPickedUpId ~= nil and self.spanPickedUpId == self.spanMovingEndId then
+                return L("End picked up: click where it should go.")
+            end
+            return L("Drag any point of the span to move it.") .. " "
+                .. L("More clicks move the last end set, round loops too. Click the other end to move that one.")
         end
-        return L("Point at a waypoint, then drag it.")
+        if self.moveSpanFromId ~= nil then
+            return L("Click the other end for a span, or drag a point to move it.")
+        end
+        if self.pickFilter == "point" then
+            return L("Drag a point to move it.")
+        elseif self.pickFilter == "run" then
+            return L("Click a run to pick all of it, or drag a point.")
+        end
+        return L("Drag a point to move it, or click two points for a span (double-click: run).")
     elseif self.tool == t.DELETE then
         if self.selectionCount > 0 then
             return string.format(L("Click to delete %d selected."), self.selectionCount)
@@ -261,7 +297,7 @@ function ADFlyoverEditor:getNextStepLines()
             if self.offsetBlockedBy ~= nil then
                 picked = L("Too tight to offset that far. Wheel it back, or swap sides.")
             else
-                picked = string.format(L("Wheel sets offset (%.1fm %s). Flip the side on the panel. Right-click applies."),
+                picked = string.format(L("Wheel sets distance (%.1fm %s). Flip the side on the panel. Right-click applies."),
                     self.offsetDistance, side())
             end
         end

@@ -143,6 +143,61 @@ for _, t in ipairs(TOOLS) do
     end
     check(t[1] .. ": NEXT text through the pick", ok and "ok" or where, "ok")
 end
+-- More NEXT states (2026-11-04), the same on every span tool: after a double-click run (no end set last),
+-- with the picks row locked to run or span, and armed from a Select popup (a click off it cancels).
+local function nextText() return tostring(E:getNextStepLines()) end
+local function has(s, w) return s:find(w, 1, true) ~= nil end
+local function doubleClick(fn, id)
+    clock = clock + 5000; E.hoverId = id; fn(id)
+    clock = clock + 100; E.hoverId = id; fn(id)
+end
+for _, t in ipairs(TOOLS) do
+    reset(); E.tool = t[2]
+    doubleClick(t[3], 9)
+    local afterRun = nextText()
+    E.pickFilter = "run"
+    local lockedRun = nextText()
+    reset(); E.tool = t[2]
+    local lockRunStart = nextText()
+    E.pickFilter = "span"
+    local lockSpanStart = nextText()
+    E.pickFilter = nil
+    reset(); E.tool = t[2]
+    clickWith(t[3], 7); clickWith(t[3], 10)
+    E.ctxMenu = { kind = "armed", tool = t[2] }
+    local armed = nextText()
+    E.ctxMenu = nil
+    local ok = has(afterRun, "nearer end") and has(lockedRun, "run through that point")
+        and has(lockRunStart, "Click a run") and not has(lockSpanStart, "double-click")
+        and has(armed, "Esc goes back") and not has(armed, "More clicks") and not has(armed, "A click")
+        and select(2, armed:gsub("Right%-click applies", "")) <= 1
+    check(t[1] .. ": NEXT after a run, locked, and armed", ok and "ok" or table.concat({ afterRun, lockedRun,
+        lockRunStart, lockSpanStart, armed }, " || "), "ok")
+end
+reset(); E.tool = E.TOOL.PARALLEL
+clickWith(function() E:offsetClick() end, 7); clickWith(function() E:offsetClick() end, 10)
+check("Parallel: NEXT says distance, as the card does", has(nextText(), "Wheel sets distance") and "ok" or nextText(), "ok")
+
+-- Move: what is picked now, not the select mode.
+local function moveClick(i) E:moveGestureClick(i) end
+reset(); E.tool = E.TOOL.MOVE
+local m0 = nextText()
+clickWith(moveClick, 7)
+local m1 = nextText()
+clickWith(moveClick, 10)
+local m2 = nextText()
+reset(); E.tool = E.TOOL.MOVE
+doubleClick(moveClick, 9)
+local m3 = nextText()
+reset(); E.tool = E.TOOL.MOVE
+E.selectionCount = 3
+local m4 = nextText()
+E.selectionCount = 0
+local okMove = has(m0, "click two points") and has(m1, "other end for a span") and has(m2, "any point of the span")
+    and has(m3, "any point of the run") and has(m3, "nearer end") and has(m4, "selected point")
+check("Move: NEXT for nothing, a first click, a span, a run, a selection", okMove and "ok" or table.concat({ m0, m1,
+    m2, m3, m4 }, " || "), "ok")
+
 if os.getenv("SHOWNEXT") then
     for k = 1, #STEPS do
         print(string.format("-- step %d", k))

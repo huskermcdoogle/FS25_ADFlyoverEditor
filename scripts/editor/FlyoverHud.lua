@@ -579,7 +579,7 @@ function ADFlyoverHud:buildRows(editor)
     add("gap")
     add("section", "THIS TOOL")
     if armedMenu then
-        add("note", "right-click applies - Esc cancels")
+        add("note", "right-click applies - Esc goes back")
     end
 
     if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
@@ -631,15 +631,18 @@ function ADFlyoverHud:buildRows(editor)
         else
             pickSeg({ "span", "run" })
         end
-        if editor.pickFilter == nil then
-            add("hint", "2 clicks = span, double-click = run")
-        end
-        if editor.pickFilter ~= "run" then
-            add("hint", "more clicks move the last end set")
-            add("hint", "click the other end to move it")
-        end
-        if editor.tool == editor.TOOL.GROUND and editor.pickFilter == nil then
-            add("hint", "or select points (box, Ctrl-click)")
+        -- Armed from a Select popup, a click off the popup cancels it: none of these clicks apply there.
+        if not armedMenu then
+            if editor.pickFilter == nil then
+                add("hint", "2 clicks = span, double-click = run")
+            end
+            if editor.pickFilter ~= "run" then
+                add("hint", "more clicks move the last end set")
+                add("hint", "click other end, then its new spot")
+            end
+            if editor.tool == editor.TOOL.GROUND and editor.pickFilter == nil then
+                add("hint", "or select points (box, Ctrl-click)")
+            end
         end
     end
 
@@ -2317,7 +2320,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         return
     end
     -- Point / span / run menus show only in Select mode. A tool armed from one of them (kind "armed")
-    -- keeps the menu state so right-click applies and Esc cancels, but its options are on the tool
+    -- keeps the menu state so right-click applies and Esc goes back to it, but its options are on the tool
     -- card, which opens where the menu was - so there is nothing to draw for it here.
     if m.kind == "armed" or editor.tool ~= editor.TOOL.NONE then
         return
