@@ -241,7 +241,7 @@ function ADFlyoverEditor:onLeftPress()
     -- Only the move tool cares about the press itself; every other tool acts on release, so that
     -- a click that turns out to be a camera drag does not commit an edit. Span is the exception:
     -- picking its two ends (and later replacing one) is a plain click, not a drag, so it is left
-    -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
+    -- for onLeftRelease/moveGestureClick - a press only ever begins a drag once the span already
     -- exists AND the hovered point is actually a member of it.
     -- Multi-point spline: a press on one of its points may become a drag of that point.
     if self.tool == self.TOOL.SPLINE and self.splineHoverIdx ~= nil and self:splineIsMultiPoint() then

@@ -222,6 +222,7 @@ Move drags waypoints to a new spot and re-seats them on the real ground there. A
 
 1. Press and drag a point to move it. Release to drop it.
 1. Click (no drag) to pick instead: a point; a second point for the SPAN between; double-click for the whole RUN. Then drag any point of the pick to move the lot. Dragging a point outside the pick moves just that point.
+1. Click on past a span's far end to carry it further, round a loop too. The first click stays put: click it, then where it should go, to move it instead.
 1. The "picks" row lights to show what is picked. Click a type to lock it: run moves the whole run from a single grab, point never builds spans. Click it again to unlock.
 1. A selection (box, circle, freehand, rotated box, Ctrl-click) wins: grab any selected point to move the set. One connected run of points counts as a span; a scattered set moves rigidly.
 1. Falloff: on a single point it spreads along the track by the falloff value (wheel, steppers, typed, or , and .). On a span, run or run-shaped selection it tapers from the point you grab down to zero at its own two ends - no value to set.

@@ -10,4 +10,6 @@
           hint="Hold the Smooth tool and open its help. It says the first click stays put and the end follows a loop. PASS if it reads well."/>
     <test id="manualPage" title="The manual page scrolls to the end"
           hint="Open the manual on Smooth. Scroll down. You can read the whole page. PASS if so."/>
+    <test id="movePopup" title="Move from the popup: carry the end round"
+          hint="Select mode: click two points on the loop, choose move. Click on past the far end round the loop. The first point stays. PASS if so."/>
 </testPlan>

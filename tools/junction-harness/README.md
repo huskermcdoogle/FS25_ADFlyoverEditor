@@ -29,6 +29,8 @@ One offline clear takes under a second; these run many side by side (PAR, defaul
 - `lua spanpick.lua` - the span-pick click on the same kind of loop: picks against the traffic and round
   the loop are taken, a lane-to-lane U-turn is still refused. `lua pairsweep.lua` - every close pair on the
   real map, kept or refused, to compare two checkouts.
+- `lua spantools.lua` - every span tool's own click handler on a loop beside a junction: the span each
+  tool acts on must be the one carried round, not a short cut.
 
 Harness switches these use: `ADOPT=<capture meta.txt>` (the game's settings), `TURNR=<m>` (the card's
 turn radius, which the clear reads too).

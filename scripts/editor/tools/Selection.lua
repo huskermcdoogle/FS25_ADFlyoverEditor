@@ -401,7 +401,7 @@ function ADFlyoverEditor:edgeBoxFrame(p1x, p1z, p2x, p2z, p3x, p3z)
 end
 
 --- Rotated box's click handling - three plain clicks (armed/cancelled by Space, see keyEvent),
---- not a drag, so this is reached from onLeftRelease exactly like moveSpanClick's own picking
+--- not a drag, so this is reached from onLeftRelease exactly like moveGestureClick's own picking
 --- clicks. First click places a corner, second sets the edge (direction + length), third sets
 --- the width and commits - degenerate at either the second or third click (edge or width too
 --- short) falls back to the same single-point toggle every other selection shape uses for a

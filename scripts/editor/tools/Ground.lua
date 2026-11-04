@@ -610,15 +610,6 @@ function ADFlyoverEditor:divideClick()
     })
 end
 
---- How many waypoints currently sit between two ends, or 0 if they are not connected.
-function ADFlyoverEditor:currentInteriorCount(fromId, toId)
-    local span = self:runPathBetween(fromId, toId)
-    if span == nil then
-        return 0
-    end
-    return math.max(0, #span - 2)
-end
-
 -- MODSPLIT: SHARED WITH THE FILES LOADED AFTER THIS ONE (tools/modsplit/split.py writes this block)
 ADFlyoverEditor.shared.isRoadAt = isRoadAt
 ADFlyoverEditor.shared.isPavedAt = isPavedAt

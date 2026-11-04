@@ -66,6 +66,12 @@ function ADFlyoverEditor:menuArmMoveSpan()
     local set = {}
     for _, id in ipairs(ids) do set[id] = true end
     self.moveSpanFromId, self.moveSpanToId, self.moveSpanIds = from, to, set
+    -- The route itself too, as every span pick keeps it: a click that then carries an end on follows
+    -- this route rather than a fresh path search, which could take the other way round a loop. A span
+    -- from the popup was made by two clicks, so as everywhere the second (toId) is the carried end and
+    -- the first stays put; a run has no click order, so the next click chooses along the track.
+    self.spanIds = ids
+    self.spanMovingEndId = (not isRun) and to or nil
     -- Picked from the popup: the span / run moves as a whole, tapering to its own ends (no reach value).
     -- Move's own gesture picks use the falloff value as a reach instead - see moveReach.
     self.movePickFromMenu = true

@@ -156,7 +156,7 @@ function ADFlyoverEditor:getNextStepLines()
             if self.hoverId ~= nil and self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId] then
                 return L("Drag the highlighted span.")
             end
-            return L("Click to replace whichever end is closer, or drag the span.")
+            return L("Click on past the far end to carry it, or drag the span.")
         end
         if self.hoverId ~= nil then
             return L("Drag the highlighted waypoint.")
