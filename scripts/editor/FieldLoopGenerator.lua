@@ -1353,10 +1353,21 @@ function AutoDrive:buildFieldLoopRing(rawPoints, marginDistance, treeClearance, 
         smoothMoveCount = 0
     end
 
+    -- Heights by the editor's shared surface rule (Ground.lua): a floor or road mesh over the terrain
+    -- wins over the terrain under it. AutoDrive's own lookup if the editor's is not there.
+    local function ringHeight(x, z)
+        if ADFlyoverEditor ~= nil and ADFlyoverEditor.surfaceNear ~= nil then
+            local ok, y = pcall(ADFlyoverEditor.surfaceNear, ADFlyoverEditor, x, z, nil)
+            if ok and y ~= nil then
+                return y
+            end
+        end
+        return AutoDrive:getTerrainHeightAtWorldPos(x, z)
+    end
     local ring = {}
     for i = 1, #finalXZ do
         local p = finalXZ[i]
-        ring[i] = { x = p.x, y = AutoDrive:getTerrainHeightAtWorldPos(p.x, p.z), z = p.z }
+        ring[i] = { x = p.x, y = ringHeight(p.x, p.z), z = p.z }
     end
 
     local perimeter = 0

@@ -726,16 +726,35 @@ function ADFlyoverEditor:resolveHeightAt(x, z, referenceY, explicitY)
         return terrainY or AutoDrive:getTerrainHeightAtWorldPos(x, z)
     end
 
+    -- 2026-11-04: the heights below come from the shared surface rule (Ground.lua, "THE SURFACE
+    -- RULE"), which sees building floors, concrete pads and ramps near the terrain, and takes a floor
+    -- over the terrain under it. AutoDrive's own lookup saw neither (its mask has no BUILDING bit).
+    local snap = AutoDrive.FLYOVER_STRUCTURE_HEIGHT
+
     if explicitY ~= nil then
+        -- The cursor's own reading. On a floor a few centimetres up it read the terrain under it
+        -- (Welker Farms, 2026-11-03), so a surface that close wins; anything else keeps the cursor.
+        local near = self:surfaceNear(x, z, explicitY, snap)
+        if near ~= nil then
+            return near
+        end
         return explicitY
     end
 
-    if referenceY ~= nil and terrainY ~= nil
-        and (referenceY - terrainY) > AutoDrive.FLYOVER_STRUCTURE_HEIGHT then
-        -- On a structure. Nothing available here can see it, so leave the height alone.
+    if referenceY ~= nil and terrainY ~= nil and (referenceY - terrainY) > snap then
+        -- On a structure. Sit on it if the rule sees one near this height; otherwise it is one no
+        -- ray sees, so leave the height alone.
+        local near = self:surfaceNear(x, z, referenceY, snap)
+        if near ~= nil then
+            return near
+        end
         return referenceY
     end
 
+    local near = self:surfaceNear(x, z, referenceY)
+    if near ~= nil then
+        return near
+    end
     return AutoDrive:getTerrainHeightAtWorldPos(x, z, referenceY)
 end
 
@@ -830,19 +849,24 @@ function ADFlyoverEditor:finishDrag()
         local beforeY = dropped.y
         local terrainY = (g_currentMission ~= nil and g_currentMission.terrainRootNode ~= nil)
             and getTerrainHeightAtWorldPos(g_currentMission.terrainRootNode, dropped.x, 1, dropped.z) or nil
-        local fromCursor = self.cursorY ~= nil
-            and AutoDrive:getTerrainHeightAtWorldPos(dropped.x, dropped.z, self.cursorY) or nil
-        local fromAbove = terrainY ~= nil
-            and AutoDrive:getTerrainHeightAtWorldPos(dropped.x, dropped.z, terrainY + 30) or nil
+        -- AutoDrive's own lookup, for comparison. It casts only 5 m, from 3 m over the height it is
+        -- given, and hands back that height when it hits nothing - so the old "ray from 30m up" read
+        -- terrain + 30 every time: a miss, not a surface. Dropped; the surfaces line below says what is there.
+        local fromCursor = nil
+        if self.cursorY ~= nil then
+            fromCursor = AutoDrive:getTerrainHeightAtWorldPos(dropped.x, dropped.z, self.cursorY)
+        end
 
         self:regroundTo(self.dragId, dropped.x, dropped.z, dropped.y)
+        dropped = ADGraphManager:getWayPointById(self.dragId) or dropped
 
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: heights at the drop point - cursor reports %s, plain terrain %s, ray from cursor %s, ray from 30m up %s, was %.2f, set to %.2f.",
-            self.cursorY ~= nil and string.format("%.2f", self.cursorY) or "nil",
-            terrainY ~= nil and string.format("%.2f", terrainY) or "nil",
-            fromCursor ~= nil and string.format("%.2f", fromCursor) or "nil",
-            fromAbove ~= nil and string.format("%.2f", fromAbove) or "nil",
-            beforeY, dropped.y)
+        local function f3(v)
+            if v == nil then return "nil" end
+            return string.format("%.3f", v)
+        end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: heights at the drop point - cursor reports %s, plain terrain %s, AutoDrive's ray from the cursor %s, was %.3f, set to %.3f.",
+            f3(self.cursorY), f3(terrainY), f3(fromCursor), beforeY, dropped.y)
+        self:describeSurfaces(dropped.x, dropped.z, math.max(beforeY, dropped.y), "(move drop id=" .. tostring(self.dragId) .. ")", dropped.y)
     end
     for _, n in ipairs(self.dragNeighbours or {}) do
         local wp = ADGraphManager:getWayPointById(n.id)

@@ -365,7 +365,9 @@ end
 -- How far a waypoint may sit off the ground before the ground tool calls it out, in meters. The
 -- band starts well below a hand's width because the point of the tool is finding drift you cannot
 -- see, and reaches high enough to ignore a genuine bridge or gantry rather than dragging it down.
-AutoDrive.FLYOVER_GROUND_MIN = 0.1
+AutoDrive.FLYOVER_GROUND_MIN = 0.0   -- 2026-11-04: down to 0 (a floor a few cm over the terrain, Welker Farms)
+-- A point this far under a floor or road mesh is flagged by the ground tool whatever the tolerance.
+AutoDrive.FLYOVER_GROUND_UNDER = 0.02
 AutoDrive.FLYOVER_GROUND_MAX = 10.0
 AutoDrive.FLYOVER_GROUND_STEP = 0.1
 AutoDrive.FLYOVER_GROUND_DEFAULT = 0.5
