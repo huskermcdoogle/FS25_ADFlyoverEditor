@@ -476,24 +476,49 @@ function ADFlyoverEditor:spanPickClick(cfg)
         return
     end
 
-    -- Both ends exist: move one of them to this click (Move's refinement, now everywhere). Which one
-    -- is decided along the track, not by straight distance (pickEndToMove).
-    -- The span being changed, so the new route keeps it where it can: an end moved on round a loop
-    -- grows the span the way it runs rather than flipping it to the other side of the loop.
+    -- Both ends exist: move the CARRIED end to this click. The end clicked first is the anchor and stays
+    -- put (2026-11-03, build 717: carried round a loop to where it meets the road again, the start
+    -- jumped to the point beside it). Clicking the anchor itself picks it up instead, so the next click
+    -- moves it. With no carried end yet (a whole-run pick), pickEndToMove chooses one along the track.
     local current = self.spanIds
     if current ~= nil and not (current[1] == from and current[#current] == to) then
         current = nil
     end
-    local replacingFrom = self:pickEndToMove(from, to, id, current)
-    if replacingFrom == nil then
+    local moving = self.spanMovingEndId
+    if moving ~= from and moving ~= to then
+        local replacingFrom = self:pickEndToMove(from, to, id, current)
+        if replacingFrom == nil then
+            return
+        end
+        moving = replacingFrom and from or to
+    end
+    local anchor = (moving == from) and to or from
+    if id == moving then
         return
     end
+    if id == anchor then
+        self.spanMovingEndId = anchor
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span: picked up the end at id=%s; the next click moves it.",
+            self.TOOL_NAMES[self.tool] or "tool", tostring(anchor))
+        return
+    end
+    local replacingFrom = moving == from
     local newFrom = replacingFrom and id or from
     local newTo = replacingFrom and to or id
-    if newFrom == newTo then
-        return
+
+    -- The new span is the current one, changed only at the carried end: cut back to the click when it
+    -- is on the span, otherwise carried on from the span's last point that reaches the click without
+    -- crossing the span. A fresh path search between the two ends could take a short cut and drop the
+    -- span (1480 to 2650 at Welker: 3 m along the road instead of round the loop).
+    local span = current ~= nil and self:carrySpanEnd(current, anchor, id) or nil
+    if span ~= nil and replacingFrom then
+        local reversed = {}
+        for i = #span, 1, -1 do reversed[#reversed + 1] = span[i] end
+        span = reversed
     end
-    local span = self:spanPath(newFrom, newTo, current)
+    if span == nil then
+        span = self:spanPath(newFrom, newTo, current)
+    end
     if span == nil and cfg.anyPoints then
         span = { newFrom, newTo }
     end
@@ -514,7 +539,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
         newFrom, newTo, span = newTo, newFrom, ordered
     end
     self.spanIds = span
-    self.spanMovingEndId = id
+    self.spanMovingEndId = id   -- still the carried end; the anchor is whichever end is not this
     cfg.setEnds(newFrom, newTo, nil)
     self.pickKind = "span"
     if cfg.onSpan ~= nil then cfg.onSpan(newFrom, newTo, span) end
@@ -553,6 +578,78 @@ local function hopsAvoiding(startId, targetId, inSpan, maxNodes)
             end
         end
         frontier = nextFrontier
+    end
+    return nil
+end
+
+--- The span `span` (either way round) with its end that is NOT `anchor` carried to `id`, as a list of
+--- ids from the anchor to `id`, or nil when that cannot be done along the track.
+---   - `id` on the span: the span cut back to it.
+---   - otherwise: the span kept from the anchor as far as the last point that reaches `id` within
+---     CARRY_MAX_HOPS links without crossing the span, then that way on to `id`. Starting from the
+---     carried end and stepping back means the span is kept as far as it can be - carried past a
+---     junction onto a spur, a click back on the other branch turns off at the junction rather than
+---     cutting the span short.
+ADFlyoverEditor.CARRY_MAX_HOPS = 40
+function ADFlyoverEditor:carrySpanEnd(span, anchor, id)
+    local cur = span
+    if span[#span] == anchor then
+        cur = {}
+        for i = #span, 1, -1 do cur[#cur + 1] = span[i] end
+    elseif span[1] ~= anchor then
+        return nil
+    end
+
+    local inSpan = {}
+    for i, sid in ipairs(cur) do
+        if sid == id then
+            local out = {}
+            for k = 1, i do out[k] = cur[k] end
+            return #out >= 2 and out or nil
+        end
+        inSpan[sid] = true
+    end
+
+    for k = #cur, 1, -1 do
+        -- Breadth-first from cur[k] to id, not through any other span point, at most CARRY_MAX_HOPS.
+        local start = cur[k]
+        local cameFrom = { [start] = false }
+        local frontier, found = { start }, false
+        for _ = 1, self.CARRY_MAX_HOPS do
+            local nextFrontier = {}
+            for _, nid in ipairs(frontier) do
+                local wp = ADGraphManager:getWayPointById(nid)
+                if wp ~= nil then
+                    for _, listName in ipairs(LINK_LISTS) do
+                        for _, other in pairs(linkList(wp, listName) or {}) do
+                            if cameFrom[other] == nil and not inSpan[other] then
+                                cameFrom[other] = nid
+                                if other == id then
+                                    found = true
+                                    break
+                                end
+                                nextFrontier[#nextFrontier + 1] = other
+                            end
+                        end
+                        if found then break end
+                    end
+                end
+                if found then break end
+            end
+            if found or #nextFrontier == 0 then break end
+            frontier = nextFrontier
+        end
+        if found then
+            local tail, nid = {}, id
+            while nid ~= start do
+                table.insert(tail, 1, nid)
+                nid = cameFrom[nid]
+            end
+            local out = {}
+            for j = 1, k do out[j] = cur[j] end
+            for _, t in ipairs(tail) do out[#out + 1] = t end
+            return out
+        end
     end
     return nil
 end

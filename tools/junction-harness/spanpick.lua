@@ -29,6 +29,24 @@ do
         f:write(string.format("  {id=%d,x=%.3f,y=0,z=%.3f,flags=0,out={%d}},\n",
             22 + k, 8 * math.cos(a), 100 + 8 * math.sin(a), 22 + (k + 1) % 12))
     end
+    -- Welker Farms' loop (2026-11-03): a two-way road at z=200 (34 - 35 - 36 - 37 - 38 - 39), and a
+    -- one-way loop that leaves it at junction 36 and comes back at junction 37, 2.5 m further on:
+    -- 36 -> 40 -> 41 ... -> 47 -> 37. Its ends, both junctions and the road beside them are all close.
+    local roadX = { -15, -7.5, 0, 2.5, 6, 12 }
+    for k = 0, 5 do
+        local outs = {}
+        if k > 0 then outs[#outs + 1] = 34 + k - 1 end
+        if k < 5 then outs[#outs + 1] = 34 + k + 1 end
+        if k == 2 then outs[#outs + 1] = 40 end
+        f:write(string.format("  {id=%d,x=%.3f,y=0,z=200,flags=0,out={%s}},\n", 34 + k, roadX[k + 1],
+            table.concat(outs, ",")))
+    end
+    for k = 0, 7 do
+        -- round from just past 36, up and over, back down to just before 37
+        local a = math.rad(250 - k * 40)
+        f:write(string.format("  {id=%d,x=%.3f,y=0,z=%.3f,flags=0,out={%d}},\n", 40 + k,
+            1.25 + 7 * math.cos(a), 207.5 + 7 * math.sin(a), k < 7 and 41 + k or 37))
+    end
     f:write("}\n")
     f:close()
 end
@@ -88,9 +106,16 @@ check("loop, two clicks far round (2 then 14): the shorter side", spanText(), "1
 fresh(); click(2); click(8); click(12)
 check("loop, span 2..8 then click 12: grows on round the loop", spanText(), "2,3,4,5,6,7,8,9,10,11,12")
 
--- 14 is nearer the 2 end: that end moves back through the junction, and the span keeps 2..8.
+-- 14 is nearer the 2 end in a straight line, but 2 was clicked first and stays: the carried 8 end goes on
+-- round to 14.
 fresh(); click(2); click(8); click(14)
-check("loop, span 2..8 then click 14: grows back through the junction", spanText(), "14,15,16,1,2,3,4,5,6,7,8")
+check("loop, span 2..8 then click 14: the carried end goes on, the start stays", spanText(),
+    "2,3,4,5,6,7,8,9,10,11,12,13,14")
+
+-- To grow it back through the junction instead: click the start (picks it up), then 14.
+fresh(); click(2); click(8); click(2); click(14)
+check("loop, span 2..8, pick up the start, click 14: grows back through the junction", spanText(),
+    "14,15,16,1,2,3,4,5,6,7,8")
 
 -- The user's case (2026-11-03, build 716): carry the end round a small loop one point at a time. Near the
 -- end the click is nearer the span's OTHER end in a straight line; it must still move the end being carried.
@@ -109,14 +134,29 @@ end
 check("small loop, end carried round point by point to the last one", carried and spanText() or "jumped",
     "22,23,24,25,26,27,28,29,30,31,32,33")
 
--- Span 3..8 on the big loop (8 placed last), click 2 just before the 3 end: that end moves, not 8 the
--- long way round.
-fresh(); click(3); click(8); click(2)
-check("loop, span 3..8 then click just before its start: the start moves", spanText(), "2,3,4,5,6,7,8")
+-- Span 3..8 on the big loop: to move the start back one, pick it up (click 3), then click 2.
+fresh(); click(3); click(8); click(3); click(2)
+check("loop, span 3..8, pick up the start, click just before it: the start moves", spanText(), "2,3,4,5,6,7,8")
 
 -- A click on the span shrinks it from the end it is fewer points from.
 fresh(); click(2); click(8); click(7)
 check("loop, span 2..8 then click 7 on it: the 8 end comes back", spanText(), "2,3,4,5,6,7")
+
+-- Welker 22:01: start on the loop, carry the end round, past the junction onto the road (38), then click
+-- the junction the loop starts from (36). The start stays; the span goes on along the road to 36.
+fresh(); click(40); click(43); click(47); click(38); click(36)
+check("loop beside a junction: carried past it and back, the start stays", spanText(),
+    "40,41,42,43,44,45,46,47,37,36")
+
+-- Welker 22:00: start at the junction, carry round to the closing junction (37), 2.5 m from the start.
+-- The span goes round the loop, not 2.5 m along the road.
+fresh(); click(36); click(42); click(47); click(37)
+check("loop beside a junction: carried round to the junction it closes at", spanText(),
+    "36,40,41,42,43,44,45,46,47,37")
+
+-- Clicking the start picks it up: the next click moves the start, the far end stays.
+fresh(); click(40); click(44); click(40); click(41)
+check("click the start to pick it up, then move it", spanText(), "41,42,43,44")
 
 fresh(); click(18); click(21)
 check("road, in-lane to out-lane (U-turn at the junction): still refused", spanText(), "REFUSED")

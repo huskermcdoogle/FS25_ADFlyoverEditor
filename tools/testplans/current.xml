@@ -3,15 +3,14 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Smooth rebuild and span picks on a loop" build="@BUILD@">
+<testPlan title="Span picks round a loop: the start stays" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="Load Welker Farms, savegame 3. This ticks by itself."/>
-    <test id="pickBack" title="Pick on the loop against the traffic"
-          failLog="refused span id"
-          hint="Smooth tool, mode rebuild. On the spline loop, click a point, then a point behind it. The span is taken, not refused. PASS if so."/>
-    <test id="pickRound" title="Move the end on round the loop"
+    <test id="pickRound" title="Carry the end round the loop"
           failLog="refused span end"
-          hint="Click on past the far end, point by point, all the way round to the start. The span keeps growing; the start never jumps. PASS if so."/>
+          hint="Smooth tool. On the spline loop, click a point, then click on point by point, all the way round and onto the road. The start never moves. PASS if so."/>
+    <test id="moveStart" title="Click the start to move it"
+          hint="Click the span's start, then the point next to it. Now the start moves and the far end stays. PASS if so."/>
     <test id="apply" title="Apply the rebuild"
           passLog="rebuilt %d+ piece%(s%)" failLog="used the FALLBACK path"
           hint="Right-click to apply. This ticks by itself."/>
