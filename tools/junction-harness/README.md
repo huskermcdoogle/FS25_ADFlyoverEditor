@@ -26,6 +26,9 @@ One offline clear takes under a second; these run many side by side (PAR, defaul
 - `reg75.sh` / `reg75check.sh` - the full pass, about 30 s each since they run in parallel.
 - `lua spanloop.lua` - Smooth rebuild on a made-up one-way loop, span picked the long way round: only
   the picked span's points may change. No map data needed.
+- `lua spanpick.lua` - the span-pick click on the same kind of loop: picks against the traffic and round
+  the loop are taken, a lane-to-lane U-turn is still refused. `lua pairsweep.lua` - every close pair on the
+  real map, kept or refused, to compare two checkouts.
 
 Harness switches these use: `ADOPT=<capture meta.txt>` (the game's settings), `TURNR=<m>` (the card's
 turn radius, which the clear reads too).

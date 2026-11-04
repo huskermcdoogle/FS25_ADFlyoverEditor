@@ -3,16 +3,18 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Smooth rebuild follows the picked span" build="@BUILD@">
+<testPlan title="Smooth rebuild and span picks on a loop" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="Load Welker Farms, savegame 3. This ticks by itself."/>
-    <test id="pick" title="Pick a span along the loop"
-          hint="Smooth tool, mode rebuild. Pick a span along the spline loop at the end of the two-lane road, where it went wrong before. PASS when the preview shows it."/>
+    <test id="pickBack" title="Pick on the loop against the traffic"
+          failLog="refused span id"
+          hint="Smooth tool, mode rebuild. On the spline loop, click a point, then a point behind it. The span is taken, not refused. PASS if so."/>
+    <test id="pickRound" title="Move the end on round the loop"
+          failLog="refused span end"
+          hint="Click past the far end, more than half way round the loop. The span grows along the loop. PASS if so."/>
     <test id="apply" title="Apply the rebuild"
           passLog="rebuilt %d+ piece%(s%)" failLog="used the FALLBACK path"
           hint="Right-click to apply. This ticks by itself."/>
     <test id="rightSide" title="Only the picked span changed"
-          hint="The new points lie where the preview was. The other side of the loop is as it was. PASS if so."/>
-    <test id="undo" title="Undo puts it back"
-          hint="Press Q (undo). The loop is back as it was. PASS if so."/>
+          hint="The new points lie where the preview was. The rest of the loop is as it was. PASS if so."/>
 </testPlan>

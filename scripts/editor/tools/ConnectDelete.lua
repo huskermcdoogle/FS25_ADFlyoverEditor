@@ -184,33 +184,16 @@ end
 --- ignores direction. Where a track has more than one route between two points (a siding, a loop, a
 --- shortcut), the plain search takes the shortest and can pick one that runs against the traffic; this
 --- takes the one the traffic actually uses.
-function ADFlyoverEditor:spanPath(a, b)
-    local maxNodes = AutoDrive.FLYOVER_MERGE_MAX_RUN
-    local path = directedPath(a, b, maxNodes)
-    if path ~= nil then
-        return path
-    end
-    path = directedPath(b, a, maxNodes)
-    if path ~= nil then
-        local reversed = {}
-        for i = #path, 1, -1 do reversed[#reversed + 1] = path[i] end
-        return reversed
-    end
-    return self:runPathBetween(a, b)
-end
-
---- A span picked by two clicks must be the short, obvious way between them. When the only route found runs
---- a long way round (away through a junction and back, or down a different run), refuse it rather than
---- quietly take it: over ROUTE_MAX_RATIO times the straight distance AND more than ROUTE_MAX_EXTRA metres
---- longer than it. Returns ok, routeLength, straightLength.
-ADFlyoverEditor.ROUTE_MAX_RATIO = 2.0
-ADFlyoverEditor.ROUTE_MAX_EXTRA = 40
-function ADFlyoverEditor:spanRouteIsDirect(span)
-    if span == nil or #span < 2 then
-        return true, 0, 0
-    end
+---
+--- On a loop BOTH directions exist: a to b one way round, b to a the other. Taking a to b whenever it
+--- existed meant a loop clicked against the traffic gave the route almost all the way round, which the
+--- long-way check then refused (2026-11-03). So both are tried and the shorter wins - unless `prefer`
+--- (the span being changed, as a list of ids) is given: then the route that keeps more of it wins, so
+--- moving one end on round a loop grows the span the way it already runs instead of flipping it to the
+--- other side.
+local function routeLength(ids)
     local length, prev = 0, nil
-    for _, id in ipairs(span) do
+    for _, id in ipairs(ids) do
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             if prev ~= nil then
@@ -219,11 +202,139 @@ function ADFlyoverEditor:spanRouteIsDirect(span)
             prev = wp
         end
     end
+    return length
+end
+
+function ADFlyoverEditor:spanPath(a, b, prefer)
+    local maxNodes = AutoDrive.FLYOVER_MERGE_MAX_RUN
+    local candidates = {}
+    local fwd = directedPath(a, b, maxNodes)
+    if fwd ~= nil then
+        candidates[#candidates + 1] = fwd
+    end
+    local back = directedPath(b, a, maxNodes)
+    if back ~= nil then
+        local reversed = {}
+        for i = #back, 1, -1 do reversed[#reversed + 1] = back[i] end
+        candidates[#candidates + 1] = reversed
+    end
+    if #candidates == 0 then
+        return self:runPathBetween(a, b)
+    end
+    if #candidates == 1 then
+        return candidates[1]
+    end
+
+    local keep = {}
+    for _, id in ipairs(prefer or {}) do keep[id] = true end
+    local best, bestKept, bestLength
+    for _, path in ipairs(candidates) do
+        local kept = 0
+        for _, id in ipairs(path) do
+            if keep[id] then kept = kept + 1 end
+        end
+        local length = routeLength(path)
+        if best == nil or kept > bestKept or (kept == bestKept and length < bestLength - 0.01) then
+            best, bestKept, bestLength = path, kept, length
+        end
+    end
+    return best
+end
+
+--- Where a route turns OFF at a junction: the first interior waypoint with more than two neighbours at
+--- which the route's heading (measured over about 4 m either side) changes by more than
+--- ROUTE_JUNCTION_TURN_DEG. Nil when it never does - the route stays on one track, going straight on
+--- through any junction it passes. Returns the id and the turn in degrees.
+ADFlyoverEditor.ROUTE_JUNCTION_TURN_DEG = 60
+function ADFlyoverEditor:spanTurnsOffAtJunction(span)
+    local pts = {}
+    for i, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp == nil then
+            return nil
+        end
+        pts[i] = wp
+    end
+    local cum = { 0 }
+    for i = 2, #pts do
+        cum[i] = cum[i - 1] + MathUtil.vector2Length(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+    end
+    local reach = 4
+    for i = 2, #pts - 1 do
+        local seen, count = {}, 0
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, other in pairs(linkList(pts[i], listName) or {}) do
+                if not seen[other] and other ~= pts[i].id then
+                    seen[other] = true
+                    count = count + 1
+                end
+            end
+        end
+        if count > 2 then
+            local j, k = i - 1, i + 1
+            while j > 1 and cum[i] - cum[j] < reach do j = j - 1 end
+            while k < #pts and cum[k] - cum[i] < reach do k = k + 1 end
+            local ax, az = pts[i].x - pts[j].x, pts[i].z - pts[j].z
+            local bx, bz = pts[k].x - pts[i].x, pts[k].z - pts[i].z
+            local la, lb = MathUtil.vector2Length(ax, az), MathUtil.vector2Length(bx, bz)
+            if la > 0.01 and lb > 0.01 then
+                local c = math.max(-1, math.min(1, (ax * bx + az * bz) / (la * lb)))
+                local turn = math.deg(math.acos(c))
+                if turn > self.ROUTE_JUNCTION_TURN_DEG then
+                    return pts[i].id, turn
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- A span picked by two clicks must be the short, obvious way between them. When the only route found runs
+--- a long way round (away through a junction and back, or down a different run), refuse it rather than
+--- quietly take it: over ROUTE_MAX_RATIO times the straight distance AND more than ROUTE_MAX_EXTRA metres
+--- longer than it. Returns ok, routeLength, straightLength, turnId, turnDeg.
+---
+--- A long route that stays CLOSE and on one track is not "the long way round": the track itself bends
+--- back, as round a turnaround loop at a road's end. Two points far round such a loop are close
+--- together but joined only along the loop, so the length test alone refused them (2026-11-03). Such a
+--- route is kept when it never turns off at a junction AND never goes more than ROUTE_MAX_STRAY metres
+--- from the nearer of its two ends. Both are needed: a route that turns off at a junction (a U-turn onto
+--- the other lane, a siding taper and back) is a detour however close it stays, and one that stays on a
+--- track but wanders far (the next lap of a field loop, a long ring road) is not what two clicks a few
+--- metres apart meant. turnId, turnDeg name where a refused route turned off (nil when it strayed).
+ADFlyoverEditor.ROUTE_MAX_RATIO = 2.0
+ADFlyoverEditor.ROUTE_MAX_EXTRA = 40
+ADFlyoverEditor.ROUTE_MAX_STRAY = 50
+function ADFlyoverEditor:spanRouteIsDirect(span)
+    if span == nil or #span < 2 then
+        return true, 0, 0
+    end
+    local length = routeLength(span)
     local a = ADGraphManager:getWayPointById(span[1])
     local b = ADGraphManager:getWayPointById(span[#span])
     local straight = (a ~= nil and b ~= nil) and MathUtil.vector2Length(b.x - a.x, b.z - a.z) or 0
     local direct = not (length > straight * self.ROUTE_MAX_RATIO and length - straight > self.ROUTE_MAX_EXTRA)
-    return direct, length, straight
+    if direct then
+        return true, length, straight
+    end
+    local turnId, turnDeg = self:spanTurnsOffAtJunction(span)
+    if turnId ~= nil then
+        return false, length, straight, turnId, turnDeg
+    end
+    local stray = 0
+    for _, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil and a ~= nil and b ~= nil then
+            stray = math.max(stray, math.min(MathUtil.vector2Length(wp.x - a.x, wp.z - a.z),
+                MathUtil.vector2Length(wp.x - b.x, wp.z - b.z)))
+        end
+    end
+    if stray > self.ROUTE_MAX_STRAY then
+        return false, length, straight
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: long route kept: %.0fm for %.0fm apart, but it stays on one track "
+        .. "within %.0fm of its ends (a loop).", length, straight, stray)
+    return true, length, straight
 end
 
 --- Put a span's ids in the direction TRAFFIC runs along it. runPathBetween walks the graph ignoring link
@@ -339,10 +450,11 @@ function ADFlyoverEditor:spanPickClick(cfg)
             self:warnPlayer(string.format("Those two points are not connected, so they are not two ends of one span."))
             return
         end
-        local direct, routeLength, straightLength = self:spanRouteIsDirect(span)
+        local direct, routeLength, straightLength, turnId, turnDeg = self:spanRouteIsDirect(span)
         if not direct then
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span id=%s to id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)).",
-                tostring(from), tostring(id), routeLength, straightLength, #span)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span id=%s to id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)), "
+                .. "turns off %.0f deg at junction id=%s.",
+                tostring(from), tostring(id), routeLength, straightLength, #span, turnDeg or 0, tostring(turnId))
             self:warnPlayer("Those two points are only joined the long way round - pick points on the same stretch of track.")
             return
         end
@@ -376,7 +488,13 @@ function ADFlyoverEditor:spanPickClick(cfg)
     if newFrom == newTo then
         return
     end
-    local span = self:spanPath(newFrom, newTo)
+    -- The span being changed, so the new route keeps it where it can: an end moved on round a loop
+    -- grows the span the way it runs rather than flipping it to the other side of the loop.
+    local current = self.spanIds
+    if current ~= nil and not (current[1] == from and current[#current] == to) then
+        current = nil
+    end
+    local span = self:spanPath(newFrom, newTo, current)
     if span == nil and cfg.anyPoints then
         span = { newFrom, newTo }
     end
@@ -384,10 +502,11 @@ function ADFlyoverEditor:spanPickClick(cfg)
         self:warnPlayer("That point is not connected to the other end, so the span was not changed.")
         return
     end
-    local direct, routeLength, straightLength = self:spanRouteIsDirect(span)
+    local direct, routeLength, straightLength, turnId, turnDeg = self:spanRouteIsDirect(span)
     if not direct then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span end id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)).",
-            tostring(id), routeLength, straightLength, #span)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span end id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)), "
+            .. "turns off %.0f deg at junction id=%s.",
+            tostring(id), routeLength, straightLength, #span, turnDeg or 0, tostring(turnId))
         self:warnPlayer("That point is only joined to the span the long way round - the span was not changed.")
         return
     end
