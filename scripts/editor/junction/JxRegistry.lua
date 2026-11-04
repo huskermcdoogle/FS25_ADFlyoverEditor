@@ -856,6 +856,113 @@ function ADFlyoverEditor:junctionForgetParts(n)
     return true
 end
 
+--- A NUMBER BELONGS TO THE UNDO STEP THAT HANDED IT OUT (the user, 2026-11-03). Every undo step keeps the
+--- network as it was before its action; it now keeps the junction numbers too (EditorHistory captureState),
+--- and an undo or redo puts back exactly those numbers: one handed out since is taken back, one dropped
+--- since comes back. Only WHICH numbers exist moves with undo - a split decision made since stays as it is
+--- on every number both sides have. Before this, the first build of a fresh T numbered it (j10 on Welker,
+--- build 718), undo took the build back but not the number, and the save kept j10 for a junction that was
+--- not there - and a numbered site took another road through the build than the fresh one.
+local function jxCopyEntry(f)
+    return { x = f.x, z = f.z, forks = f.forks, ends = f.ends, n = f.n, virgin = f.virgin, cleared = f.cleared,
+             decision = f.decision, parts = f.parts, partsAside = f.partsAside }
+end
+
+function ADFlyoverEditor:junctionNumbersCapture()
+    if self._jxReg == nil then return nil end   -- the tool has not numbered anything in this game
+    -- The numbers as they stand, not built again: building them takes ~150 ms on a 12,800-point map, too
+    -- long for every undo step. The card builds them on every lock and after every build, so they are the
+    -- ones the action saw.
+    local list = {}
+    for _, f in ipairs(self._jxReg) do
+        if f.n ~= nil then list[#list + 1] = jxCopyEntry(f) end
+    end
+    return { home = self._jxRegHome, list = list }
+end
+
+function ADFlyoverEditor:junctionNumbersRestore(snap, what)
+    if snap == nil or self._jxReg == nil or snap.home ~= self._jxRegHome then return end
+    local had, now = {}, {}
+    for _, f in ipairs(snap.list) do had[f.n] = f end
+    for _, f in ipairs(self._jxReg) do if f.n ~= nil then now[f.n] = true end end
+    local keep, gone, back = {}, {}, {}
+    for _, f in ipairs(self._jxReg) do
+        if f.n == nil or had[f.n] ~= nil then keep[#keep + 1] = f else gone[#gone + 1] = f.n end
+    end
+    for _, f in ipairs(snap.list) do
+        if not now[f.n] then keep[#keep + 1] = jxCopyEntry(f) back[#back + 1] = f.n end
+    end
+    if #gone == 0 and #back == 0 then return end
+    table.sort(gone)
+    table.sort(back)
+    -- Built again from this list next time it is asked for, so the junctions the network still has keep
+    -- their numbers and the taken-back one is not numbered again unless the network has it again.
+    self._jxReg, self._jxRegCount, self._jxRegUnsaved = keep, nil, true
+    local function names(l)
+        local t = {}
+        for _, n in ipairs(l) do t[#t + 1] = string.format("j%02d", n) end
+        return table.concat(t, ", ")
+    end
+    Logging.info("[FlyoverEditor]: junction numbers - %s %s%s%s.", tostring(what or "undo"),
+        #gone > 0 and ("took back " .. names(gone)) or "", (#gone > 0 and #back > 0) and "; " or "",
+        #back > 0 and ("put back " .. names(back)) or "")
+end
+
+--- NUMBERS CLEAN THEMSELVES UP (the user, 2026-11-03): at the game's save, a number whose junction has gone
+--- from the map is dropped instead of being written again. Gone means no fork point (three or more
+--- neighbours) within 15 m of its point, the registry's own fork reach - as the user put it. So a junction
+--- the clear has emptied and that waits for its build loses its number at a save too, and gets a new one
+--- when it is built. Only a number the scan has stopped finding can go: one it still finds would be handed
+--- out again straight after the save. A number carrying the user's split decision is always kept. Nothing
+--- is renumbered. Only the numbers built in this game are checked; a game where the tool was not used
+--- writes the file back as it was read. Returns the list to write and the numbers dropped.
+local JX_NUMBER_GONE_R = 15
+local function jxNumbersStillThere(list)
+    local forks = {}
+    for _, w in pairs(ADGraphManager:getWayPoints()) do
+        if w ~= nil and w.id ~= nil then
+            local nb, deg = {}, 0
+            for _, t in ipairs(w.out or {}) do nb[t] = true end
+            for _, t in ipairs(w.incoming or {}) do nb[t] = true end
+            for _ in pairs(nb) do deg = deg + 1 end
+            if deg >= 3 then forks[#forks + 1] = w end
+        end
+    end
+    local R2 = JX_NUMBER_GONE_R * JX_NUMBER_GONE_R
+    local keep, dropped = {}, {}
+    for _, f in ipairs(list) do
+        -- Only a number the scan no longer finds (carried forward, `cleared`) can go: one it finds would be
+        -- numbered again straight after the save (Welker j02, two lanes crossing with no shared point, no fork).
+        local there = f.n == nil or not f.cleared or f.decision ~= nil or f.parts ~= nil or f.partsAside ~= nil
+        if not there then
+            for _, w in ipairs(forks) do
+                if (w.x - f.x) ^ 2 + (w.z - f.z) ^ 2 <= R2 then there = true break end
+            end
+        end
+        if there then keep[#keep + 1] = f else dropped[#dropped + 1] = f end
+    end
+    return keep, dropped
+end
+
+--- FlyoverForgetJunction <n>: drop one number, for testing. The junction, if it is still on the map, is
+--- numbered again the next time the numbers are built (the lowest free number). Returns what to say.
+function ADFlyoverEditor:junctionForgetNumber(n)
+    n = tonumber(n)
+    if n == nil then return "Give a junction number: FlyoverForgetJunction 10" end
+    local reg = self:junctionRegistry()
+    if reg == nil then return "No junction numbers in this game yet." end
+    for i, f in ipairs(reg) do
+        if f.n == n then
+            table.remove(reg, i)
+            self._jxRegCount, self._jxRegUnsaved = nil, true
+            Logging.info("[FlyoverEditor]: junction numbers - j%02d at %.1f, %.1f forgotten (console)%s.", n, f.x, f.z,
+                f.decision ~= nil and (", with its decision '" .. tostring(f.decision) .. "'") or "")
+            return string.format("j%02d forgotten. A junction still there gets the lowest free number next time.", n)
+        end
+    end
+    return string.format("There is no j%02d.", n)
+end
+
 --- NUMBERS AND DECISIONS STILL WAITING FOR A FOLDER: a career that has never been saved has none,
 --- so the registry stays marked unsaved. It used to be tried again only when the registry was built
 --- again, which happens only when the network changes - so a decision made, the game saved and the
@@ -918,6 +1025,17 @@ function ADFlyoverEditor:junctionRegistryOnGameSave()
         list, what = self._jxRegFile, "as read when the game loaded"
     end
     if list == nil then return end
+    -- Numbers whose junction has gone are not written again (jxNumbersStillThere).
+    local kept, dropped = list, {}
+    if list == self._jxReg then kept, dropped = jxNumbersStillThere(list) end
+    if #dropped > 0 then
+        for _, f in ipairs(dropped) do
+            Logging.info("[FlyoverEditor]: junction numbers - j%02d dropped with the save: no junction left at %.1f, %.1f.",
+                f.n, f.x, f.z)
+        end
+        self._jxReg, self._jxRegCount = kept, nil
+        list = kept
+    end
     -- The folder the game is saving now, worked out as AutoDrive works out its own (junctionRegistryFolder).
     local folder = junctionRegistryFolder()
     if folder == nil then return end

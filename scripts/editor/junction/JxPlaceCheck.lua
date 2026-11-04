@@ -180,39 +180,32 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     if site ~= nil and not site.virgin then
         return nil, nil, "turn wiring is still here"
     end
+    -- NO SITE FROM THE FINDER: THE SAME TRIES FOR EVERY JUNCTION, NUMBERED OR NOT (the user, 2026-11-03: a
+    -- numbered site must not get a different build from the same junction fresh). Before, a numbered site was
+    -- fitted at its saved point and nowhere else, and a fresh one at the click and the side road's mouth, with
+    -- a check for turns still wired that a road bending through the junction tripped (survey j79). Now every
+    -- such junction is tried at the click, at the side road's mouth (the lane end and lane start nearest the
+    -- click), and at its saved point if it has one; the first try that lays the whole pattern is the site.
+    -- A wired junction is the finder's to see (refused above), and the route check still guards the rest.
+    -- One intended difference: a PART of a junction the user split is tried at its saved point first, as
+    -- before - each part sees its twin's turns, kept on purpose (the course's pair: 1w lies 15.3 m from the
+    -- pair's middle). A junction with no number is "new" in the log and on the card.
+    local tries = nil
     if site == nil then
-        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place. A
-        -- junction split into parts is anchored by its parts, each its own junction (the course's pair:
-        -- 1w lies 15.3 m from the pair's middle, and was not found).
-        local bd = 15 * 15
+        local saved, bd = nil, 15 * 15
         for _, e in ipairs(self:junctionRegistry() or {}) do
             local spots = { e }
             if e.decision == "split" and e.parts ~= nil and #e.parts >= 2 then spots = e.parts end
             for _, q in ipairs(spots) do
                 local d = (q.x - jp.cx) ^ 2 + (q.z - jp.cz) ^ 2
-                if d < bd then site, bd = { x = q.x, z = q.z, virgin = true }, d end
+                if d < bd then saved, bd = { x = q.x, z = q.z, virgin = true, part = (spots ~= nil and q ~= e) or nil }, d end
             end
         end
-    end
-    -- A JUNCTION NOBODY HAS WORKED ON YET (Welker Farms, 2026-11-03): a side road's two lanes stop short of
-    -- the main road and no turn is wired. The finder sees no forks and the numbered list has no number,
-    -- so the pattern was never tried and every such T went turn by turn. The build locked it and found
-    -- its turns all missing: that lock is the site. Only a TURN counts as wiring: the main road running
-    -- straight through is there on every T (headings within 30 degrees).
-    local fresh = nil
-    if site == nil and #(jp.movements or {}) > 0 then
-        local wired = false
-        for _, m in ipairs(jp.movements) do
-            if m.exists then
-                local d = math.abs((m.from.bearing or 0) - (m.to.bearing or 0)) % (2 * math.pi)
-                if d > math.pi then d = 2 * math.pi - d end
-                if m.from.bearing == nil or m.to.bearing == nil or d > math.rad(30) then wired = true break end
-            end
-        end
-        if not wired then
-            -- Where to fit it: the click first; then the side road's mouth - the middle of the lane end and
-            -- lane start nearest the click (a click 8 m up the side road put the fit on the wrong road).
-            site = { x = jp.cx, z = jp.cz, virgin = true, fresh = true }
+        local fresh = (saved == nil) or nil
+        tries = {}
+        if saved ~= nil and saved.part then tries[1] = saved end
+        if #(jp.movements or {}) > 0 then
+            tries[#tries + 1] = { x = jp.cx, z = jp.cz, virgin = true, fresh = fresh }
             local e, s, de, ds = nil, nil, 20 * 20, 20 * 20
             for _, w in pairs(ADGraphManager:getWayPoints()) do
                 if w ~= nil and w.id ~= nil then
@@ -223,9 +216,11 @@ function ADFlyoverEditor:junctionPatternFit(jp)
                 end
             end
             if e ~= nil and s ~= nil and (e.x - s.x) ^ 2 + (e.z - s.z) ^ 2 < 14 * 14 then
-                fresh = { site, { x = (e.x + s.x) / 2, z = (e.z + s.z) / 2, virgin = true, fresh = true } }
+                tries[#tries + 1] = { x = (e.x + s.x) / 2, z = (e.z + s.z) / 2, virgin = true, fresh = fresh }
             end
         end
+        if saved ~= nil and not saved.part then tries[#tries + 1] = saved end
+        site = tries[1]
     end
     if site == nil then
         return nil, nil, "no junction place knows here"
@@ -235,13 +230,13 @@ function ADFlyoverEditor:junctionPatternFit(jp)
         return junctionPlacePattern(site.x, site.z, 15, shape, true)
     end)
     local function good(o, r) return o and r ~= nil and #(r.loose or {}) == 0 and not (r.shape == "plain" and r.kind ~= "X") end
-    if fresh ~= nil and not good(ok, res) then
-        local ok2, res2, why2 = tryCall("junction build: does the pattern fit at the mouth", function()
-            return junctionPlacePattern(fresh[2].x, fresh[2].z, 15, shape, true)
+    for i = 2, #(tries or {}) do
+        if good(ok, res) then break end
+        local t = tries[i]
+        local ok2, res2, why2 = tryCall("junction build: does the pattern fit (another try)", function()
+            return junctionPlacePattern(t.x, t.z, 15, shape, true)
         end)
-        if good(ok2, res2) then
-            site, ok, res, why = fresh[2], ok2, res2, why2
-        end
+        if good(ok2, res2) then site, ok, res, why = t, ok2, res2, why2 end
     end
     if not ok or res == nil then
         return nil, nil, tostring(why or "it does not fit")

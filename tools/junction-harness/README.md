@@ -32,6 +32,9 @@ meets on or off, whatever the code's default (`FLYOVER_JUNCTION_PLACE_TWO_WAY`).
 - `bash welker/regwelker.sh` - the Welker Farms save's junctions (savegame3), clear + build each, like
   `regcourse.sh`. Its header says how to export the fixture.
 - `BOTH=1 lua dbgundo.lua X Z` - the undo check for the card's clear + build instead of the clear alone.
+- `GRAPH=net.lua REGDIR=<copy of a junction-file folder> lua regnumbers.lua X Z` - junction numbers through
+  a fresh clear + build, undo, redo and the game's save, and `FlyoverForgetJunction`. Restore the folder's
+  file afterwards: the save writes it.
 
 ## Setup
 

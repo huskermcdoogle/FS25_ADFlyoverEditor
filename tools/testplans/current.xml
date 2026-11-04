@@ -3,15 +3,19 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Junction: a new road-runs T gets the mod's T first time" build="@BUILD@">
+<testPlan title="Junction numbers: undo takes a new number back" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
     <test id="newT" title="A new two-lane T: clear + build"
           passLog="a new junction %(no number yet.*the mod's T fitted"
-          failLog="the mod pattern won't fit here"
-          hint="Lay a new two-lane side road onto a two-lane road with road runs (no turns, no number). Lock it (card: junction: new). Right-click. Ticks by itself."/>
-    <test id="newTlooks" title="It is the mod's T"
-          hint="Look at the T you just built. It is the mod's T pattern, not separate curved turns. PASS if so."/>
-    <test id="undo" title="Undo puts it back"
-          hint="Press undo once. The side road is back as road runs left it. PASS if so. Redo if you want to keep it."/>
+          hint="Lay a new two-lane side road onto a two-lane road with road runs. Lock it (card: junction: new). Right-click. Ticks by itself."/>
+    <test id="undoBack" title="Undo takes its number back"
+          passLog="junction numbers %- .*took back j%d"
+          hint="Press undo once. Ticks by itself. The number over the junction is gone."/>
+    <test id="redoBack" title="Redo puts the number back"
+          passLog="junction numbers %- .*put back j%d"
+          hint="Press redo once. Ticks by itself. The same number is back over it."/>
+    <test id="save" title="Undo again, then save"
+          passLog="written with the game's save"
+          hint="Press undo once more, then save the game. Ticks by itself."/>
 </testPlan>
