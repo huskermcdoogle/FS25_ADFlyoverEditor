@@ -180,19 +180,47 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     if site ~= nil and not site.virgin then
         return nil, nil, "turn wiring is still here"
     end
+    -- NO SITE FROM THE FINDER: THE SAME TRIES FOR EVERY JUNCTION, NUMBERED OR NOT (the user, 2026-11-03: a
+    -- numbered site must not get a different build from the same junction fresh). Before, a numbered site was
+    -- fitted at its saved point and nowhere else, and a fresh one at the click and the side road's mouth, with
+    -- a check for turns still wired that a road bending through the junction tripped (survey j79). Now every
+    -- such junction is tried at the click, at the side road's mouth (the lane end and lane start nearest the
+    -- click), and at its saved point if it has one; the first try that lays the whole pattern is the site.
+    -- A wired junction is the finder's to see (refused above), and the route check still guards the rest.
+    -- One intended difference: a PART of a junction the user split is tried at its saved point first, as
+    -- before - each part sees its twin's turns, kept on purpose (the course's pair: 1w lies 15.3 m from the
+    -- pair's middle). A junction with no number is "new" in the log and on the card.
+    local tries = nil
     if site == nil then
-        -- A cleared junction the finder no longer sees: the numbered list anchors it, as for place. A
-        -- junction split into parts is anchored by its parts, each its own junction (the course's pair:
-        -- 1w lies 15.3 m from the pair's middle, and was not found).
-        local bd = 15 * 15
+        local saved, bd = nil, 15 * 15
         for _, e in ipairs(self:junctionRegistry() or {}) do
             local spots = { e }
             if e.decision == "split" and e.parts ~= nil and #e.parts >= 2 then spots = e.parts end
             for _, q in ipairs(spots) do
                 local d = (q.x - jp.cx) ^ 2 + (q.z - jp.cz) ^ 2
-                if d < bd then site, bd = { x = q.x, z = q.z, virgin = true }, d end
+                if d < bd then saved, bd = { x = q.x, z = q.z, virgin = true, part = (spots ~= nil and q ~= e) or nil }, d end
             end
         end
+        local fresh = (saved == nil) or nil
+        tries = {}
+        if saved ~= nil and saved.part then tries[1] = saved end
+        if #(jp.movements or {}) > 0 then
+            tries[#tries + 1] = { x = jp.cx, z = jp.cz, virgin = true, fresh = fresh }
+            local e, s, de, ds = nil, nil, 20 * 20, 20 * 20
+            for _, w in pairs(ADGraphManager:getWayPoints()) do
+                if w ~= nil and w.id ~= nil then
+                    local d = (w.x - jp.cx) ^ 2 + (w.z - jp.cz) ^ 2
+                    local nin, nout = #(w.incoming or {}), #(w.out or {})
+                    if nout == 0 and nin >= 1 and d < de then e, de = w, d end
+                    if nin == 0 and nout >= 1 and d < ds then s, ds = w, d end
+                end
+            end
+            if e ~= nil and s ~= nil and (e.x - s.x) ^ 2 + (e.z - s.z) ^ 2 < 14 * 14 then
+                tries[#tries + 1] = { x = (e.x + s.x) / 2, z = (e.z + s.z) / 2, virgin = true, fresh = fresh }
+            end
+        end
+        if saved ~= nil and not saved.part then tries[#tries + 1] = saved end
+        site = tries[1]
     end
     if site == nil then
         return nil, nil, "no junction place knows here"
@@ -201,11 +229,21 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     local ok, res, why = tryCall("junction build: does the pattern fit", function()
         return junctionPlacePattern(site.x, site.z, 15, shape, true)
     end)
+    local function good(o, r) return o and r ~= nil and #(r.loose or {}) == 0 and not (r.shape == "plain" and r.kind ~= "X") end
+    for i = 2, #(tries or {}) do
+        if good(ok, res) then break end
+        local t = tries[i]
+        local ok2, res2, why2 = tryCall("junction build: does the pattern fit (another try)", function()
+            return junctionPlacePattern(t.x, t.z, 15, shape, true)
+        end)
+        if good(ok2, res2) then site, ok, res, why = t, ok2, res2, why2 end
+    end
     if not ok or res == nil then
         return nil, nil, tostring(why or "it does not fit")
     end
     if #(res.loose or {}) > 0 then
         return nil, nil, string.format("it would leave %d lane end(s) loose", #res.loose)
+            .. ((res.fitWhy ~= nil) and string.format(" (the fitted %s: %s)", tostring(res.kind), tostring(res.fitWhy)) or "")
     end
     -- ONLY A PLAIN TWO-LANE T OR X: the pattern lays 6 movements on a T and 12 on an X, so the junction
     -- must have exactly those - no more (a T laid on a 4-way left half its routes out: 38, 83 on the
@@ -217,22 +255,23 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     -- off; from the centre alone j34 took in a lane of something else passing (12).
     local click = self.junctionArmed or { cx = jp.cx, cz = jp.cz }
     local need = self:junctionMovementsAt15(jp, click.cx, click.cz)
-    if need ~= ((res.kind == "X") and 12 or 6) then
+    if need ~= (res.lays or ((res.kind == "X") and 12 or 6)) then
         local atCentre = self:junctionMovementsAt15(jp, res.ox, res.oz)
         -- Both counts in the log when neither will do: in game (build 548) 1w read 7 from a click 5 m up its
         -- side road where offline both read 6, and the log could not say which count it was.
-        if atCentre ~= ((res.kind == "X") and 12 or 6) then
+        if atCentre ~= (res.lays or ((res.kind == "X") and 12 or 6)) then
             Logging.info("[FlyoverEditor]: junction build - the %s's count: %d movement(s) from the click at %.1f, %.1f, %d from its centre at %.1f, %.1f, %d at the search radius (%.0f m).",
                 tostring(res.kind), need, click.cx, click.cz, atCentre, res.ox, res.oz, #(jp.movements or {}), self:junctionRadiusValue())
         end
-        if atCentre == ((res.kind == "X") and 12 or 6) then need = atCentre end
+        if atCentre == (res.lays or ((res.kind == "X") and 12 or 6)) then need = atCentre end
     end
-    local lays = (res.kind == "X") and 12 or 6
+    local lays = res.lays or ((res.kind == "X") and 12 or 6)
     if need ~= lays then
         return nil, nil, string.format("the junction has %d movement(s), the %s lays %d", need, tostring(res.kind), lays)
     end
     if res.shape == "plain" and res.kind ~= "X" then
         return nil, nil, "only the plain piece would go here"
+            .. ((res.fitWhy ~= nil) and string.format(" (the fitted T: %s)", tostring(res.fitWhy)) or "")
     end
     return site, res
 end
@@ -256,6 +295,10 @@ function ADFlyoverEditor:junctionBuildAsPattern(jp)
     local shape = self.junctionPattern or "exact"
     Logging.info("[FlyoverEditor]: junction build - the mod's %s %s fits every road here, so it is laid as the pattern (the traffic study, doc 09).",
         tostring(res.shape), tostring(res.kind))
+    if site.fresh then
+        Logging.info("[FlyoverEditor]: junction build - a new junction (no number yet, no turn wired): the mod's %s fitted at %.1f, %.1f.",
+            tostring(res.kind), site.x, site.z)
+    end
     self.junctionPreview = { placeMode = true, cx = site.x, cz = site.z, shape = shape, ok = true, plan = res }
     self:applyJunctionPlace()
     local last = self.junctionLastPlace or {}

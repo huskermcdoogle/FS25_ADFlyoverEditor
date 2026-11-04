@@ -980,6 +980,12 @@ function ADFlyoverHud:buildRows(editor)
                     add("toggle", "state", tostring(jp.junctionState))
                 end
                 junctionDecisionRows(jp)
+            elseif jp.patternFit ~= nil and jp.patternFit.ok then
+                -- A JUNCTION NOBODY HAS WORKED ON YET (2026-11-03): its side road stops short of the main
+                -- road, so the finder counts too few roads and it has no number - but the build lays the
+                -- pattern, and it is numbered once its turns are there.
+                add("toggle", "junction", "new")
+                add("note", "numbered once it is built")
             elseif editor.junctionRefused ~= nil then
                 add("toggle", "free placement", "")
                 notes(editor.junctionRefused)

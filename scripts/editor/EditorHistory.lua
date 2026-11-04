@@ -192,12 +192,20 @@ end
 --- The graph as it stands right now: the real objects, each with a copy of its values, and where
 --- every vehicle's destinations stand.
 local function captureState(label)
+    -- The junction numbers go with the step too (JxRegistry junctionNumbersCapture, 2026-11-03): a number
+    -- the action hands out is taken back by its undo. Never lets a failure there stop the capture.
+    local junctions = nil
+    if ADFlyoverEditor ~= nil and ADFlyoverEditor.junctionNumbersCapture ~= nil then
+        local ok, j = pcall(ADFlyoverEditor.junctionNumbersCapture, ADFlyoverEditor)
+        if ok then junctions = j end
+    end
     return {
         label = label or "edit",
         wayPoints = recordObjects(ADGraphManager:getWayPoints()),
         mapMarkers = recordObjects(ADGraphManager:getMapMarkers()),
         groups = copyGroups(ADGraphManager:getGroups()),
-        vehicles = recordDestinations()
+        vehicles = recordDestinations(),
+        junctions = junctions
     }
 end
 
@@ -342,6 +350,9 @@ local function restoreState(entry)
     local presentBefore = markerSet(ADGraphManager:getMapMarkers())
     local currentBefore = safely(recordDestinations)
     ADGraphManager:setWayPoints(restoreObjects(entry.wayPoints))
+    if entry.junctions ~= nil and ADFlyoverEditor ~= nil and ADFlyoverEditor.junctionNumbersRestore ~= nil then
+        safely(ADFlyoverEditor.junctionNumbersRestore, ADFlyoverEditor, entry.junctions, "undo/redo of '" .. tostring(entry.label) .. "'")
+    end
     local markers = restoreObjects(entry.mapMarkers)
     ADGraphManager:setMapMarkers(markers)
 

@@ -793,6 +793,12 @@ function P:consoleTestPanel(arg)
     if ADFlyoverTestPanel.plan == nil then return "This build carries no test plan (testplan.xml) - test builds only." end
     return ADFlyoverTestPanel.toggleShown() and "Test plan card shown (it sits on the editor's screen)." or "Test plan card hidden."
 end
+--- FlyoverForgetJunction <n>: drop one junction number (JxRegistry junctionForgetNumber), for testing.
+function P:consoleForgetJunction(arg)
+    if ADFlyoverEditor == nil or ADFlyoverEditor.junctionForgetNumber == nil then return "The editor is not loaded (load a savegame first)." end
+    return ADFlyoverEditor:junctionForgetNumber(arg)
+end
+addConsoleCommand("FlyoverForgetJunction", "Junction tool: drop one junction number <n> (testing); a junction still there is numbered again", "consoleForgetJunction", P)
 addConsoleCommand("FlyoverTestPanel", "Show or hide the test build's test plan card (reload: read testplan.xml again)", "consoleTestPanel", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 

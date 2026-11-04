@@ -26,7 +26,15 @@ One offline clear takes under a second; these run many side by side (PAR, defaul
 - `reg75.sh` / `reg75check.sh` - the full pass, about 30 s each since they run in parallel.
 
 Harness switches these use: `ADOPT=<capture meta.txt>` (the game's settings), `TURNR=<m>` (the card's
-turn radius, which the clear reads too).
+turn radius, which the clear reads too). `TWO_WAY=1|0` turns the pattern at junctions where a two-way road
+meets on or off, whatever the code's default (`FLYOVER_JUNCTION_PLACE_TWO_WAY`).
+
+- `bash welker/regwelker.sh` - the Welker Farms save's junctions (savegame3), clear + build each, like
+  `regcourse.sh`. Its header says how to export the fixture.
+- `BOTH=1 lua dbgundo.lua X Z` - the undo check for the card's clear + build instead of the clear alone.
+- `GRAPH=net.lua REGDIR=<copy of a junction-file folder> lua regnumbers.lua X Z` - junction numbers through
+  a fresh clear + build, undo, redo and the game's save, and `FlyoverForgetJunction`. Restore the folder's
+  file afterwards: the save writes it.
 
 ## Setup
 
