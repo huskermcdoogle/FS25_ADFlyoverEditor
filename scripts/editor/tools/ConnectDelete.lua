@@ -481,7 +481,7 @@ function ADFlyoverEditor:screenSideLabels()
     local mx, my, mz = (a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5
     local ok0, x0, y0, d0 = pcall(project, mx, my, mz)
     local ok1, x1, y1, d1 = pcall(project, mx + nx * 5, my, mz + nz * 5)
-    if not (ok0 and ok1 and x0 and x1 and d0 and d1 and d0 > 0 and d1 > 0) then return nil end
+    if not (ok0 and ok1 and x0 and x1 and ADFlyoverEditor.inFrontDepth(d0) and ADFlyoverEditor.inFrontDepth(d1)) then return nil end
     -- Normalised screen x is squeezed by the aspect ratio; scale it back so the two axes compare fairly.
     local vx, vy = (x1 - x0) * (g_screenAspectRatio or (16 / 9)), y1 - y0
     if math.abs(vx) >= math.abs(vy) then

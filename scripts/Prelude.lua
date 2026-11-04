@@ -138,6 +138,7 @@ P.EDITOR_FILES = {
     "scripts/editor/junction/JxCheck.lua",
     "scripts/editor/junction/JxCheckCard.lua",
     "scripts/editor/tools/Appearance.lua",
+    "scripts/editor/tools/Camera.lua",   -- camera through buildings (issue #30)
     "scripts/editor/tools/Convert.lua",
     "scripts/editor/tools/Merge.lua",
     "scripts/editor/tools/FieldLoop.lua",
@@ -725,7 +726,10 @@ function P:consoleResetInput()
         return "Editor not loaded."
     end
     if ADFlyoverEditor.resetInput ~= nil then
-        return tostring(ADFlyoverEditor:resetInput())
+        -- tostring() with no argument at all throws ("missing argument #1"), and resetInput used to
+        -- return nothing - so the command ran and then reported an error.
+        local result = ADFlyoverEditor:resetInput()
+        return result ~= nil and tostring(result) or "Input reset."
     end
     return "This build of the editor has no resetInput."
 end

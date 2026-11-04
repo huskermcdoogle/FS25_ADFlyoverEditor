@@ -139,7 +139,7 @@ function ADFlyoverEditor:splinePointNearCursor()
         bestD = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS * AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
         for i, p in ipairs(pts) do
             local ok, sx, sy, depth = pcall(project, p.x, (p.y or 0) + 0.5, p.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                 local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
                 if dx * dx + dy * dy < bestD then
                     best, bestD = i, dx * dx + dy * dy
@@ -175,7 +175,7 @@ function ADFlyoverEditor:splineSnapCandidate()
     end
     if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
         local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.5, wp.z)
-        if ok and sx ~= nil and depth ~= nil and depth > 0 then
+        if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
             local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
             local r = AutoDrive.FLYOVER_SPLINE_SNAP_SCREEN_RADIUS
             return (dx * dx + dy * dy <= r * r) and wp or nil
@@ -217,7 +217,7 @@ function ADFlyoverEditor:splineInsertPiece()
     end
     if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
         local ok, sx, sy, depth = pcall(project, px, (py or self.cursorY or 0) + 0.6, pz)
-        if ok and sx ~= nil and depth ~= nil and depth > 0 then
+        if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
             local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
             local r = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
             return (dx * dx + dy * dy <= r * r) and seg or nil

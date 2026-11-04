@@ -1953,7 +1953,7 @@ local function menuSelectionBox(m)
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                 x0 = x0 and math.min(x0, sx) or sx
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
@@ -2216,7 +2216,7 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
         local wp = ADGraphManager:getWayPointById(ids[i])
         if wp ~= nil then
             local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
                 x0 = x0 and math.min(x0, sx) or sx
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
@@ -2578,6 +2578,33 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         value = ADFlyoverSettings.get("toolCardStatic") and "stays put" or "follows work",
         action = function() ADFlyoverSettings.cycle("toolCardStatic", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("toolCardStatic", d) end })
+    push({ kind = "field", text = "camera through buildings",
+        value = TR(ADFlyoverSettings.get("cameraThroughBuildings") and "on" or "off"),
+        action = function() editor:toggleCameraThroughBuildings() end,
+        stepAction = function() editor:toggleCameraThroughBuildings() end })
+    push({ kind = "note", text = "on: the camera flies under roofs, to place points inside sheds" })
+    push({ kind = "field", text = "height slice (G)",
+        value = TR(ADFlyoverSettings.get("heightSlice") and "on" or "off"),
+        action = function() editor:toggleHeightSlice() end,
+        stepAction = function() editor:toggleHeightSlice() end })
+    do
+        local editing = editor.editing ~= nil and editor.editing.label == "slice on foot"
+        local function set(v)
+            ADFlyoverSettings.setValue("heightSliceOnFoot", v)
+            editor.sliceVehicleMs = nil
+            return true
+        end
+        push({ kind = "field", text = "slice height on foot",
+            value = editing and (editor.editing.buffer .. "_") or string.format("%.1f m", ADFlyoverSettings.get("heightSliceOnFoot")),
+            editing = editing,
+            action = function()
+                editor:beginEditNumber({ label = "slice on foot", unit = "m",
+                    get = function() return ADFlyoverSettings.get("heightSliceOnFoot") end, apply = set,
+                    step = function(d) set(ADFlyoverSettings.get("heightSliceOnFoot") + d * 0.5) end })
+            end,
+            stepAction = function(d) set(ADFlyoverSettings.get("heightSliceOnFoot") + d * 0.5) end })
+    end
+    push({ kind = "note", text = "slice: looks straight down and hides roofs and trees over your vehicle's height" })
     push({ kind = "section", text = "THEME" })
     push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
         action = function() editor:cycleThemePreset(1) end,

@@ -410,6 +410,7 @@ ADFlyoverLocale.GENERAL.br = {
             "H - ocultar / exibir o cartão flutuante da ferramenta (ele também se oculta ao arrastar).",
             ", e . - diminuir / aumentar a atenuação do Mover.",
             "B - alternar a cópia do Mover.",
+            "G - corte de altura liga / desliga: vista direto para baixo, telhados e árvores acima da altura do veículo ficam ocultos.",
             "R (segurado) + roda - girar o que está sendo arrastado (Mover, durante o arrasto).",
             "Esc - volta UM passo: um número digitado, um diálogo, um popup (e sua seleção), uma ferramenta escolhida em um popup (volta ao popup), uma ação pendente, a seleção, a ferramenta - e só então sai do editor.",
         } },

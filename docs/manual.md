@@ -28,6 +28,7 @@ Opening, leaving, and the keys and controls that work everywhere.
 - H - hide / show the floating tool card (it also auto-hides while you drag).
 - , and . - Move's falloff value down / up.
 - B - toggle Move's copy.
+- G - height slice on / off: looks straight down and hides roofs and trees over your vehicle's height.
 - R (held) + wheel - rotate what is being dragged (Move, mid-drag).
 - Esc - back out ONE step: a typed number, a dialog, a popup (and its selection), a tool picked from a popup (back to the popup), a pending action, the selection, the tool - and only then leave the editor.
 

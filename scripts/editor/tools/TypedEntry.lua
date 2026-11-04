@@ -707,7 +707,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
         return
     end
 
-    local ok, x, y, z = tryCall("cursor:getPosition", function() return self.cursor:getPosition() end)
+    local ok, x, y, z = tryCall("cursor:getPosition", function() return self:cursorPosition() end)
     if not ok or x == nil or z == nil then
         -- Only log this once: if the cursor never resolves a position it will do so every frame.
         if not self.loggedNoPosition then
@@ -752,6 +752,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
     ADGraphManager:markChanges()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: placed waypoint id=%s at x=%.1f y=%.1f z=%.1f%s",
         tostring(newId), x, y, z, connectPrevious and " (connected to the previous one)" or "")
+    tryCall("notePlacedUnderRoof", function() self:notePlacedUnderRoof(newId, x, y, z) end)
 end
 
 function ADFlyoverEditor:draw()
