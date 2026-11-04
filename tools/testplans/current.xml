@@ -3,17 +3,11 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Span picks round a loop: the start stays" build="@BUILD@">
+<testPlan title="Help text for span picks" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
-          hint="Load Welker Farms, savegame 3. This ticks by itself."/>
-    <test id="pickRound" title="Carry the end round the loop"
-          failLog="refused span end"
-          hint="Smooth tool. On the spline loop, click a point, then click on point by point, all the way round and onto the road. The start never moves. PASS if so."/>
-    <test id="moveStart" title="Click the start to move it"
-          hint="Click the span's start, then the point next to it. Now the start moves and the far end stays. PASS if so."/>
-    <test id="apply" title="Apply the rebuild"
-          passLog="rebuilt %d+ piece%(s%)" failLog="used the FALLBACK path"
-          hint="Right-click to apply. This ticks by itself."/>
-    <test id="rightSide" title="Only the picked span changed"
-          hint="The new points lie where the preview was. The rest of the loop is as it was. PASS if so."/>
+          hint="This ticks by itself. Nothing to do."/>
+    <test id="smoothHelp" title="Smooth's help reads right"
+          hint="Hold the Smooth tool and open its help. It says the first click stays put and the end follows a loop. PASS if it reads well."/>
+    <test id="manualPage" title="The manual page scrolls to the end"
+          hint="Open the manual on Smooth. Scroll down. You can read the whole page. PASS if so."/>
 </testPlan>
