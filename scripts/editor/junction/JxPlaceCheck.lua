@@ -194,6 +194,22 @@ function ADFlyoverEditor:junctionPatternFit(jp)
             end
         end
     end
+    -- A JUNCTION NOBODY HAS WORKED ON YET (Welker Farms, 2026-11-03): a side road's two lanes stop short of
+    -- the main road and no turn is wired. The finder sees no forks and the numbered list has no number,
+    -- so the pattern was never tried and every such T went turn by turn. The build locked it and found
+    -- its turns all missing: that lock is the site. Only a TURN counts as wiring: the main road running
+    -- straight through is there on every T (headings within 30 degrees).
+    if site == nil and #(jp.movements or {}) > 0 then
+        local wired = false
+        for _, m in ipairs(jp.movements) do
+            if m.exists then
+                local d = math.abs((m.from.bearing or 0) - (m.to.bearing or 0)) % (2 * math.pi)
+                if d > math.pi then d = 2 * math.pi - d end
+                if m.from.bearing == nil or m.to.bearing == nil or d > math.rad(30) then wired = true break end
+            end
+        end
+        if not wired then site = { x = jp.cx, z = jp.cz, virgin = true } end
+    end
     if site == nil then
         return nil, nil, "no junction place knows here"
     end
@@ -206,6 +222,7 @@ function ADFlyoverEditor:junctionPatternFit(jp)
     end
     if #(res.loose or {}) > 0 then
         return nil, nil, string.format("it would leave %d lane end(s) loose", #res.loose)
+            .. ((res.fitWhy ~= nil) and string.format(" (the fitted %s: %s)", tostring(res.kind), tostring(res.fitWhy)) or "")
     end
     -- ONLY A PLAIN TWO-LANE T OR X: the pattern lays 6 movements on a T and 12 on an X, so the junction
     -- must have exactly those - no more (a T laid on a 4-way left half its routes out: 38, 83 on the
