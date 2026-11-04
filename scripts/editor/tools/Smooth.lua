@@ -290,7 +290,10 @@ function ADFlyoverEditor:collectSpanAnchors(ids)
 end
 
 function ADFlyoverEditor:rebuildSpanInPieces(ids)
-    local anchorPositions, junctions = self:collectSpanAnchors(ids)
+    -- Each piece is the span's OWN route between two anchors, not a fresh path search. Where two
+    -- anchors are joined by more than one route (a loop, a siding), the search took the shorter one
+    -- and rebuilt a different track from the one picked and previewed (Welker Farms, 2026-11-03).
+    local anchorPositions, junctions, pieceFor = self:ownRoutePieces(ids)
 
     local maxSpacing = self.smoothSpacing
     local minSpacing = math.max(AutoDrive.FIELD_LOOP_ADAPTIVE_MIN_SPACING, maxSpacing * 0.25)
@@ -299,39 +302,39 @@ function ADFlyoverEditor:rebuildSpanInPieces(ids)
 
     -- Backwards, so a piece being rebuilt cannot renumber the anchors of a piece not yet reached.
     for i = #anchorPositions - 1, 1, -1 do
-        local startId = self:findWayPointAt(anchorPositions[i])
-        local endId = self:findWayPointAt(anchorPositions[i + 1])
-        if startId ~= nil and endId ~= nil and startId ~= endId then
-            local piece = self:runPathBetween(startId, endId)
-            if piece ~= nil and #piece > 2 then
-                local pts = {}
-                for j = 1, #piece do
-                    local wp = ADGraphManager:getWayPointById(piece[j])
-                    if wp ~= nil then
-                        pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
-                    end
+        local piece, followedOwnRoute = pieceFor(i)
+        if piece ~= nil and not followedOwnRoute then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: rebuild piece %d: could not follow the span's own route, "
+                .. "used the FALLBACK path (%d point(s)).", i, #piece)
+        end
+        if piece ~= nil and #piece > 2 then
+            local pts = {}
+            for j = 1, #piece do
+                local wp = ADGraphManager:getWayPointById(piece[j])
+                if wp ~= nil then
+                    pts[#pts + 1] = { x = wp.x, y = wp.y, z = wp.z }
                 end
+            end
 
-                local smoothed = ADOffsetGeometry.smoothOpenChain(pts, 2, AutoDrive.FIELD_LOOP_MAX_WAYPOINT_TURN_DEG, 180)
-                local resampled = ADOffsetGeometry.resampleOpenChainByCurvature(smoothed,
-                    minSpacing, maxSpacing, AutoDrive.FIELD_LOOP_ADAPTIVE_TOLERANCE)
-                local finalPts = ADOffsetGeometry.relaxOpenChain(resampled, 1, {})
+            local smoothed = ADOffsetGeometry.smoothOpenChain(pts, 2, AutoDrive.FIELD_LOOP_MAX_WAYPOINT_TURN_DEG, 180)
+            local resampled = ADOffsetGeometry.resampleOpenChainByCurvature(smoothed,
+                minSpacing, maxSpacing, AutoDrive.FIELD_LOOP_ADAPTIVE_TOLERANCE)
+            local finalPts = ADOffsetGeometry.relaxOpenChain(resampled, 1, {})
 
-                for j = 1, #finalPts do
-                    finalPts[j].y = self:resolveHeightAt(finalPts[j].x, finalPts[j].z,
-                        heightAlongChain(pts, finalPts[j].x, finalPts[j].z))
-                end
+            for j = 1, #finalPts do
+                finalPts[j].y = self:resolveHeightAt(finalPts[j].x, finalPts[j].z,
+                    heightAlongChain(pts, finalPts[j].x, finalPts[j].z))
+            end
 
-                local a = ADGraphManager:getWayPointById(piece[1])
-                local b = ADGraphManager:getWayPointById(piece[2])
-                local dual = ADGraphManager:isDualRoad(a, b)
-                local flags = b.flags or AutoDrive.FLAG_NONE
+            local a = ADGraphManager:getWayPointById(piece[1])
+            local b = ADGraphManager:getWayPointById(piece[2])
+            local dual = ADGraphManager:isDualRoad(a, b)
+            local flags = b.flags or AutoDrive.FLAG_NONE
 
-                before = before + #piece
-                after = after + #finalPts
-                if self:replaceChainInterior(piece, finalPts, dual, flags) then
-                    piecesDone = piecesDone + 1
-                end
+            before = before + #piece
+            after = after + #finalPts
+            if self:replaceChainInterior(piece, finalPts, dual, flags) then
+                piecesDone = piecesDone + 1
             end
         end
     end

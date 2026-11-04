@@ -24,6 +24,15 @@ One offline clear takes under a second; these run many side by side (PAR, defaul
   temporary checkout; checks the zip's editor file is the commit's; refuses while FS25 runs; installs
   and launches.
 - `reg75.sh` / `reg75check.sh` - the full pass, about 30 s each since they run in parallel.
+- `lua spanloop.lua` - Smooth rebuild on a made-up one-way loop, span picked the long way round: only
+  the picked span's points may change. No map data needed.
+- `lua spanpick.lua` - the span-pick click on the same kind of loop: picks against the traffic and round
+  the loop are taken, a lane-to-lane U-turn is still refused. `lua pairsweep.lua` - every close pair on the
+  real map, kept or refused, to compare two checkouts.
+- `lua spantools.lua` - every span tool's own click handler on a loop beside a junction: the span each
+  tool acts on must be the one carried round, not a short cut.
+- `lua cardhelp.lua` - the real HUD draw with engine calls stubbed: with the help page open, the tool card
+  must not overlap it (game text draws through any background), or is left out with its buttons.
 
 Harness switches these use: `ADOPT=<capture meta.txt>` (the game's settings), `TURNR=<m>` (the card's
 turn radius, which the clear reads too). `TWO_WAY=1|0` turns the pattern at junctions where a two-way road

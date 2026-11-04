@@ -184,33 +184,16 @@ end
 --- ignores direction. Where a track has more than one route between two points (a siding, a loop, a
 --- shortcut), the plain search takes the shortest and can pick one that runs against the traffic; this
 --- takes the one the traffic actually uses.
-function ADFlyoverEditor:spanPath(a, b)
-    local maxNodes = AutoDrive.FLYOVER_MERGE_MAX_RUN
-    local path = directedPath(a, b, maxNodes)
-    if path ~= nil then
-        return path
-    end
-    path = directedPath(b, a, maxNodes)
-    if path ~= nil then
-        local reversed = {}
-        for i = #path, 1, -1 do reversed[#reversed + 1] = path[i] end
-        return reversed
-    end
-    return self:runPathBetween(a, b)
-end
-
---- A span picked by two clicks must be the short, obvious way between them. When the only route found runs
---- a long way round (away through a junction and back, or down a different run), refuse it rather than
---- quietly take it: over ROUTE_MAX_RATIO times the straight distance AND more than ROUTE_MAX_EXTRA metres
---- longer than it. Returns ok, routeLength, straightLength.
-ADFlyoverEditor.ROUTE_MAX_RATIO = 2.0
-ADFlyoverEditor.ROUTE_MAX_EXTRA = 40
-function ADFlyoverEditor:spanRouteIsDirect(span)
-    if span == nil or #span < 2 then
-        return true, 0, 0
-    end
+---
+--- On a loop BOTH directions exist: a to b one way round, b to a the other. Taking a to b whenever it
+--- existed meant a loop clicked against the traffic gave the route almost all the way round, which the
+--- long-way check then refused (2026-11-03). So both are tried and the shorter wins - unless `prefer`
+--- (the span being changed, as a list of ids) is given: then the route that keeps more of it wins, so
+--- moving one end on round a loop grows the span the way it already runs instead of flipping it to the
+--- other side.
+local function routeLength(ids)
     local length, prev = 0, nil
-    for _, id in ipairs(span) do
+    for _, id in ipairs(ids) do
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             if prev ~= nil then
@@ -219,11 +202,139 @@ function ADFlyoverEditor:spanRouteIsDirect(span)
             prev = wp
         end
     end
+    return length
+end
+
+function ADFlyoverEditor:spanPath(a, b, prefer)
+    local maxNodes = AutoDrive.FLYOVER_MERGE_MAX_RUN
+    local candidates = {}
+    local fwd = directedPath(a, b, maxNodes)
+    if fwd ~= nil then
+        candidates[#candidates + 1] = fwd
+    end
+    local back = directedPath(b, a, maxNodes)
+    if back ~= nil then
+        local reversed = {}
+        for i = #back, 1, -1 do reversed[#reversed + 1] = back[i] end
+        candidates[#candidates + 1] = reversed
+    end
+    if #candidates == 0 then
+        return self:runPathBetween(a, b)
+    end
+    if #candidates == 1 then
+        return candidates[1]
+    end
+
+    local keep = {}
+    for _, id in ipairs(prefer or {}) do keep[id] = true end
+    local best, bestKept, bestLength
+    for _, path in ipairs(candidates) do
+        local kept = 0
+        for _, id in ipairs(path) do
+            if keep[id] then kept = kept + 1 end
+        end
+        local length = routeLength(path)
+        if best == nil or kept > bestKept or (kept == bestKept and length < bestLength - 0.01) then
+            best, bestKept, bestLength = path, kept, length
+        end
+    end
+    return best
+end
+
+--- Where a route turns OFF at a junction: the first interior waypoint with more than two neighbours at
+--- which the route's heading (measured over about 4 m either side) changes by more than
+--- ROUTE_JUNCTION_TURN_DEG. Nil when it never does - the route stays on one track, going straight on
+--- through any junction it passes. Returns the id and the turn in degrees.
+ADFlyoverEditor.ROUTE_JUNCTION_TURN_DEG = 60
+function ADFlyoverEditor:spanTurnsOffAtJunction(span)
+    local pts = {}
+    for i, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp == nil then
+            return nil
+        end
+        pts[i] = wp
+    end
+    local cum = { 0 }
+    for i = 2, #pts do
+        cum[i] = cum[i - 1] + MathUtil.vector2Length(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z)
+    end
+    local reach = 4
+    for i = 2, #pts - 1 do
+        local seen, count = {}, 0
+        for _, listName in ipairs(LINK_LISTS) do
+            for _, other in pairs(linkList(pts[i], listName) or {}) do
+                if not seen[other] and other ~= pts[i].id then
+                    seen[other] = true
+                    count = count + 1
+                end
+            end
+        end
+        if count > 2 then
+            local j, k = i - 1, i + 1
+            while j > 1 and cum[i] - cum[j] < reach do j = j - 1 end
+            while k < #pts and cum[k] - cum[i] < reach do k = k + 1 end
+            local ax, az = pts[i].x - pts[j].x, pts[i].z - pts[j].z
+            local bx, bz = pts[k].x - pts[i].x, pts[k].z - pts[i].z
+            local la, lb = MathUtil.vector2Length(ax, az), MathUtil.vector2Length(bx, bz)
+            if la > 0.01 and lb > 0.01 then
+                local c = math.max(-1, math.min(1, (ax * bx + az * bz) / (la * lb)))
+                local turn = math.deg(math.acos(c))
+                if turn > self.ROUTE_JUNCTION_TURN_DEG then
+                    return pts[i].id, turn
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- A span picked by two clicks must be the short, obvious way between them. When the only route found runs
+--- a long way round (away through a junction and back, or down a different run), refuse it rather than
+--- quietly take it: over ROUTE_MAX_RATIO times the straight distance AND more than ROUTE_MAX_EXTRA metres
+--- longer than it. Returns ok, routeLength, straightLength, turnId, turnDeg.
+---
+--- A long route that stays CLOSE and on one track is not "the long way round": the track itself bends
+--- back, as round a turnaround loop at a road's end. Two points far round such a loop are close
+--- together but joined only along the loop, so the length test alone refused them (2026-11-03). Such a
+--- route is kept when it never turns off at a junction AND never goes more than ROUTE_MAX_STRAY metres
+--- from the nearer of its two ends. Both are needed: a route that turns off at a junction (a U-turn onto
+--- the other lane, a siding taper and back) is a detour however close it stays, and one that stays on a
+--- track but wanders far (the next lap of a field loop, a long ring road) is not what two clicks a few
+--- metres apart meant. turnId, turnDeg name where a refused route turned off (nil when it strayed).
+ADFlyoverEditor.ROUTE_MAX_RATIO = 2.0
+ADFlyoverEditor.ROUTE_MAX_EXTRA = 40
+ADFlyoverEditor.ROUTE_MAX_STRAY = 50
+function ADFlyoverEditor:spanRouteIsDirect(span)
+    if span == nil or #span < 2 then
+        return true, 0, 0
+    end
+    local length = routeLength(span)
     local a = ADGraphManager:getWayPointById(span[1])
     local b = ADGraphManager:getWayPointById(span[#span])
     local straight = (a ~= nil and b ~= nil) and MathUtil.vector2Length(b.x - a.x, b.z - a.z) or 0
     local direct = not (length > straight * self.ROUTE_MAX_RATIO and length - straight > self.ROUTE_MAX_EXTRA)
-    return direct, length, straight
+    if direct then
+        return true, length, straight
+    end
+    local turnId, turnDeg = self:spanTurnsOffAtJunction(span)
+    if turnId ~= nil then
+        return false, length, straight, turnId, turnDeg
+    end
+    local stray = 0
+    for _, id in ipairs(span) do
+        local wp = ADGraphManager:getWayPointById(id)
+        if wp ~= nil and a ~= nil and b ~= nil then
+            stray = math.max(stray, math.min(MathUtil.vector2Length(wp.x - a.x, wp.z - a.z),
+                MathUtil.vector2Length(wp.x - b.x, wp.z - b.z)))
+        end
+    end
+    if stray > self.ROUTE_MAX_STRAY then
+        return false, length, straight
+    end
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: long route kept: %.0fm for %.0fm apart, but it stays on one track "
+        .. "within %.0fm of its ends (a loop).", length, straight, stray)
+    return true, length, straight
 end
 
 --- Put a span's ids in the direction TRAFFIC runs along it. runPathBetween walks the graph ignoring link
@@ -293,6 +404,8 @@ function ADFlyoverEditor:spanPickClick(cfg)
                 fromId, toId = ids[1], ids[#ids]
             end
             self.spanIds = ids
+            self.spanMovingEndId = nil
+            self.spanPickedUpId = nil
             cfg.setEnds(fromId, toId, ids)
             self.pickKind = "run"
             if cfg.onSpan ~= nil then cfg.onSpan(fromId, toId, ids) end
@@ -320,6 +433,8 @@ function ADFlyoverEditor:spanPickClick(cfg)
 
     if from == nil then
         self.spanIds = nil
+        self.spanMovingEndId = nil
+        self.spanPickedUpId = nil
         cfg.setEnds(id, nil, nil)
         self.pickKind = "span"
         ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span from id=%s; click the far end (or double-click for the whole run).",
@@ -339,10 +454,11 @@ function ADFlyoverEditor:spanPickClick(cfg)
             self:warnPlayer(string.format("Those two points are not connected, so they are not two ends of one span."))
             return
         end
-        local direct, routeLength, straightLength = self:spanRouteIsDirect(span)
+        local direct, routeLength, straightLength, turnId, turnDeg = self:spanRouteIsDirect(span)
         if not direct then
-            ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span id=%s to id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)).",
-                tostring(from), tostring(id), routeLength, straightLength, #span)
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span id=%s to id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)), "
+                .. "turns off %.0f deg at junction id=%s.",
+                tostring(from), tostring(id), routeLength, straightLength, #span, turnDeg or 0, tostring(turnId))
             self:warnPlayer("Those two points are only joined the long way round - pick points on the same stretch of track.")
             return
         end
@@ -352,6 +468,8 @@ function ADFlyoverEditor:spanPickClick(cfg)
             a, b, span = id, from, ordered   -- the traffic runs the other way: the span starts at the second click
         end
         self.spanIds = span   -- the route that was picked, so the preview and the commit follow exactly it
+        self.spanMovingEndId = id   -- the second click is the end being placed; clicks on past it keep moving it
+        self.spanPickedUpId = nil
         cfg.setEnds(a, b, nil)
         self.pickKind = "span"
         if cfg.onSpan ~= nil then cfg.onSpan(a, b, span) end
@@ -361,22 +479,50 @@ function ADFlyoverEditor:spanPickClick(cfg)
         return
     end
 
-    -- Both ends exist: replace whichever end is nearer this click (Move's refinement, now everywhere).
-    local wp = ADGraphManager:getWayPointById(id)
-    local fromWp = ADGraphManager:getWayPointById(from)
-    local toWp = ADGraphManager:getWayPointById(to)
-    if wp == nil or fromWp == nil or toWp == nil then
+    -- Both ends exist: move the CARRIED end to this click. The end clicked first is the anchor and stays
+    -- put (2026-11-03, build 717: carried round a loop to where it meets the road again, the start
+    -- jumped to the point beside it). Clicking the anchor itself picks it up instead, so the next click
+    -- moves it. With no carried end yet (a whole-run pick), pickEndToMove chooses one along the track.
+    local current = self.spanIds
+    if current ~= nil and not (current[1] == from and current[#current] == to) then
+        current = nil
+    end
+    local moving = self.spanMovingEndId
+    if moving ~= from and moving ~= to then
+        local replacingFrom = self:pickEndToMove(from, to, id, current)
+        if replacingFrom == nil then
+            return
+        end
+        moving = replacingFrom and from or to
+    end
+    local anchor = (moving == from) and to or from
+    if id == moving then
         return
     end
-    local dFrom = MathUtil.vector2Length(wp.x - fromWp.x, wp.z - fromWp.z)
-    local dTo = MathUtil.vector2Length(wp.x - toWp.x, wp.z - toWp.z)
-    local replacingFrom = dFrom <= dTo
+    if id == anchor then
+        self.spanMovingEndId = anchor
+        self.spanPickedUpId = anchor   -- the card says so until it is placed
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span: picked up the end at id=%s; the next click moves it.",
+            self.TOOL_NAMES[self.tool] or "tool", tostring(anchor))
+        return
+    end
+    local replacingFrom = moving == from
     local newFrom = replacingFrom and id or from
     local newTo = replacingFrom and to or id
-    if newFrom == newTo then
-        return
+
+    -- The new span is the current one, changed only at the carried end: cut back to the click when it
+    -- is on the span, otherwise carried on from the span's last point that reaches the click without
+    -- crossing the span. A fresh path search between the two ends could take a short cut and drop the
+    -- span (1480 to 2650 at Welker: 3 m along the road instead of round the loop).
+    local span = current ~= nil and self:carrySpanEnd(current, anchor, id) or nil
+    if span ~= nil and replacingFrom then
+        local reversed = {}
+        for i = #span, 1, -1 do reversed[#reversed + 1] = span[i] end
+        span = reversed
     end
-    local span = self:spanPath(newFrom, newTo)
+    if span == nil then
+        span = self:spanPath(newFrom, newTo, current)
+    end
     if span == nil and cfg.anyPoints then
         span = { newFrom, newTo }
     end
@@ -384,10 +530,11 @@ function ADFlyoverEditor:spanPickClick(cfg)
         self:warnPlayer("That point is not connected to the other end, so the span was not changed.")
         return
     end
-    local direct, routeLength, straightLength = self:spanRouteIsDirect(span)
+    local direct, routeLength, straightLength, turnId, turnDeg = self:spanRouteIsDirect(span)
     if not direct then
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span end id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)).",
-            tostring(id), routeLength, straightLength, #span)
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: refused span end id=%s: the route is %.0fm for %.0fm apart (%d waypoint(s)), "
+            .. "turns off %.0f deg at junction id=%s.",
+            tostring(id), routeLength, straightLength, #span, turnDeg or 0, tostring(turnId))
         self:warnPlayer("That point is only joined to the span the long way round - the span was not changed.")
         return
     end
@@ -396,12 +543,179 @@ function ADFlyoverEditor:spanPickClick(cfg)
         newFrom, newTo, span = newTo, newFrom, ordered
     end
     self.spanIds = span
+    self.spanMovingEndId = id   -- still the carried end; the anchor is whichever end is not this
+    self.spanPickedUpId = nil
     cfg.setEnds(newFrom, newTo, nil)
     self.pickKind = "span"
     if cfg.onSpan ~= nil then cfg.onSpan(newFrom, newTo, span) end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span end replaced: %d waypoint(s), id=%s to id=%s%s.",
         self.TOOL_NAMES[self.tool] or "tool", #span, tostring(newFrom), tostring(newTo),
         turned and " (turned round to follow the traffic)" or "")
+end
+
+--- How many links from `startId` to `targetId` without passing through the span (`inSpan`, a set of
+--- ids; only startId itself may be in it), ignoring direction. Nil when the span is in the way or the
+--- target is too far.
+local function hopsAvoiding(startId, targetId, inSpan, maxNodes)
+    if startId == targetId then
+        return 0
+    end
+    local seen = { [startId] = true }
+    local frontier, hops, visited = { startId }, 0, 1
+    while #frontier > 0 and visited < maxNodes do
+        hops = hops + 1
+        local nextFrontier = {}
+        for _, id in ipairs(frontier) do
+            local wp = ADGraphManager:getWayPointById(id)
+            if wp ~= nil then
+                for _, listName in ipairs(LINK_LISTS) do
+                    for _, other in pairs(linkList(wp, listName) or {}) do
+                        if other == targetId then
+                            return hops
+                        end
+                        if not seen[other] and not inSpan[other] then
+                            seen[other] = true
+                            visited = visited + 1
+                            nextFrontier[#nextFrontier + 1] = other
+                        end
+                    end
+                end
+            end
+        end
+        frontier = nextFrontier
+    end
+    return nil
+end
+
+--- The span `span` (either way round) with its end that is NOT `anchor` carried to `id`, as a list of
+--- ids from the anchor to `id`, or nil when that cannot be done along the track.
+---   - `id` on the span: the span cut back to it.
+---   - otherwise: the span kept from the anchor as far as the last point that reaches `id` within
+---     CARRY_MAX_HOPS links without crossing the span, then that way on to `id`. Starting from the
+---     carried end and stepping back means the span is kept as far as it can be - carried past a
+---     junction onto a spur, a click back on the other branch turns off at the junction rather than
+---     cutting the span short.
+ADFlyoverEditor.CARRY_MAX_HOPS = 40
+function ADFlyoverEditor:carrySpanEnd(span, anchor, id)
+    local cur = span
+    if span[#span] == anchor then
+        cur = {}
+        for i = #span, 1, -1 do cur[#cur + 1] = span[i] end
+    elseif span[1] ~= anchor then
+        return nil
+    end
+
+    local inSpan = {}
+    for i, sid in ipairs(cur) do
+        if sid == id then
+            local out = {}
+            for k = 1, i do out[k] = cur[k] end
+            return #out >= 2 and out or nil
+        end
+        inSpan[sid] = true
+    end
+
+    for k = #cur, 1, -1 do
+        -- Breadth-first from cur[k] to id, not through any other span point, at most CARRY_MAX_HOPS.
+        local start = cur[k]
+        local cameFrom = { [start] = false }
+        local frontier, found = { start }, false
+        for _ = 1, self.CARRY_MAX_HOPS do
+            local nextFrontier = {}
+            for _, nid in ipairs(frontier) do
+                local wp = ADGraphManager:getWayPointById(nid)
+                if wp ~= nil then
+                    for _, listName in ipairs(LINK_LISTS) do
+                        for _, other in pairs(linkList(wp, listName) or {}) do
+                            if cameFrom[other] == nil and not inSpan[other] then
+                                cameFrom[other] = nid
+                                if other == id then
+                                    found = true
+                                    break
+                                end
+                                nextFrontier[#nextFrontier + 1] = other
+                            end
+                        end
+                        if found then break end
+                    end
+                end
+                if found then break end
+            end
+            if found or #nextFrontier == 0 then break end
+            frontier = nextFrontier
+        end
+        if found then
+            local tail, nid = {}, id
+            while nid ~= start do
+                table.insert(tail, 1, nid)
+                nid = cameFrom[nid]
+            end
+            local out = {}
+            for j = 1, k do out[j] = cur[j] end
+            for _, t in ipairs(tail) do out[#out + 1] = t end
+            return out
+        end
+    end
+    return nil
+end
+
+--- Which end of a picked span a click moves: true for the `from` end, false for `to`, nil to ignore.
+---
+--- Decided along the track, by node order, not by straight distance. Straight distance broke on a loop
+--- (2026-11-03): with the span run nearly all the way round, its two ends sit side by side, and a click
+--- just past the end being moved was nearer the OTHER end, which then jumped back to the short side.
+---   - A click ON the span moves the end it is fewer points from (shrinking the span from that end).
+---   - A click off the span keeps moving the end that was placed last (spanMovingEndId), if that end can
+---     reach the click without crossing the span and is no more than one link farther from it than the
+---     other end - so carrying an end on round a loop keeps going the way it was going, even once it is
+---     next to the other end, while a click just past the other end still moves that one.
+---   - Otherwise the end fewer links away from the click, not crossing the span.
+---   - Straight distance only when neither end can be reached that way.
+function ADFlyoverEditor:pickEndToMove(from, to, id, span)
+    span = span or self:spanPath(from, to)
+    local inSpan, index = {}, {}
+    for i, sid in ipairs(span or {}) do
+        inSpan[sid] = true
+        index[sid] = i
+    end
+
+    if index[id] ~= nil and span ~= nil then
+        local i = index[id]
+        if i - 1 ~= #span - i then
+            return i - 1 < #span - i
+        end
+    elseif span ~= nil then
+        local maxNodes = AutoDrive.FLYOVER_MERGE_MAX_RUN or 4096
+        local hFrom = hopsAvoiding(from, id, inSpan, maxNodes)
+        local hTo = hopsAvoiding(to, id, inSpan, maxNodes)
+        -- The end being moved wins unless the other end is clearly nearer the click (two links or more):
+        -- on a loop both ends reach a click in the gap, and the one just carried there is meant.
+        local moving = self.spanMovingEndId
+        if moving == from and hFrom ~= nil and (hTo == nil or hFrom <= hTo + 1) then
+            return true
+        elseif moving == to and hTo ~= nil and (hFrom == nil or hTo <= hFrom + 1) then
+            return false
+        end
+        if hFrom ~= nil or hTo ~= nil then
+            if hTo == nil then
+                return true
+            elseif hFrom == nil then
+                return false
+            elseif hFrom ~= hTo then
+                return hFrom < hTo
+            end
+        end
+    end
+
+    local wp = ADGraphManager:getWayPointById(id)
+    local fromWp = ADGraphManager:getWayPointById(from)
+    local toWp = ADGraphManager:getWayPointById(to)
+    if wp == nil or fromWp == nil or toWp == nil then
+        return nil
+    end
+    local dFrom = MathUtil.vector2Length(wp.x - fromWp.x, wp.z - fromWp.z)
+    local dTo = MathUtil.vector2Length(wp.x - toWp.x, wp.z - toWp.z)
+    return dFrom <= dTo
 end
 
 --- Lock the selection type (or, with nil, go back to auto). Clicking the lit type on a tool card
@@ -530,79 +844,6 @@ ADFlyoverEditor.DELETE_SCOPE_NAMES = { "one waypoint", "whole run" }
 -- has Span (and, later, Box/Circle/Freehand), none of which delete has any use for.
 ADFlyoverEditor.MOVE_SELECT = { POINT = 1, RUN = 2, SPAN = 3 }
 ADFlyoverEditor.MOVE_SELECT_NAMES = { "point", "run", "span" }
-
---- Span mode's click handling. Point/Run grab and move in one press-drag-release gesture; Span is
---- built up first with plain clicks, and only once both ends exist does pressing on a MEMBER of it
---- become an actual grab (onLeftPress/beginDrag - see there).
----
---- Same gesture ("click the new one") whichever end is being set: with fewer than two ends picked,
---- a click fills in the next one; once both exist, a click that lands on neither end nor a member
---- replaces whichever existing end it is geometrically closer to. This is deliberately NOT a
---- separate "reselect" mode - there is only ever one thing a click does here, so nothing needs
---- cancelling to redo an end, and there is no ambiguity to guess between "replace" and "start over"
---- (see junction-crossing-detection-self-destructs in project memory for why a proximity GUESS
---- between two different actions is the wrong shape here).
-function ADFlyoverEditor:moveSpanClick()
-    if self.hoverId == nil then
-        return
-    end
-
-    if self.moveSpanFromId == nil then
-        self.moveSpanFromId = self.hoverId
-        self.moveSpanToId, self.moveSpanIds = nil, nil
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: move span from id=%s; click the far end.", tostring(self.hoverId))
-        return
-    end
-
-    if self.moveSpanToId == nil then
-        if self.hoverId == self.moveSpanFromId then
-            return
-        end
-        local span = self:runPathBetween(self.moveSpanFromId, self.hoverId)
-        if span == nil then
-            Logging.warning("[FlyoverEditor]: id=%s is not connected to id=%s, so they are not two ends of one span.",
-                tostring(self.hoverId), tostring(self.moveSpanFromId))
-            return
-        end
-        self.moveSpanToId = self.hoverId
-        self.moveSpanIds = {}
-        for _, id in ipairs(span) do self.moveSpanIds[id] = true end
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: move span of %d waypoint(s) picked. Grab and drag any point "
-            .. "on it to move; click elsewhere on the network to replace whichever end is closer.", #span)
-        return
-    end
-
-    -- Both ends exist - replace whichever end sits closer to this click. Used to refuse a click
-    -- that landed on a member outright, back when onLeftPress guaranteed one could never reach
-    -- here at all; onLeftRelease now deliberately routes a too-small-to-be-a-drag click on a
-    -- member here too (2026-09-21 fix - shrinking a span never worked before this, only
-    -- extending it), so a member landing here is expected, not a case to refuse. Re-picking the
-    -- SAME end you clicked (or clicking the far end exactly) both resolve to a harmless no-op via
-    -- the distance comparison below, so nothing special has to be done for those either.
-    local wp = ADGraphManager:getWayPointById(self.hoverId)
-    local fromWp = ADGraphManager:getWayPointById(self.moveSpanFromId)
-    local toWp = ADGraphManager:getWayPointById(self.moveSpanToId)
-    if wp == nil or fromWp == nil or toWp == nil then
-        return
-    end
-    local dFrom = MathUtil.vector2Length(wp.x - fromWp.x, wp.z - fromWp.z)
-    local dTo = MathUtil.vector2Length(wp.x - toWp.x, wp.z - toWp.z)
-    local replacingFrom = dFrom <= dTo
-    local newFromId = replacingFrom and self.hoverId or self.moveSpanFromId
-    local newToId = replacingFrom and self.moveSpanToId or self.hoverId
-
-    local span = self:runPathBetween(newFromId, newToId)
-    if span == nil then
-        Logging.warning("[FlyoverEditor]: id=%s is not connected to the other end, so the span was not changed.",
-            tostring(self.hoverId))
-        return
-    end
-
-    self.moveSpanFromId, self.moveSpanToId = newFromId, newToId
-    self.moveSpanIds = {}
-    for _, id in ipairs(span) do self.moveSpanIds[id] = true end
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: move span of %d waypoint(s) picked.", #span)
-end
 
 function ADFlyoverEditor:cancelMoveSpan()
     if self.moveSpanFromId ~= nil or self.moveSpanToId ~= nil then

@@ -158,7 +158,10 @@ Parallel copies a span or run sideways by a set distance as a second track along
 
 **How to use it**
 
-1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. Click again near either end to move that end. The "picks" row lights to show what you picked; click a type to lock to it (the others dull), click it again to unlock. A route that only joins the two points the long way round is refused.
+1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. On a loop two clicks take the shorter way round.
+1. Click on past the far end to carry it further; it follows the track, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
+1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
+1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. The side follows where the cursor is when the span is picked; change it on the card.
 1. Set the distance (type, step or wheel), then right-click to lay it.
 
@@ -222,6 +225,7 @@ Move drags waypoints to a new spot and re-seats them on the real ground there. A
 
 1. Press and drag a point to move it. Release to drop it.
 1. Click (no drag) to pick instead: a point; a second point for the SPAN between; double-click for the whole RUN. Then drag any point of the pick to move the lot. Dragging a point outside the pick moves just that point.
+1. Click on past a span's far end to carry it further, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
 1. The "picks" row lights to show what is picked. Click a type to lock it: run moves the whole run from a single grab, point never builds spans. Click it again to unlock.
 1. A selection (box, circle, freehand, rotated box, Ctrl-click) wins: grab any selected point to move the set. One connected run of points counts as a span; a scattered set moves rigidly.
 1. Falloff: on a single point it spreads along the track by the falloff value (wheel, steppers, typed, or , and .). On a span, run or run-shaped selection it tapers from the point you grab down to zero at its own two ends - no value to set.
@@ -246,11 +250,14 @@ Move drags waypoints to a new spot and re-seats them on the real ground there. A
 
 *Shape — Round off the jitter in a span or run.*
 
-Smooth eases the small kinks out of a stretch so a driven path stops feeling jumpy. Relax nudges the existing points into line (keeping junctions and markers); rebuild lays the stretch again at an even spacing.
+Smooth eases the small kinks out of a stretch so a driven path stops feeling jumpy. Relax nudges the existing points into line (keeping junctions and markers); rebuild lays the stretch again along exactly the route you picked: points up to the max spacing apart, closer on curves.
 
 **How to use it**
 
-1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. Click again near either end to move that end. The "picks" row lights to show what you picked; click a type to lock to it (the others dull), click it again to unlock. A route that only joins the two points the long way round is refused.
+1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. On a loop two clicks take the shorter way round.
+1. Click on past the far end to carry it further; it follows the track, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
+1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
+1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. Or Ctrl-click the points one by one - they have to stay one connected run; a plain click afterwards drops that and starts a new pick.
 1. Set the mode and strength / spacing, then right-click to apply.
 
@@ -258,7 +265,7 @@ Smooth eases the small kinks out of a stretch so a driven path stops feeling jum
 
 - **mode** — relax (move points) or rebuild (respace).
 - **strength** — how hard relax pulls.
-- **max spacing** — point spacing when rebuilding.
+- **max spacing** — the widest gap when rebuilding; curves get closer points.
 
 <a id="straighten"></a>
 ## Straighten
@@ -269,7 +276,10 @@ Straighten removes wandering detail but keeps genuine corners, dropping only the
 
 **How to use it**
 
-1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. Click again near either end to move that end. The "picks" row lights to show what you picked; click a type to lock to it (the others dull), click it again to unlock. A route that only joins the two points the long way round is refused.
+1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. On a loop two clicks take the shorter way round.
+1. Click on past the far end to carry it further; it follows the track, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
+1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
+1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. Or Ctrl-click the points one by one (one connected run).
 1. Set the tolerance - larger removes more - then right-click to apply.
 
@@ -286,7 +296,10 @@ Divide spreads a chosen number of waypoints evenly by distance along a stretch, 
 
 **How to use it**
 
-1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. Click again near either end to move that end. The "picks" row lights to show what you picked; click a type to lock to it (the others dull), click it again to unlock. A route that only joins the two points the long way round is refused.
+1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. On a loop two clicks take the shorter way round.
+1. Click on past the far end to carry it further; it follows the track, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
+1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
+1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. Or Ctrl-click the points one by one (one connected run).
 1. Set how many points, then right-click to apply.
 
@@ -303,7 +316,10 @@ Ground drops (or raises) waypoints onto the ground within a tolerance, fixing po
 
 **How to use it**
 
-1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. Click again near either end to move that end. The "picks" row lights to show what you picked; click a type to lock to it (the others dull), click it again to unlock. A route that only joins the two points the long way round is refused.
+1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. On a loop two clicks take the shorter way round.
+1. Click on past the far end to carry it further; it follows the track, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
+1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
+1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. Or select points - box, circle, Ctrl-click - connected or not; Ground checks each on its own.
 1. Set the tolerance; the points found off the ground are marked. Right-click re-seats them.
 
@@ -341,7 +357,10 @@ Merge is for a stretch where two separately-recorded tracks run alongside each o
 
 **How to use it**
 
-1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. Click again near either end to move that end. The "picks" row lights to show what you picked; click a type to lock to it (the others dull), click it again to unlock. A route that only joins the two points the long way round is refused.
+1. Pick the stretch the usual way: click one end and then the other for a SPAN, or double-click for the whole RUN between junctions. On a loop two clicks take the shorter way round.
+1. Click on past the far end to carry it further; it follows the track, round a loop too. The first click stays put: click it, then where it should go, to move it instead. After a double-click run, a click moves the nearer end.
+1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
+1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. Green marks what would be absorbed. Click the OTHER track to merge - or right-click if it is the only track alongside.
 1. The two tracks have to be within the merge distance of each other for anything to merge.
 
