@@ -164,7 +164,7 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Point at a waypoint, then drag it.")
     elseif self.tool == t.DELETE then
         if self.selectionCount > 0 then
-            return string.format(L("Click to delete %d selected."), self.selectionCount)
+            return string.format(L("Right-click deletes the %d selected. Esc clears the selection."), self.selectionCount)
         end
         if self.deleteScope == self.DELETE_SCOPE.RUN then
             return L("Click a run to delete all of it, out to the junctions at each end.")

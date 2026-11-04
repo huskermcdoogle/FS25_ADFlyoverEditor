@@ -76,7 +76,7 @@ function ADFlyoverEditor:getEditableNumbers()
         return { fieldEntry("tolerance", "m", 1, "groundTolerance", AD.FLYOVER_GROUND_MIN, AD.FLYOVER_GROUND_MAX,
             AD.FLYOVER_GROUND_STEP, false) }
     elseif self.tool == self.TOOL.STRAIGHTEN then
-        return { fieldEntry("tolerance", "m", 1, "straightenTolerance", AD.FLYOVER_STRAIGHTEN_MIN,
+        return { fieldEntry("tolerance", "m", 2, "straightenTolerance", AD.FLYOVER_STRAIGHTEN_MIN,
             AD.FLYOVER_STRAIGHTEN_MAX, AD.FLYOVER_STRAIGHTEN_STEP, false) }
     elseif self.tool == self.TOOL.DIVIDE then
         return { fieldEntry("points", "", 0, "divideCount", 0, AD.FLYOVER_DIVIDE_MAX, 1, true) }

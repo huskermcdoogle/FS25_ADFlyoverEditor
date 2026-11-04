@@ -3,34 +3,29 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Issue 28 settings page + issue 18 wheel zoom" build="@BUILD@">
+<testPlan title="Panels on top of each other + help text" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
-    <test id="bigScale" title="Make the editor big"
-          hint="Open the editor settings (more settings...). Set ui scale to 1.5 x or more. Then click PASS."/>
-    <test id="fits" title="The settings page fits"
-          hint="Look at the page. You can reach the title and the close button, and nothing is cut off. PASS if so."/>
-    <test id="wheelScrolls" title="The wheel scrolls the page"
-          hint="Roll the wheel over the rows. The page moves, a bar on the right shows where you are, and no value changes. PASS if so."/>
-    <test id="stepsWork" title="The + button still works"
-          hint="Scroll down to LAUNCH BUTTON. Click + on position. The position changes. PASS if so."/>
-    <test id="scaleBack" title="Set the size back"
-          hint="Set ui scale back to 1.0 x. Then click PASS."/>
-    <test id="smallWheel" title="Small page: the wheel changes values"
-          hint="Roll the wheel over a value. The value changes, as before. PASS if so."/>
-    <test id="buttonRight" title="Button set to right stays on screen"
-          hint="Set position to right. Close the editor. With AutoDrive's box at the right edge, the button sits on its left, fully on screen. PASS if so."/>
-    <test id="buttonEdge" title="Button near the top stays on screen"
-          hint="Set position to above. Drag AutoDrive's box to the top edge. The button stays on screen. Set it back the way you like it, then PASS."/>
-    <test id="cycleExit" title="In a vehicle: open and close the editor"
-          passLog="exit: the screen is on the vehicle's camera"
-          hint="Sit in a vehicle. Press Alt+F, then Esc. This ticks by itself."/>
-    <test id="wheelZooms" title="The wheel zooms the vehicle camera"
-          hint="Roll the wheel. The camera zooms in and out. PASS if so."/>
-    <test id="report" title="Run the wheel report"
-          hint="Open the console (~). Type FlyoverWheelReport and press Enter. One line appears. PASS if so."/>
-    <test id="clickVehicle" title="Clicking a vehicle from above does not enter it"
-          hint="Open the editor. With the Select tool, left-click a parked vehicle. You stay where you are and the editor stays open. PASS if so."/>
-    <test id="leaveInside" title="Leave the vehicle with the editor open"
-          hint="In a vehicle: Alt+F, then leave or switch vehicle any way you can, then Esc. The wheel still zooms where you are. SKIP if nothing lets you leave."/>
+    <test id="smoothHelp" title="Smooth card under its help page"
+          hint="Press 7 (Smooth), then / for help. Drag the Smooth card so half of it is under the help page. The help page reads clean: no card text or buttons show on it. PASS if so."/>
+    <test id="helpClicks" title="The help page takes the clicks"
+          hint="Click and roll the wheel on the help page, right over where the card sits under it. The help scrolls; nothing on the card changes. PASS if so."/>
+    <test id="cardOverPanel" title="Card on top of the main panel"
+          hint="Close help (/). Drag the Smooth card over the main panel. The card reads clean: no panel text shows through it, and its buttons work. Drag it back. PASS if so."/>
+    <test id="warningOverCard" title="Warning box on top of the card"
+          hint="With Smooth, click a point on one road, then a point on a road not joined to it. A red box says they are not connected. It reads clean over the card. Click it: it closes. PASS if so."/>
+    <test id="popupOverHelp" title="Select popup on top of the help page"
+          hint="Pick Select. Press / for help. Click a point: its popup opens. Drag the popup by its title onto the help page. The popup reads clean, its buttons work, and the wheel on it does not scroll the help. PASS if so."/>
+    <test id="testCardOverHelp" title="This test card on top of the help page"
+          hint="With help open, drag the main panel to the right edge. The help page slides under this card. This card reads clean, and its buttons still work. Drag the panel back. PASS if so."/>
+    <test id="modalsAlone" title="Manual and settings show alone"
+          hint="On the help page click browse the full manual: only the manual shows. Close it. Click the gear: only the settings page shows. Close it. PASS if so."/>
+    <test id="everyTool" title="Every tool's help reads clean"
+          hint="Help open. Press 1 to 9 and 0 in turn. Each help page reads clean, with no card text on it. PASS if so."/>
+    <test id="deleteNext" title="Delete says right-click deletes a selection"
+          hint="Pick Delete. Alt+drag a box round a few points. The NEXT line says right-click deletes them and Esc clears. Press Esc. PASS if so."/>
+    <test id="straightenTol" title="Straighten tolerance shows two decimals"
+          hint="Press 8 (Straighten). Step the tolerance with + once. It reads 0.25 m style values, not 0.3 m. PASS if so."/>
+    <test id="helpText" title="Help pages say what the tools do"
+          hint="Read help for Field loop (3), Merge and Ground. Field loop: click inside a field. Merge: the other track is folded in. Ground: points more than the tolerance off move. PASS if they read right."/>
 </testPlan>

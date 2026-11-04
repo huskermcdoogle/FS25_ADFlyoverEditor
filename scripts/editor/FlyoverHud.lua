@@ -1279,10 +1279,6 @@ function ADFlyoverHud:drawPanels(editor)
             break
         end
     end
-    -- Layer 1 = corner panel (rows up to the status line), layer 2 = the tool card (the rest). The
-    -- count is frozen here: the row passes below append stepper and option buttons to the same table.
-    local nRows = #rows
-    for i = 1, nRows do rows[i].layer = (i <= split) and 1 or 2 end
 
     -- Lay rows[first..last] as one column from (x, top); tools pair two to a row. Returns the height.
     local vg = pad * 0.4   -- gap under each plated control
@@ -1471,6 +1467,12 @@ function ADFlyoverHud:drawPanels(editor)
         local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
         self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
     end
+
+    -- Layer 1 = corner panel (rows up to the status line), layer 2 = the tool card (the rest). Tagged
+    -- here, after placement, so it counts the rows actually drawn. The count is frozen: the row passes
+    -- below append stepper and option buttons to the same table.
+    local nRows = #rows
+    for i = 1, nRows do rows[i].layer = (i <= split) and 1 or 2 end
 
     local edge = 0.0025
     -- Corner panel: near-opaque so the world does not read through the text, with a defined edge.
