@@ -47,6 +47,7 @@ LOG = {}
 E:applyJunctionClearThenBuild()
 local built = numberAt(x, z)
 check("after the build: numbered", built ~= nil, built and ("j" .. built) or nil)
+check("after the build: nothing written to the file before a save", built == nil or numbersInFile()[built] == nil)
 check("the build laid the mod's pattern", logHas("laid as the pattern") ~= nil)
 
 LOG = {}
@@ -56,8 +57,15 @@ LOG = {}
 ADEditorHistory:redo()
 local again = numberAt(x, z)
 check("after redo: the same number back", again == built, (again and ("j" .. again) or "none") .. "; " .. tostring(logHas("junction numbers %-")))
+check("after redo: still nothing written before a save", again == nil or numbersInFile()[again] == nil)
 ADEditorHistory:undo()
 check("undone again: no number", numberAt(x, z) == nil)
+-- a split decision is not written before a save either
+local fileBefore = io.open(path, "rb"):read("*a")
+local someN = nil
+for _, f in ipairs(E:junctionRegistry()) do if f.decision == nil and not f.cleared then someN = f.n break end end
+if someN ~= nil then E:junctionDecide(someN, "whole") end
+check("a decision: nothing written before a save", io.open(path, "rb"):read("*a") == fileBefore)
 
 -- the game's save: the file must not have the taken-back number
 ItemSystem.save()

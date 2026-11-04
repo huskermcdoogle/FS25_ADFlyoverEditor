@@ -217,32 +217,6 @@ local function junctionRegistryLoad(home)
     return list, path
 end
 
---- Write every numbered junction, found or not: the ones the scan no longer sees are exactly the
---- ones whose numbers would otherwise be handed out again after a restart. Returns true and the
---- path when the file was written.
----
---- ONLY INTO THE FOLDER THEY WERE READ FROM (`home`, the registry's), and only while that game is
---- still the one loaded: anywhere else they would replace another career's numbers and decisions
---- with these.
-local function junctionRegistrySave(reg, home)
-    if not jxHomeIsHere(home) then return false end
-    local folder = home.folder
-    if folder == nil or createXMLFile == nil or fileExists == nil then return false end
-    -- A career that has never been saved has no folder yet, and making one here would leave a
-    -- savegame slot holding nothing but this file for the game to trip over. The numbers stay in
-    -- memory, the registry stays marked unsaved, and junctionRegistrySaveWaiting writes them once
-    -- the game's first save has made the folder.
-    if not fileExists(folder .. "careerSavegame.xml") then return false end
-    local path = folder .. JUNCTION_REGISTRY_FILE
-    local ok, err = ADFlyoverEditor.junctionRegistryWriteFile(path, reg)
-    if not ok then
-        Logging.warning("[FlyoverEditor]: junction - could not save the numbers (%s): %s",
-            path, tostring(err))
-        return false
-    end
-    return true, path
-end
-
 --- EVERY JUNCTION ON THE MAP, NUMBERED, so a site can be named out loud. Without a number, talking
 --- about a particular junction means quoting coordinates at each other and hoping we mean the same
 --- one, and a survey done on Tuesday cannot be compared with a run done on Thursday.
@@ -470,7 +444,7 @@ function ADFlyoverEditor:junctionRegistry()
 
     -- What was numbered before: the last build, or - the first time in a session - the file.
     -- The file is the one in the folder of the game loaded now, and that folder is the only one these
-    -- numbers are ever written back to (junctionRegistrySave).
+    -- numbers are ever written back to (junctionRegistryOnGameSave).
     local prev, fromFile = self._jxReg, nil
     if prev == nil then
         self._jxRegHome = jxHomeNow()
@@ -588,16 +562,11 @@ function ADFlyoverEditor:junctionRegistry()
             #prev, fromFile, #found - nKept - #added, nKept, #added)
     end
 
-    -- Saved when the registry GAINS a number, and only then: a number is the one thing that cannot
-    -- be worked out again after a restart. Positions drift a little as a junction is cleared and
-    -- rebuilt, but every form of it sits round the same crossing, well inside the match radius of
-    -- where it was first written, so they are not worth a write. A save that fails (a career not
-    -- yet saved has no folder) leaves the registry marked, and junctionRegistrySaveWaiting writes it
-    -- once the folder is there.
+    -- WRITTEN ONLY WITH THE GAME'S SAVE (junctionRegistryOnGameSave; the user, 2026-11-04). It was written
+    -- the moment a number was handed out: on Welker a build numbered a fresh T j10 at 23:16, the build was
+    -- undone and the game quit without saving, and j10 was in the file at the next load - for a junction
+    -- the saved network never had. The numbers now go to disk with the network they belong to, or not at all.
     if gained then self._jxRegUnsaved = true end
-    if self._jxRegUnsaved and junctionRegistrySave(found, self._jxRegHome) then
-        self._jxRegUnsaved = false
-    end
 
     self._jxReg, self._jxRegCount, self._jxRegNet = found, count, jxNetworkMark()
     return found
@@ -762,17 +731,13 @@ function ADFlyoverEditor:junctionNameSite(jp)
     end
 end
 
---- A decision taken: saved at once, beside the numbers, and said in the log. Where the career has
---- never been saved there is no folder to save into, so it is kept in memory and written as soon as
---- the first save makes the folder (junctionRegistrySaveWaiting). The card is named again.
+--- A decision taken: kept beside the numbers and written with the game's next save (2026-11-04: nothing
+--- is written outside the game's save), and said in the log. The card is named again.
 local function jxDecisionTaken(self, n, said)
-    local ok, path = junctionRegistrySave(self:junctionRegistry() or {}, self._jxRegHome)
-    if ok then
-        Logging.info("[FlyoverEditor]: junction j%02d - %s, saved to %s", n, said, tostring(path))
-    else
-        self._jxRegUnsaved = true
-        Logging.info("[FlyoverEditor]: junction j%02d - %s, kept until the game is saved once", n, said)
-    end
+    -- Kept with the game's save, like the numbers (junctionRegistryOnGameSave), not written now.
+    self:junctionRegistry()
+    self._jxRegUnsaved = true
+    Logging.info("[FlyoverEditor]: junction j%02d - %s, kept with the game's next save", n, said)
     if self.junctionPreview ~= nil then
         tryCall("junction name", function() self:junctionNameSite(self.junctionPreview) end)
     end
@@ -963,30 +928,10 @@ function ADFlyoverEditor:junctionForgetNumber(n)
     return string.format("There is no j%02d.", n)
 end
 
---- NUMBERS AND DECISIONS STILL WAITING FOR A FOLDER: a career that has never been saved has none,
---- so the registry stays marked unsaved. It used to be tried again only when the registry was built
---- again, which happens only when the network changes - so a decision made, the game saved and the
---- game quit without another edit was lost, although the card had said it would be kept until the
---- game was saved. Called from update() every frame, editor open or not; looks every 2 s, and only
---- while something is waiting.
----
---- ONLY FOR THE GAME IT WAS MADE IN. update() goes on reaching this table after the player has left
---- to the menu and loaded another savegame, until the editor files are sourced again; written then,
---- into whatever folder the game loaded NOW has, one career's numbers and decisions replaced
---- another's. So what is waiting is written only into the folder the numbers were read from, while
---- that game is still loaded, and is dropped the moment another game is (junctionRegistryCheckHome).
+--- NUMBERS AND DECISIONS ARE WRITTEN ONLY WITH THE GAME'S SAVE (2026-11-04): this used to write them every
+--- 2 s into a career's folder once its first save had made one. junctionRegistryOnGameSave now covers that
+--- save too, so there is nothing left to do here; kept so update() can go on calling it.
 function ADFlyoverEditor:junctionRegistrySaveWaiting(dt)
-    if not self._jxRegUnsaved or self._jxReg == nil then return end
-    if not self:junctionRegistryCheckHome() then return end
-    self._jxRegWaitMs = (self._jxRegWaitMs or 0) + (dt or 0)
-    if self._jxRegWaitMs < 2000 then return end
-    self._jxRegWaitMs = 0
-    local ok, path = junctionRegistrySave(self._jxReg, self._jxRegHome)
-    if ok then
-        self._jxRegUnsaved = false
-        Logging.info("[FlyoverEditor]: junction - numbers and split decisions saved to %s, now that the game has been saved once.",
-            tostring(path))
-    end
 end
 
 --- KEPT THROUGH THE GAME'S OWN SAVE. FS25 saves by writing the savegame folder afresh: a file it did
