@@ -2,20 +2,60 @@
 <!-- The in-game test plan for the next test build (scripts/editor/TestPanel.lua). tools/testbuild.sh packs
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
-     matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Issue 30 wheel zoom in the editor + slice on G" build="@BUILD@">
+     matched against the editor's own log lines. A click always wins. The panel numbers the steps itself.
+     Every log line is matched against every step, so each step ticks on a line only it can see, and no
+     step has a failLog.
+
+     RELEASE 1.0.3.4 (2026-11-04): one card for the merged build. Each title starts with the map it needs:
+     Welker = Welker Farms, savegame3 (Courseplay on for the field loop step); Lehndorf = Welcome to
+     Lehndorf, any save with AutoDrive. Grounding (untested) and issue 31 islands (untested) get their full
+     steps; every fix that already passed on its own branch gets one short smoke step. -->
+<testPlan title="Release 1.0.3.4 - all fixes together" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
-          hint="This ticks by itself. Nothing to do."/>
-    <test id="wheelZoom" title="The wheel zooms the editor camera"
-          passLog="the wheel zoomed the editor camera"
-          hint="Open the editor. No tool, mouse on the map, not on the card. Turn the wheel a few notches. This ticks by itself. If the view does not zoom, press FAIL."/>
-    <test id="sliceOn" title="G turns the slice on"
-          passLog="height slice: cut at"
-          hint="Over the shed, press G. The roof goes. This ticks by itself."/>
-    <test id="hoverPoint" title="Point at a point on the shed floor"
-          passLog="the mouse is on point id="
-          hint="Slice still on. Hold the mouse on a floor point. This ticks by itself."/>
-    <test id="resetInput" title="FlyoverResetInput keeps your controls"
+          hint="Load Welker Farms (savegame3). This ticks by itself."/>
+
+    <!-- Grounding on floors (claude/nice-morse-7e9c4f, untested). The floor's spot is still for the user to name. -->
+    <test id="groundFloor" title="Welker: ground a run on the floor"
+          passLog="%(ground.*floor '[^']*' group 0x%x+ up [%d%.]+ kept"
+          hint="Go to the floor just above the ground (the spot you name). Ground tool: pick a run on it, right-click. Ticks itself if the floor is seen."/>
+    <test id="moveDrop" title="Welker: drop a point on the floor"
+          passLog="%(move drop id=%d+%).*floor '[^']*' group 0x%x+ up [%d%.]+ kept"
+          hint="Move tool: drag a point onto the floor and let go. Ticks itself if the floor is seen."/>
+    <test id="divideFloor" title="Welker: divide a run on the floor"
+          hint="Divide tool: pick a run on the floor, right-click. Fly low beside it. All points sit on top of the floor, none under it. PASS if so."/>
+    <test id="bridge" title="Welker: bridges still work"
+          hint="Ground tool: pick a run over a bridge, right-click. The points stay on the deck. SKIP if no bridge is near."/>
+
+    <!-- Smoke steps for the fixes that passed on their own branches. -->
+    <test id="slice" title="Welker: height slice over a shed"
+          passLog="height slice: the mouse is on point id="
+          hint="Over a shed with points on its floor, press G. The roof goes. Hold the mouse on a floor point. Ticks by itself. G again."/>
+    <test id="splineEnds" title="Welker: spline loop joins both lane ends"
+          passLog="joined both ends"
+          hint="Spline tool. At a two-lane road end, click 1 m off one lane end, round a loop, 1 m off the other. Right-click. Ticks by itself. Q."/>
+    <test id="cpField" title="Welker: field loop on a Courseplay field"
+          passLog="field loop boundary: Courseplay custom field"
+          hint="Field loop tool, Courseplay field on. Click inside a Courseplay custom field. Ticks by itself. Q to undo."/>
+    <test id="freshT" title="Welker: fresh T at x -207, z -926"
+          passLog="a new junction %(no number yet.*the mod's T fitted"
+          hint="Junction tool, clear + build. Click the T at x -207, z -926 (card: junction: new). Right-click. Ticks by itself. Q to undo."/>
+    <test id="smoothLoop" title="Welker: Smooth rebuild round the loop"
+          hint="Smooth, rebuild. On a one-way loop click two points, then click on past the far end round the loop. Right-click. Only that stretch changes. Q."/>
+    <test id="helpClear" title="Welker: Smooth card beside its help"
+          hint="Hold Smooth, press / for help. The card moves beside the help, and no card text shows on the help page. PASS if so."/>
+    <test id="resetInput" title="Welker: FlyoverResetInput keeps your controls"
           passLog="input reset: undid 0"
-          hint="Close the editor. In the console type FlyoverResetInput. This ticks by itself. Then walk or drive: FAIL if any key is dead."/>
+          hint="Close the editor. In the console type FlyoverResetInput. Ticks by itself. Then walk or drive: FAIL if any key is dead."/>
+
+    <!-- Issue 31, field loop islands (claude/fervent-borg-2438bd ee8d3fc, untested). -->
+    <test id="islandsKept" title="Lehndorf: islands kept, the old loop"
+          passLog="field loop islands kept"
+          hint="Load Lehndorf. Field loop tool: margin -2, detect custom field off, leave out islands off. Click a field with tree patches. Ticks by itself."/>
+    <test id="islandsLeftOut" title="Lehndorf: islands left out"
+          passLog="field loop left out [1-9]%d* island"
+          hint="Press Q (undo). Turn leave out islands on. Click the same spot again. Ticks by itself."/>
+    <test id="roundField" title="Lehndorf: the loop runs round the field only"
+          hint="The new loop follows the field edge and runs into no tree patch or pylon. PASS if so."/>
+    <test id="pylonField" title="Lehndorf: the field with the lone pylon"
+          hint="Find the field with one pylon patch in it. Click inside it. The loop goes round the whole field. PASS if so."/>
 </testPlan>
