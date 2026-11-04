@@ -1,5 +1,61 @@
 # Changelog
 
+## 1.0.3.4 — Inside sheds, floors, span picks on loops
+
+### Camera and screen
+
+- **The camera flies under roofs** (issue #30), so you can place points inside sheds. Settings >
+  DISPLAY, "camera through buildings", on by default.
+- **Height slice: G.** The camera looks straight down and hides roofs and trees above your vehicle's
+  height (on foot: a height you set, 4 m to start). Points under the slice can be clicked as usual.
+  Also in settings > DISPLAY.
+- **Panels no longer show through each other.** The tool card, help, menus, the warning box and the
+  panel each have their own layer. Text under a panel is hidden, and a click goes to the panel on top.
+- **The tool card moves beside the help page** instead of showing through it.
+- **`FlyoverResetInput`** no longer leaves you with no controls when you run it on foot.
+
+### Points on floors
+
+- **One ground rule for every tool.** Points now land on shed floors, concrete pads and other floors just
+  above the terrain, not on the terrain under them. Roofs, poles, fence rails and kerbs are left out.
+  Placing, moving and grounding points use it, and so do Divide, Smooth, Straighten, the spline, road
+  runs, the junction build and the field loop.
+- **Ground flags a point under a floor**, even by a few centimetres. Its tolerance now goes down to 0.
+
+### Spline
+
+- **Both ends join the road more easily.** The first and last point join a waypoint within about 1.5 m
+  (further when zoomed out), lane ends first. Right-click snaps a loose last point the same way. Hold Alt
+  for no snap. A last click near the start is no longer swallowed by the start point.
+
+### Span picks (Smooth, Straighten, Divide, Ground, Parallel, Merge, Move)
+
+- **Smooth's rebuild works on the stretch you picked.** On a loop it could rebuild the other side.
+- **Picks on a loop work.** Two clicks take the shorter way round, and are no longer refused as "the long
+  way round". Click on past the far end to carry it along the track, round the loop too. The first click
+  stays put: click it, then where it should go, to move it.
+- **Every span tool acts on the span you picked**, and the card's hint and NEXT line say how to change it.
+
+### Field loop
+
+- **Uses a Courseplay custom field as the boundary** when the cursor is inside one. Card toggle
+  "Courseplay field", on by default; it shows only when Courseplay is installed.
+- **Leaves out islands** (issue #31). A pylon or tree patch cut into a field no longer pulls the loop in
+  and out of it. Card toggle "leave out islands", on by default.
+
+### Junction tool (beta)
+
+- **A fresh T gets the full pattern.** A T nobody has worked on yet (lanes stop short, no turns) is
+  built in one go instead of turn by turn.
+- **Farm-road T.** A two-way farm road meeting a two-lane road gets its own pattern; a one-way side road
+  gets the same pattern, pruned.
+- **Junction numbers follow undo and redo**, and are written only when the game saves. A number with no
+  junction left is dropped at the save. New console command `FlyoverForgetJunction <n>`.
+
+### Help
+
+- Help and hint text fixed to match the tools (about 15 places), including the new span picks.
+
 ## 1.0.3.3 — Settings page fits, wheel zoom check
 
 - **The settings page fits the screen** (issue #28). With a large ui scale the page could run off the
