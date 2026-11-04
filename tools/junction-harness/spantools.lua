@@ -117,5 +117,38 @@ E:menuArmMoveSpan()
 for _, id in ipairs({ 14, 5, 3 }) do clickWith(function(i) E:moveGestureClick(i) end, id) end
 check("Move from the Select popup: carried on round the loop and back", setText(E.moveSpanIds), sortedWant())
 
+-- The card's NEXT text through a pick, the same on every span tool (spanPickNextStep): before the first
+-- click, after it, with both ends set, after clicking the first end (picked up), and once it is placed.
+local STEPS = {
+    { nil, "double-click for the whole run" },
+    { 7, "Click the other end" },
+    { 10, "move the last end set" },
+    { 7, "End picked up" },
+    { 8, "move the last end set" },
+}
+local shown = {}
+for _, t in ipairs(TOOLS) do
+    reset()
+    E.tool = t[2]
+    local ok, where = true, ""
+    for k, step in ipairs(STEPS) do
+        if step[1] ~= nil then clickWith(t[3], step[1]) end
+        local msg = E:getNextStepLines()
+        shown[k] = shown[k] or {}
+        shown[k][t[1]] = msg
+        if not tostring(msg):find(step[2], 1, true) then
+            ok, where = false, string.format("step %d said: %s", k, tostring(msg))
+            break
+        end
+    end
+    check(t[1] .. ": NEXT text through the pick", ok and "ok" or where, "ok")
+end
+if os.getenv("SHOWNEXT") then
+    for k = 1, #STEPS do
+        print(string.format("-- step %d", k))
+        for _, t in ipairs(TOOLS) do print(string.format("   %-10s %s", t[1], tostring(shown[k][t[1]]))) end
+    end
+end
+
 print(fails == 0 and "ALL PASS" or (fails .. " FAIL(S)"))
 os.exit(fails == 0 and 0 or 1)

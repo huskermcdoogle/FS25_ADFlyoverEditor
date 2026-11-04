@@ -622,17 +622,24 @@ function ADFlyoverHud:buildRows(editor)
         add("hint", "(only matters beside a one-way track)")
     end
     if editor:toolUsesSpanPick() then
+        -- The same few short lines on every span tool's card: how to pick, then how to change the pick
+        -- (spanPickClick: later clicks carry the end set last; clicking the other end picks that one up).
+        -- A locked "run" pick takes the whole run in one click, so the span lines are left off then.
         if editor.tool == editor.TOOL.GROUND then
             -- Ground needs no path, so it also takes any selection, connected or not.
             pickSeg({ "span", "run", "set" })
-            if editor.pickFilter == nil then
-                add("hint", "2 clicks = span, double-click = run, or select points")
-            end
         else
             pickSeg({ "span", "run" })
-            if editor.pickFilter == nil then
-                add("hint", "2 clicks = span, double-click = run")
-            end
+        end
+        if editor.pickFilter == nil then
+            add("hint", "2 clicks = span, double-click = run")
+        end
+        if editor.pickFilter ~= "run" then
+            add("hint", "more clicks move the last end set")
+            add("hint", "click the other end to move it")
+        end
+        if editor.tool == editor.TOOL.GROUND and editor.pickFilter == nil then
+            add("hint", "or select points (box, Ctrl-click)")
         end
     end
 

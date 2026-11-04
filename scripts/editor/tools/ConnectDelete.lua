@@ -405,6 +405,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
             end
             self.spanIds = ids
             self.spanMovingEndId = nil
+            self.spanPickedUpId = nil
             cfg.setEnds(fromId, toId, ids)
             self.pickKind = "run"
             if cfg.onSpan ~= nil then cfg.onSpan(fromId, toId, ids) end
@@ -433,6 +434,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
     if from == nil then
         self.spanIds = nil
         self.spanMovingEndId = nil
+        self.spanPickedUpId = nil
         cfg.setEnds(id, nil, nil)
         self.pickKind = "span"
         ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span from id=%s; click the far end (or double-click for the whole run).",
@@ -467,6 +469,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
         end
         self.spanIds = span   -- the route that was picked, so the preview and the commit follow exactly it
         self.spanMovingEndId = id   -- the second click is the end being placed; clicks on past it keep moving it
+        self.spanPickedUpId = nil
         cfg.setEnds(a, b, nil)
         self.pickKind = "span"
         if cfg.onSpan ~= nil then cfg.onSpan(a, b, span) end
@@ -498,6 +501,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
     end
     if id == anchor then
         self.spanMovingEndId = anchor
+        self.spanPickedUpId = anchor   -- the card says so until it is placed
         ADFlyoverSettings.debugLog("[FlyoverEditor]: %s span: picked up the end at id=%s; the next click moves it.",
             self.TOOL_NAMES[self.tool] or "tool", tostring(anchor))
         return
@@ -540,6 +544,7 @@ function ADFlyoverEditor:spanPickClick(cfg)
     end
     self.spanIds = span
     self.spanMovingEndId = id   -- still the carried end; the anchor is whichever end is not this
+    self.spanPickedUpId = nil
     cfg.setEnds(newFrom, newTo, nil)
     self.pickKind = "span"
     if cfg.onSpan ~= nil then cfg.onSpan(newFrom, newTo, span) end

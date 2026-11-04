@@ -3,9 +3,11 @@
      this file into the zip as testplan.xml; @BUILD@ becomes the build number. One test element per check:
      auto="build" ticks itself when the running build is this plan's; passLog / failLog are Lua patterns
      matched against the editor's own log lines. A click always wins. The panel numbers the steps itself. -->
-<testPlan title="Help text for span picks" build="@BUILD@">
+<testPlan title="Card hints and help for span picks" build="@BUILD@">
     <test id="build" title="The game loaded this test version" auto="build"
           hint="This ticks by itself. Nothing to do."/>
+    <test id="cardHints" title="The card says how to pick"
+          hint="Smooth tool. Read the lines under picks and in NEXT, before and after picking a span. They say how to move an end. PASS if they read well."/>
     <test id="smoothHelp" title="Smooth's help reads right"
           hint="Hold the Smooth tool and open its help. It says the first click stays put and the end follows a loop. PASS if it reads well."/>
     <test id="manualPage" title="The manual page scrolls to the end"

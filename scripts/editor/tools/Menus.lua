@@ -72,6 +72,7 @@ function ADFlyoverEditor:menuArmMoveSpan()
     -- the first stays put; a run has no click order, so the next click chooses along the track.
     self.spanIds = ids
     self.spanMovingEndId = (not isRun) and to or nil
+    self.spanPickedUpId = nil
     -- Picked from the popup: the span / run moves as a whole, tapering to its own ends (no reach value).
     -- Move's own gesture picks use the falloff value as a reach instead - see moveReach.
     self.movePickFromMenu = true
