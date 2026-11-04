@@ -237,7 +237,7 @@ function ADFlyoverEditor:getNextStepLines()
         return L("Drag a point to move it, or click two points for a span (double-click: run).")
     elseif self.tool == t.DELETE then
         if self.selectionCount > 0 then
-            return string.format(L("Click to delete %d selected."), self.selectionCount)
+            return string.format(L("Right-click deletes the %d selected. Esc clears the selection."), self.selectionCount)
         end
         if self.deleteScope == self.DELETE_SCOPE.RUN then
             return L("Click a run to delete all of it, out to the junctions at each end.")

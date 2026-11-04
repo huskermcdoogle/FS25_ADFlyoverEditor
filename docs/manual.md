@@ -29,13 +29,14 @@ Opening, leaving, and the keys and controls that work everywhere.
 - , and . - Move's falloff value down / up.
 - B - toggle Move's copy.
 - G - height slice on / off: looks straight down and hides roofs and trees over your vehicle's height.
+- / - show / hide this help.
 - R (held) + wheel - rotate what is being dragged (Move, mid-drag).
-- Esc - back out ONE step: a typed number, a dialog, a popup (and its selection), a tool picked from a popup (back to the popup), a pending action, the selection, the tool - and only then leave the editor.
+- Esc - back out ONE step: a typed number, a dialog, a popup (and its selection), a tool picked from a popup (back to the popup), the help, a pending action, the selection, the tool - and only then leave the editor.
 
 ### Mouse & camera
 
 - Left-click - pick; left-drag - move (Move). Second click = span, double-click = run, in every tool that works on a stretch.
-- Right-click - apply what is pending (end a run, lay a track, commit), or close a popup.
+- Right-click - apply what is pending (end a run, lay a track, commit), or close a popup. With nothing pending, right-click again after a moment to put the tool away.
 - Middle-mouse - orbit / spin the camera. WASD moves it.
 - Wheel - camera zoom, or adjust the number the cursor is over.
 - Ctrl - add to / remove from the selection, on its own or on top of a shape below. In Smooth, Straighten, Divide, Parallel and Merge it must stay one connected run.
@@ -73,8 +74,8 @@ Select mode is where you act on what is already there. Clicking the network open
 1. Click a waypoint: its POINT popup (name, move, connect, spline, one/two-way, primary/secondary, delete).
 1. Click a second point: the SPAN between them. Double-click a point: the whole RUN.
 1. Alt+drag a box, Shift+drag a circle, Alt+Shift+drag freehand, Space+drag+click a rotated box, or Ctrl-click points one by one to make a SELECTION; its popup acts on the whole set. A plain click followed by Ctrl-clicks keeps the first point; one point left is a point again.
-1. Picking a tool from a popup opens that tool's card where the popup was; right-click applies, Esc steps back to the popup.
-1. Esc closes the popup (and drops a selection); right-click closes it too.
+1. Picking a tool from a popup opens that tool's card where the popup was; Esc steps back to the popup. For straighten, smooth, divide, ground and parallel, right-click applies.
+1. Esc closes the popup and drops a selection; right-click closes the popup only.
 
 **Controls**
 
@@ -93,7 +94,7 @@ Draw lays down new waypoints one click at a time, joining each to the last so a 
 **How to use it**
 
 1. Click empty ground to drop a waypoint; each new one connects to the previous.
-1. Click an existing waypoint to start drawing FROM it, wiring the new run into the network.
+1. Click an existing waypoint to start drawing FROM it, wiring the new run into the network. With a run going, a click on a waypoint links to it - or takes the link away if there is one already.
 1. Right-click ends the current run, so the next click starts a fresh one.
 
 **Controls**
@@ -129,16 +130,17 @@ Spline lays a smooth curve that passes through every point you click, for sweepi
 
 *Create — Generate a drivable loop around the field under the cursor.*
 
-Field loop builds a complete two-way route that runs just outside a field's boundary, smoothed to a turning radius and nudged inward around any trees in the way. It stays on the field side of a fence (running inside the field outline where the fence stands inside it) and pulls its margin in to keep clear of another field loop beside it. It is a standalone loop - no map markers, not wired to the rest of the network - so you connect it in afterwards with Draw or the editor.
+Field loop builds a complete route (two-way and secondary unless the card says otherwise) that runs just outside a field's boundary, smoothed to a turning radius and nudged inward around any trees in the way. It stays on the field side of a fence (running inside the field outline where the fence stands inside it) and pulls its margin in to keep clear of another field loop beside it. It is a standalone loop - no map markers, not wired to the rest of the network - so you connect it in afterwards with Draw or the editor.
 
 **How to use it**
 
-1. Point the cursor at the field you want the loop around.
-1. Select the field loop tool - it reads the field boundary and lays the loop.
+1. Click inside the field you want ringed. It reads the field boundary and lays the loop at once.
 1. Wire the loop into your network afterwards if you need it connected.
 
 **Controls**
 
+- **priority** — primary or secondary (default).
+- **track** — clockwise, counter-clockwise or two-way (default).
 - **margin** — how far outside the boundary the loop runs.
 - **obstacle clearance** — how far the loop keeps from trees, poles, fences and buildings before detouring.
 - **turning radius** — the tightest turn the loop is allowed to make, from 2m to 20m. Very small values can leave a sharp field corner looking like a kink.
@@ -181,7 +183,7 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 
 **How to use it**
 
-1. Click where the siding should sit - the click is its centre, and the side follows the cursor.
+1. Click a waypoint on the run where the siding should sit - the click is its centre (it slides along if too near an end), and the side follows the cursor.
 1. Set the offset and length (the wheel adjusts the length), then right-click to lay it.
 
 **Controls**
@@ -190,7 +192,7 @@ Siding drops a short parallel stretch beside a run and curves it back into the r
 - **offset** — how far to the side the siding sits.
 - **length (wheel)** — how long the parallel stretch is.
 
-<a id="move"></a>
+<a id="road-runs"></a>
 ## Road runs
 
 *Create — Lay AutoDrive runs along map roads and farm tracks that have no path yet, and reshape roads already built.*
@@ -201,7 +203,7 @@ Road runs reads the ground paint round the mouse - asphalt and concrete, gravel,
 
 1. Point at a road: it lights up, with its lanes previewed. Click to pick it; double-click carries it on through forks.
 1. For a one-way run, click on the side of the road you would drive on (keep right).
-1. Click a pick to select it: drag a handle to reshape it, click the line to add a handle, Ctrl-click a handle to remove it. An end dragged onto a waypoint joins it (hold Alt for no snap).
+1. Click a pick to select it: drag a handle to reshape it, click the line to add a handle, Ctrl-click a handle to remove it (a run keeps two). An end dragged onto a waypoint joins it (hold Alt for no snap).
 1. Right-click builds everything picked. One undo takes it all back.
 1. Click a road already built to reshape it the same way. A two-lane road is shaped by its middle, both lanes together. Junction points move with it; short turns bend and side roads ease back into place. Right-click applies, as one undo step.
 
@@ -272,7 +274,7 @@ Smooth eases the small kinks out of a stretch so a driven path stops feeling jum
 
 *Shape — Flatten the noise out of a span while keeping real bends.*
 
-Straighten removes wandering detail but keeps genuine corners, dropping only the points within a tolerance of the straight line. Junctions, markers and the ends are kept; each stretch between them is straightened along the route you picked.
+Straighten removes wandering detail but keeps genuine corners, then spaces the same number of points evenly along the straighter line. Junctions, markers and the ends are kept; each stretch between them is straightened along the route you picked.
 
 **How to use it**
 
@@ -281,11 +283,11 @@ Straighten removes wandering detail but keeps genuine corners, dropping only the
 1. The "picks" row shows what you picked; click a type to lock to it (the others dull), click it again to unlock.
 1. Two points joined only the long way round (off the track at a junction and back) are refused.
 1. Or Ctrl-click the points one by one (one connected run).
-1. Set the tolerance - larger removes more - then right-click to apply.
+1. Set the tolerance - larger straightens more - then right-click to apply.
 
 **Controls**
 
-- **tolerance** — how far off the line a point may be before it is kept.
+- **tolerance** — how far a wobble may stray from the straight line and still be flattened.
 
 <a id="divide"></a>
 ## Divide
@@ -312,7 +314,7 @@ Divide spreads a chosen number of waypoints evenly by distance along a stretch, 
 
 *Shape — Re-seat points onto the surface under them.*
 
-Ground drops (or raises) waypoints onto the ground within a tolerance, fixing points that float or sit buried. A point already correctly on a placed ramp or bridge deck is left there.
+Ground drops (or raises) waypoints that are more than the tolerance off the ground, fixing points that float or sit buried. With snap to = surface, a point already on a placed ramp or bridge deck is left there.
 
 **How to use it**
 
@@ -346,14 +348,14 @@ Convert rewrites connections that already exist. Set the direction AND the prior
 
 - **direction** — two-way, one-way, other way (flips a one-way; a reverse-way stays reverse-way), or reverse-way (AutoDrive's reverse road, driven in reverse gear).
 - **priority** — primary, or secondary (a give-way road).
-- **applies to** — this waypoint, or the whole run.
+- **applies to** — one waypoint, or the whole run.
 
 <a id="merge"></a>
 ## Merge
 
 *Connect — Fold two parallel lanes into one shared track.*
 
-Merge is for a stretch where two separately-recorded tracks run alongside each other - the two directions of a road, or a lane recorded twice - and you want them to become one. Pick the stretch on one track, then click the other, and the picked stretch is absorbed.
+Merge is for a stretch where two separately-recorded tracks run alongside each other - the two directions of a road, or a lane recorded twice - and you want them to become one. Pick the stretch on one track, then click the other: the other track is folded in, and the picked stretch moves to the middle and becomes two-way.
 
 **How to use it**
 
@@ -370,7 +372,7 @@ Merge is for a stretch where two separately-recorded tracks run alongside each o
 - **divergence** — how far they may pull apart along the stretch before the merge stops there.
 - **snap to** — terrain, or keep merged points on a bridge / ramp surface.
 
-<a id="name"></a>
+<a id="junction-beta"></a>
 ## Junction (beta)
 
 *Connect — Clear a road junction's turns, lay new ones, or both in one right-click.*
@@ -382,7 +384,7 @@ The junction tool works on one junction at a time. Clear takes out the old turn 
 1. Point at a junction: the card says which one and what kind. Left-click locks it.
 1. Pick the action on the card: clear, build, or clear + build.
 1. Right-click does it. One undo takes it all back.
-1. Left-click elsewhere moves the lock to another junction; Esc lets it go.
+1. Left-click elsewhere moves the lock to another junction. Right-click with nothing to do lets it go; Esc puts the tool away.
 
 **Controls**
 
