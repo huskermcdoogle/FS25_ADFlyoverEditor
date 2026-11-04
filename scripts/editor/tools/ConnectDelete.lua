@@ -674,7 +674,7 @@ function ADFlyoverEditor:applyMoveAsCopy(record)
             local fx, fy, fz, flags = wp.x, wp.y, wp.z, wp.flags
             if m.finalX ~= nil then
                 fx, fz = m.finalX, m.finalZ
-                fy = AutoDrive:getTerrainHeightAtWorldPos(fx, fz, wp.y)
+                fy = self:resolveHeightAt(fx, fz, wp.y)   -- the shared surface rule (Ground.lua)
             end
             if not self.moveBreakOn then
                 self:moveTo(m.id, m.originalX, m.originalZ)
