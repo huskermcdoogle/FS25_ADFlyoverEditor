@@ -9,7 +9,9 @@
 -- to move it, Ctrl-click one to remove it, right-click to lay it. The curve passes through every
 -- point (ADSplinePath); the waypoints it lays are evenly spaced along it at the spacing setting.
 -- An end clicked on a waypoint joins that waypoint and leaves along its road's heading (the start
--- / end tangent flips turn that heading round); an end on the ground gets a new waypoint. The
+-- / end tangent flips turn that heading round); an end on the ground gets a new waypoint. The ends
+-- reach further than the middle points: the first click snaps to a waypoint within ~1.5 m, and on
+-- right-click a loose last point snaps the same way (2026-11-03, splineSnapLastEnd). The
 -- whole thing is one undo step. The old two-point AutoDrive spline stays behind the "curve by"
 -- toggle (splineMode setting).
 -- ---------------------------------------------------------------------------------------------
@@ -190,18 +192,199 @@ function ADFlyoverEditor:splineSnapCandidate()
     return (dx * dx + dz * dz <= r * r) and wp or nil
 end
 
+--- The two ENDS reach further than the middle points (2026-11-03 owner's design: a loop at a road
+--- end kept missing the lane ends - clicks 0.2 to 0.9 m off made a loose point beside them; 1 try in
+--- 6 joined both). The middle points keep the tight snap above so they don't grab other points. A
+--- waypoint is in an end's reach within this many metres on the ground, or within this much of the
+--- screen when zoomed out - whichever reaches further. 0.025 of the screen is about 1.5 m at a
+--- normal working zoom.
+AutoDrive.FLYOVER_SPLINE_END_SNAP_RADIUS = 1.5
+AutoDrive.FLYOVER_SPLINE_END_SNAP_SCREEN_RADIUS = 0.025
+
+--- How many other waypoints a waypoint is joined to (in or out, each counted once). 1 = a lane end.
+function ADFlyoverEditor:splineNeighbourCount(wp)
+    local seen, n = {}, 0
+    for _, listName in ipairs({ "out", "incoming" }) do
+        for _, id in pairs(wp[listName] or {}) do
+            if not seen[id] and id ~= wp.id then
+                seen[id], n = true, n + 1
+            end
+        end
+    end
+    return n
+end
+
+--- Where a world point is on screen (sx, sy); nil when project is unavailable or it is behind the camera.
+function ADFlyoverEditor:splineScreenAt(x, y, z)
+    if project == nil then
+        return nil
+    end
+    local ok, sx, sy, depth = pcall(project, x, (y or 0) + 0.5, z)
+    if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
+        return sx, sy
+    end
+    return nil
+end
+
+--- How far a world point is from the mouse, squared: on screen like waypoint picking, or on the
+--- ground when project is unavailable. nil when it can't be told.
+function ADFlyoverEditor:splineMouseDist2(x, y, z)
+    if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
+        local sx, sy = self:splineScreenAt(x, y, z)
+        if sx == nil then
+            return nil
+        end
+        local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
+        return dx * dx + dy * dy
+    end
+    if self.cursorX == nil then
+        return nil
+    end
+    local dx, dz = x - self.cursorX, z - self.cursorZ
+    return dx * dx + dz * dz
+end
+
+--- The waypoints the spline already sits on, as a set of ids (an end must never snap onto one).
+function ADFlyoverEditor:splineUsedWaypoints()
+    local used = {}
+    for _, p in ipairs(self.splinePoints or {}) do
+        local wp = self:splineSnapNode(p)
+        if wp ~= nil then
+            used[wp.id] = true
+        end
+    end
+    return used
+end
+
+--- The waypoint a spline END snaps onto from (x, z) with the ends' wider reach, or nil; and how far
+--- it is on the ground. (sx, sy) is that spot on screen (nil: the ground reach only). A lane end (one
+--- neighbour) wins over other waypoints in reach, then the nearest. Waypoints in `skip` never win.
+function ADFlyoverEditor:splineEndSnapNear(x, z, sx, sy, skip)
+    local R = AutoDrive.FLYOVER_SPLINE_END_SNAP_RADIUS
+    local Rs = AutoDrive.FLYOVER_SPLINE_END_SNAP_SCREEN_RADIUS
+    -- only project what is plausibly on screen, as waypoint picking does
+    local pre = sx ~= nil and math.max(R, AutoDrive.FLYOVER_DRAW_RADIUS) or R
+    local best, bestEnd, bestD2 = nil, false, nil
+    local wayPoints = ADGraphManager:getWayPoints()
+    for i = 1, #wayPoints do
+        local wp = wayPoints[i]
+        if wp ~= nil and not (skip ~= nil and skip[wp.id]) then
+            local dx, dz = wp.x - x, wp.z - z
+            local d2 = dx * dx + dz * dz
+            if d2 <= pre * pre then
+                local inReach = d2 <= R * R
+                if not inReach and sx ~= nil then
+                    local wx, wy = self:splineScreenAt(wp.x, wp.y, wp.z)
+                    if wx ~= nil then
+                        local ex, ey = wx - sx, wy - sy
+                        inReach = ex * ex + ey * ey <= Rs * Rs
+                    end
+                end
+                if inReach then
+                    local isEnd = self:splineNeighbourCount(wp) == 1
+                    if best == nil or (isEnd and not bestEnd) or (isEnd == bestEnd and d2 < bestD2) then
+                        best, bestEnd, bestD2 = wp, isEnd, d2
+                    end
+                end
+            end
+        end
+    end
+    return best, best ~= nil and math.sqrt(bestD2) or nil
+end
+
+--- The waypoint a click here would join as a spline END: the one right under the mouse (the tight
+--- snap) when there is one, else the nearest in the ends' wider reach (lane ends first) and how far
+--- it is. Alt held: nil. Waypoints in `skip` never win.
+function ADFlyoverEditor:splineEndSnapAtCursor(skip)
+    if self.leftAltHeld or self.cursorX == nil then
+        return nil
+    end
+    local wp = self:splineSnapCandidate()
+    if wp ~= nil and not (skip ~= nil and skip[wp.id]) then
+        return wp, nil
+    end
+    local sx, sy = nil, nil
+    if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
+        sx, sy = g_lastMousePosX, g_lastMousePosY
+    end
+    return self:splineEndSnapNear(self.cursorX, self.cursorZ, sx, sy, skip)
+end
+
+--- The trap at a loop's start (2026-11-03). A loop at a road end comes back to the other lane end,
+--- only ~4 m from the start. Zoomed out, a click there is within the pick reach of the start point
+--- (the click grabbed it and added nothing) or of the curve leaving it (the click went into the
+--- line), so the end never got placed. When a waypoint the end could join is nearer the mouse than
+--- `d2` (squared, from splineMouseDist2), the click is for the end: it goes on the end.
+function ADFlyoverEditor:splineEndBeatsStart(d2)
+    local pts = self.splinePoints
+    if self.splineEdit ~= nil or self.leftAltHeld or d2 == nil or pts == nil or #pts < 2 then
+        return false
+    end
+    local wp = self:splineEndSnapAtCursor(self:splineUsedWaypoints())
+    if wp == nil then
+        return false
+    end
+    local w2 = self:splineMouseDist2(wp.x, wp.y, wp.z)
+    if w2 ~= nil and w2 < d2 then
+        self.splineEndBeatId = wp.id             -- for the click's log line
+        return true
+    end
+    return false
+end
+
 --- Where a point goes for the cursor right now: onto a waypoint right under the mouse when
 --- snapping is allowed (only the two ends join the road, so only they snap), else the ground.
-function ADFlyoverEditor:splinePointAtCursor(allowSnap)
-    local wp = allowSnap and self:splineSnapCandidate() or nil
+--- `wideEnd`: this point is the spline's first, so it is an end for sure and snaps with the ends'
+--- wider reach. A point put down with Alt held is marked so it is never snapped later either.
+function ADFlyoverEditor:splinePointAtCursor(allowSnap, wideEnd)
+    local wp, dist = nil, nil
+    if allowSnap then
+        if wideEnd then
+            wp, dist = self:splineEndSnapAtCursor(nil)
+        else
+            wp = self:splineSnapCandidate()
+        end
+    end
     if wp ~= nil then
-        return { x = wp.x, y = wp.y, z = wp.z, wpId = wp.id }
+        return { x = wp.x, y = wp.y, z = wp.z, wpId = wp.id, reach = dist }
     end
     if self.cursorX == nil then
         return nil
     end
     local y = self:resolveHeightAt(self.cursorX, self.cursorZ, self.cursorY, self.cursorY)
-    return { x = self.cursorX, y = y, z = self.cursorZ }
+    return { x = self.cursorX, y = y, z = self.cursorZ, noSnap = self.leftAltHeld or nil }
+end
+
+--- Right-click, before laying: the last point is the end now. If it is loose and a waypoint is in the
+--- ends' wider reach, the end moves onto it and joins it. Never onto the spline's own start or a
+--- waypoint it already uses; never for a point put down with Alt held, or with Alt held now.
+function ADFlyoverEditor:splineSnapLastEnd()
+    local pts = self.splinePoints
+    local n = pts ~= nil and #pts or 0
+    if n < 2 or self.splineEdit ~= nil then
+        return
+    end
+    local last = pts[n]
+    if self:splineSnapNode(last) ~= nil then
+        return
+    end
+    local sx, sy = self:splineScreenAt(last.x, last.y, last.z)
+    local wp, dist = self:splineEndSnapNear(last.x, last.z, sx, sy, self:splineUsedWaypoints())
+    if wp == nil then
+        return
+    end
+    if last.noSnap or self.leftAltHeld then
+        -- always logged (the in-game test card ticks itself from it)
+        Logging.info("[FlyoverEditor]: spline end not snapped (Alt held): waypoint id=%d was %.1f m away.", wp.id, dist or 0)
+        return
+    end
+    local prev = pts[n - 1]
+    if math.abs(prev.x - wp.x) < 0.1 and math.abs(prev.z - wp.z) < 0.1 then
+        return                                   -- it would sit on the point before it
+    end
+    pts[n] = { x = wp.x, y = wp.y, z = wp.z, wpId = wp.id }
+    -- always logged (the in-game test card ticks itself from it)
+    Logging.info("[FlyoverEditor]: spline end snapped to waypoint id=%d (%.1f m).", wp.id, dist or 0)
 end
 
 --- Which piece of the curve the mouse is on (close enough to put a point into it), or nil.
@@ -215,16 +398,25 @@ function ADFlyoverEditor:splineInsertPiece()
     if seg == nil then
         return nil
     end
+    local hit = false
     if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
         local ok, sx, sy, depth = pcall(project, px, (py or self.cursorY or 0) + 0.6, pz)
         if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
             local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
             local r = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
-            return (dx * dx + dy * dy <= r * r) and seg or nil
+            hit = dx * dx + dy * dy <= r * r
         end
+    else
+        hit = dist <= AutoDrive.FLYOVER_PICK_RADIUS
+    end
+    if not hit then
         return nil
     end
-    return dist <= AutoDrive.FLYOVER_PICK_RADIUS and seg or nil
+    -- near the start, a waypoint the end could join that is nearer the mouse than the curve wins
+    if seg == 1 and self:splineEndBeatsStart(self:splineMouseDist2(px, py or self.cursorY or 0, pz)) then
+        return nil
+    end
+    return seg
 end
 
 --- Put a point in at index `at` (default: on the end).
@@ -258,9 +450,19 @@ function ADFlyoverEditor:multiSplineClick()
     if self.splineEdit ~= nil and seg == nil then
         return                                   -- editing: points go into the line, never on the ends
     end
-    local p = self:splinePointAtCursor(seg == nil)
+    -- the first point is an end for sure: it snaps with the ends' wider reach
+    local first = self.splineEdit == nil and (self.splinePoints == nil or #self.splinePoints == 0)
+    local p = self:splinePointAtCursor(seg == nil, first)
     if p ~= nil then
         self:multiSplineAdd(p, seg ~= nil and seg + 1 or nil)
+        -- always logged (the in-game test card ticks itself from these)
+        if p.reach ~= nil then
+            Logging.info("[FlyoverEditor]: spline start snapped to waypoint id=%d (%.1f m).", p.wpId, p.reach)
+        end
+        if seg == nil and self.splineEndBeatId ~= nil then
+            Logging.info("[FlyoverEditor]: spline - a click near the start went on the end (waypoint id=%d is nearer).",
+                self.splineEndBeatId)
+        end
     end
 end
 
@@ -336,14 +538,19 @@ function ADFlyoverEditor:updateMultiSpline()
     end
 
     -- No hover highlight on the point being dragged: it is under the cursor by definition.
-    self.splineHoverIdx = (self.splineDragIdx == nil) and self:splinePointNearCursor() or nil
+    self.splineEndBeatId = nil                   -- set again below when a far lane end beats the start
+    local hover = (self.splineDragIdx == nil) and self:splinePointNearCursor() or nil
+    if hover == 1 and #pts >= 2 and self:splineEndBeatsStart(self:splineMouseDist2(pts[1].x, pts[1].y, pts[1].z)) then
+        hover = nil                              -- a loop's far lane end, not the start (see splineEndBeatsStart)
+    end
+    self.splineHoverIdx = hover
 
     -- What a click would do here, for the preview: put a point into the line, or add one on the end
     -- (snapped onto a waypoint, or free).
     self.splineGhost = nil
     if self.splineDragIdx == nil and self.splineHoverIdx == nil then
         local seg = self:splineInsertPiece()
-        local g = self:splinePointAtCursor(seg == nil)
+        local g = self:splinePointAtCursor(seg == nil, self.splineEdit == nil and #pts == 0)
         if g ~= nil and not (self.splineEdit ~= nil and seg == nil) then   -- editing: only into the line
             g.insert = seg ~= nil
             self.splineGhost = g
@@ -403,6 +610,8 @@ function ADFlyoverEditor:commitMultiSpline()
         self:warnPlayer("Waypoints can only be placed on the server (host/singleplayer).")
         return
     end
+    -- The last point is the end now: join it to a waypoint in the ends' wider reach.
+    self:splineSnapLastEnd()
     -- Make sure the preview is for exactly these points before laying it.
     self.splineLaidKey = nil
     self:updateMultiSpline()
