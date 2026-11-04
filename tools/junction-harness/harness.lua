@@ -250,6 +250,10 @@ if os.getenv("TWIN_TURNS") == "0" then AutoDrive.FLYOVER_JUNCTION_TWIN_TURNS = f
 -- half-way line to the other part again (rule 2 of 2026-10-03): clearing 20n and then 20s then takes
 -- the whole road between the two.
 if os.getenv("PART_ROAD") == "0" then AutoDrive.FLYOVER_JUNCTION_PART_ROAD = false end
+-- TWO_WAY=1 / 0: the pattern on a junction where a two-way road meets, on or off whatever the code's
+-- default is (FLYOVER_JUNCTION_PLACE_TWO_WAY).
+if os.getenv("TWO_WAY") == "1" then AutoDrive.FLYOVER_JUNCTION_PLACE_TWO_WAY = true end
+if os.getenv("TWO_WAY") == "0" then AutoDrive.FLYOVER_JUNCTION_PLACE_TWO_WAY = false end
 
 function M.lock(cx, cz, opts)
     opts = opts or {}

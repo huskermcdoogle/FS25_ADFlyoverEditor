@@ -545,6 +545,74 @@ local function jxpGroundY(x, z, fallback)
     return y
 end
 
+-- A T WHOSE SIDE ROAD IS ONE TWO-WAY ROAD (Welker Farms, 2026-11-03): the piece's two side lanes meet the
+-- road at one point, in a V. Where the clear left the road's end about 1 m past the lanes' ends, the V was
+-- so flat (about 55 degrees) that a truck could drive in by one lane and straight back out by the other:
+-- AutoDrive takes any bend up to 80 degrees. So the lanes meet the road one lane gap out from their ends,
+-- along the side road, where the V bends about 125 degrees. The road's points short of that go, and the
+-- nearest one beyond is moved there (or used as it is when it is about there already).
+-- E: the road's end. (mx, mz): the middle of the two side lanes' ends. (ax, az): the side road's heading,
+-- away from the main road. L: the lane gap. dry: only say whether it can be done.
+-- Returns the point the lanes meet at (dry: true), or nil and why.
+local function jxpTwoWaySplit(E, mx, mz, ax, az, L, dry)
+    local function along(w) return (w.x - mx) * ax + (w.z - mz) * az end
+    local dMin, dWant = 0.6 * L, 1.0 * L
+    local e0 = along(E)
+    if e0 >= dMin then
+        if not dry then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the two-way side road's end is %.1f m past its lanes' ends; the lanes meet it there.", e0)
+        end
+        return dry or E
+    end
+    -- The road's points, out from its end, while they run on as plain road (two neighbours, both ways).
+    local chain, prev, cur, beyond = { E }, nil, E, nil
+    for _ = 1, 20 do
+        local nb = {}
+        for _, id in ipairs(cur.out or {}) do nb[id] = true end
+        for _, id in ipairs(cur.incoming or {}) do nb[id] = true end
+        local nextW, n = nil, 0
+        for id in pairs(nb) do
+            n = n + 1
+            local w = ADGraphManager:getWayPointById(id)
+            if w ~= nil and w ~= prev then nextW = w end
+        end
+        if cur ~= E and n ~= 2 then return nil, "the two-way road forks right by the junction" end
+        if nextW == nil or not table.contains(nextW.out or {}, cur.id) or not table.contains(cur.out or {}, nextW.id) then
+            return nil, "the two-way road stops right by the junction"
+        end
+        if along(nextW) >= dMin then beyond = nextW break end
+        chain[#chain + 1] = nextW
+        prev, cur = cur, nextW
+    end
+    if beyond == nil then return nil, "the two-way road stays right by the junction" end
+    if dry then return true end
+    local last = chain[#chain]
+    local moveTo = nil
+    if along(beyond) > dWant + 1.0 then
+        local a0, a1 = along(last), along(beyond)
+        local t = (dWant - a0) / (a1 - a0)
+        moveTo = { x = last.x + t * (beyond.x - last.x), z = last.z + t * (beyond.z - last.z),
+                   y = (last.y or 0) + t * ((beyond.y or 0) - (last.y or 0)) }
+    end
+    -- Moved: every point short of the last one goes, and the last one moves out. Used as it is: all of them go.
+    local n = moveTo and (#chain - 1) or #chain
+    for i = 1, n do
+        if not jxRemove(chain[i], "junction pattern: two-way road end too close to the side lanes", true) then
+            return nil, "could not take the two-way road's end back"
+        end
+    end
+    if moveTo == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the two-way side road's end was %.1f m past its lanes' ends; %d point(s) taken, the lanes meet it at %.1f, %.1f (%.1f m out).",
+            e0, n, beyond.x, beyond.z, along(beyond))
+        return beyond
+    end
+    ADGraphManager:moveWayPoint(last.id, moveTo.x, jxpGroundY(moveTo.x, moveTo.z, moveTo.y), moveTo.z, last.flags, false)
+    jxNoteMoved(last)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the two-way side road's end was %.1f m past its lanes' ends; %d point(s) taken, one moved out to %.1f, %.1f (%.1f m out), where the lanes meet it.",
+        e0, n, last.x, last.z, along(last))
+    return last
+end
+
 -- A POINT ON A LANE: the lane running in direction (dx, dz) that passes nearest (px, pz). An end
 -- of that link within 0.3 m is used as it is; otherwise a point is spliced in. `through` runs the
 -- lane through a given point instead (a corner the other lane already has). dry only says whether
@@ -1056,6 +1124,12 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
         if twoWaySide ~= nil and sh ~= "exact" then
             return false, "the side road is one two-way road, and the smooth shape needs two side lanes"
         end
+        if twoWaySide ~= nil then
+            local mx, mz = W(0, 0.5 + f2)
+            local ax, az = D(0, 1)
+            local ok, why = jxpTwoWaySplit(twoWaySide, mx, mz, ax, az, L, true)
+            if not ok then return false, why end
+        end
         for _, n in ipairs(needs(sh)) do
             if not lanePoint(n[1], n[2], n[3], n[4], true) then
                 local x, z = W(n[1], n[2])
@@ -1226,6 +1300,14 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
         -- The mod's T (doc 05): every path one-way. The left from -x into the side road runs 12 ->
         -- centre -> 2 -> 5; the left out of the side road 8 -> 9 -> centre -> 13; they take turns at the
         -- centre. The rights are the short cuts 3 -> 5 and 8 -> 10.
+        -- One two-way side road: the point its lanes meet at goes a lane gap out first (jxpTwoWaySplit).
+        if twoWaySide ~= nil then
+            local mx, mz = W(0, 0.5 + f2)
+            local ax, az = D(0, 1)
+            local S, why = jxpTwoWaySplit(twoWaySide, mx, mz, ax, az, L)
+            if S == nil then return nil, why end
+            twoWaySide, sideIn, sideOut = S, S, S
+        end
         local n = {}
         for _, key in ipairs(T_ORDER) do
             local s = T_EXACT[key]

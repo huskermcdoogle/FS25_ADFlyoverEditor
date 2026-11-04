@@ -69,7 +69,9 @@ local function checksum(lines)
     return string.format("%08x%08x", h1, h2)
 end
 
-H.lock(tonumber(arg[1]), tonumber(arg[2]), { mode = "clear", radius = 12, leaveThrough = (os.getenv("LEAVE") == "1") })
+-- BOTH=1: the card's clear + build (one right-click, one undo) instead of the clear alone.
+local both = os.getenv("BOTH") == "1"
+H.lock(tonumber(arg[1]), tonumber(arg[2]), { mode = "clear", radius = 12, leaveThrough = (os.getenv("LEAVE") == "1"), thenBuild = both })
 -- NOTHING_LEFT=1: the site reads as having nothing to clear, before the cleaning and after it, so
 -- the clear cleans the site and stops. No registry junction does that on its own, and it is the one
 -- way a clear can change the network without clearing anything.
@@ -90,7 +92,14 @@ if os.getenv("NOTHING_LEFT") == "1" then
 end
 local before = net()
 local d0 = ADEditorHistory:depth()
-local log = H.apply()
+local log
+if both then
+    LOG = {}
+    ADFlyoverEditor:applyJunctionClearThenBuild()
+    log = LOG
+else
+    log = H.apply()
+end
 local after = net()
 local pushed = ADEditorHistory:depth() - d0
 local changed = not same(before, after)
@@ -124,3 +133,4 @@ print(string.format("UNDO %s pushed=%d changed=%s undo=%s redo=%s stopped=%s too
     ok and "ok" or "FAIL", pushed, changed and "yes" or "no", undo, redo, stopped and "yes" or "no", took, far, err,
     checksum(after)))
 for _, n in ipairs(notes) do print(n) end
+if os.getenv("SHOWLOG") == "1" then for _, l in ipairs(log) do print(l) end end

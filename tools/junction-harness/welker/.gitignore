@@ -1,0 +1,4 @@
+# The Welker Farms network and junction numbers come from the user's save (see regwelker.sh); pictures are made here too.
+*.lua
+*.png
+ADFlyoverEditor_junctions.xml
