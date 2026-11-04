@@ -22,6 +22,13 @@ do
     f:write(string.format("  {id=19,x=%.3f,y=0,z=-3,flags=0,out={1}},\n", R + 20))
     f:write(string.format("  {id=20,x=%.3f,y=0,z=3,flags=0,out={21}},\n", R + 20))
     f:write(string.format("  {id=21,x=%.3f,y=0,z=3,flags=0,out={}},\n", R + 40))
+    -- A small one-way loop on its own (ids 22..33, radius 8 m, at z=100), its last point only 8 degrees
+    -- short of its first: carried round, the span's two ends end up side by side.
+    for k = 0, 11 do
+        local a = math.rad(k * 32)
+        f:write(string.format("  {id=%d,x=%.3f,y=0,z=%.3f,flags=0,out={%d}},\n",
+            22 + k, 8 * math.cos(a), 100 + 8 * math.sin(a), 22 + (k + 1) % 12))
+    end
     f:write("}\n")
     f:close()
 end
@@ -84,6 +91,32 @@ check("loop, span 2..8 then click 12: grows on round the loop", spanText(), "2,3
 -- 14 is nearer the 2 end: that end moves back through the junction, and the span keeps 2..8.
 fresh(); click(2); click(8); click(14)
 check("loop, span 2..8 then click 14: grows back through the junction", spanText(), "14,15,16,1,2,3,4,5,6,7,8")
+
+-- The user's case (2026-11-03, build 716): carry the end round a small loop one point at a time. Near the
+-- end the click is nearer the span's OTHER end in a straight line; it must still move the end being carried.
+fresh(); click(22); click(23)
+local carried = true
+for id = 24, 33 do
+    click(id)
+    local want = {}
+    for k = 22, id do want[#want + 1] = k end
+    if spanText() ~= table.concat(want, ",") then
+        carried = false
+        print(string.format("     click %d gave %s", id, spanText()))
+        break
+    end
+end
+check("small loop, end carried round point by point to the last one", carried and spanText() or "jumped",
+    "22,23,24,25,26,27,28,29,30,31,32,33")
+
+-- Span 3..8 on the big loop (8 placed last), click 2 just before the 3 end: that end moves, not 8 the
+-- long way round.
+fresh(); click(3); click(8); click(2)
+check("loop, span 3..8 then click just before its start: the start moves", spanText(), "2,3,4,5,6,7,8")
+
+-- A click on the span shrinks it from the end it is fewer points from.
+fresh(); click(2); click(8); click(7)
+check("loop, span 2..8 then click 7 on it: the 8 end comes back", spanText(), "2,3,4,5,6,7")
 
 fresh(); click(18); click(21)
 check("road, in-lane to out-lane (U-turn at the junction): still refused", spanText(), "REFUSED")

@@ -11,7 +11,7 @@
           hint="Smooth tool, mode rebuild. On the spline loop, click a point, then a point behind it. The span is taken, not refused. PASS if so."/>
     <test id="pickRound" title="Move the end on round the loop"
           failLog="refused span end"
-          hint="Click past the far end, more than half way round the loop. The span grows along the loop. PASS if so."/>
+          hint="Click on past the far end, point by point, all the way round to the start. The span keeps growing; the start never jumps. PASS if so."/>
     <test id="apply" title="Apply the rebuild"
           passLog="rebuilt %d+ piece%(s%)" failLog="used the FALLBACK path"
           hint="Right-click to apply. This ticks by itself."/>
