@@ -552,6 +552,9 @@ function ADFlyoverEditor:wheelProbeArm()
     self.wheelZoomSeen = false
     self.wheelWatch = nil
     self.wheelDeadLogged = false
+    self.wheelDeadNotes = 0
+    self.wheelComboClearTried = false
+    self.wheelComboClearedMs = nil
 end
 
 --- One probe line for a stage, while that stage has lines left. Stages other than "raw" only log
@@ -617,6 +620,7 @@ end
 -- ---------------------------------------------------------------------------------------------
 
 CAM.WHEEL_DEAD_MS = 80
+CAM.WHEEL_DEAD_NOTES = 5   -- evidence lines per open
 local deadWheelDumps = 0
 
 local function mouseButtonHeld()
@@ -629,6 +633,28 @@ local function mouseButtonHeld()
         end
     end
     return false
+end
+
+--- The mouse combo mask, as the game's own input help reads it (InputHelpDisplay.lua:192:
+--- getComboCommandPressedMask returns the gamepad mask, then the mouse mask), and the field the
+--- 755 dump showed (pressedMouseComboMask). A middle button held is a mouse combo: while one is
+--- set, the wheel's bindings (ignoreComboMask=false) do not fire, and Z / X are not mouse bindings.
+local function mouseComboMask()
+    local ib = g_inputBinding
+    if ib == nil then
+        return nil, nil
+    end
+    local okM, _, viaCall = pcall(function() return ib:getComboCommandPressedMask() end)
+    return okM and viaCall or nil, ib.pressedMouseComboMask
+end
+
+local function heldText()
+    if Input == nil or Input.isMouseButtonPressed == nil then
+        return "unknown (no Input.isMouseButtonPressed)"
+    end
+    local function held(b) return b ~= nil and Input.isMouseButtonPressed(b) == true end
+    return string.format("left=%s middle=%s right=%s", tostring(held(Input.MOUSE_BUTTON_LEFT)),
+        tostring(held(Input.MOUSE_BUTTON_MIDDLE)), tostring(held(Input.MOUSE_BUTTON_RIGHT)))
 end
 
 --- From mouseEvent, every wheel notch while the editor is open. A notch arrives as two events in
@@ -661,6 +687,10 @@ function ADFlyoverEditor:wheelWatchUpdate()
     local now = nowMs(self)
     if self.lastWheelActionMs ~= nil and self.lastWheelActionMs >= w.since then
         w.since, w.steps = nil, 0           -- the action fired: nothing to do
+        if self.wheelComboClearedMs ~= nil then
+            self.wheelComboClearedMs = nil
+            Logging.info("[FlyoverEditor]: the wheel's zoom action fires again after the stuck mouse combo mask was cleared.")
+        end
         return
     end
     if now - w.since < CAM.WHEEL_DEAD_MS then
@@ -670,6 +700,32 @@ function ADFlyoverEditor:wheelWatchUpdate()
     w.since, w.steps = nil, 0
     if steps == 0 or self.camera == nil or self.camera.onZoom == nil then
         return
+    end
+    -- A button held now (a middle-button orbit begun after the notch): the game blocks the wheel
+    -- then on purpose, so this notch is not a dead one.
+    if mouseButtonHeld() then
+        return
+    end
+
+    -- The evidence for each dead notch (the first few per open): is a mouse combo still set with
+    -- no mouse button held? That is the suspected stuck state (manager's lead, build 755).
+    local viaCall, field = mouseComboMask()
+    self.wheelDeadNotes = (self.wheelDeadNotes or 0) + 1
+    if self.wheelDeadNotes <= CAM.WHEEL_DEAD_NOTES then
+        Logging.info("[FlyoverEditor]: dead wheel notch %d: mouse combo mask %s (field %s), buttons held %s, context %s.",
+            self.wheelDeadNotes, tostring(viaCall), tostring(field), heldText(),
+            tostring(g_inputBinding ~= nil and g_inputBinding.currentContextName))
+    end
+    -- Stuck: a combo set with nothing held. Clear it once per open and see whether the next notch
+    -- fires the action again (the line above, "fires again", is the proof). Only when the game can
+    -- say no button is held, so a real middle-button hold is never cleared.
+    local mask = viaCall or field
+    if type(mask) == "number" and mask ~= 0 and not self.wheelComboClearTried
+        and Input ~= nil and Input.isMouseButtonPressed ~= nil and g_inputBinding ~= nil then
+        self.wheelComboClearTried = true
+        self.wheelComboClearedMs = now
+        g_inputBinding.pressedMouseComboMask = 0
+        Logging.info("[FlyoverEditor]: the mouse combo mask was %s with no mouse button held; cleared it.", tostring(mask))
     end
     if ADFlyoverWrappers ~= nil and ADFlyoverWrappers.counts ~= nil then
         ADFlyoverWrappers.counts.wheelFallback = (ADFlyoverWrappers.counts.wheelFallback or 0) + 1

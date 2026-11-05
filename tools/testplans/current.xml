@@ -62,5 +62,5 @@
          never fired. The editor now zooms from the notch itself and writes the input dump once. -->
     <test id="deadWheel" title="Any map: the wheel still zooms if it goes dead"
           passLog="zooming from the wheel directly"
-          hint="Nothing to do on purpose. If the editor wheel ever stops zooming, this ticks and the view zooms anyway. PASS if it did. SKIP if it never went dead."/>
+          hint="Nothing to do on purpose. If the editor wheel ever stops zooming, this ticks and the view zooms anyway. PASS if it did. SKIP if it never went dead. If it ticks, say whether you had just pressed the middle button."/>
 </testPlan>

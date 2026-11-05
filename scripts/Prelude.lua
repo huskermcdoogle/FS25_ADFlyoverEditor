@@ -809,6 +809,41 @@ function P.inputDump(reason)
     table.sort(fields)
     log("input dump: binding fields: %s", table.concat(fields, ", "))
 
+    -- The combo masks (gamepad, mouse) as the game's input help reads them, and the mouse buttons.
+    local okMask, gamepadMask, mouseMask = pcall(function() return ib:getComboCommandPressedMask() end)
+    local held = "?"
+    if Input ~= nil and Input.isMouseButtonPressed ~= nil then
+        held = string.format("left=%s middle=%s right=%s",
+            tostring(safe(function() return Input.isMouseButtonPressed(Input.MOUSE_BUTTON_LEFT) end)),
+            tostring(safe(function() return Input.isMouseButtonPressed(Input.MOUSE_BUTTON_MIDDLE) end)),
+            tostring(safe(function() return Input.isMouseButtonPressed(Input.MOUSE_BUTTON_RIGHT) end)))
+    end
+    log("input dump: combo mask gamepad=%s mouse=%s; mouse buttons held %s", okMask and tostring(gamepadMask) or "?",
+        okMask and tostring(mouseMask) or "?", held)
+
+    -- The binding object's own methods about resets, combos, the mouse and blocking (fix candidates).
+    local methods, seenM = {}, {}
+    -- The instance, its class chain, and InputBinding itself.
+    local classes, cls = {}, ib
+    while type(cls) == "table" and #classes < 5 do
+        classes[#classes + 1] = cls
+        local cmt = getmetatable(cls)
+        cls = cmt ~= nil and type(cmt.__index) == "table" and cmt.__index or nil
+    end
+    if type(InputBinding) == "table" then classes[#classes + 1] = InputBinding end
+    for _, cls in ipairs(classes) do
+        for k, v in pairs(cls) do
+            local key = tostring(k):lower()
+            if type(v) == "function" and not seenM[k] and (key:find("reset") or key:find("combo")
+                or key:find("mouse") or key:find("clear") or key:find("block") or key:find("wheel")) then
+                seenM[k] = true
+                methods[#methods + 1] = tostring(k)
+            end
+        end
+    end
+    table.sort(methods)
+    log("input dump: binding methods: %s", #methods > 0 and table.concat(methods, ", ") or "none found")
+
     -- The wheel's actions, read off each action's own bindings.
     local zoomAction = InputAction ~= nil and ib.nameActions ~= nil
         and ib.nameActions[InputAction.AXIS_CONSTRUCTION_CAMERA_ZOOM] or nil
@@ -857,6 +892,28 @@ function P.inputDump(reason)
         end
         log("input dump: wheel action %s%s (%s): %s", tostring(w.name), w.action == zoomAction and " [camera zoom]" or "",
             w.how, #texts > 0 and table.concat(texts, " ") or "no event in the current context")
+    end
+
+    -- The camera zoom action's own bindings, wheel and keys alike, field by field: if only the
+    -- wheel's die, the difference between them is here.
+    if type(zoomAction) == "table" then
+        local seen, shown = {}, 0
+        local function walk(t, depth)
+            if seen[t] or depth > 4 or shown >= 8 then return end
+            seen[t] = true
+            local hasInput = false
+            for _, v in pairs(t) do
+                if type(v) == "string" and (v:find("WHEEL") or v:find("KEY_")) then hasInput = true end
+            end
+            if hasInput and t ~= zoomAction then
+                shown = shown + 1
+                log("input dump: camera zoom binding: %s", eventText(t))
+            end
+            for _, v in pairs(t) do
+                if type(v) == "table" then walk(v, depth + 1) end
+            end
+        end
+        pcall(walk, zoomAction, 1)
     end
     return string.format("Input dump written to the log (%d contexts, %d wheel actions).", #names, #wheelActions)
 end
