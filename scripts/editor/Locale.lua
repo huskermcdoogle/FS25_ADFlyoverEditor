@@ -482,6 +482,7 @@ L.STRINGS = {
         ["tidy lane ends to"] = "Fahrbahnenden bis",
         ["lane ends to box edge"] = "Fahrbahnenden an Boxkante",
         ["point at a junction"] = "auf eine Kreuzung zeigen",
+        ["numbered once it is built"] = "bekommt eine Nummer, sobald sie gebaut ist",
         ["search radius"] = "Suchradius",
         ["turn radius"] = "Wenderadius",
         ["road check"] = "Straßenprüfung",
@@ -537,16 +538,17 @@ L.SUMMARIES = {
         ["field loop"] = "Eine befahrbare Schleife um das Feld unter dem Cursor erzeugen.",
         ["parallel"] = "Eine Spur parallel zu einem Abschnitt oder einer Route anlegen.",
         ["siding"] = "Ein paralleler Abzweig, der an beiden Enden wieder einschwenkt.",
-        ["move"] = "Einen Wegpunkt ziehen, wahlweise mit seinen Nachbarn.",
+        ["road runs"] = "AutoDrive-Routen entlang Kartenstraßen und Feldwegen ohne Pfad legen und gebaute Straßen umformen.",
+        ["move"] = "Einen Punkt, Abschnitt, eine Route oder Auswahl ziehen - verschieben, kopieren, lostrennen oder seitlich schieben.",
         ["smooth"] = "Das Zittern in einem Abschnitt oder einer Route abrunden.",
         ["straighten"] = "Das Rauschen aus einem Abschnitt glätten, echte Kurven bleiben erhalten.",
         ["divide"] = "Gleichmäßig verteilte Punkte entlang eines Abschnitts einfügen.",
         ["ground"] = "Punkte wieder auf die Oberfläche unter ihnen aufsetzen.",
         ["convert"] = "Einbahn / beidseitig und Priorität ändern.",
         ["merge"] = "Zwei parallele Spuren zu einer gemeinsamen Spur zusammenführen.",
-        ["junction"] = "Ein Klick baut eine ganze Kreuzung aus sanften, radiusgebundenen Abbiegern.",
+        ["junction"] = "Die Abbieger einer Kreuzung entfernen, neue legen oder beides mit einem Rechtsklick.",
         ["name"] = "Einem Wegpunkt einen Kartenmarker-Namen geben.",
-        ["delete"] = "Einen Punkt, einen Abschnitt oder eine Route entfernen.",
+        ["delete"] = "Einen Punkt, eine Route oder eine Auswahl entfernen.",
     },
 }
 
@@ -564,8 +566,8 @@ L.HELP = {
                 "Einen Wegpunkt anklicken: sein PUNKT-Popup (benennen, verschieben, verbinden, Spline, ein-/beidseitig, primär/sekundär, löschen).",
                 "Einen zweiten Punkt anklicken: der ABSCHNITT dazwischen. Doppelklick auf einen Punkt: die ganze ROUTE.",
                 "Alt+Ziehen für ein Kästchen, Umschalt+Ziehen für einen Kreis, Alt+Umschalt+Ziehen freihand, Leertaste+Ziehen+Klick für ein gedrehtes Kästchen, oder Punkte einzeln mit Strg anklicken: eine AUSWAHL, deren Popup auf die ganze Menge wirkt. Ein normaler Klick und danach Strg-Klicks behalten den ersten Punkt; bleibt ein Punkt übrig, ist er wieder ein Punkt.",
-                "Ein Werkzeug aus einem Popup öffnet seine Karte dort, wo das Popup war; Rechtsklick wendet an, Esc geht zurück zum Popup.",
-                "Esc schließt das Popup (und hebt eine Auswahl auf); Rechtsklick schließt es ebenfalls.",
+                "Ein Werkzeug aus einem Popup öffnet seine Karte dort, wo das Popup war; Esc geht zurück zum Popup. Bei Begradigen, Glätten, Unterteilen, Aufsetzen und Parallele wendet Rechtsklick an.",
+                "Esc schließt das Popup und hebt eine Auswahl auf; Rechtsklick schließt nur das Popup.",
             },
             controls = {
                 "Punkt-Popup: benennen, verschieben, verbinden, Spline, einseitig oder beidseitig machen, primär oder sekundär machen, Punkt löschen.",
@@ -580,7 +582,7 @@ L.HELP = {
             },
             how = {
                 "Auf leeren Boden klicken, um einen Wegpunkt zu setzen; jeder neue verbindet sich mit dem vorigen.",
-                "Auf einen vorhandenen Wegpunkt klicken, um VON ihm aus zu zeichnen und die neue Route ins Netz einzubinden.",
+                "Auf einen vorhandenen Wegpunkt klicken, um VON ihm aus zu zeichnen und die neue Route ins Netz einzubinden. Bei laufender Route verbindet ein Klick auf einen Wegpunkt mit ihm - oder nimmt die Verbindung weg, wenn schon eine besteht.",
                 "Rechtsklick beendet die aktuelle Route, der nächste Klick beginnt eine neue.",
             },
             controls = {
@@ -591,14 +593,16 @@ L.HELP = {
         },
         ["spline"] = {
             what = {
-                "Spline legt eine glatte Kurve, die durch jeden angeklickten Punkt läuft - für weite Bögen, denen ein Fahrzeug zügig folgen kann. Eine Live-Vorschau zeigt die Kurve und die Wegpunkte, die sie legt, bevor du sie festlegst. Ein Ende auf einem Wegpunkt schließt dort an die Straße an und folgt ihrer Richtung; ein Ende auf freiem Boden bekommt einen neuen Wegpunkt.",
+                "Spline legt eine glatte Kurve, die durch jeden angeklickten Punkt läuft - für weite Bögen, denen ein Fahrzeug zügig folgen kann. Eine Live-Vorschau zeigt die Kurve und die Wegpunkte, die sie legt, bevor du sie festlegst. Ein Ende auf einem Wegpunkt schließt dort an die Straße an und folgt ihrer Richtung; ein Ende auf freiem Boden bekommt einen neuen Wegpunkt. Steht Aktion auf \"edit placed\", nimmt ein Klick auf eine schon gelegte Route sie genauso zum Umformen auf.",
             },
             how = {
-                "Punkte der Reihe nach anklicken - auf dem Boden, oder direkt auf einem Wegpunkt, um dort an die Straße anzuschließen. Alt halten setzt einen Punkt ohne Einrasten. Eine Markierung unter der Maus zeigt, was ein Klick tut: gelb schließt an einen Wegpunkt an, weiß ist freier Boden, grün fügt in die Linie ein.",
+                "Punkte der Reihe nach anklicken - auf dem Boden, oder direkt auf einem Wegpunkt, um dort an die Straße anzuschließen. Die zwei Enden reichen weiter: der erste Klick schließt an einen Wegpunkt in etwa 1,5 m an (zuerst an ein Spurende), und beim Rechtsklick rückt ein letzter Punkt so nah an einem Wegpunkt auf ihn und schließt an - nie an den eigenen Anfang des Splines. Mittlere Punkte rasten nur direkt auf einem Wegpunkt ein. Alt halten setzt einen Punkt ohne Einrasten. Eine Markierung unter der Maus zeigt, was ein Klick tut: gelb schließt an einen Wegpunkt an, weiß ist freier Boden, grün fügt in die Linie ein.",
                 "Auf die Kurve klicken fügt dort einen Punkt in die Linie ein. Einen Punkt ziehen, um ihn zu verschieben. Strg-Klick auf einen Punkt entfernt ihn.",
                 "Rechtsklick legt die Kurve als ein Rückgängig-Schritt; Esc verwirft sie.",
+                "Um eine schon gelegte Route umzuformen, Aktion auf \"edit placed\" stellen und die Route anklicken: ihre Form wird zu Punkten zum Ziehen, Hinzufügen (auf die Kurve klicken) oder Entfernen (Strg-Klick). Ihre zwei Enden bleiben, weil dort andere Straßen anschließen. Rechtsklick legt sie neu und behält Richtung, ein-/beidseitig und Priorität; ein Rückgängig nimmt es zurück.",
             },
             controls = {
+                "Aktion: \"new\" legt einen neuen Spline; \"edit placed\" formt eine schon gelegte Route um (das Stück zwischen zwei Kreuzungen).",
                 "Kurve per: Mehrpunkt ist diese Kurve; AutoDrive ist der alte Zwei-Punkt-Spline (zwei Wegpunkte anklicken, Rad für die Krümmung).",
                 "Abstand: wie weit die gelegten Wegpunkte auseinander liegen, in Metern.",
                 "Start-/End-Richtung: umkehren, in welche Richtung entlang der Straße ein angeschlossenes Ende abgeht oder ankommt.",
@@ -607,18 +611,24 @@ L.HELP = {
         },
         ["field loop"] = {
             what = {
-                "Feldschleife baut eine vollständige beidseitige Route, die knapp außerhalb der Feldgrenze verläuft, auf einen Wenderadius geglättet und um Bäume herum nach innen versetzt. Sie bleibt auf der Feldseite eines Zauns (innerhalb der Feldgrenze, wo der Zaun dort steht) und zieht ihren Rand ein, um Abstand zu einer anderen Feldschleife daneben zu halten. Es ist eine eigenständige Schleife - keine Kartenmarker, nicht mit dem übrigen Netz verbunden - die du danach mit Zeichnen oder dem Editor einbindest.",
+                "Feldschleife baut eine vollständige Route (beidseitig und sekundär, wenn die Karte nichts anderes sagt), die knapp außerhalb der Feldgrenze verläuft, auf einen Wenderadius geglättet und um Bäume herum nach innen versetzt. Sie bleibt auf der Feldseite eines Zauns (innerhalb der Feldgrenze, wo der Zaun dort steht) und zieht ihren Rand ein, um Abstand zu einer anderen Feldschleife daneben zu halten. Es ist eine eigenständige Schleife - keine Kartenmarker, nicht mit dem übrigen Netz verbunden - die du danach mit Zeichnen oder dem Editor einbindest.",
             },
             how = {
-                "Den Cursor auf das Feld richten, um das die Schleife laufen soll.",
-                "Das Feldschleifen-Werkzeug wählen - es liest die Feldgrenze und legt die Schleife.",
+                "In das Feld klicken, das umrundet werden soll. Es liest die Feldgrenze und legt die Schleife sofort.",
                 "Die Schleife danach in dein Netz einbinden, falls du sie verbunden brauchst.",
             },
             controls = {
+                "Priorität: primär oder sekundär (Standard).",
+                "Spur: im Uhrzeigersinn, gegen den Uhrzeigersinn oder beidseitig (Standard).",
                 "Rand: wie weit außerhalb der Grenze die Schleife läuft.",
-                "Baumabstand: wie weit die Schleife von Bäumen bleibt, bevor sie ausweicht.",
-                "Wenderadius: die engste Kurve, die die Schleife machen darf.",
+                "Hindernisabstand: wie weit die Schleife von Bäumen, Masten, Zäunen und Gebäuden bleibt, bevor sie ausweicht.",
+                "Wenderadius: die engste Kurve, die die Schleife machen darf, von 2 m bis 20 m. Sehr kleine Werte können eine spitze Feldecke wie einen Knick aussehen lassen.",
                 "Fahrzeughöhe: für wie hohe Maschine die Baumprüfung frei hält.",
+                "eigenes Feld erkennen: standardmäßig an; findet auch Boden, der gepflügt wurde, um zwei getrennte Kartenfelder zu einem zu verbinden, nicht nur ein Feld der Karte. Ausschalten, um nur die Felder der Karte zu nehmen, falls es ein Feld in deinem Spielstand falsch liest.",
+                "Courseplay-Feld: nur zu sehen, wenn Courseplay installiert ist. Standardmäßig an; steht der Cursor in einem deiner eigenen Courseplay-Felder, folgt die Schleife diesem Umriss. Die Karte zeigt, welche Grenze die letzte Schleife genommen hat.",
+                "Hindernisse meiden: standardmäßig an; schiebt die Schleife von Bäumen, Masten, Zäunen und Gebäuden weg, statt sie gerade hindurchzulegen. Ausschalten, um die versetzte Grenze so zu nehmen, wie sie liegt, falls die Prüfung etwas meldet, das nicht wirklich im Weg ist.",
+                "Inseln auslassen: standardmäßig an; eine Karte kann eine Gruppe Masten oder Bäume mit einem Schlitz im Umriss aus einem Feld schneiden. Die Schleife läuft dann um das Feld, nicht in jede Insel. Ausschalten, um dem Umriss so zu folgen, wie die Karte ihn zeichnet.",
+                "Kombi-Lücke: wie weit nach einem anderen, getrennten Stück desselben Felds gesucht wird, wenn ein Weg es teilt, um es in dieselbe Schleife zu nehmen. 0 (Standard) verlässt nie das angeklickte Feld. Nur für ein von einem Weg geteiltes Feld erhöhen; senken, falls es je über eine echte Straße in ein fremdes Feld greift. Zwei Felder, die sich ohne Lücke berühren, gelten weiter als ein Feld.",
             },
         },
         ["parallel"] = {
@@ -645,13 +655,34 @@ L.HELP = {
                 "Ausweiche legt ein kurzes paralleles Stück neben eine Route und führt es an beiden Enden per Kurve zurück - wie eine Haltebucht oder Ausweichstelle, in einem Schritt.",
             },
             how = {
-                "Dort klicken, wo die Ausweiche liegen soll - der Klick ist ihre Mitte, die Seite folgt dem Cursor.",
+                "Einen Wegpunkt auf der Route anklicken, wo die Ausweiche liegen soll - der Klick ist ihre Mitte (sie rutscht weiter, wenn sie zu nah an einem Ende liegt), die Seite folgt dem Cursor.",
                 "Versatz und Länge setzen (das Rad ändert die Länge), dann Rechtsklick zum Legen.",
             },
             controls = {
                 "Seite: wie bei Parallele - links / rechts in Fahrtrichtung bei einer Einbahnspur, nach Bildschirm bei einer beidseitigen.",
                 "Versatz: wie weit seitlich die Ausweiche liegt.",
                 "Länge (Rad): wie lang das parallele Stück ist.",
+            },
+        },
+        -- The road runs card is still English, so its labels stay English here (2026-11-04).
+        ["road runs"] = {
+            what = {
+                "Road runs liest die Bodenfarbe um die Maus - Asphalt und Beton, Schotter, Feldwege - und hebt die Straßen hervor, die noch keinen AutoDrive-Pfad haben. Ein Klick folgt der Straße weiter durch Kreuzungen, wo sie geradeaus geht, und hält an T-Kreuzungen, echten Enden und vorhandenen Pfaden. Es legt die Spuren, die du wählst: einseitig, eine beidseitige Linie oder zwei Spuren mit Rechtsverkehr. An Gabelungen hält es vorher an, damit das Kreuzungswerkzeug sie fertig baut; ein Feldweg, der auf eine Straße trifft, läuft bis an den Asphalt. Brücken und Rampen werden aus den Straßenmodellen des Spiels gefunden. Eine schon gebaute Straße lässt sich mit Griffen umformen, auch durch ihre Kreuzungen, und die Straßen, die an sie anschließen, folgen.",
+            },
+            how = {
+                "Auf eine Straße zeigen: sie leuchtet auf, mit ihren Spuren in der Vorschau. Klicken wählt sie; Doppelklick führt sie weiter durch Gabelungen.",
+                "Für eine Einbahn-Route auf die Seite der Straße klicken, auf der du fahren würdest (rechts).",
+                "Eine Wahl anklicken, um sie auszuwählen: einen Griff ziehen formt sie um, auf die Linie klicken fügt einen Griff hinzu, Strg-Klick auf einen Griff entfernt ihn (eine Route behält zwei). Ein Ende, das auf einen Wegpunkt gezogen wird, schließt dort an (Alt halten: ohne Einrasten).",
+                "Rechtsklick baut alles Gewählte. Ein Rückgängig nimmt alles zurück.",
+                "Eine schon gebaute Straße anklicken, um sie genauso umzuformen. Eine Straße mit zwei Spuren wird an ihrer Mitte geformt, beide Spuren zusammen. Kreuzungspunkte bewegen sich mit; kurze Abbieger biegen sich, und Seitenstraßen gleiten zurück an ihren Platz. Rechtsklick wendet an, als ein Rückgängig-Schritt.",
+            },
+            controls = {
+                "lay as: auto (zwei Spuren auf befestigten Straßen, eine beidseitige Linie auf Feldwegen), einseitig, beidseitig oder zwei Spuren.",
+                "Priorität: primär oder sekundär, wie bei Zeichnen.",
+                "roads to find: befestigt, Schotter und Erde - eine Art ausschalten, damit sie nicht mehr aufleuchtet.",
+                "lane gap: from road misst nach der Straßenbreite; set: eigenen Wert eintippen.",
+                "through junctions: beim Umformen einer gebauten Straße die Auswahl durch ihre Kreuzungen weiterführen (an) oder nur die Route zwischen zwei Kreuzungen nehmen (aus).",
+                "Einstellungsdialog: light up (under mouse oder all nearby), side check (bridges oder everywhere), rig width (3,0 m) und fork gap (7,5 m).",
             },
         },
         ["move"] = {
@@ -701,7 +732,7 @@ L.HELP = {
         },
         ["straighten"] = {
             what = {
-                "Begradigen entfernt ziellose Details, behält aber echte Kurven, indem nur Punkte innerhalb einer Toleranz der Geraden wegfallen. Kreuzungen, Marker und die Enden bleiben; jedes Stück dazwischen wird entlang der gewählten Strecke begradigt.",
+                "Begradigen entfernt ziellose Details, behält aber echte Kurven, und verteilt dann dieselbe Anzahl Punkte gleichmäßig auf der geraderen Linie. Kreuzungen, Marker und die Enden bleiben; jedes Stück dazwischen wird entlang der gewählten Strecke begradigt.",
             },
             how = {
                 "Den Abschnitt wie gewohnt wählen: ein Ende und dann das andere anklicken für einen ABSCHNITT, oder doppelklicken für die ganze ROUTE zwischen Kreuzungen. Auf einer Schleife nehmen zwei Klicks den kürzeren Weg.",
@@ -709,10 +740,10 @@ L.HELP = {
                 "Die Zeile \"Auswahl\" zeigt, was gewählt ist; einen Typ anklicken sperrt ihn (die anderen werden blass), erneut anklicken hebt die Sperre auf.",
                 "Zwei Punkte, die nur über einen langen Umweg verbunden sind (an einer Kreuzung weg von der Spur und zurück), werden abgelehnt.",
                 "Oder die Punkte einzeln mit Strg anklicken (eine zusammenhängende Route).",
-                "Toleranz setzen - größer entfernt mehr - dann Rechtsklick zum Anwenden.",
+                "Toleranz setzen - größer begradigt mehr - dann Rechtsklick zum Anwenden.",
             },
             controls = {
-                "Toleranz: wie weit ein Punkt von der Linie abweichen darf, bevor er bleibt.",
+                "Toleranz: wie weit ein Schlenker von der Geraden abweichen darf und trotzdem geglättet wird.",
             },
         },
         ["divide"] = {
@@ -733,7 +764,7 @@ L.HELP = {
         },
         ["ground"] = {
             what = {
-                "Aufsetzen senkt (oder hebt) Wegpunkte innerhalb einer Toleranz auf den Boden und behebt schwebende oder vergrabene Punkte. Ein Punkt, der bereits richtig auf einer Rampe oder Brücke liegt, bleibt dort.",
+                "Aufsetzen senkt (oder hebt) Wegpunkte, die mehr als die Toleranz neben dem Boden liegen, und behebt schwebende oder vergrabene Punkte. Mit einrasten auf = Oberfläche bleibt ein Punkt, der schon auf einer gesetzten Rampe oder Brücke liegt, dort.",
             },
             how = {
                 "Den Abschnitt wie gewohnt wählen: ein Ende und dann das andere anklicken für einen ABSCHNITT, oder doppelklicken für die ganze ROUTE zwischen Kreuzungen. Auf einer Schleife nehmen zwei Klicks den kürzeren Weg.",
@@ -761,12 +792,12 @@ L.HELP = {
             controls = {
                 "Richtung: beidseitig, einseitig, andersherum (dreht eine Einbahn; ein Rückwärtsweg bleibt Rückwärtsweg) oder Rückwärtsweg (AutoDrives Rückwärtsstraße, im Rückwärtsgang befahren).",
                 "Priorität: primär oder sekundär (Vorfahrt gewähren).",
-                "gilt für: diesen Wegpunkt oder die ganze Route.",
+                "gilt für: einen Wegpunkt oder die ganze Route.",
             },
         },
         ["merge"] = {
             what = {
-                "Zusammenführen ist für ein Stück, auf dem zwei getrennt aufgezeichnete Spuren nebeneinander laufen - die zwei Richtungen einer Straße oder eine doppelt aufgezeichnete Spur - die eins werden sollen. Das Stück auf einer Spur wählen, dann die andere anklicken, und das gewählte Stück wird übernommen.",
+                "Zusammenführen ist für ein Stück, auf dem zwei getrennt aufgezeichnete Spuren nebeneinander laufen - die zwei Richtungen einer Straße oder eine doppelt aufgezeichnete Spur - die eins werden sollen. Das Stück auf einer Spur wählen, dann die andere anklicken: die andere Spur wird eingefaltet, und das gewählte Stück rückt in die Mitte und wird beidseitig.",
             },
             how = {
                 "Den Abschnitt wie gewohnt wählen: ein Ende und dann das andere anklicken für einen ABSCHNITT, oder doppelklicken für die ganze ROUTE zwischen Kreuzungen. Auf einer Schleife nehmen zwei Klicks den kürzeren Weg.",
@@ -809,24 +840,20 @@ L.HELP = {
         },
         ["junction"] = {
             what = {
-                "Kreuzung erzeugt in einer Platzierung alle Verbinder, die eine Kreuzung braucht - jede zulässige Abbiegung zwischen den Straßen im Suchkreis. Die Verbinder folgen der echten Spurgeometrie: Die Anschlusspunkte liegen auf den vorhandenen Strecken, die Kurven sind an den Wenderadius gebunden, bleiben auf der Fahrbahn und weichen festen Hindernissen aus; jede Abbiegung wird mit dem größten Radius gelöst, der an ihre Stelle passt. Was sich nicht sicher bauen lässt, wird sichtbar abgelehnt - rot gezeichnet, auf der Karte gezählt, im Log begründet - statt schlecht verlegt.",
+                "Das Kreuzungswerkzeug arbeitet an einer Kreuzung auf einmal. Entfernen nimmt die alten Abbieger in der Kreuzung heraus und kürzt die Fahrbahnen auf saubere Enden; Bauen legt neue Abbieger - das eigene X- oder T-Muster der Mod, wo es an jede Straße dort passt, sonst Abbieger für Abbieger (oder gar nichts, wie die erweiterte Einstellung sagt). Entfernen + bauen macht beides als ein Rückgängig-Schritt. Kreuzungen sind über der Karte nummeriert, und die Nummern bleiben beim Spielstand. Es ist eine BETA: einfache X- und T-Kreuzungen von Straßen kann es heute gut; beidseitige Feldwege, Y-Kreuzungen und schiefe Kreuzungen kommen noch. Im Einstellungsdialog (Abschnitt BETA) ausschalten, dann verschwindet sein Knopf.",
             },
             how = {
-                "Auf eine Kreuzung zeigen - der Suchkreis und die geschnittenen Zufahrten erscheinen live in der Vorschau. Das Mausrad ändert den Kreis: der wichtigste Hebel dafür, was als eine Kreuzung zählt.",
-                "Linksklick SPERRT den Ort (der Kreis wird durchgezogen). Die Vorschau folgt dem Cursor nicht mehr; Rad und Karteneinstellungen formen sie weiter live.",
-                "Weiße Kurven werden verlegt; rote sind abgelehnt, der Grund steht gezählt auf der Karte (zu eng, neben der Straße, blockiert usw.).",
-                "Rechtsklick platziert alles als EINEN Undo-Schritt. Rechtsklick ohne etwas zu platzieren entsperrt den Ort; erneuter Rechtsklick legt das Werkzeug weg.",
-                "Mit 'Bestehende: neu bauen' werden die alten Verbinder im Kreis entfernt und frisch verlegt - die Straßen selbst bleiben unberührt.",
+                "Auf eine Kreuzung zeigen: die Karte sagt, welche es ist und welche Art. Linksklick sperrt sie.",
+                "Die Aktion auf der Karte wählen: entfernen, bauen oder entfernen + bauen.",
+                "Rechtsklick führt sie aus. Ein Rückgängig nimmt alles zurück.",
+                "Linksklick woanders versetzt die Sperre auf eine andere Kreuzung. Rechtsklick ohne etwas zu tun gibt sie frei; Esc legt das Werkzeug weg.",
             },
             controls = {
-                "Suchradius (Rad): der Suchkreis - welche Straßen zu dieser Kreuzung gehören.",
-                "Wenderadius: der Ziel-Wenderadius; jede Abbiegung verkleinert ihn nur so weit wie nötig, um in ihre Ecke zu passen.",
-                "Straßenprüfung: hält den Fahrzeugkorridor auf der Fahrbahn; aus heißt nur Radius.",
-                "Hindernisse: lehnt Abbiegungen ab, deren Korridor Bäume, Gebäude, Masten oder Zäune trifft.",
-                "Korridor / Freiraum: die Breiten für Fahrbahnprüfung und Hindernisbox.",
-                "Kürzen/Verlängern: ein Anschlusspunkt darf über ein vor der Ecke gekürztes Ende hinausragen.",
-                "Bestehende: das Vorhandene behalten oder frisch neu bauen.",
-                "Kurve: Dubins (radiusgebunden, Pose zu Pose) oder Biarc; die kürzere Lösung gewinnt.",
+                "Aktion: entfernen, bauen oder entfernen + bauen.",
+                "Durchfahrten: beim Entfernen belassen (die Straßen geradeaus bleiben) oder mit entfernt.",
+                "Form: beim Bauen Mod (das eigene X oder T der Mod) oder glätten (rundere Abbieger).",
+                "muss passen: die Fahrzeuge, für die jeder neue Abbieger passen muss.",
+                "erweitert: die Radien und Prüfungen hinter dem Bauen; standardmäßig zu.",
             },
         },
     },
@@ -851,12 +878,13 @@ L.GENERAL = {
                 ", und . - Abfallwert von Verschieben verkleinern / vergrößern.",
                 "B - Kopieren von Verschieben umschalten.",
                 "G - Höhenschnitt an / aus: Blick senkrecht nach unten, Dächer und Bäume über der Fahrzeughöhe ausgeblendet.",
+                "/ - diese Hilfe zeigen / verbergen.",
                 "R (halten) + Rad - das Gezogene drehen (Verschieben, beim Ziehen).",
-                "Esc - EINEN Schritt zurück: eine Zahleneingabe, ein Dialog, ein Popup (samt Auswahl), ein Werkzeug aus einem Popup (zurück zum Popup), eine offene Aktion, die Auswahl, das Werkzeug - und erst dann den Editor verlassen.",
+                "Esc - EINEN Schritt zurück: eine Zahleneingabe, ein Dialog, ein Popup (samt Auswahl), ein Werkzeug aus einem Popup (zurück zum Popup), die Hilfe, eine offene Aktion, die Auswahl, das Werkzeug - und erst dann den Editor verlassen.",
             } },
             { title = "MAUS & KAMERA", lines = {
                 "Linksklick - wählen; Linksziehen - bewegen (Verschieben). Zweiter Klick = Abschnitt, Doppelklick = Route, in jedem Werkzeug, das auf einem Stück arbeitet.",
-                "Rechtsklick - Offenes anwenden (Route beenden, Spur legen, bestätigen) oder ein Popup schließen.",
+                "Rechtsklick - Offenes anwenden (Route beenden, Spur legen, bestätigen) oder ein Popup schließen. Ist nichts offen, legt ein weiterer Rechtsklick nach einem Moment das Werkzeug weg.",
                 "Mittlere Maustaste - die Kamera schwenken/drehen. WASD bewegt sie.",
                 "Rad - Kamera-Zoom oder die Zahl unter dem Cursor ändern.",
                 "Strg - zur Auswahl hinzufügen / entfernen, allein oder zusammen mit einer Form unten. In Glätten, Begradigen, Unterteilen, Parallele und Zusammenführen muss sie eine zusammenhängende Route bleiben.",

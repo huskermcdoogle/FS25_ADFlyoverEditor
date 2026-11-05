@@ -109,6 +109,11 @@ ADFlyoverLocale.STRINGS.br = {
     ["scope"] = "alcance",
     ["applies to"] = "vale para",
     ["tool card"] = "cartão da ferramenta",
+    ["camera through buildings"] = "câmera através de prédios",
+    ["on: the camera flies under roofs, to place points inside sheds"] = "lig.: a câmera passa sob telhados, para pôr pontos dentro de galpões",
+    ["height slice (G)"] = "corte de altura (G)",
+    ["slice height on foot"] = "altura do corte a pé",
+    ["slice: looks straight down and hides roofs and trees over your vehicle's height"] = "corte: vista direto para baixo, telhados e árvores acima da altura do veículo ficam ocultos",
     ["pin"] = "fixar",
     ["picked side"] = "lado escolhido",
     ["up"] = "cima",
@@ -403,32 +408,34 @@ ADFlyoverLocale.STRINGS.br = {
     ["already there"] = "já existe",
     ["confidence"] = "confiança",
     ["point at a crossing"] = "aponte para um cruzamento",
+    ["numbered once it is built"] = "recebe número quando for construído",
 }
 
 ADFlyoverLocale.SUMMARIES.br = {
     ["select"] = "O modo padrão. Clique nas coisas para editá-las; nenhuma ferramenta ativa.",
     ["draw"] = "Colocar pontos e ligá-los em uma rota.",
-    ["spline"] = "Traçar uma ligação suave e curva entre dois pontos.",
+    ["spline"] = "Traçar uma curva suave por quantos pontos você quiser.",
     ["field loop"] = "Criar um contorno transitável ao redor do campo sob o cursor.",
     ["parallel"] = "Traçar uma faixa paralela a um trecho ou rota.",
     ["siding"] = "Um desvio paralelo que volta à via nas duas pontas.",
-    ["move"] = "Arrastar um ponto, se quiser com seus vizinhos.",
+    ["road runs"] = "Traçar rotas do AutoDrive em estradas do mapa e estradas de terra que ainda não têm caminho, e remodelar estradas já construídas.",
+    ["move"] = "Arrastar um ponto, trecho, rota ou seleção - mover, copiar, desligar ou deslizar para o lado.",
     ["smooth"] = "Arredondar os tremores de um trecho ou rota.",
     ["straighten"] = "Alisar o ruído de um trecho, mantendo as curvas reais.",
     ["divide"] = "Inserir pontos espaçados por igual ao longo de um trecho.",
     ["ground"] = "Reassentar os pontos na superfície sob eles.",
     ["convert"] = "Mudar mão única / mão dupla e prioridade.",
     ["merge"] = "Fundir duas faixas paralelas em uma faixa comum.",
-    ["junction"] = "Um clique cria um cruzamento inteiro com conversões suaves de raio definido.",
+    ["junction"] = "Limpar as conversões de um cruzamento, traçar novas, ou os dois com um clique direito.",
     ["name"] = "Dar a um ponto um nome de marcador no mapa.",
-    ["delete"] = "Remover um ponto, um trecho ou uma rota.",
+    ["delete"] = "Remover um ponto, uma rota ou uma seleção.",
 }
 
 ADFlyoverLocale.GENERAL.br = {
     summary = "Abrir, sair e as teclas e controles que valem em qualquer ferramenta.",
     sections = {
         { title = "ABRIR E SAIR", lines = {
-            "Abra o editor com Alt esquerdo + F (reatribuível no menu de controles) ou com o botão ao lado do HUD do AutoDrive.",
+            "Abra o editor com Alt esquerdo + V ou Alt esquerdo + F (reatribuível no menu de controles) ou com o botão ao lado do HUD do AutoDrive.",
             "Esc para sair. Toda edição pode ser desfeita.",
             "Só um jogador. As edições são gravadas quando você é o anfitrião.",
         } },
@@ -439,12 +446,13 @@ ADFlyoverLocale.GENERAL.br = {
             ", e . - diminuir / aumentar a atenuação do Mover.",
             "B - alternar a cópia do Mover.",
             "G - corte de altura liga / desliga: vista direto para baixo, telhados e árvores acima da altura do veículo ficam ocultos.",
+            "/ - exibir / ocultar esta ajuda.",
             "R (segurado) + roda - girar o que está sendo arrastado (Mover, durante o arrasto).",
-            "Esc - volta UM passo: um número digitado, um diálogo, um popup (e sua seleção), uma ferramenta escolhida em um popup (volta ao popup), uma ação pendente, a seleção, a ferramenta - e só então sai do editor.",
+            "Esc - volta UM passo: um número digitado, um diálogo, um popup (e sua seleção), uma ferramenta escolhida em um popup (volta ao popup), a ajuda, uma ação pendente, a seleção, a ferramenta - e só então sai do editor.",
         } },
         { title = "MOUSE E CÂMERA", lines = {
             "Clique esquerdo - escolher; arrastar com o esquerdo - mover (Mover). Segundo clique = trecho, clique duplo = rota, em toda ferramenta que trabalha sobre um trecho.",
-            "Clique direito - aplicar o que está pendente (encerrar uma rota, traçar uma faixa, confirmar) ou fechar um popup.",
+            "Clique direito - aplicar o que está pendente (encerrar uma rota, traçar uma faixa, confirmar) ou fechar um popup. Sem nada pendente, outro clique direito depois de um instante guarda a ferramenta.",
             "Botão do meio - orbitar / girar a câmera. WASD a move.",
             "Roda - zoom da câmera ou ajustar o número sob o cursor.",
             "Ctrl - adicionar à seleção / remover dela, sozinho ou junto com uma forma abaixo. Em Suavizar, Endireitar, Dividir, Paralela e Mesclar ela precisa continuar sendo uma rota conectada.",
@@ -478,8 +486,8 @@ ADFlyoverLocale.HELP.br = {
                 "Clique em um ponto: abre o popup do PONTO (nomear, mover, conectar, spline, mão única/mão dupla, primária/secundária, excluir).",
                 "Clique em um segundo ponto: o TRECHO entre eles. Clique duas vezes em um ponto: a ROTA inteira.",
                 "Alt+arrastar faz uma caixa, Shift+arrastar faz um círculo, Alt+Shift+arrastar é à mão livre, Espaço+arrastar+clicar faz uma caixa girada, ou clique nos pontos um a um com Ctrl para formar uma SELEÇÃO; o popup dela age sobre o conjunto todo. Um clique simples seguido de cliques com Ctrl mantém o primeiro ponto; se sobrar um só ponto, ele volta a ser um ponto.",
-                "Escolher uma ferramenta em um popup abre o cartão dela no lugar onde o popup estava; clique direito aplica, Esc volta ao popup.",
-                "Esc fecha o popup (e desfaz a seleção); o clique direito também o fecha.",
+                "Escolher uma ferramenta em um popup abre o cartão dela no lugar onde o popup estava; Esc volta ao popup. Em endireitar, suavizar, dividir, assentar no solo e paralela, o clique direito aplica.",
+                "Esc fecha o popup e desfaz a seleção; o clique direito só fecha o popup.",
             },
             controls = {
                 "Popup do ponto: nomear, mover, conectar, spline, tornar mão única ou mão dupla, tornar primária ou secundária, excluir ponto.",
@@ -494,7 +502,7 @@ ADFlyoverLocale.HELP.br = {
             },
             how = {
                 "Clique no chão vazio para colocar um ponto; cada novo ponto se conecta ao anterior.",
-                "Clique em um ponto existente para começar a desenhar A PARTIR dele, ligando a nova rota à rede.",
+                "Clique em um ponto existente para começar a desenhar A PARTIR dele, ligando a nova rota à rede. Com uma rota em andamento, um clique em um ponto liga a ele - ou tira a ligação, se já houver uma.",
                 "O clique direito encerra a rota atual, e o próximo clique começa uma nova.",
             },
             controls = {
@@ -505,34 +513,42 @@ ADFlyoverLocale.HELP.br = {
         },
         ["spline"] = {
             what = {
-                "Spline liga dois pontos com uma curva em vez de um segmento reto, para curvas amplas que um veículo consegue seguir em velocidade. Uma prévia ao vivo mostra a curva antes de você confirmá-la.",
+                "Spline traça uma curva suave que passa por todos os pontos que você clica, para curvas amplas que um veículo consegue seguir em velocidade. Uma prévia ao vivo mostra a curva e os pontos que ela vai colocar antes de você confirmar. Uma ponta clicada em um ponto liga à estrada ali e segue a direção dela; uma ponta em chão vazio ganha um ponto novo. Com ação em \"edit placed\", um clique em uma rota já traçada a pega para ser remodelada do mesmo jeito.",
             },
             how = {
-                "Clique no ponto inicial e depois no ponto final - a curva aparece em prévia entre eles.",
-                "Gire a roda do mouse para fechar ou abrir a curvatura enquanto a prévia estiver ativa.",
-                "Clique de novo / confirme para colocá-la; o clique direito cancela.",
+                "Clique nos pontos em ordem - no chão, ou bem em cima de um ponto para ligar à estrada ali. As duas pontas alcançam mais longe: o primeiro clique liga a um ponto a até cerca de 1,5 m (primeiro a uma ponta de faixa), e no clique direito um último ponto tão perto de um ponto vai para cima dele e liga - nunca ao próprio início da spline. Os pontos do meio só encaixam bem em cima de um ponto. Segure Alt para colocar um ponto sem encaixar. Um marcador sob o mouse mostra o que um clique faz: amarelo liga a um ponto, branco é chão vazio, verde entra na linha.",
+                "Clique na curva para inserir um ponto na linha ali. Arraste um ponto para movê-lo. Ctrl+clique em um ponto o remove.",
+                "O clique direito traça a curva como um só passo de desfazer; Esc a descarta.",
+                "Para remodelar uma rota já traçada, ponha ação em \"edit placed\" e clique na rota: a forma dela vira pontos para arrastar, adicionar (clique na curva) ou remover (Ctrl+clique). As duas pontas ficam, porque outras estradas se encontram ali. O clique direito a traça de novo, mantendo o sentido, mão única ou mão dupla e a prioridade; um desfazer a traz de volta.",
             },
             controls = {
-                "curvatura (roda): quão fechada é a curva, limitada a uma faixa razoável.",
-                "direção da spline: normal constrói a curva a partir do primeiro ponto; invertida a constrói a partir da outra ponta. Isso muda a forma da curva e, em mão única, define o sentido em que ela corre.",
-                "tangente final / inicial: inverte a direção em que a curva sai de cada extremidade.",
+                "ação: \"new\" traça uma spline nova; \"edit placed\" remodela uma rota já traçada (o trecho entre dois cruzamentos).",
+                "curva por: multiponto é esta curva; AutoDrive é a antiga spline de dois pontos (clique em dois pontos, roda para a curvatura).",
+                "espaçamento: a distância entre os pontos traçados, em metros.",
+                "direção inicial / final: inverte para que lado da estrada uma ponta ligada sai ou chega.",
                 "tráfego / prioridade: como em Desenhar - mão única, mão dupla ou contramão (a estrada de ré do AutoDrive, percorrida de ré) e primária/secundária.",
             },
         },
         ["field loop"] = {
             what = {
-                "Contorno de campo constrói uma rota completa de mão dupla que corre logo fora do limite de um campo, suavizada até um raio de curva e deslocada para dentro ao redor de árvores no caminho. É um circuito independente - sem marcadores do mapa e não ligado ao resto da rede - que você conecta depois com Desenhar ou com o editor.",
+                "Contorno de campo constrói uma rota completa (mão dupla e secundária, a não ser que o cartão diga outra coisa) que corre logo fora do limite de um campo, suavizada até um raio de curva e deslocada para dentro ao redor de árvores no caminho. Ela fica do lado do campo de uma cerca (dentro do contorno do campo, onde a cerca fica dentro dele) e recolhe a margem para manter distância de outro contorno de campo ao lado. É um circuito independente - sem marcadores do mapa e não ligado ao resto da rede - que você conecta depois com Desenhar ou com o editor.",
             },
             how = {
-                "Aponte o cursor para o campo que você quer contornar.",
-                "Escolha a ferramenta Contorno de campo - ela lê o limite do campo e traça o circuito.",
+                "Clique dentro do campo que você quer contornar. Ele lê o limite do campo e traça o circuito na hora.",
                 "Depois, ligue o circuito à sua rede, se precisar que ele esteja conectado.",
             },
             controls = {
+                "prioridade: primária ou secundária (padrão).",
+                "faixa: horário, anti-horário ou mão dupla (padrão).",
                 "margem: a que distância fora do limite o circuito corre.",
                 "folga de obstáculos: a que distância o circuito se mantém de árvores, postes, cercas e construções antes de desviar.",
-                "raio de curva: a curva mais fechada que o circuito pode fazer. Nunca se usa menos de 5 m, mesmo que o valor seja menor - uma esquina mais fechada que isso fica parecendo um tranco, não uma curva suave.",
+                "raio de curva: a curva mais fechada que o circuito pode fazer, de 2 m a 20 m. Valores muito pequenos podem deixar uma esquina fechada do campo parecendo um tranco.",
                 "altura do veículo: para qual altura de máquina a checagem de árvores libera a passagem.",
+                "detectar campo próprio: ligado por padrão; também acha terra arada para juntar dois campos separados do mapa em um, não só um campo que vem com o mapa. Desligue para usar só os campos do mapa, se algum dia ele ler errado um campo do seu jogo salvo.",
+                "campo do Courseplay: só aparece com o Courseplay instalado. Ligado por padrão; quando o cursor está dentro de um dos seus campos personalizados do Courseplay, o circuito segue esse contorno. O cartão diz qual limite o último circuito usou.",
+                "evitar obstáculos: ligado por padrão; afasta o circuito de árvores, postes, cercas e construções em vez de traçá-lo direto por eles. Desligue para usar o limite deslocado como está, se a checagem insistir em algo que não está de fato no caminho.",
+                "ignorar ilhas: ligado por padrão; um mapa pode recortar um grupo de postes ou árvores de um campo com uma fenda no contorno. O circuito então dá a volta no campo, sem entrar em cada ilha. Desligue para seguir o contorno como o mapa o desenha.",
+                "vão do combo: até que distância procurar outra parte separada do mesmo campo quando uma estradinha o divide, e juntá-la no mesmo circuito. 0 (o padrão) nunca sai do campo clicado. Aumente só para um campo dividido por uma estradinha; diminua se algum dia ele passar por uma estrada de verdade até um campo sem relação. Dois campos que se tocam sem vão nenhum continuam contando como um só.",
             },
         },
         ["parallel"] = {
@@ -559,13 +575,34 @@ ADFlyoverLocale.HELP.br = {
                 "Desvio paralelo coloca um trecho paralelo curto ao lado de uma rota e o faz voltar para ela por curvas nas duas pontas - como um acostamento de parada ou um desvio de cruzamento, em uma só ação.",
             },
             how = {
-                "Clique onde o desvio deve ficar - o clique é o centro dele, e o lado acompanha o cursor.",
+                "Clique em um ponto da rota onde o desvio deve ficar - o clique é o centro dele (ele escorrega ao longo da rota se ficar perto demais de uma ponta), e o lado acompanha o cursor.",
                 "Defina o deslocamento e o comprimento (a roda ajusta o comprimento), depois clique com o botão direito para traçar.",
             },
             controls = {
                 "lado: como em Paralela - esquerda / direita no sentido da viagem em via de mão única, pela tela em via de mão dupla.",
                 "deslocamento: a que distância, para o lado, fica o desvio.",
                 "comprimento (roda): o tamanho do trecho paralelo.",
+            },
+        },
+        -- The road runs card is still English, so its labels stay English here (2026-11-04).
+        ["road runs"] = {
+            what = {
+                "Road runs lê a pintura do chão em volta do mouse - asfalto e concreto, cascalho, estradas de terra - e acende as estradas que ainda não têm caminho do AutoDrive. Um clique segue a estrada pelos cruzamentos onde ela continua reta, e para em T, em pontas de verdade e em caminhos que já existem. Ele traça as faixas que você escolher: mão única, uma linha de mão dupla, ou duas faixas pela direita. Ele para antes das bifurcações, para a ferramenta de cruzamento terminá-las; uma estrada de terra que chega a uma estrada vai até o asfalto. Pontes e rampas são achadas pelas malhas de estrada do jogo. Uma estrada já construída pode ser remodelada com alças, inclusive pelos cruzamentos dela, e as estradas que se ligam a ela acompanham.",
+            },
+            how = {
+                "Aponte para uma estrada: ela acende, com as faixas em prévia. Clique para escolhê-la; clique duplo a leva adiante pelas bifurcações.",
+                "Para uma rota de mão única, clique no lado da estrada em que você dirigiria (pela direita).",
+                "Clique em uma escolha para selecioná-la: arraste uma alça para remodelá-la, clique na linha para adicionar uma alça, Ctrl+clique em uma alça para removê-la (uma rota fica com duas). Uma ponta arrastada até um ponto se liga a ele (segure Alt para não encaixar).",
+                "O clique direito constrói tudo o que foi escolhido. Um desfazer traz tudo de volta.",
+                "Clique em uma estrada já construída para remodelá-la do mesmo jeito. Uma estrada de duas faixas é moldada pelo meio, as duas faixas juntas. Os pontos de cruzamento se movem com ela; conversões curtas se curvam e as estradas laterais voltam ao lugar com suavidade. O clique direito aplica, como um só passo de desfazer.",
+            },
+            controls = {
+                "lay as: auto (duas faixas em estradas pavimentadas, uma linha de mão dupla em estradas de terra), mão única, mão dupla ou duas faixas.",
+                "prioridade: primária ou secundária, como em Desenhar.",
+                "roads to find: pavimentada, cascalho e terra - desligue um tipo para ele parar de acender.",
+                "lane gap: from road mede pela largura da estrada; set: digite o seu valor.",
+                "through junctions: ao remodelar uma estrada construída, leva a seleção adiante pelos cruzamentos dela (ligado) ou pega só a rota entre dois cruzamentos (desligado).",
+                "diálogo de ajustes: light up (under mouse ou all nearby), side check (bridges ou everywhere), rig width (3,0 m) e fork gap (7,5 m).",
             },
         },
         ["move"] = {
@@ -615,7 +652,7 @@ ADFlyoverLocale.HELP.br = {
         },
         ["straighten"] = {
             what = {
-                "Endireitar remove os detalhes errantes, mas mantém as curvas de verdade, descartando só os pontos que ficam dentro de uma tolerância em relação à reta. Cruzamentos, marcadores e as pontas são mantidos; cada trecho entre eles é endireitado ao longo do caminho que você escolheu.",
+                "Endireitar remove os detalhes errantes, mas mantém as curvas de verdade, e depois espaça o mesmo número de pontos por igual ao longo da linha mais reta. Cruzamentos, marcadores e as pontas são mantidos; cada trecho entre eles é endireitado ao longo do caminho que você escolheu.",
             },
             how = {
                 "Escolha o trecho como de costume: clique em uma ponta e depois na outra para um TRECHO, ou clique duas vezes para a ROTA inteira entre cruzamentos. Em um laço, dois cliques pegam o caminho mais curto.",
@@ -623,10 +660,10 @@ ADFlyoverLocale.HELP.br = {
                 "A linha \"Seleção\" mostra o que foi escolhido; clicar em um tipo o trava (os outros ficam esmaecidos), e clicar de novo destrava.",
                 "Dois pontos ligados só por um desvio longo (saindo da faixa em um cruzamento e voltando) são recusados.",
                 "Ou clique nos pontos um a um com Ctrl (uma rota contínua).",
-                "Defina a tolerância - quanto maior, mais pontos saem - depois clique com o botão direito para aplicar.",
+                "Defina a tolerância - quanto maior, mais endireita - depois clique com o botão direito para aplicar.",
             },
             controls = {
-                "tolerância: o quanto um ponto pode se afastar da linha antes de ser mantido.",
+                "tolerância: o quanto uma ondulação pode se afastar da reta e ainda ser achatada.",
             },
         },
         ["divide"] = {
@@ -647,7 +684,7 @@ ADFlyoverLocale.HELP.br = {
         },
         ["ground"] = {
             what = {
-                "Assentar no solo baixa (ou ergue) os pontos até o chão dentro de uma tolerância, corrigindo pontos que flutuam ou ficam enterrados. Um ponto que já está certo sobre uma rampa ou ponte colocada continua ali.",
+                "Assentar no solo baixa (ou ergue) os pontos que estão mais longe do chão do que a tolerância, corrigindo pontos que flutuam ou ficam enterrados. Com encaixar em = superfície, um ponto que já está sobre uma rampa ou ponte colocada continua ali.",
             },
             how = {
                 "Escolha o trecho como de costume: clique em uma ponta e depois na outra para um TRECHO, ou clique duas vezes para a ROTA inteira entre cruzamentos. Em um laço, dois cliques pegam o caminho mais curto.",
@@ -675,12 +712,12 @@ ADFlyoverLocale.HELP.br = {
             controls = {
                 "sentido: mão dupla, mão única, outro sentido (inverte uma mão única; um contramão continua sendo contramão) ou contramão (a estrada de ré do AutoDrive, percorrida de ré).",
                 "prioridade: primária ou secundária (estrada de preferência para o outro lado).",
-                "vale para: este ponto ou a rota inteira.",
+                "vale para: um ponto ou a rota inteira.",
             },
         },
         ["merge"] = {
             what = {
-                "Mesclar serve para um trecho em que duas pistas gravadas separadamente correm lado a lado - os dois sentidos de uma estrada, ou uma faixa gravada duas vezes - e você quer que virem uma só. Escolha o trecho em uma das pistas e depois clique na outra, e o trecho escolhido é absorvido.",
+                "Mesclar serve para um trecho em que duas pistas gravadas separadamente correm lado a lado - os dois sentidos de uma estrada, ou uma faixa gravada duas vezes - e você quer que virem uma só. Escolha o trecho em uma das pistas e depois clique na outra: a outra pista é incorporada, e o trecho escolhido vai para o meio e vira mão dupla.",
             },
             how = {
                 "Escolha o trecho como de costume: clique em uma ponta e depois na outra para um TRECHO, ou clique duas vezes para a ROTA inteira entre cruzamentos. Em um laço, dois cliques pegam o caminho mais curto.",
@@ -723,24 +760,20 @@ ADFlyoverLocale.HELP.br = {
         },
         ["junction"] = {
             what = {
-                "Cruzamento cria, de uma só vez, todos os conectores de que um cruzamento precisa - cada conversão permitida entre as estradas dentro do círculo de busca. Os conectores seguem a geometria real das faixas: os pontos de ligação ficam nos trechos existentes, as curvas respeitam o raio de curva, ficam na pista e desviam de obstáculos fixos; cada conversão é resolvida com o maior raio que cabe naquele lugar. O que não dá para construir com segurança é recusado de forma visível - desenhado em vermelho, contado no mapa, com o motivo no log - em vez de ser traçado mal.",
+                "A ferramenta de cruzamento trabalha em um cruzamento por vez. Limpar tira as ligações de conversão antigas de dentro do cruzamento e apara as faixas até pontas limpas; construir traça conversões novas - o padrão X ou T da própria mod onde ele cabe em todas as estradas ali, conversão por conversão onde não cabe (ou nada, conforme o ajuste avançado). Limpar + construir faz as duas coisas como um só passo de desfazer. Os cruzamentos são numerados sobre o mapa, e os números ficam com o jogo salvo. É uma BETA: hoje ela vai bem em cruzamentos simples de estradas em X e em T; estradas de terra de mão dupla, cruzamentos em Y e cruzamentos tortos ainda vão chegar. Desligue-a no diálogo de ajustes (seção BETA) e o botão dela some.",
             },
             how = {
-                "Aponte para um cruzamento - o círculo de busca e as chegadas cortadas aparecem ao vivo na prévia. A roda do mouse muda o círculo: é a principal alavanca para definir o que conta como um cruzamento.",
-                "O clique esquerdo TRAVA o lugar (o círculo passa a ser contínuo). A prévia deixa de seguir o cursor; a roda e os ajustes do cartão continuam moldando-a ao vivo.",
-                "As curvas brancas serão traçadas; as vermelhas foram recusadas, e o motivo aparece contado no mapa (apertada demais, fora da estrada, bloqueada etc.).",
-                "O clique direito coloca tudo como UM só passo de desfazer. O clique direito sem colocar nada destrava o lugar; outro clique direito guarda a ferramenta.",
-                "Com 'Existentes: reconstruir', os conectores antigos dentro do círculo são removidos e traçados de novo - as estradas em si não são tocadas.",
+                "Aponte para um cruzamento: o cartão diz qual é e de que tipo. O clique esquerdo o trava.",
+                "Escolha a ação no cartão: limpar, build ou clear + build.",
+                "O clique direito a executa. Um desfazer traz tudo de volta.",
+                "Um clique esquerdo em outro lugar passa a trava para outro cruzamento. O clique direito sem nada a fazer o solta; Esc guarda a ferramenta.",
             },
             controls = {
-                "raio de busca (roda): o círculo de busca - quais estradas pertencem a este cruzamento.",
-                "raio de curva: o raio de curva desejado; cada conversão só o reduz o necessário para caber na sua esquina.",
-                "checagem da estrada: mantém o corredor do veículo sobre a pista; desligado, vale só o raio.",
-                "obstáculos: recusa conversões cujo corredor atinge árvores, construções, postes ou cercas.",
-                "corredor / folga: as larguras da checagem da pista e da caixa de obstáculos.",
-                "encurtar/alongar: permite que um ponto de ligação ultrapasse uma ponta que foi encurtada antes da esquina.",
-                "existentes: manter o que há ou reconstruir do zero.",
-                "curva: Dubins (presa ao raio, de pose a pose) ou biarco; vence a solução mais curta.",
+                "ação: limpar, build ou clear + build.",
+                "through roads: ao limpar, kept (as estradas que seguem reto ficam) ou cleared (saem também).",
+                "shape: ao construir, mod (o X ou T da própria mod) ou suavizar (conversões mais redondas).",
+                "must fit: os veículos que toda conversão nova precisa comportar.",
+                "advanced: os raios e checagens por trás da construção; fechado por padrão.",
             },
         },
 }
