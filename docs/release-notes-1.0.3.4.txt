@@ -6,6 +6,7 @@ Camera and screen
 - Panels no longer show through each other. The tool card, help, menus, the warning box and the panel each have their own layer, and a click goes to the one on top.
 - The tool card moves beside the help page instead of showing through it.
 - The console command FlyoverResetInput no longer leaves you with no controls when you run it on foot.
+- The editor wheel keeps zooming. If the game stops sending the mouse wheel to the camera zoom, the editor zooms from the wheel itself. New console command FlyoverInputDump writes the input state to the log.
 
 Points on floors
 - One ground rule for every tool. Points now land on shed floors, concrete pads and other floors just above the terrain, not on the terrain under them. Roofs, poles, fence rails and kerbs are left out. Placing, moving and grounding points use it, and so do Divide, Smooth, Straighten, the spline, road runs, the junction build and the field loop.

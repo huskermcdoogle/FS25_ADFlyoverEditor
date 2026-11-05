@@ -48,6 +48,7 @@ Screen and keys
 - Leaving the editor puts the screen back on the vehicle you are in (issue 18).
 - Panels no longer show through each other, and the tool card moves beside the help page.
 - New console command FlyoverWheelReport: if the mouse wheel zoom ever stops working in a vehicle, run it and paste the line into a GitHub issue.
+- If the game stops sending the mouse wheel to the editor's zoom, the editor zooms from the wheel itself.
 
 Languages
 - A first draft of Brazilian Portuguese. Anything not translated yet shows in English.

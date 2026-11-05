@@ -13,6 +13,9 @@
   panel each have their own layer. Text under a panel is hidden, and a click goes to the panel on top.
 - **The tool card moves beside the help page** instead of showing through it.
 - **`FlyoverResetInput`** no longer leaves you with no controls when you run it on foot.
+- **The editor wheel keeps zooming** (issue #18). If the game stops sending the mouse wheel to the
+  camera zoom, the editor zooms from the wheel itself. New console command `FlyoverInputDump` writes the
+  input state to the log.
 
 ### Points on floors
 
