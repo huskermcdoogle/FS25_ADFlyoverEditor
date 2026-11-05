@@ -36,6 +36,7 @@ W.counts = {
     wheelOffered = 0,
     topDownZoomOffered = 0,
     oldAutoDriveCurvature = 0,
+    wheelFallback = 0,  -- editor wheel notches whose zoom action never fired, zoomed by the editor
     -- The three-level wheel probe (docs/issue-18-wheel-zoom-log.md). One counter per link of the
     -- in-vehicle zoom chain, always on, nothing written per event. When the wheel is dead, the three
     -- numbers say which link dropped it:
@@ -250,6 +251,12 @@ function W.install(AD)
             function(cameraSelf, superFunc, action, offset, ...)
                 if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
                     W.counts.topDownZoomOffered = W.counts.topDownZoomOffered + 1
+                    -- A wheel notch that reached the zoom action (isMouse, the 3rd vararg): the
+                    -- editor's dead-wheel check (tools/Camera.lua) waits for this.
+                    local _, _, isMouse = ...
+                    if isMouse and offset ~= 0 then
+                        ADFlyoverEditor.lastWheelActionMs = g_time
+                    end
                     -- onZoomTopDownCamera calls handleSplineCurvature(-offset); match that sign so
                     -- curvature turns the same way here as it does on a version new enough to reach
                     -- wrapper 4's copy of this same math.

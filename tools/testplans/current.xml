@@ -58,4 +58,9 @@
           hint="The new loop follows the field edge and runs into no tree patch or pylon. PASS if so."/>
     <test id="pylonField" title="Lehndorf: the field with the lone pylon"
           hint="Find the field with one pylon patch in it. Click inside it. The loop goes round the whole field. PASS if so."/>
+    <!-- The editor wheel loss (issue 18; build 754 at 20:57): the wheel notch arrived, the zoom action
+         never fired. The editor now zooms from the notch itself and writes the input dump once. -->
+    <test id="deadWheel" title="Any map: the wheel still zooms if it goes dead"
+          passLog="zooming from the wheel directly"
+          hint="Nothing to do on purpose. If the editor wheel ever stops zooming, this ticks and the view zooms anyway. PASS if it did. SKIP if it never went dead."/>
 </testPlan>

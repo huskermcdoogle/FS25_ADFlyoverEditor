@@ -550,6 +550,8 @@ function ADFlyoverEditor:wheelProbeArm()
     self.wheelProbe = { raw = n, zoom = n, hook = n, after = n }
     self.lastWheelMs = nil
     self.wheelZoomSeen = false
+    self.wheelWatch = nil
+    self.wheelDeadLogged = false
 end
 
 --- One probe line for a stage, while that stage has lines left. Stages other than "raw" only log
@@ -597,4 +599,90 @@ function ADFlyoverEditor:wheelProbeAfterUpdate(before)
         Logging.info("[FlyoverEditor]: the wheel zoomed the editor camera (zoom target %.2f -> %.2f).",
             before.target, cam.targetZoomFactor)
     end
+end
+
+-- ---------------------------------------------------------------------------------------------
+-- Dead wheel: the notch arrived, the zoom action did not fire
+--
+-- Build 754 (2026-11-04): after a while every wheel notch logged only "wheel probe raw" - the
+-- notch reached the mod, but AXIS_CONSTRUCTION_CAMERA_ZOOM never fired for it, while Z / X on the
+-- same action still zoomed. Reopening and FlyoverResetInput did not bring it back. Why the game
+-- stops is not readable from Lua. So: a notch with no zoom action within WHEEL_DEAD_MS is zoomed
+-- here, through the camera's own onZoom as a mouse input (so the tools' wheel and AutoDrive's
+-- spline curvature still get first refusal, as they do for a live notch), and the first time it
+-- happens in a session the input dump goes to the log (Prelude.inputDump).
+--
+-- Not while a mouse button is held: the zoom action never fires then (measured, Mouse.lua), and
+-- Mouse.lua already hands a mid-drag wheel to handleWheel.
+-- ---------------------------------------------------------------------------------------------
+
+CAM.WHEEL_DEAD_MS = 80
+local deadWheelDumps = 0
+
+local function mouseButtonHeld()
+    if Input == nil or Input.isMouseButtonPressed == nil then
+        return false
+    end
+    for _, b in ipairs({ Input.MOUSE_BUTTON_LEFT, Input.MOUSE_BUTTON_RIGHT, Input.MOUSE_BUTTON_MIDDLE }) do
+        if b ~= nil and Input.isMouseButtonPressed(b) then
+            return true
+        end
+    end
+    return false
+end
+
+--- From mouseEvent, every wheel notch while the editor is open. A notch arrives as two events in
+--- the same millisecond, so those count once.
+function ADFlyoverEditor:wheelWatchRaw(button)
+    if self.dragId ~= nil or mouseButtonHeld() then
+        return
+    end
+    local now = nowMs(self)
+    local w = self.wheelWatch
+    if w == nil then
+        w = {}
+        self.wheelWatch = w
+    end
+    if w.lastRawMs == now then
+        return
+    end
+    w.lastRawMs = now
+    w.since = w.since or now
+    w.steps = (w.steps or 0) + (button == Input.MOUSE_BUTTON_WHEEL_UP and 1 or -1)
+end
+
+--- Each frame before the camera moves: a notch older than WHEEL_DEAD_MS that the zoom action never
+--- answered is zoomed here.
+function ADFlyoverEditor:wheelWatchUpdate()
+    local w = self.wheelWatch
+    if w == nil or w.since == nil then
+        return
+    end
+    local now = nowMs(self)
+    if self.lastWheelActionMs ~= nil and self.lastWheelActionMs >= w.since then
+        w.since, w.steps = nil, 0           -- the action fired: nothing to do
+        return
+    end
+    if now - w.since < CAM.WHEEL_DEAD_MS then
+        return
+    end
+    local steps = w.steps or 0
+    w.since, w.steps = nil, 0
+    if steps == 0 or self.camera == nil or self.camera.onZoom == nil then
+        return
+    end
+    if ADFlyoverWrappers ~= nil and ADFlyoverWrappers.counts ~= nil then
+        ADFlyoverWrappers.counts.wheelFallback = (ADFlyoverWrappers.counts.wheelFallback or 0) + 1
+    end
+    if not self.wheelDeadLogged then
+        self.wheelDeadLogged = true
+        Logging.info("[FlyoverEditor]: the wheel reached the editor but the camera's zoom action did not fire for it (Z / X still use that action); zooming from the wheel directly while the editor is open.")
+        if deadWheelDumps < 1 and ADFlyoverPrelude ~= nil and ADFlyoverPrelude.inputDump ~= nil then
+            deadWheelDumps = deadWheelDumps + 1
+            pcall(ADFlyoverPrelude.inputDump, "the wheel's zoom action did not fire")
+        end
+    end
+    -- onZoom(self, action, inputValue, callbackState, isAnalog, isMouse): wheel up is +1, as the
+    -- live notches log it (raw "down" -> zoom offset=-1).
+    self.camera:onZoom(nil, steps, nil, false, true)
 end

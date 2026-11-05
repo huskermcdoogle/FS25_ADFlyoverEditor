@@ -1972,6 +1972,7 @@ function ADFlyoverEditor:update(dt)
         return
     end
 
+    tryCall("wheelWatchUpdate", function() self:wheelWatchUpdate() end)
     local zoomBefore = self.camera ~= nil and {
         input = self.camera.inputZoom, target = self.camera.targetZoomFactor, zoom = self.camera.zoomFactor } or nil
     tryCall("camera:update", function() self.camera:update(dt) end)

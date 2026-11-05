@@ -721,6 +721,150 @@ function P:consoleWheelReport()
     return line
 end
 
+--- The editor's wheel loss (issue #18, builds 717 and 754): the wheel's notches reach the mod but the
+--- camera's zoom action (AXIS_CONSTRUCTION_CAMERA_ZOOM) stops firing for them, while Z / X on the
+--- same action still work. The game's input code is not readable (blanked in the IDE copy, packed in
+--- dataS.gar), so this writes what can be read at the moment it happens: the current context, every
+--- context with its action count and which wheel actions have events there, every action bound to
+--- the wheel and its events in the current context, the input object's own context / stack / mouse
+--- / wheel fields, and the GUI. Every read is guarded. Run from the console (FlyoverInputDump), and
+--- once by itself when the editor sees the wheel's zoom action fail (tools/Camera.lua).
+function P.inputDump(reason)
+    local ib = g_inputBinding
+    if ib == nil then
+        log("input dump (%s): no g_inputBinding.", tostring(reason))
+        return "no g_inputBinding"
+    end
+    local function safe(fn)
+        local ok, a = pcall(fn)
+        if ok then return a end
+        return "?"
+    end
+    local function short(v)
+        local t = type(v)
+        if t == "table" then
+            local n = 0
+            for _ in pairs(v) do n = n + 1 end
+            return "table#" .. n
+        elseif t == "function" then
+            return "fn"
+        end
+        return tostring(v)
+    end
+    -- Every string (or key) in a table, five levels down (action -> bindings -> binding -> axis
+    -- names), that names the wheel. At most 200 tables per action, in case one links to the world.
+    local function wheelStrings(root)
+        local found, seen, visited = {}, {}, 0
+        local function walk(t, depth)
+            if seen[t] or depth > 5 or visited >= 200 then return end
+            seen[t] = true
+            visited = visited + 1
+            for k, v in pairs(t) do
+                if type(v) == "string" and v:find("WHEEL") then
+                    found[v] = true
+                elseif type(v) == "table" then
+                    walk(v, depth + 1)
+                end
+                if type(k) == "string" and k:find("WHEEL") then
+                    found[k] = true
+                end
+            end
+        end
+        walk(root, 1)
+        local list = {}
+        for s in pairs(found) do list[#list + 1] = s end
+        table.sort(list)
+        return list
+    end
+    local function eventText(e)
+        if type(e) ~= "table" then return short(e) end
+        local parts = {}
+        for k, v in pairs(e) do
+            local t = type(v)
+            if t == "boolean" or t == "number" or (t == "string" and #v < 40) then
+                parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+            end
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, " ") .. "}"
+    end
+
+    local current = safe(function() return ib.currentContextName end)
+    log("input dump (%s): context=%s, cursor=%s, editor open=%s, gui visible=%s, gui=%s, dialog=%s",
+        tostring(reason), tostring(current), tostring(safe(function() return ib:getShowMouseCursor() end)),
+        tostring(ADFlyoverEditor ~= nil and ADFlyoverEditor.active == true),
+        tostring(safe(function() return g_gui:getIsGuiVisible() end)),
+        tostring(safe(function() return g_gui.currentGuiName end)),
+        tostring(safe(function() return g_gui:getIsDialogVisible() end)))
+
+    -- The input object's own fields about contexts, the stack, the mouse and the wheel.
+    local fields = {}
+    for k, v in pairs(ib) do
+        local key = tostring(k):lower()
+        if key:find("context") or key:find("stack") or key:find("mouse") or key:find("wheel")
+            or key:find("block") or key:find("disab") or key:find("prior") then
+            fields[#fields + 1] = tostring(k) .. "=" .. short(v)
+        end
+    end
+    table.sort(fields)
+    log("input dump: binding fields: %s", table.concat(fields, ", "))
+
+    -- The wheel's actions, read off each action's own bindings.
+    local zoomAction = InputAction ~= nil and ib.nameActions ~= nil
+        and ib.nameActions[InputAction.AXIS_CONSTRUCTION_CAMERA_ZOOM] or nil
+    local wheelActions = {}
+    for name, action in pairs(ib.nameActions or {}) do
+        if type(action) == "table" then
+            local ok, list = pcall(wheelStrings, action)
+            if ok and #list > 0 then
+                wheelActions[#wheelActions + 1] = { name = name, action = action, how = table.concat(list, "/") }
+            end
+        end
+    end
+    table.sort(wheelActions, function(a, b) return tostring(a.name) < tostring(b.name) end)
+
+    -- Every context: how many actions have events in it, and which of the wheel's do.
+    local names = {}
+    for name in pairs(ib.contexts or {}) do names[#names + 1] = tostring(name) end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        local ctx = ib.contexts[name]
+        local n, wheelHere = 0, {}
+        local events = type(ctx) == "table" and ctx.actionEvents or nil
+        if type(events) == "table" then
+            for action, list in pairs(events) do
+                if type(list) == "table" and next(list) ~= nil then
+                    n = n + 1
+                    for _, w in ipairs(wheelActions) do
+                        if w.action == action then
+                            wheelHere[#wheelHere + 1] = tostring(w.name) .. " x" .. #list
+                        end
+                    end
+                end
+            end
+        end
+        log("input dump: context %s%s: %d action(s) with events; wheel actions: %s", name,
+            name == current and " (CURRENT)" or "", n, #wheelHere > 0 and table.concat(wheelHere, ", ") or "none")
+    end
+
+    -- The wheel's actions in the current context, event by event.
+    local ctx = ib.contexts ~= nil and ib.contexts[current] or nil
+    for _, w in ipairs(wheelActions) do
+        local list = type(ctx) == "table" and type(ctx.actionEvents) == "table" and ctx.actionEvents[w.action] or nil
+        local texts = {}
+        for _, e in ipairs(type(list) == "table" and list or {}) do
+            texts[#texts + 1] = eventText(e)
+        end
+        log("input dump: wheel action %s%s (%s): %s", tostring(w.name), w.action == zoomAction and " [camera zoom]" or "",
+            w.how, #texts > 0 and table.concat(texts, " ") or "no event in the current context")
+    end
+    return string.format("Input dump written to the log (%d contexts, %d wheel actions).", #names, #wheelActions)
+end
+
+function P:consoleInputDump()
+    return P.inputDump("console")
+end
+
 function P:consoleResetInput()
     if ADFlyoverEditor == nil then
         return "Editor not loaded."
@@ -773,6 +917,7 @@ addConsoleCommand("FlyoverRoadSplines", "Save the map's traffic splines (its own
 addConsoleCommand("FlyoverSelfLinks", "Report points wired to themselves; pass apply to unwire them", "consoleSelfLinks", P)
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
+addConsoleCommand("FlyoverInputDump", "Write the input contexts and every action on the mouse wheel to the log (for a dead wheel)", "consoleInputDump", P)
 addConsoleCommand("FlyoverHudOrder", "Whole-hud hide order: symmetric (default) or legacy (1.0.2.0)", "consoleHudOrder", P)
 addConsoleCommand("FlyoverHudToggleTest", "Flip the base-game HUD off and on with no editor, logging action events", "consoleHudToggleTest", P)
 addConsoleCommand("FlyoverWheelReport", "Issue 18: one line about the in-vehicle wheel zoom, to paste into the report", "consoleWheelReport", P)

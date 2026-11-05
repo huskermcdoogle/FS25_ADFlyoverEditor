@@ -24,6 +24,7 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
     end
     if isDown and self.active and (button == Input.MOUSE_BUTTON_WHEEL_UP or button == Input.MOUSE_BUTTON_WHEEL_DOWN) then
         tryCall("wheelProbeRaw", function() self:wheelProbeRaw(posX, posY, button) end)
+        tryCall("wheelWatchRaw", function() self:wheelWatchRaw(button) end)
     end
 
     -- Logged BEFORE the guard, and only for real button presses, so a click that is being thrown
