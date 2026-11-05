@@ -36,6 +36,7 @@ W.counts = {
     wheelOffered = 0,
     topDownZoomOffered = 0,
     oldAutoDriveCurvature = 0,
+    wheelFallback = 0,  -- editor wheel notches whose zoom action never fired, zoomed by the editor
     -- The three-level wheel probe (docs/issue-18-wheel-zoom-log.md). One counter per link of the
     -- in-vehicle zoom chain, always on, nothing written per event. When the wheel is dead, the three
     -- numbers say which link dropped it:
@@ -152,6 +153,20 @@ function W.install(AD)
         return originalIsEditorShow(...)
     end
 
+    -- The editor's wheel probe (tools/Camera.lua, armed on every open): one line per stage for the
+    -- first few wheel events. Never throws into the input chain.
+    W.probe = function(stage, fmt, ...)
+        if ADFlyoverEditor ~= nil and ADFlyoverEditor.wheelProbeNote ~= nil then
+            pcall(ADFlyoverEditor.wheelProbeNote, ADFlyoverEditor, stage, fmt, ...)
+        end
+    end
+    -- onZoom(self, action, inputValue, callbackState, isAnalog, isMouse): the varargs after offset.
+    W.probeZoom = function(cameraSelf, offset, result, _, isAnalog, isMouse)
+        W.probe("zoom", "offset=%s analog=%s mouse=%s mouseDisabled=%s -> %s; zoom %s target %s",
+            tostring(offset), tostring(isAnalog), tostring(isMouse), tostring(cameraSelf.mouseDisabled), result,
+            tostring(cameraSelf.zoomFactor), tostring(cameraSelf.targetZoomFactor))
+    end
+
     -- 4. The mouse wheel. This is the only hook that can take the wheel away from the camera zoom -
     -- both zoomSmoothly and onZoomTopDownCamera skip zooming when it returns true - so any flyover
     -- tool that wants the wheel has to come through here.
@@ -175,6 +190,7 @@ function W.install(AD)
         if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
             W.counts.wheelOffered = W.counts.wheelOffered + 1
             if ADFlyoverEditor:handleWheel(offset) then
+                W.probe("hook", "offset=%s -> taken by the editor (handleWheel)", tostring(offset))
                 return true
             end
             -- The editor declined, so this wheel is the camera's. The original ends in
@@ -183,7 +199,14 @@ function W.install(AD)
             -- there made every declined wheel "handled" and the flyover camera unzoomable. The flag
             -- is meaningless while the editor owns the mouse, so clear it before delegating; the
             -- spline-curvature path inside the original still gets its turn.
+            local wasActive = AD.mouseWheelActive
             AD.mouseWheelActive = false
+            local spline = AD.splineInterpolation
+            local swallowed = originalHandleSplineCurvature(selfArg, offset, ...)
+            W.probe("hook", "offset=%s mouseWheelActive was %s, splineValid=%s -> %s", tostring(offset),
+                tostring(wasActive), tostring(spline ~= nil and spline.valid),
+                swallowed and "kept from the camera" or "left to the camera")
+            return swallowed
         end
         -- Debug probe, armed for a few wheel events after each editor exit: says whether the
         -- vehicle camera's zoom reached AutoDrive's hook and whether AutoDrive swallowed it.
@@ -228,10 +251,17 @@ function W.install(AD)
             function(cameraSelf, superFunc, action, offset, ...)
                 if editorActive() and ADFlyoverEditor ~= nil and ADFlyoverEditor.handleWheel ~= nil then
                     W.counts.topDownZoomOffered = W.counts.topDownZoomOffered + 1
+                    -- A wheel notch that reached the zoom action (isMouse, the 3rd vararg): the
+                    -- editor's dead-wheel check (tools/Camera.lua) waits for this.
+                    local _, _, isMouse = ...
+                    if isMouse and offset ~= 0 then
+                        ADFlyoverEditor.lastWheelActionMs = g_time
+                    end
                     -- onZoomTopDownCamera calls handleSplineCurvature(-offset); match that sign so
                     -- curvature turns the same way here as it does on a version new enough to reach
                     -- wrapper 4's copy of this same math.
                     if ADFlyoverEditor:handleWheel(-offset) then
+                        W.probeZoom(cameraSelf, offset, "taken by the editor (handleWheel)", ...)
                         return
                     end
                     if not hadRealHandleSplineCurvature then
@@ -244,6 +274,11 @@ function W.install(AD)
                         end
                         AD.mouseWheelActive = false
                     end
+                    local inputBefore = cameraSelf.inputZoom
+                    superFunc(cameraSelf, action, offset, ...)
+                    W.probeZoom(cameraSelf, offset, string.format("passed on; inputZoom %s -> %s",
+                        tostring(inputBefore), tostring(cameraSelf.inputZoom)), ...)
+                    return
                 end
                 return superFunc(cameraSelf, action, offset, ...)
             end)

@@ -138,6 +138,7 @@ P.EDITOR_FILES = {
     "scripts/editor/junction/JxCheck.lua",
     "scripts/editor/junction/JxCheckCard.lua",
     "scripts/editor/tools/Appearance.lua",
+    "scripts/editor/tools/Camera.lua",   -- camera through buildings (issue #30)
     "scripts/editor/tools/Convert.lua",
     "scripts/editor/tools/Merge.lua",
     "scripts/editor/tools/FieldLoop.lua",
@@ -720,12 +721,216 @@ function P:consoleWheelReport()
     return line
 end
 
+--- The editor's wheel loss (issue #18, builds 717 and 754): the wheel's notches reach the mod but the
+--- camera's zoom action (AXIS_CONSTRUCTION_CAMERA_ZOOM) stops firing for them, while Z / X on the
+--- same action still work. The game's input code is not readable (blanked in the IDE copy, packed in
+--- dataS.gar), so this writes what can be read at the moment it happens: the current context, every
+--- context with its action count and which wheel actions have events there, every action bound to
+--- the wheel and its events in the current context, the input object's own context / stack / mouse
+--- / wheel fields, and the GUI. Every read is guarded. Run from the console (FlyoverInputDump), and
+--- once by itself when the editor sees the wheel's zoom action fail (tools/Camera.lua).
+function P.inputDump(reason)
+    local ib = g_inputBinding
+    if ib == nil then
+        log("input dump (%s): no g_inputBinding.", tostring(reason))
+        return "no g_inputBinding"
+    end
+    local function safe(fn)
+        local ok, a = pcall(fn)
+        if ok then return a end
+        return "?"
+    end
+    local function short(v)
+        local t = type(v)
+        if t == "table" then
+            local n = 0
+            for _ in pairs(v) do n = n + 1 end
+            return "table#" .. n
+        elseif t == "function" then
+            return "fn"
+        end
+        return tostring(v)
+    end
+    -- Every string (or key) in a table, five levels down (action -> bindings -> binding -> axis
+    -- names), that names the wheel. At most 200 tables per action, in case one links to the world.
+    local function wheelStrings(root)
+        local found, seen, visited = {}, {}, 0
+        local function walk(t, depth)
+            if seen[t] or depth > 5 or visited >= 200 then return end
+            seen[t] = true
+            visited = visited + 1
+            for k, v in pairs(t) do
+                if type(v) == "string" and v:find("WHEEL") then
+                    found[v] = true
+                elseif type(v) == "table" then
+                    walk(v, depth + 1)
+                end
+                if type(k) == "string" and k:find("WHEEL") then
+                    found[k] = true
+                end
+            end
+        end
+        walk(root, 1)
+        local list = {}
+        for s in pairs(found) do list[#list + 1] = s end
+        table.sort(list)
+        return list
+    end
+    local function eventText(e)
+        if type(e) ~= "table" then return short(e) end
+        local parts = {}
+        for k, v in pairs(e) do
+            local t = type(v)
+            if t == "boolean" or t == "number" or (t == "string" and #v < 40) then
+                parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+            end
+        end
+        table.sort(parts)
+        return "{" .. table.concat(parts, " ") .. "}"
+    end
+
+    local current = safe(function() return ib.currentContextName end)
+    log("input dump (%s): context=%s, cursor=%s, editor open=%s, gui visible=%s, gui=%s, dialog=%s",
+        tostring(reason), tostring(current), tostring(safe(function() return ib:getShowMouseCursor() end)),
+        tostring(ADFlyoverEditor ~= nil and ADFlyoverEditor.active == true),
+        tostring(safe(function() return g_gui:getIsGuiVisible() end)),
+        tostring(safe(function() return g_gui.currentGuiName end)),
+        tostring(safe(function() return g_gui:getIsDialogVisible() end)))
+
+    -- The input object's own fields about contexts, the stack, the mouse and the wheel.
+    local fields = {}
+    for k, v in pairs(ib) do
+        local key = tostring(k):lower()
+        if key:find("context") or key:find("stack") or key:find("mouse") or key:find("wheel")
+            or key:find("block") or key:find("disab") or key:find("prior") then
+            fields[#fields + 1] = tostring(k) .. "=" .. short(v)
+        end
+    end
+    table.sort(fields)
+    log("input dump: binding fields: %s", table.concat(fields, ", "))
+
+    -- The combo masks (gamepad, mouse) as the game's input help reads them, and the mouse buttons.
+    local okMask, gamepadMask, mouseMask = pcall(function() return ib:getComboCommandPressedMask() end)
+    local held = "?"
+    if Input ~= nil and Input.isMouseButtonPressed ~= nil then
+        held = string.format("left=%s middle=%s right=%s",
+            tostring(safe(function() return Input.isMouseButtonPressed(Input.MOUSE_BUTTON_LEFT) end)),
+            tostring(safe(function() return Input.isMouseButtonPressed(Input.MOUSE_BUTTON_MIDDLE) end)),
+            tostring(safe(function() return Input.isMouseButtonPressed(Input.MOUSE_BUTTON_RIGHT) end)))
+    end
+    log("input dump: combo mask gamepad=%s mouse=%s; mouse buttons held %s", okMask and tostring(gamepadMask) or "?",
+        okMask and tostring(mouseMask) or "?", held)
+
+    -- The binding object's own methods about resets, combos, the mouse and blocking (fix candidates).
+    local methods, seenM = {}, {}
+    -- The instance, its class chain, and InputBinding itself.
+    local classes, cls = {}, ib
+    while type(cls) == "table" and #classes < 5 do
+        classes[#classes + 1] = cls
+        local cmt = getmetatable(cls)
+        cls = cmt ~= nil and type(cmt.__index) == "table" and cmt.__index or nil
+    end
+    if type(InputBinding) == "table" then classes[#classes + 1] = InputBinding end
+    for _, cls in ipairs(classes) do
+        for k, v in pairs(cls) do
+            local key = tostring(k):lower()
+            if type(v) == "function" and not seenM[k] and (key:find("reset") or key:find("combo")
+                or key:find("mouse") or key:find("clear") or key:find("block") or key:find("wheel")) then
+                seenM[k] = true
+                methods[#methods + 1] = tostring(k)
+            end
+        end
+    end
+    table.sort(methods)
+    log("input dump: binding methods: %s", #methods > 0 and table.concat(methods, ", ") or "none found")
+
+    -- The wheel's actions, read off each action's own bindings.
+    local zoomAction = InputAction ~= nil and ib.nameActions ~= nil
+        and ib.nameActions[InputAction.AXIS_CONSTRUCTION_CAMERA_ZOOM] or nil
+    local wheelActions = {}
+    for name, action in pairs(ib.nameActions or {}) do
+        if type(action) == "table" then
+            local ok, list = pcall(wheelStrings, action)
+            if ok and #list > 0 then
+                wheelActions[#wheelActions + 1] = { name = name, action = action, how = table.concat(list, "/") }
+            end
+        end
+    end
+    table.sort(wheelActions, function(a, b) return tostring(a.name) < tostring(b.name) end)
+
+    -- Every context: how many actions have events in it, and which of the wheel's do.
+    local names = {}
+    for name in pairs(ib.contexts or {}) do names[#names + 1] = tostring(name) end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        local ctx = ib.contexts[name]
+        local n, wheelHere = 0, {}
+        local events = type(ctx) == "table" and ctx.actionEvents or nil
+        if type(events) == "table" then
+            for action, list in pairs(events) do
+                if type(list) == "table" and next(list) ~= nil then
+                    n = n + 1
+                    for _, w in ipairs(wheelActions) do
+                        if w.action == action then
+                            wheelHere[#wheelHere + 1] = tostring(w.name) .. " x" .. #list
+                        end
+                    end
+                end
+            end
+        end
+        log("input dump: context %s%s: %d action(s) with events; wheel actions: %s", name,
+            name == current and " (CURRENT)" or "", n, #wheelHere > 0 and table.concat(wheelHere, ", ") or "none")
+    end
+
+    -- The wheel's actions in the current context, event by event.
+    local ctx = ib.contexts ~= nil and ib.contexts[current] or nil
+    for _, w in ipairs(wheelActions) do
+        local list = type(ctx) == "table" and type(ctx.actionEvents) == "table" and ctx.actionEvents[w.action] or nil
+        local texts = {}
+        for _, e in ipairs(type(list) == "table" and list or {}) do
+            texts[#texts + 1] = eventText(e)
+        end
+        log("input dump: wheel action %s%s (%s): %s", tostring(w.name), w.action == zoomAction and " [camera zoom]" or "",
+            w.how, #texts > 0 and table.concat(texts, " ") or "no event in the current context")
+    end
+
+    -- The camera zoom action's own bindings, wheel and keys alike, field by field: if only the
+    -- wheel's die, the difference between them is here.
+    if type(zoomAction) == "table" then
+        local seen, shown = {}, 0
+        local function walk(t, depth)
+            if seen[t] or depth > 4 or shown >= 8 then return end
+            seen[t] = true
+            local hasInput = false
+            for _, v in pairs(t) do
+                if type(v) == "string" and (v:find("WHEEL") or v:find("KEY_")) then hasInput = true end
+            end
+            if hasInput and t ~= zoomAction then
+                shown = shown + 1
+                log("input dump: camera zoom binding: %s", eventText(t))
+            end
+            for _, v in pairs(t) do
+                if type(v) == "table" then walk(v, depth + 1) end
+            end
+        end
+        pcall(walk, zoomAction, 1)
+    end
+    return string.format("Input dump written to the log (%d contexts, %d wheel actions).", #names, #wheelActions)
+end
+
+function P:consoleInputDump()
+    return P.inputDump("console")
+end
+
 function P:consoleResetInput()
     if ADFlyoverEditor == nil then
         return "Editor not loaded."
     end
     if ADFlyoverEditor.resetInput ~= nil then
-        return tostring(ADFlyoverEditor:resetInput())
+        -- tostring() with no argument at all throws ("missing argument #1"), and resetInput used to
+        -- return nothing - so the command ran and then reported an error.
+        local result = ADFlyoverEditor:resetInput()
+        return result ~= nil and tostring(result) or "Input reset."
     end
     return "This build of the editor has no resetInput."
 end
@@ -769,6 +974,7 @@ addConsoleCommand("FlyoverRoadSplines", "Save the map's traffic splines (its own
 addConsoleCommand("FlyoverSelfLinks", "Report points wired to themselves; pass apply to unwire them", "consoleSelfLinks", P)
 addConsoleCommand("FlyoverEditor", "Toggle the flyover editor (also Left Alt + F, or the button on AutoDrive's HUD)", "consoleEditor", P)
 addConsoleCommand("FlyoverResetInput", "Recover stranded movement keys", "consoleResetInput", P)
+addConsoleCommand("FlyoverInputDump", "Write the input contexts and every action on the mouse wheel to the log (for a dead wheel)", "consoleInputDump", P)
 addConsoleCommand("FlyoverHudOrder", "Whole-hud hide order: symmetric (default) or legacy (1.0.2.0)", "consoleHudOrder", P)
 addConsoleCommand("FlyoverHudToggleTest", "Flip the base-game HUD off and on with no editor, logging action events", "consoleHudToggleTest", P)
 addConsoleCommand("FlyoverWheelReport", "Issue 18: one line about the in-vehicle wheel zoom, to paste into the report", "consoleWheelReport", P)
@@ -789,6 +995,12 @@ function P:consoleTestPanel(arg)
     if ADFlyoverTestPanel.plan == nil then return "This build carries no test plan (testplan.xml) - test builds only." end
     return ADFlyoverTestPanel.toggleShown() and "Test plan card shown (it sits on the editor's screen)." or "Test plan card hidden."
 end
+--- FlyoverForgetJunction <n>: drop one junction number (JxRegistry junctionForgetNumber), for testing.
+function P:consoleForgetJunction(arg)
+    if ADFlyoverEditor == nil or ADFlyoverEditor.junctionForgetNumber == nil then return "The editor is not loaded (load a savegame first)." end
+    return ADFlyoverEditor:junctionForgetNumber(arg)
+end
+addConsoleCommand("FlyoverForgetJunction", "Junction tool: drop one junction number <n> (testing); a junction still there is numbered again", "consoleForgetJunction", P)
 addConsoleCommand("FlyoverTestPanel", "Show or hide the test build's test plan card (reload: read testplan.xml again)", "consoleTestPanel", P)
 addConsoleCommand("FlyoverStatus", "Report what the flyover editor attached to", "consoleStatus", P)
 

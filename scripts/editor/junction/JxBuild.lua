@@ -545,6 +545,92 @@ local function jxpGroundY(x, z, fallback)
     return y
 end
 
+-- A T WHOSE SIDE ROAD IS A SINGLE LINE (the user's farm-road T, Welker Farms, 2026-11-03): a two-way farm
+-- road, or a one-way road only in or only out. The side road's end becomes the piece's MOUTH, half a lane
+-- gap past the near lane (the user's own builds: 1.9-2.2 m at a 3.7-3.8 m lane gap). Where the clear left
+-- the end short of that, the road's points short of it go and the nearest one beyond is moved there (or
+-- used as it is when it is about there already); where the end stops further out, a point is laid there and
+-- joined to it the way the road runs.
+-- E: the road's end. (mx, mz): where the side road's line crosses the near lane. (ax, az): the side road's
+-- heading, away from the main road. L: the lane gap. dry: only say whether it can be done. flow: "two", "in"
+-- (traffic only leaves the main road into it: E is its first point) or "out" (only joins: E is its last).
+-- Returns the mouth (dry: how far out along the side road it will be), or nil and why.
+local function jxpSideEnd(E, mx, mz, ax, az, L, dry, flow)
+    local function along(w) return (w.x - mx) * ax + (w.z - mz) * az end
+    local dMin, dWant = 0.3 * L, 0.5 * L
+    local road = (flow == "two") and "two-way side road" or "one-way side road"
+    local e0 = along(E)
+    if e0 > dWant + 1.0 then
+        if dry then return dWant end
+        local px, pz = mx + dWant * ax, mz + dWant * az
+        local M = ADFlyoverRecordWayPoint(px, jxpGroundY(px, pz, E.y or 0), pz, false, false, false, 0,
+            E.flags or AutoDrive.FLAG_NONE, false)
+        jxNoteAdded(M)
+        if M == nil then return nil, "could not add the mouth point" end
+        if flow == "two" then junctionConnect(E, M, true)
+        elseif flow == "out" then junctionConnect(E, M, false)
+        else junctionConnect(M, E, false) end
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the %s's end was %.1f m out; a mouth point laid at %.1f, %.1f (%.1f m out).",
+            road, e0, px, pz, dWant)
+        return M
+    end
+    if e0 >= dMin then
+        if not dry then
+            ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the %s's end is %.1f m out; it is the mouth.", road, e0)
+        end
+        if dry then return e0 end
+        return E
+    end
+    -- The road's points, out from its end, while they run on as plain road (two neighbours).
+    local chain, prev, cur, beyond = { E }, nil, E, nil
+    for _ = 1, 20 do
+        local nb = {}
+        for _, id in ipairs(cur.out or {}) do nb[id] = true end
+        for _, id in ipairs(cur.incoming or {}) do nb[id] = true end
+        local nextW, n = nil, 0
+        for id in pairs(nb) do
+            n = n + 1
+            local w = ADGraphManager:getWayPointById(id)
+            if w ~= nil and w ~= prev then nextW = w end
+        end
+        if cur ~= E and n ~= 2 then return nil, "the " .. road .. " forks right by the junction" end
+        if nextW == nil then return nil, "the " .. road .. " stops right by the junction" end
+        if flow == "two" and (not table.contains(nextW.out or {}, cur.id) or not table.contains(cur.out or {}, nextW.id)) then
+            return nil, "the two-way side road stops running both ways right by the junction"
+        end
+        if along(nextW) >= dMin then beyond = nextW break end
+        chain[#chain + 1] = nextW
+        prev, cur = cur, nextW
+    end
+    if beyond == nil then return nil, "the " .. road .. " stays right by the junction" end
+    if dry then return (along(beyond) > dWant + 1.0) and dWant or along(beyond) end
+    local last = chain[#chain]
+    local moveTo = nil
+    if along(beyond) > dWant + 1.0 then
+        local a0, a1 = along(last), along(beyond)
+        local t = (dWant - a0) / (a1 - a0)
+        moveTo = { x = last.x + t * (beyond.x - last.x), z = last.z + t * (beyond.z - last.z),
+                   y = (last.y or 0) + t * ((beyond.y or 0) - (last.y or 0)) }
+    end
+    -- Moved: every point short of the last one goes, and the last one moves out. Used as it is: all of them go.
+    local n = moveTo and (#chain - 1) or #chain
+    for i = 1, n do
+        if not jxRemove(chain[i], "junction pattern: side road end too close to the main road", true) then
+            return nil, "could not take the " .. road .. "'s end back"
+        end
+    end
+    if moveTo == nil then
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the %s's end was %.1f m out; %d point(s) taken, the mouth is at %.1f, %.1f (%.1f m out).",
+            road, e0, n, beyond.x, beyond.z, along(beyond))
+        return beyond
+    end
+    ADGraphManager:moveWayPoint(last.id, moveTo.x, jxpGroundY(moveTo.x, moveTo.z, moveTo.y), moveTo.z, last.flags, false)
+    jxNoteMoved(last)
+    ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern - the %s's end was %.1f m out; %d point(s) taken, one moved out to %.1f, %.1f (%.1f m out) as the mouth.",
+        road, e0, n, last.x, last.z, along(last))
+    return last
+end
+
 -- A POINT ON A LANE: the lane running in direction (dx, dz) that passes nearest (px, pz). An end
 -- of that link within 0.3 m is used as it is; otherwise a point is spliced in. `through` runs the
 -- lane through a given point instead (a corner the other lane already has). dry only says whether
@@ -737,7 +823,8 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
     local kind, ox, oz, ux, uz, vx, vz, L = nil, 0, 0, nil, nil, nil, nil, 0
     local e1x, e1z, e2x, e2z = nil, nil, nil, nil
     local sideIn, sideOut = nil, nil
-    local twoWaySide = nil      -- a T whose side road is one two-way road: its end
+    local twoWaySide = nil      -- a T whose side road is a single line (two-way, or one-way in or out): its end
+    local sideFlow = nil        -- that line: "two", "in" (only leaves the main road) or "out" (only joins it)
     if #corners == 4 then
         kind = "X"
         for _, c in ipairs(corners) do ox, oz = ox + c.x / 4, oz + c.z / 4 end
@@ -848,10 +935,28 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
                     for _, id in ipairs(w.incoming or {}) do if not nb[id] then nb[id] = true n = n + 1 only = id end end
                     if n == 1 and table.contains(w.out or {}, only) and table.contains(w.incoming or {}, only) then
                         local d = (w.x - cx) ^ 2 + (w.z - cz) ^ 2
-                        if bd2 == nil or d < bd2 then bestPair, bd2, twoWaySide = { w, w, only }, d, w end
+                        if bd2 == nil or d < bd2 then bestPair, bd2, twoWaySide, sideFlow = { w, w, only }, d, w, "two" end
                     end
                 end
             end
+        end
+        -- A ONE-WAY SIDE ROAD (the user, 2026-11-03: "same pattern but pruned"): a lane that only ends here
+        -- (traffic joins the main road) or only starts here (traffic leaves it), with no partner lane.
+        if bestPair == nil and #corners == 0 then
+            local bd2 = nil
+            local function single(list, flow, nbr)
+                for _, w in ipairs(list) do
+                    local nb, n, only = {}, 0, nil
+                    for _, id in ipairs(w.out or {}) do if not nb[id] then nb[id] = true n = n + 1 only = id end end
+                    for _, id in ipairs(w.incoming or {}) do if not nb[id] then nb[id] = true n = n + 1 only = id end end
+                    if n == 1 then
+                        local d = (w.x - cx) ^ 2 + (w.z - cz) ^ 2
+                        if bd2 == nil or d < bd2 then bestPair, bd2, twoWaySide, sideFlow = { w, w, only }, d, w, flow end
+                    end
+                end
+            end
+            single(ends, "out")
+            single(starts, "in")
         end
         if bestPair == nil then
             return nil, string.format("not an X (%d lane crossings) and no side road found (%d lane ends, %d lane starts near the middle)",
@@ -886,7 +991,10 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
                 if math.abs(along) > minAlong and math.min(ua, ub) <= xm and math.max(ua, ub) >= xm then
                     local tt = (xm - ua) / (ub - ua)
                     local zl = ((l.a.x + tt * (l.b.x - l.a.x)) - sideIn.x) * vx + ((l.a.z + tt * (l.b.z - l.a.z)) - sideIn.z) * vz
-                    if zl < 0 then cand[#cand + 1] = { zl = zl, dir = along > 0 and 1 or -1, dx = lx, dz = lz } end
+                    if zl < 0 then
+                        cand[#cand + 1] = { zl = zl, dir = along > 0 and 1 or -1, dx = lx, dz = lz,
+                            two = table.contains(l.b.out or {}, l.a.id) }
+                    end
                 end
             end
             local e, w = nil, nil
@@ -894,10 +1002,12 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
                 if c.dir > 0 and (e == nil or c.zl > e.zl) then e = c end
             end
             if e == nil then return nil, "no main-road lane runs past the side road the right way" end
+            if e.two then return nil, "the main road runs both ways here" end
             for _, c in ipairs(cand) do
                 if c.dir < 0 and c.zl < e.zl - 0.5 and (w == nil or c.zl > w.zl) then w = c end
             end
             if w == nil then return nil, "no second main-road lane beyond the first" end
+            if w.two then return nil, "the main road runs both ways here" end
             return e, w
         end
         local e, w = pickMain(0.5)
@@ -973,6 +1083,14 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
         local stub, forward = sideOut, false
         if ddz < 0 then stub, forward = sideIn, true end
         local ahead = (px - stub.x) * dx + (pz - stub.z) * dz
+        -- The lane already ends (or starts) about where the point goes: it is the point. A side road laid
+        -- by road runs stops 1 m past the main road's near lane - just where the mod's T puts its side
+        -- points - and the fit gave up on it, though the same junction fitted once a clear had moved the
+        -- ends to the box edge (Welker, build 718: fresh -206.7, -925.9 turn by turn, numbered j10 the T).
+        if (px - stub.x) ^ 2 + (pz - stub.z) ^ 2 <= 0.6 * 0.6 then
+            if dry then return true end
+            return stub
+        end
         if (forward and ahead <= 0.3) or (not forward and ahead >= -0.3) then return nil end
         if math.sqrt((px - stub.x) ^ 2 + (pz - stub.z) ^ 2) > 2.5 * L then return nil end
         if dry then return true end
@@ -1029,6 +1147,61 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
     -- turns end further out (2 L), where a lane may already have bent away; the mod's shape stays within
     -- about 0.75 L of the centre (1.5 L along a T's main road), so where smooth does not fit, the mod's
     -- shape is placed instead.
+    -- THE USER'S FARM-ROAD T (Welker Farms, built by hand there; agreed 2026-11-03), for a side road that is
+    -- a single line. Two-way: the road stays two-way from its MOUTH (half a lane gap past the near lane)
+    -- across the near lane, where the near lane shares a CROSSING point with it, square on, to a TOP point
+    -- half way to the far lane. Rights are one-way cuts between the near lane (a lane gap either side) and
+    -- the mouth; lefts join or leave the far lane (a lane gap either side) at the top. Every turn and the
+    -- near lane's through traffic meet at shared points, so AutoDrive makes them take turns. A one-way side
+    -- road is the same pattern pruned to the turns it has ("same pattern but pruned"), every link one-way.
+    -- The crossing runs square to the main road whatever the side road's angle: on a slanted one (Welker
+    -- x 277, by hand) the spine met the near lane at 78 degrees, and AutoDrive took that bend as a U-turn.
+    -- Where its points go, worked out square to the main road around the crossing C: the near lane runs
+    -- through C along u, the far lane a lane gap beyond (-v). The mouth is half a lane gap down the side
+    -- road. The right cuts start and end where each of their two bends stays at or under 65 degrees: on a
+    -- square junction that is the user's own shape (a lane gap out, bends of 27 and 63), on a slanted one
+    -- the cut moves along the lane (survey j80 and j88, 37 and 32 degrees off square: a fixed cut bent 80+
+    -- at the mouth). The lefts join the far lane a lane gap either side of the top.
+    local SPINE_ORDER = { "nL", "nC", "nR", "fR", "fL" }
+    local SPINE_NAME = { nL = "right turn start", nC = "crossing", nR = "right turn end", fR = "left turn start", fL = "left turn end" }
+    local function spineUses(key)
+        if key == "nC" or sideFlow == "two" then return true end
+        if sideFlow == "in" then return key == "nL" or key == "fR" end
+        return key == "nR" or key == "fL"
+    end
+    local function spinePoints(h, mouth)         -- h: how far down the side road the mouth is; or the mouth itself
+        local cpx, cpz = W(0, 0.5)
+        local sx, sz = D(0, 1)                       -- down the side road
+        h = h or 0.5 * L
+        local mox, moz = cpx + h * sx, cpz + h * sz  -- the mouth
+        if mouth ~= nil then mox, moz = mouth.x, mouth.z end
+        local mcx, mcz = mox - cpx, moz - cpz        -- crossing to mouth
+        local function ang(ax, az, bx, bz) return math.deg(math.acos(math.max(-1, math.min(1, ax * bx + az * bz)))) end
+        local function toward(ax, az, bx, bz, deg)  -- a turned towards b by deg
+            local sgn = (ax * bz - az * bx) >= 0 and 1 or -1
+            local r = math.rad(deg) * sgn
+            return ax * math.cos(r) - az * math.sin(r), ax * math.sin(r) + az * math.cos(r)
+        end
+        local function cross(ax, az, bx, bz) return ax * bz - az * bx end
+        local function clamp(x, a, b) return math.max(a, math.min(b, x)) end
+        -- Right in: along u, then down the side road.
+        local th = ang(ux, uz, sx, sz)
+        local dx, dz = toward(ux, uz, sx, sz, clamp(0.295 * th, th - 65, 65))
+        local t = cross(mcx, mcz, ux, uz) / cross(dx, dz, ux, uz)
+        local sL = (mcx - t * dx) * ux + (mcz - t * dz) * uz
+        -- Right out: up the side road (-s), then along u.
+        local th2 = ang(-sx, -sz, ux, uz)
+        local ex, ez = toward(-sx, -sz, ux, uz, clamp(0.705 * th2, th2 - 65, 65))
+        local t2 = -cross(mcx, mcz, ux, uz) / cross(ex, ez, ux, uz)
+        local sR = (mcx + t2 * ex) * ux + (mcz + t2 * ez) * uz
+        local tx, tz = cpx - 0.5 * L * vx, cpz - 0.5 * L * vz   -- the top
+        local fx, fz = cpx - L * vx, cpz - L * vz               -- the far lane, square across from C
+        return {
+            nL = { cpx + sL * ux, cpz + sL * uz, ux, uz }, nC = { cpx, cpz, ux, uz }, nR = { cpx + sR * ux, cpz + sR * uz, ux, uz },
+            fR = { fx + L * ux, fz + L * uz, -ux, -uz }, fL = { fx - L * ux, fz - L * uz, -ux, -uz },
+            top = { tx, tz }, mouth = { mox, moz }, ok = t > 0 and t2 > 0 and math.abs(sL) <= 2.5 * L and math.abs(sR) <= 2.5 * L,
+        }
+    end
     local function needs(sh)
         local t = {}
         if kind == "X" then
@@ -1054,7 +1227,22 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
     end
     local function fits(sh)
         if twoWaySide ~= nil and sh ~= "exact" then
-            return false, "the side road is one two-way road, and the smooth shape needs two side lanes"
+            return false, "the side road is a single line, and the smooth shape needs two side lanes"
+        end
+        if twoWaySide ~= nil then
+            local mx, mz = W(0, 0.5)
+            local ax, az = D(0, 1)
+            local h, why = jxpSideEnd(twoWaySide, mx, mz, ax, az, L, true, sideFlow)
+            if not h then return false, why end
+            local sp = spinePoints(h)
+            if not sp.ok then return false, "the side road leans too far for the farm-road T's right turns" end
+            for _, key in ipairs(SPINE_ORDER) do
+                local q = sp[key]
+                if spineUses(key) and onLane(q[1], q[2], q[3], q[4], nil, true) == nil then
+                    return false, string.format("no lane under the %s at %.1f, %.1f", SPINE_NAME[key], q[1], q[2])
+                end
+            end
+            return true
         end
         for _, n in ipairs(needs(sh)) do
             if not lanePoint(n[1], n[2], n[3], n[4], true) then
@@ -1071,6 +1259,24 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
         shape = "exact"
     elseif not okFit then
         return nil, whyNot
+    end
+    local lays = (kind == "X") and 12 or ((twoWaySide ~= nil and sideFlow ~= "two") and 4 or 6)
+    if dry and kind == "T" and twoWaySide ~= nil then
+        -- The farm-road T, drawn: the mouth on the side road's line, the crossing, the top.
+        local cpx0, cpz0 = W(0, 0.5)
+        local sx0, sz0 = D(0, 1)
+        local sp = spinePoints(jxpSideEnd(twoWaySide, cpx0, cpz0, sx0, sz0, L, true, sideFlow) or nil)
+        local function Q(q) return { x = q[1], z = q[2] } end
+        local pos = { nL = Q(sp.nL), nC = Q(sp.nC), nR = Q(sp.nR), fR = Q(sp.fR), fL = Q(sp.fL), top = Q(sp.top), mouth = Q(sp.mouth) }
+        local two = sideFlow == "two"
+        local new = {}
+        if sideFlow ~= "out" then new[#new + 1] = { "nL", "mouth" } new[#new + 1] = { "fR", "top" } end
+        if sideFlow ~= "in" then new[#new + 1] = { "mouth", "nR" } new[#new + 1] = { "top", "fL" } end
+        new[#new + 1] = { "mouth", "nC", two } new[#new + 1] = { "nC", "top", two }
+        local lines = {}
+        for _, l in ipairs(new) do lines[#lines + 1] = { pts = { pos[l[1]], pos[l[2]] }, dual = l[3] == true } end
+        return { shape = shape, kind = kind, L = L, ox = ox, oz = oz, ux = ux, uz = uz, turns = 0, lines = lines,
+                 marks = { pos.mouth, pos.nC, pos.top }, flow = sideFlow, lays = lays }
     end
     if dry then
         -- What the preview draws: each new path as a line through world points, and the shared points.
@@ -1114,7 +1320,7 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
             marks[#marks + 1] = P(0, 0)
         end
         return { shape = shape, kind = kind, L = L, ox = ox, oz = oz, ux = ux, uz = uz, turns = 0,
-                 lines = lines, marks = marks }
+                 lines = lines, marks = marks, lays = lays }
     end
 
     -- 4. LAYING. First the lanes joined across an empty middle, for real: the pattern's points go on them.
@@ -1222,6 +1428,56 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
             local d2x, d2z = rot(0, 1, k)
             lay(lanePoint(ax, az, d1x, d1z), {}, lanePoint(bx, bz, d2x, d2z), "R45")
         end
+    elseif shape == "exact" and twoWaySide ~= nil then
+        -- The farm-road T (SPINE above): the side road's end becomes the mouth first (jxpSideEnd).
+        local cpx, cpz = W(0, 0.5)
+        local ax, az = D(0, 1)
+        local M, why = jxpSideEnd(twoWaySide, cpx, cpz, ax, az, L, false, sideFlow)
+        if M == nil then return nil, why end
+        twoWaySide, sideIn, sideOut = M, M, M
+        local n = {}
+        local sp = spinePoints(nil, M)
+        for _, key in ipairs(SPINE_ORDER) do
+            if spineUses(key) then
+                local q = sp[key]
+                n[key] = onLane(q[1], q[2], q[3], q[4])
+                if n[key] == nil then return nil, "lost the lane under the " .. SPINE_NAME[key] end
+            end
+        end
+        local tx, tz = sp.top[1], sp.top[2]
+        local T0 = ADFlyoverRecordWayPoint(tx, groundY(tx, tz, n.nC.y or 0), tz, false, false, false, 0,
+            n.nC.flags or AutoDrive.FLAG_NONE, false)
+        jxState.jxLayLabel = "top"
+        jxNoteAdded(T0)
+        jxState.jxLayLabel = nil
+        if T0 == nil then return nil, "could not add the top point" end
+        label("spine")
+        if sideFlow == "out" then
+            junctionConnect(M, n.nC, false)
+            junctionConnect(n.nC, T0, false)
+        elseif sideFlow == "in" then
+            junctionConnect(T0, n.nC, false)
+            junctionConnect(n.nC, M, false)
+        else
+            junctionConnect(M, n.nC, true)
+            junctionConnect(n.nC, T0, true)
+        end
+        if sideFlow ~= "out" then
+            label("R-in")
+            junctionConnect(n.nL, M, false)
+            label("L-in")
+            junctionConnect(n.fR, T0, false)
+        end
+        if sideFlow ~= "in" then
+            label("R-out")
+            junctionConnect(M, n.nR, false)
+            label("L-out")
+            junctionConnect(T0, n.fL, false)
+        end
+        jxState.jxLayLabel = nil
+        turns = turns + ((sideFlow == "two") and 4 or 2)
+        Logging.info("[FlyoverEditor]: junction pattern - farm-road T (%s side road): mouth %.1f, %.1f, crossing %.1f, %.1f, top %.1f, %.1f.",
+            sideFlow == "two" and "two-way" or ("one-way " .. sideFlow), M.x, M.z, n.nC.x, n.nC.z, T0.x, T0.z)
     elseif shape == "exact" then
         -- The mod's T (doc 05): every path one-way. The left from -x into the side road runs 12 ->
         -- centre -> 2 -> 5; the left out of the side road 8 -> 9 -> centre -> 13; they take turns at the
@@ -1282,7 +1538,7 @@ local function junctionPlaceFittedInner(cx, cz, reach, shape, dry)
     end
     ADFlyoverSettings.debugLog("[FlyoverEditor]: junction pattern (%s) placed: %s, lane gap %.1f m, centre %.1f, %.1f, %d turn piece(s).",
         shape, kind, L, ox, oz, turns)
-    return { shape = shape, kind = kind, turns = turns, L = L, ox = ox, oz = oz, ux = ux, uz = uz }
+    return { shape = shape, kind = kind, turns = turns, L = L, ox = ox, oz = oz, ux = ux, uz = uz, flow = sideFlow, lays = lays }
 end
 
 -- The fit with the empty middle's lanes joined in thought for as long as it runs (jxpBridges), and never
@@ -1609,21 +1865,26 @@ end
 -- PLACE (doc 08): the pattern fitted to the crossing where it fits, the plain piece everywhere else.
 -- Only turn wiring still there, or no road at all, stops it.
 local function junctionPlacePattern(cx, cz, reach, shape, dry)
-    -- TWO-WAY ROADS ARE TABLED (decided 2026-10-05): a junction where any road running both ways meets is
-    -- refused, fitted or plain, until there has been time to research how they should join. The two-way
-    -- side road code below (twoWaySide in the fitted T, twoWayEnd in the plain piece) stays, switched off;
-    -- FLYOVER_JUNCTION_PLACE_TWO_WAY = true brings it back.
-    if AutoDrive.FLYOVER_JUNCTION_PLACE_TWO_WAY ~= true then
-        for _, a in pairs(ADGraphManager:getWayPoints()) do
-            if a ~= nil and a.id ~= nil and (a.x - cx) ^ 2 + (a.z - cz) ^ 2 <= 14 * 14 then
-                for _, bid in ipairs(a.out or {}) do
-                    local b = ADGraphManager:getWayPointById(bid)
-                    if b ~= nil and table.contains(b.out or {}, a.id) then
-                        return nil, "a two-way road meets here - two-way roads aren't handled yet"
-                    end
-                end
+    -- TWO-WAY ROADS (tabled 2026-10-05): a junction where a road running both ways meets is refused, fitted
+    -- or plain - except the user's farm-road T (2026-11-03): a two-way side road meeting a road of one-way
+    -- lanes gets that, and nothing else. FLYOVER_JUNCTION_PLACE_TWO_WAY = false refuses it too.
+    local twoWayHere = false
+    for _, a in pairs(ADGraphManager:getWayPoints()) do
+        if a ~= nil and a.id ~= nil and (a.x - cx) ^ 2 + (a.z - cz) ^ 2 <= 14 * 14 then
+            for _, bid in ipairs(a.out or {}) do
+                local b = ADGraphManager:getWayPointById(bid)
+                if b ~= nil and table.contains(b.out or {}, a.id) then twoWayHere = true break end
             end
         end
+        if twoWayHere then break end
+    end
+    local TWO_WAY_NO = "a two-way road meets here - two-way roads aren't handled yet"
+    if twoWayHere then
+        if AutoDrive.FLYOVER_JUNCTION_PLACE_TWO_WAY == false then return nil, TWO_WAY_NO end
+        local res, why, wired = junctionPlaceFitted(cx, cz, reach, shape, dry)
+        if res ~= nil and res.flow == "two" then return res, why, wired end
+        if wired then return nil, why, wired end
+        return nil, TWO_WAY_NO .. ((res == nil and why ~= nil) and (" (" .. tostring(why) .. ")") or "")
     end
     local res, why, wired = nil, "forced plain (test switch)", nil
     -- Test switch (harness): always the plain piece, without trying the fit at all.

@@ -177,13 +177,73 @@ local function drawQuad(ov, x, y, w, h, r, g, b, a)
     ov:render()
 end
 
+-- =============================================================================================
+-- THE DRAW-ORDER RULE (every panel the HUD draws follows it - read before adding a panel)
+--
+-- The game draws ALL text in a pass after ALL overlay quads. A panel's background therefore covers
+-- the quads of a panel drawn before it, but never its text: that is how the Smooth card's rows
+-- printed straight through the help page (build 720). Draw order alone cannot fix it.
+--
+-- So every panel has a fixed LAYER, bottom to top:
+--   1 corner panel   2 tool card   3 help page   4 Select popup   5 test card   6 warning box
+-- (The settings dialog and the manual are modal: they draw ALONE - see draw() - and never mix.)
+--   * A panel is drawn after every panel below it, quads included, so its background covers theirs.
+--   * Each panel says its rect with hudCover(layer, ...). Text is held until the end of the frame and
+--     a line from a lower layer is DROPPED where any higher panel's rect touches it.
+--   * Every click row carries its layer; a panel puts one blocker row over its whole rect. A click,
+--     wheel notch or drag goes to the TOP panel at that spot (isMouseOver / topLayerAt), never to a
+--     panel underneath, and never through to the world.
+-- A new panel: pick its layer, call hudLayer(n) before drawing it, hudCover(n, rect) once its rect
+-- is known, and add a blocker row (blocker = true). That is all.
+-- =============================================================================================
+local HUDTEXT = { on = false, layer = 0, items = {}, covers = {} }
+
+local function hudLayer(n) HUDTEXT.layer = n end
+local function hudCover(n, x, y, w, h)
+    if x == nil or w == nil or w <= 0 then return end
+    HUDTEXT.covers[#HUDTEXT.covers + 1] = { n, x, y, w, h }
+end
+
 local function label(x, y, size, text, r, g, b, a, align)
+    if HUDTEXT.on then
+        local q = HUDTEXT.items
+        q[#q + 1] = { x, y, size, text, r, g, b, a, align, HUDTEXT.layer }
+        return
+    end
     setTextAlignment(align or RenderText.ALIGN_LEFT)
     setTextBold(false)
     setTextColor(r, g, b, a)
     renderText(x, y, size, text)
     setTextAlignment(RenderText.ALIGN_LEFT)
     setTextColor(1, 1, 1, 1)
+end
+
+-- Draw the held text, dropping each line a higher panel covers. Called once, at the end of draw().
+local function hudFlushText()
+    HUDTEXT.on = false
+    local covers = HUDTEXT.covers
+    setTextBold(false)
+    for _, it in ipairs(HUDTEXT.items) do
+        local x, y, size, text, layer = it[1], it[2], it[3], it[4], it[10]
+        local hidden = false
+        if #covers > 0 and text ~= nil and text ~= "" then
+            local tw = getTextWidth ~= nil and getTextWidth(size, tostring(text)) or #tostring(text) * size * 0.5
+            local x0 = x
+            if it[9] == RenderText.ALIGN_CENTER then x0 = x - tw * 0.5
+            elseif it[9] == RenderText.ALIGN_RIGHT then x0 = x - tw end
+            local x1, y0, y1 = x0 + tw, y - size * 0.25, y + size
+            for _, c in ipairs(covers) do
+                if c[1] > layer and x1 > c[2] and x0 < c[2] + c[4] and y1 > c[3] and y0 < c[3] + c[5] then
+                    hidden = true
+                    break
+                end
+            end
+        end
+        if not hidden then
+            label(x, y, size, text, it[5], it[6], it[7], it[8], it[9])
+        end
+    end
+    HUDTEXT.items, HUDTEXT.covers, HUDTEXT.layer = {}, {}, 0
 end
 
 -- Fill a quad in a theme role's colour. Alpha stays per-call because the same role is drawn at
@@ -579,7 +639,7 @@ function ADFlyoverHud:buildRows(editor)
     add("gap")
     add("section", "THIS TOOL")
     if armedMenu then
-        add("note", "right-click applies - Esc cancels")
+        add("note", "right-click applies - Esc goes back")
     end
 
     if editor.tool == editor.TOOL.PARALLEL or editor.tool == editor.TOOL.SIDING then
@@ -622,16 +682,26 @@ function ADFlyoverHud:buildRows(editor)
         add("hint", "(only matters beside a one-way track)")
     end
     if editor:toolUsesSpanPick() then
+        -- The same few short lines on every span tool's card: how to pick, then how to change the pick
+        -- (spanPickClick: later clicks carry the end set last; clicking the other end picks that one up).
+        -- A locked "run" pick takes the whole run in one click, so the span lines are left off then.
         if editor.tool == editor.TOOL.GROUND then
             -- Ground needs no path, so it also takes any selection, connected or not.
             pickSeg({ "span", "run", "set" })
-            if editor.pickFilter == nil then
-                add("hint", "2 clicks = span, double-click = run, or select points")
-            end
         else
             pickSeg({ "span", "run" })
+        end
+        -- Armed from a Select popup, a click off the popup cancels it: none of these clicks apply there.
+        if not armedMenu then
             if editor.pickFilter == nil then
                 add("hint", "2 clicks = span, double-click = run")
+            end
+            if editor.pickFilter ~= "run" then
+                add("hint", "more clicks move the last end set")
+                add("hint", "click other end, then its new spot")
+            end
+            if editor.tool == editor.TOOL.GROUND and editor.pickFilter == nil then
+                add("hint", "or select points (box, Ctrl-click)")
             end
         end
     end
@@ -786,10 +856,30 @@ function ADFlyoverHud:buildRows(editor)
         -- that can be isolated per-site without a settings-dialog trip.
         tgl("detect custom field", ADFlyoverSettings.get("fieldLoopDetectCustomField"),
             function() ADFlyoverSettings.cycle("fieldLoopDetectCustomField", 1) end)
+        -- Only offered when Courseplay is installed and has published its custom fields; without it
+        -- the card is exactly as before.
+        if AutoDrive.hasCourseplayCustomFields ~= nil and AutoDrive:hasCourseplayCustomFields() then
+            tgl("Courseplay field", ADFlyoverSettings.get("fieldLoopUseCourseplayField"),
+                function()
+                    ADFlyoverSettings.cycle("fieldLoopUseCourseplayField", 1)
+                    Logging.info("[FlyoverEditor]: field loop - Courseplay field turned %s.",
+                        ADFlyoverSettings.get("fieldLoopUseCourseplayField") and "on" or "off")
+                end)
+        end
         -- Off skips the tree/pole/fence/building detour entirely, taking the offset boundary as
         -- laid rather than nudging it clear of whatever the obstacle check is flagging.
         tgl("avoid obstacles", ADFlyoverSettings.get("fieldLoopAvoidObstacles"),
             function() ADFlyoverSettings.cycle("fieldLoopAvoidObstacles", 1) end)
+        -- Off follows a field outline into the islands a map cuts into it (issue 31).
+        tgl("leave out islands", ADFlyoverSettings.get("fieldLoopLeaveOutIslands"),
+            function()
+                ADFlyoverSettings.cycle("fieldLoopLeaveOutIslands", 1)
+                Logging.info("[FlyoverEditor]: field loop - leave out islands turned %s.",
+                    ADFlyoverSettings.get("fieldLoopLeaveOutIslands") and "on" or "off")
+            end)
+        if editor.fieldLoopLastBoundary ~= nil then
+            add("note", "last loop: " .. editor.fieldLoopLastBoundary)
+        end
     elseif editor.tool == editor.TOOL.CONVERT then
         -- Two kinds of change, two rows: which way traffic runs, and the road's priority. Configure both;
         -- one click converts to both at once.
@@ -960,6 +1050,12 @@ function ADFlyoverHud:buildRows(editor)
                     add("toggle", "state", tostring(jp.junctionState))
                 end
                 junctionDecisionRows(jp)
+            elseif jp.patternFit ~= nil and jp.patternFit.ok then
+                -- A JUNCTION NOBODY HAS WORKED ON YET (2026-11-03): its side road stops short of the main
+                -- road, so the finder counts too few roads and it has no number - but the build lays the
+                -- pattern, and it is numbered once its turns are there.
+                add("toggle", "junction", "new")
+                add("note", "numbered once it is built")
             elseif editor.junctionRefused ~= nil then
                 add("toggle", "free placement", "")
                 notes(editor.junctionRefused)
@@ -1149,8 +1245,32 @@ function ADFlyoverHud:buildRows(editor)
     return rows
 end
 
+--- One frame of the HUD. Text is held while the panels draw and put out at the end, minus what a
+--- higher panel covers (the draw-order rule at the top of this file). The flush runs even when a
+--- panel faults, so a fault never leaves text held into the next frame; the fault is passed on.
 function ADFlyoverHud:draw(editor)
+    HUDTEXT.on, HUDTEXT.items, HUDTEXT.covers, HUDTEXT.layer = true, {}, {}, 0
+    local ok, err = pcall(self.drawPanels, self, editor)
+    hudFlushText()
+    if not ok then
+        error(err, 0)
+    end
+end
+
+--- Stamp every click row added since index `from` with a layer (rows that already have one keep it).
+function ADFlyoverHud:tagRows(from, layer)
+    for i = from, #self.rows do
+        if self.rows[i].layer == nil then self.rows[i].layer = layer end
+    end
+end
+
+function ADFlyoverHud:drawPanels(editor)
     self:ensureOverlays()
+    -- Cleared each frame; the panels that are up set them again as they draw. A stale rect would keep
+    -- taking wheel and drags where nothing is drawn any more. (testRect is NOT cleared here: the tool
+    -- card reads last frame's to keep clear of the test card, and drawTestPanel resets it itself.)
+    self.ctxFrameW, self.warnRect = 0, nil
+    self.menuRect, self.menuHeadRect = nil, nil
 
     -- A modal owns the screen: draw it ALONE. The panel is skipped on purpose, not just covered - its
     -- own rows are text (the wide "under cursor" field readout reaches under the modal's left edge and
@@ -1158,16 +1278,20 @@ function ADFlyoverHud:draw(editor)
     -- hide. The world network and its labels are already suppressed for the same reason (see
     -- ADFlyoverEditor:draw and ADFlyoverProxy.run), so the manual/dialog is the only thing on screen.
     if editor.dialogOpen then
+        self.rows, self.helpRect = {}, nil
         self:drawSettingsDialog(editor)
         return
     end
     if editor.manualOpen then
+        self.rows, self.helpRect = {}, nil
         self:drawManual(editor)
         return
     end
 
     -- Cleared each frame; drawHelp sets it again only when the help card is actually up. Otherwise a
-    -- stale rect would keep suppressing world labels over an area with no help panel on it.
+    -- stale rect would keep suppressing world labels over an area with no help panel on it. Last
+    -- frame's rect is kept while the help is open: the tool card has to keep clear of it (below).
+    local helpWas = editor.helpOpen and self.helpRect or nil
     self.helpRect = nil
 
     local rows = self:buildRows(editor)
@@ -1378,21 +1502,80 @@ function ADFlyoverHud:draw(editor)
                 cardY = math.max(ch, math.min(1, self.cardShift[2]))
             end
         end
-        local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
-        self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
+        -- The help card sits where the tool card's home is (both beside the corner panel), and engine
+        -- text draws in a pass above every overlay, so the help's background cannot hide the card's
+        -- text: it read straight through the help page (2026-11-03). While the help is open the card
+        -- steps clear of it - right of it, else left, else below - and only if none fits is it left
+        -- out until the help closes. Not saved: it goes back to its own spot when the help closes.
+        local hideCard = false
+        if helpWas ~= nil and not self.ctxDragging then
+            local function overlaps(x, y, w, h, r)
+                return r ~= nil and x < r.x + r.w and x + w > r.x and y < r.y + r.h and y + h > r.y
+            end
+            local hr, gap = helpWas, 0.012
+            local tr = self.testRect
+            local function clear(x, y)
+                return x >= 0 and x + width <= 1 and y - ch >= 0 and y <= 1
+                    and not overlaps(x, y - ch, width, ch, hr) and not overlaps(x, y - ch, width, ch, tr)
+                    and not overlaps(x, y - ch, width, ch, { x = self.frameX or 0, y = self.frameY or 0,
+                        w = self.frameW or 0, h = self.frameH or 0 })
+            end
+            if overlaps(cardX, cardY - ch, width, ch, hr) then
+                local tries = {
+                    { hr.x + hr.w + gap, cardY },
+                    { hr.x - width - gap, cardY },
+                    { cardX, hr.y - gap },
+                    { hr.x + hr.w + gap, math.min(1, hr.y + hr.h) },
+                }
+                local moved = false
+                for _, p in ipairs(tries) do
+                    if clear(p[1], p[2]) then
+                        cardX, cardY, moved = p[1], p[2], true
+                        break
+                    end
+                end
+                hideCard = not moved
+            end
+        end
+        if hideCard then
+            -- Its rows go too, so no button of a card that is not drawn can be clicked.
+            for k = #rows, split + 1, -1 do
+                table.remove(rows, k)
+            end
+            hasContext = false
+        else
+            local hC = place(split + 1, #rows, cardX, cardY - grabH) + grabH
+            self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH = cardX, cardY - hC, width, hC
+        end
     end
+
+    -- Layer 1 = corner panel (rows up to the status line), layer 2 = the tool card (the rest). Tagged
+    -- here, after placement, so it counts the rows actually drawn. The count is frozen: the row passes
+    -- below append stepper and option buttons to the same table.
+    local nRows = #rows
+    for i = 1, nRows do rows[i].layer = (i <= split) and 1 or 2 end
 
     local edge = 0.0025
     -- Corner panel: near-opaque so the world does not read through the text, with a defined edge.
+    hudLayer(1)
+    hudCover(1, self.frameX - edge, self.frameY - edge, self.frameW + edge * 2, self.frameH + edge * 2)
     fillRole(self.borderOverlay, self.frameX - edge, self.frameY - edge,
         self.frameW + edge * 2, self.frameH + edge * 2, "panelBorder", 0.95)
     fillRole(self.background, self.frameX, self.frameY, self.frameW, self.frameH, "panelBg", 0.98)
-    -- Floating tool card, accent-tinted border so it reads as the active tool's own controls.
+    table.insert(self.rows, { x = self.frameX - edge, y = self.frameY - edge, w = self.frameW + edge * 2,
+        h = self.frameH + edge * 2, blocker = true, layer = 1 })
+    -- Floating tool card, accent-tinted border so it reads as the active tool's own controls. Drawn
+    -- AFTER the corner panel's rows (drawCardFrame is called below), so a card dragged over the panel
+    -- covers the panel's buttons instead of having them show through its background.
+    local function drawCardFrame()
     if hasContext then
+        hudLayer(2)
+        hudCover(2, self.ctxFrameX - edge, self.ctxFrameY - edge, self.ctxFrameW + edge * 2, self.ctxFrameH + edge * 2)
+        table.insert(self.rows, { x = self.ctxFrameX - edge, y = self.ctxFrameY - edge, w = self.ctxFrameW + edge * 2,
+            h = self.ctxFrameH + edge * 2, blocker = true, layer = 2 })
         fillRole(self.borderOverlay, self.ctxFrameX - edge, self.ctxFrameY - edge,
             self.ctxFrameW + edge * 2, self.ctxFrameH + edge * 2, "cardBorder", 0.96)
-        fillRole(self.background, self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH,
-            "cardBg", 0.99)
+        fillRoleSolid(self.background, self.ctxFrameX, self.ctxFrameY, self.ctxFrameW, self.ctxFrameH, "cardBg")
         -- The header strip: the card's drag handle, styled like the corner panel's own draggable
         -- header so it reads as the same affordance, titled with the active tool's name.
         local gy = self.ctxFrameY + self.ctxFrameH - CTX_GRAB_H
@@ -1424,18 +1607,20 @@ function ADFlyoverHud:draw(editor)
                 end
             end
             ADFlyoverSettings.cycle("toolCardStatic", 1)
-        end })
+        end, layer = 2 })
     else
         self.pinRect = nil
+    end
     end
 
     -- Normalised coords are square only on a 1:1 screen; on 16:9 a shape with equal w and h renders
     -- wider than tall. Icons must be pixel-square, so their width is divided by the aspect ratio.
     local aspect = g_screenAspectRatio or (16 / 9)
     local mx, my = editor.mouseX, editor.mouseY
-    -- Numeric for over a frozen count: drawNumberField appends the stepper buttons to `rows` as it
-    -- draws, and this must not then iterate into the buttons it just added.
-    for ri = 1, #rows do
+    -- Numeric for over a frozen count (nRows): drawNumberField appends the stepper buttons to `rows`
+    -- as it draws, and this must not then iterate into the buttons it just added.
+    local function drawRowRange(firstRow, lastRow)
+    for ri = firstRow, lastRow do
         local row = rows[ri]
         local x, y, width, h = row.x, row.y, row.w, row.h
         local textY = y + (h - fontSize) * 0.5
@@ -1666,6 +1851,11 @@ function ADFlyoverHud:draw(editor)
             end
         end
     end
+    end
+
+    -- Corner panel rows first, then (below, after its grip) the tool card over it.
+    local rowsFrom = #self.rows + 1
+    drawRowRange(1, split)
 
     -- Resize grip in the panel's bottom-right corner: a triangle of dots, drawn last so no row fill
     -- covers it. Dragging it sets the mod's ui scale (see handleDrag); the typed field stays the exact
@@ -1690,26 +1880,47 @@ function ADFlyoverHud:draw(editor)
             end
         end
     end
+    self:tagRows(rowsFrom, 1)
 
-    self:drawContextMenu(editor)
+    -- Layer 2: the tool card, over the corner panel.
+    rowsFrom = #self.rows + 1
+    drawCardFrame()
+    drawRowRange(split + 1, nRows)
+    self:tagRows(rowsFrom, 2)
 
-    -- Contextual help sits beside the panel and is non-modal, so you can read it while working. The
-    -- modals (settings dialog, manual) never reach here - they return at the top of draw(), drawn
-    -- alone over a cleared screen - so help and a modal can never render at once.
+    -- Layer 3: contextual help sits beside the panel and is non-modal, so you can read it while
+    -- working. The modals (settings dialog, manual) never reach here - they return at the top of
+    -- drawPanels(), drawn alone over a cleared screen - so help and a modal can never render at once.
+    hudLayer(3)
+    rowsFrom = #self.rows + 1
     if editor.helpOpen and not editor.dialogOpen and not editor.manualOpen then
         self:drawHelp(editor)
     end
+    self:tagRows(rowsFrom, 3)
 
-    -- A test build's plan (TestPanel.lua), at the right edge. Guarded: a fault in the test card must
-    -- never take the editor's own screen down with it - it is said once in the log instead.
+    -- Layer 4: the Select popup, over the help: it opens from a click on the map, so it is the thing
+    -- being worked on right now.
+    hudLayer(4)
+    rowsFrom = #self.rows + 1
+    self:drawContextMenu(editor)
+    self:tagRows(rowsFrom, 4)
+
+    -- Layer 5: a test build's plan (TestPanel.lua), at the right edge. Guarded: a fault in the test
+    -- card must never take the editor's own screen down with it - it is said once in the log instead.
+    hudLayer(5)
+    rowsFrom = #self.rows + 1
     local tpOk, tpErr = pcall(self.drawTestPanel, self, editor)
     if not tpOk and not self.testPanelFaultSaid then
         self.testPanelFaultSaid = true
         Logging.warning("[FlyoverEditor]: test panel - the card could not be drawn: %s", tostring(tpErr))
     end
+    self:tagRows(rowsFrom, 5)
 
-    -- Last, so it sits on top of whatever it hangs off, and its click row is found first.
+    -- Layer 6, last: the warning box sits on top of whatever it hangs off, and takes its click first.
+    hudLayer(6)
+    rowsFrom = #self.rows + 1
     self:drawWarning(editor)
+    self:tagRows(rowsFrom, 6)
 end
 
 --- Greedy word-wrap to a measured width, so the breaks follow the real glyph widths at the size the
@@ -1790,6 +2001,8 @@ function ADFlyoverHud:drawWarning(editor)
     end
     y = math.max(0, math.min(1 - h, y))
 
+    self.warnRect = { x = x - edge, y = y - edge, w = w + edge * 2, h = h + edge * 2 }
+    hudCover(6, x - edge, y - edge, w + edge * 2, h + edge * 2)
     fillRole(self.borderOverlay, x - edge, y - edge, w + edge * 2, h + edge * 2, "danger", 0.9 * alpha)
     fillRole(self.background, x, y, w, h, "cardBg", 0.99 * alpha)
     for i, text in ipairs(lines) do
@@ -1864,8 +2077,9 @@ function ADFlyoverHud:drawTestPanel(editor)
     fillRole(self.borderOverlay, x - edge, y0 - edge, W + edge * 2, h + edge * 2, "cardBorder", 0.96)
     fillRoleSolid(self.background, x, y0, W, h, "cardBg")
     self.testRect = { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2 }
+    hudCover(5, x - edge, y0 - edge, W + edge * 2, h + edge * 2)
     -- Whole-card blocker first: a click on a label never reaches the world behind.
-    table.insert(self.rows, { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2 })
+    table.insert(self.rows, { x = x - edge, y = y0 - edge, w = W + edge * 2, h = h + edge * 2, blocker = true })
 
     local y = top - pad
     for _, it in ipairs(items) do
@@ -1953,7 +2167,7 @@ local function menuSelectionBox(m)
         local wp = ADGraphManager:getWayPointById(id)
         if wp ~= nil then
             local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                 x0 = x0 and math.min(x0, sx) or sx
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
@@ -2216,7 +2430,7 @@ function ADFlyoverHud:actionTargetsBox(editor, rx, ry, rw, rh, includeSpan)
         local wp = ADGraphManager:getWayPointById(ids[i])
         if wp ~= nil then
             local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.7, wp.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) and sx >= 0 and sx <= 1 and sy >= 0 and sy <= 1 then
                 x0 = x0 and math.min(x0, sx) or sx
                 x1 = x1 and math.max(x1, sx) or sx
                 y0 = y0 and math.min(y0, sy) or sy
@@ -2265,7 +2479,7 @@ function ADFlyoverHud:drawContextMenu(editor)
         return
     end
     -- Point / span / run menus show only in Select mode. A tool armed from one of them (kind "armed")
-    -- keeps the menu state so right-click applies and Esc cancels, but its options are on the tool
+    -- keeps the menu state so right-click applies and Esc goes back to it, but its options are on the tool
     -- card, which opens where the menu was - so there is nothing to draw for it here.
     if m.kind == "armed" or editor.tool ~= editor.TOOL.NONE then
         return
@@ -2419,9 +2633,13 @@ function ADFlyoverHud:drawContextMenu(editor)
     local mx, my = editor.mouseX, editor.mouseY
 
     local edge = 0.0025
+    -- Layer 4 (the draw-order rule): covers what is under it, and the gaps between its buttons take
+    -- the click instead of passing it to the corner panel or the world underneath.
+    hudCover(4, x - edge, top - ph - edge, pw + edge * 2, ph + edge * 2)
+    table.insert(self.rows, { x = x - edge, y = top - ph - edge, w = pw + edge * 2, h = ph + edge * 2, blocker = true })
     fillRole(self.borderOverlay, x - edge, top - ph - edge, pw + edge * 2, ph + edge * 2,
         "cardBorder", 0.98)
-    fillRole(self.background, x, top - ph, pw, ph, "cardBg", 0.99)
+    fillRoleSolid(self.background, x, top - ph, pw, ph, "cardBg")
 
     local halfW = (pw - pad * 2 - colGap) * 0.5
     local function inside(cx, cy, cw, ch)
@@ -2578,6 +2796,33 @@ function ADFlyoverHud:drawSettingsDialog(editor)
         value = ADFlyoverSettings.get("toolCardStatic") and "stays put" or "follows work",
         action = function() ADFlyoverSettings.cycle("toolCardStatic", 1) end,
         stepAction = function(d) ADFlyoverSettings.cycle("toolCardStatic", d) end })
+    push({ kind = "field", text = "camera through buildings",
+        value = TR(ADFlyoverSettings.get("cameraThroughBuildings") and "on" or "off"),
+        action = function() editor:toggleCameraThroughBuildings() end,
+        stepAction = function() editor:toggleCameraThroughBuildings() end })
+    push({ kind = "note", text = "on: the camera flies under roofs, to place points inside sheds" })
+    push({ kind = "field", text = "height slice (G)",
+        value = TR(ADFlyoverSettings.get("heightSlice") and "on" or "off"),
+        action = function() editor:toggleHeightSlice() end,
+        stepAction = function() editor:toggleHeightSlice() end })
+    do
+        local editing = editor.editing ~= nil and editor.editing.label == "slice on foot"
+        local function set(v)
+            ADFlyoverSettings.setValue("heightSliceOnFoot", v)
+            editor.sliceVehicleMs = nil
+            return true
+        end
+        push({ kind = "field", text = "slice height on foot",
+            value = editing and (editor.editing.buffer .. "_") or string.format("%.1f m", ADFlyoverSettings.get("heightSliceOnFoot")),
+            editing = editing,
+            action = function()
+                editor:beginEditNumber({ label = "slice on foot", unit = "m",
+                    get = function() return ADFlyoverSettings.get("heightSliceOnFoot") end, apply = set,
+                    step = function(d) set(ADFlyoverSettings.get("heightSliceOnFoot") + d * 0.5) end })
+            end,
+            stepAction = function(d) set(ADFlyoverSettings.get("heightSliceOnFoot") + d * 0.5) end })
+    end
+    push({ kind = "note", text = "slice: looks straight down and hides roofs and trees over your vehicle's height" })
     push({ kind = "section", text = "THEME" })
     push({ kind = "field", text = "theme", value = (T.PRESET_NAMES[T.preset] or T.preset),
         action = function() editor:cycleThemePreset(1) end,
@@ -2854,7 +3099,8 @@ function ADFlyoverHud:drawHelp(editor)
     fillRoleSolid(self.background, x, top - h, W, h, "cardBg")
     -- Whole-card blocker (stops a click reaching the world) and the wheel target for scrolling.
     self.helpRect = { x = x, y = top - h, w = W, h = h }
-    table.insert(self.rows, { x = x - edge, y = top - h - edge, w = W + edge * 2, h = h + edge * 2 })
+    hudCover(3, x - edge, top - h - edge, W + edge * 2, h + edge * 2)
+    table.insert(self.rows, { x = x - edge, y = top - h - edge, w = W + edge * 2, h = h + edge * 2, blocker = true })
 
     local y = top - pad - headH
     fillRole(self.headerOverlay, x, y, W, headH, "headerBg", 1)
@@ -3079,6 +3325,7 @@ function ADFlyoverHud:isMouseOverToolCard(mx, my)
     end
     return mx >= self.ctxFrameX and mx <= self.ctxFrameX + self.ctxFrameW
         and my >= self.ctxFrameY and my <= self.ctxFrameY + self.ctxFrameH
+        and self:topLayerAt(mx, my) == 2   -- not where a panel on top of the card covers it
 end
 
 --- Is the point over the contextual help card? The wheel handler asks this so a scroll over the help
@@ -3090,6 +3337,7 @@ function ADFlyoverHud:isMouseOverHelp(mx, my)
         return false
     end
     return mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
+        and self:topLayerAt(mx, my) == 3   -- not where a popup, the test card or a warning sits on it
 end
 
 --- Does a screen point (normalised, y up - the same space as project() and the mouse) fall on one of
@@ -3183,7 +3431,10 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
     -- The point/span/run menu's header is its drag handle. The position lives on the menu
     -- itself (editor.ctxMenu.placeX/placeTop), so it is held while the menu is open and gone with it.
     local hr, mr, menu = self.menuHeadRect, self.menuRect, editor ~= nil and editor.ctxMenu or nil
-    if button == 1 and isDown and menu ~= nil and hr ~= nil and mr ~= nil
+    -- A press starts a drag only on the TOP panel at that spot (the draw-order rule): a press on the
+    -- help page over the card's header strip must not pick the card up from underneath.
+    local topLayer = isDown and self:topLayerAt(mouseX, mouseY) or 0
+    if button == 1 and isDown and topLayer == 4 and menu ~= nil and hr ~= nil and mr ~= nil
         and mouseX >= hr.x and mouseX <= hr.x + hr.w and mouseY >= hr.y and mouseY <= hr.y + hr.h then
         self.menuDragging = true
         self.menuDragDX = mouseX - mr.x
@@ -3200,7 +3451,7 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
         return true
     end
 
-    if button == 1 and isDown and self:isMouseOverToolCardGrab(mouseX, mouseY) then
+    if button == 1 and isDown and topLayer == 2 and self:isMouseOverToolCardGrab(mouseX, mouseY) then
         if editor ~= nil then
             -- Pin the card where it is DRAWN right now before the spawn/step-aside positions are dropped.
             -- Otherwise, until the first mouse move writes a drag position, the card falls back to its
@@ -3237,7 +3488,7 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
     -- edge, and the scale is the grabbed scale times new width over grabbed width. Clamped by the
     -- theme's own limits, and so the right edge cannot leave the screen.
     local gr = self.gripRect
-    if button == 1 and isDown and gr ~= nil and ADFlyoverTheme ~= nil
+    if button == 1 and isDown and topLayer == 1 and gr ~= nil and ADFlyoverTheme ~= nil
         and mouseX >= gr.x and mouseX <= gr.x + gr.w and mouseY >= gr.y and mouseY <= gr.y + gr.h then
         self.gripDragging = true
         self.gripStartScale = ADFlyoverTheme.scale
@@ -3262,7 +3513,7 @@ function ADFlyoverHud:handleDrag(editor, mouseX, mouseY, isDown, isUp, button)
         return true
     end
 
-    if button == 1 and isDown and self:isMouseOverHeader(mouseX, mouseY) then
+    if button == 1 and isDown and topLayer == 1 and self:isMouseOverHeader(mouseX, mouseY) then
         self.dragging = true
         -- Remember the grab point within the panel so it does not jump to align a corner with
         -- the cursor on the first frame.
@@ -3298,15 +3549,33 @@ end
 --- Scanned back-to-front so the most recently drawn (topmost) row wins where rows overlap: the
 --- stepper buttons sit inside a numeric field's full-width box, and a menu can sit over the corner
 --- block. Later in the list means drawn on top, so it takes the click.
+---
+--- The draw-order rule (top of this file): the row in the HIGHEST layer wins, so a panel on top takes
+--- the click even where a panel underneath has a button. Within one layer a real row beats that
+--- panel's blocker, and a later row beats an earlier one.
 function ADFlyoverHud:isMouseOver(mouseX, mouseY)
+    if mouseX == nil or mouseY == nil then
+        return false, nil
+    end
+    local best, bestLayer, bestBlocker
     for i = #self.rows, 1, -1 do
         local row = self.rows[i]
         if row.x ~= nil and mouseX >= row.x and mouseX <= row.x + row.w
             and mouseY >= row.y and mouseY <= row.y + row.h then
-            return true, row
+            local layer = row.layer or 0
+            local blocker = row.blocker == true
+            if best == nil or layer > bestLayer or (layer == bestLayer and bestBlocker and not blocker) then
+                best, bestLayer, bestBlocker = row, layer, blocker
+            end
         end
     end
-    return false, nil
+    return best ~= nil, best
+end
+
+--- The layer of the top panel at a screen point (1 corner panel ... 6 warning box), or 0 for none.
+function ADFlyoverHud:topLayerAt(mouseX, mouseY)
+    local over, row = self:isMouseOver(mouseX, mouseY)
+    return (over and row ~= nil and row.layer) or 0
 end
 
 --- The numeric field (if any) under the cursor - the one the wheel should drive when scrolling over
@@ -3317,9 +3586,12 @@ function ADFlyoverHud:numberFieldAt(mouseX, mouseY)
     if mouseX == nil then
         return nil
     end
+    -- Only a field in the TOP panel there: a scroll over the help page or the test card must not step
+    -- a card field hidden underneath.
+    local top = self:topLayerAt(mouseX, mouseY)
     for i = #self.rows, 1, -1 do
         local row = self.rows[i]
-        if row.stepAction ~= nil and row.x ~= nil
+        if row.stepAction ~= nil and row.x ~= nil and (row.layer or 0) == top
             and mouseX >= row.x and mouseX <= row.x + row.w
             and mouseY >= row.y and mouseY <= row.y + row.h then
             return row

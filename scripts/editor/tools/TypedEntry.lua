@@ -76,7 +76,7 @@ function ADFlyoverEditor:getEditableNumbers()
         return { fieldEntry("tolerance", "m", 1, "groundTolerance", AD.FLYOVER_GROUND_MIN, AD.FLYOVER_GROUND_MAX,
             AD.FLYOVER_GROUND_STEP, false) }
     elseif self.tool == self.TOOL.STRAIGHTEN then
-        return { fieldEntry("tolerance", "m", 1, "straightenTolerance", AD.FLYOVER_STRAIGHTEN_MIN,
+        return { fieldEntry("tolerance", "m", 2, "straightenTolerance", AD.FLYOVER_STRAIGHTEN_MIN,
             AD.FLYOVER_STRAIGHTEN_MAX, AD.FLYOVER_STRAIGHTEN_STEP, false) }
     elseif self.tool == self.TOOL.DIVIDE then
         return { fieldEntry("points", "", 0, "divideCount", 0, AD.FLYOVER_DIVIDE_MAX, 1, true) }
@@ -707,7 +707,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
         return
     end
 
-    local ok, x, y, z = tryCall("cursor:getPosition", function() return self.cursor:getPosition() end)
+    local ok, x, y, z = tryCall("cursor:getPosition", function() return self:cursorPosition() end)
     if not ok or x == nil or z == nil then
         -- Only log this once: if the cursor never resolves a position it will do so every frame.
         if not self.loggedNoPosition then
@@ -752,6 +752,7 @@ function ADFlyoverEditor:placeWaypointAtCursor()
     ADGraphManager:markChanges()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: placed waypoint id=%s at x=%.1f y=%.1f z=%.1f%s",
         tostring(newId), x, y, z, connectPrevious and " (connected to the previous one)" or "")
+    tryCall("notePlacedUnderRoof", function() self:notePlacedUnderRoof(newId, x, y, z) end)
 end
 
 function ADFlyoverEditor:draw()

@@ -93,6 +93,66 @@ end
 --- what lets German - which wraps differently from English - read as a sentence rather than two halves
 --- broken at the English line break. Format placeholders are kept inside the localized template so the
 --- live value lands in the right place in either language.
+--- The NEXT text of the shared span pick (spanPickClick), the same on every span tool's card: Smooth,
+--- Straighten, Divide, Ground, Parallel and Merge. `picked` is the tool's own line once both ends are
+--- set (what the wheel does, how to apply); the pick's own options follow it.
+---   opts.selectToo - the tool also takes a selection of points (Ground).
+---   opts.sameTrack - both ends must be on one track, and a click on a track beside the span means
+---                    something else (Merge: it merges).
+function ADFlyoverEditor:spanPickNextStep(fromId, toId, picked, opts)
+    local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
+    opts = opts or {}
+    -- Armed from a Select popup: a click off the popup cancels it, so none of the pick's clicks apply.
+    -- The tool's own line already says how to apply, so only Esc is added to it.
+    if self.ctxMenu ~= nil and self.ctxMenu.kind == "armed" then
+        if picked ~= nil and picked ~= "" then
+            return picked .. " " .. L("Esc goes back to the menu.")
+        end
+        return L("Right-click applies; Esc goes back to the menu.")
+    end
+    -- The picks row can be locked: "run" takes the whole run in one click, "span" never does.
+    local lock = self.pickFilter
+    if fromId == nil then
+        local s
+        if lock == "run" then
+            s = L("Click a run to take all of it.")
+        elseif lock == "span" then
+            s = L("Click one end of the span.")
+        else
+            s = L("Click one end of the span, or double-click for the whole run.")
+        end
+        if opts.selectToo then
+            s = s .. " " .. L("Or select points (box, circle, Ctrl-click).")
+        end
+        return s
+    end
+    if toId == nil then
+        local s = L("Click the other end. The span follows the track, round a loop too.")
+        if opts.sameTrack then
+            s = s .. " " .. L("Stay on the SAME track.")
+        end
+        return s
+    end
+    local carry
+    if lock == "run" then
+        carry = L("A click takes the run through that point instead.")
+    elseif self.spanPickedUpId ~= nil and self.spanPickedUpId == self.spanMovingEndId then
+        carry = L("End picked up: click where it should go.")
+    elseif self.spanMovingEndId == nil then
+        -- A whole run (double-click) has no end set last: a click moves whichever end is nearer it.
+        carry = opts.sameTrack and L("A click on your own track moves the nearer end there.")
+            or L("A click moves the nearer end there, along the track.")
+    elseif opts.sameTrack then
+        carry = L("Clicks on your own track move the last end set. Click the other end to move that one.")
+    else
+        carry = L("More clicks move the last end set, round loops too. Click the other end to move that one.")
+    end
+    if picked == nil or picked == "" then
+        return carry
+    end
+    return picked .. " " .. carry
+end
+
 function ADFlyoverEditor:getNextStepLines()
     local t = self.TOOL
     local function L(s) return ADFlyoverLocale ~= nil and ADFlyoverLocale.t(s) or s end
@@ -146,25 +206,38 @@ function ADFlyoverEditor:getNextStepLines()
             end
             return string.format(L("Release to %s."), verb)
         end
-        if self.moveSelectMode == self.MOVE_SELECT.SPAN then
-            if self.moveSpanFromId == nil then
-                return L("Click a waypoint to start the span.")
-            end
-            if self.moveSpanToId == nil then
-                return L("Click the far end of the span.")
-            end
-            if self.hoverId ~= nil and self.moveSpanIds ~= nil and self.moveSpanIds[self.hoverId] then
-                return L("Drag the highlighted span.")
-            end
-            return L("Click to replace whichever end is closer, or drag the span.")
+        -- What is picked now - a selection, a run, a span, a first click - rather than the select mode,
+        -- which a single click resets to point (so the old span lines were never shown).
+        if self.selectionCount > 0 then
+            return L("Drag any selected point to move the set.")
         end
-        if self.hoverId ~= nil then
-            return L("Drag the highlighted waypoint.")
+        if self.moveSpanIds ~= nil and self.moveSpanToId ~= nil then
+            if self.pickFilter == "run" then
+                return L("Drag any point of the run to move all of it.") .. " "
+                    .. L("A click takes the run through that point instead.")
+            end
+            if self.spanMovingEndId == nil then
+                return L("Drag any point of the run to move all of it.") .. " "
+                    .. L("A click moves the nearer end there, along the track.")
+            end
+            if self.spanPickedUpId ~= nil and self.spanPickedUpId == self.spanMovingEndId then
+                return L("End picked up: click where it should go.")
+            end
+            return L("Drag any point of the span to move it.") .. " "
+                .. L("More clicks move the last end set, round loops too. Click the other end to move that one.")
         end
-        return L("Point at a waypoint, then drag it.")
+        if self.moveSpanFromId ~= nil then
+            return L("Click the other end for a span, or drag a point to move it.")
+        end
+        if self.pickFilter == "point" then
+            return L("Drag a point to move it.")
+        elseif self.pickFilter == "run" then
+            return L("Click a run to pick all of it, or drag a point.")
+        end
+        return L("Drag a point to move it, or click two points for a span (double-click: run).")
     elseif self.tool == t.DELETE then
         if self.selectionCount > 0 then
-            return string.format(L("Click to delete %d selected."), self.selectionCount)
+            return string.format(L("Right-click deletes the %d selected. Esc clears the selection."), self.selectionCount)
         end
         if self.deleteScope == self.DELETE_SCOPE.RUN then
             return L("Click a run to delete all of it, out to the junctions at each end.")
@@ -174,16 +247,15 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Point at a waypoint to delete it.")
     elseif self.tool == t.SMOOTH then
+        local picked
         if self.smoothToId ~= nil then
             if self.smoothMode == self.SMOOTH_MODE.REBUILD then
-                return string.format(L("Wheel sets max spacing (%.1fm). Curves stay denser."), self.smoothSpacing)
+                picked = string.format(L("Wheel sets max spacing (%.1fm). Curves stay denser."), self.smoothSpacing)
+            else
+                picked = string.format(L("Wheel sets strength (%d). Right-click applies it."), self.smoothStrength)
             end
-            return string.format(L("Wheel sets strength (%d). Right-click applies it."), self.smoothStrength)
         end
-        if self.smoothFromId ~= nil then
-            return L("Click the far end of the span.")
-        end
-        return L("Click one end of the span.")
+        return self:spanPickNextStep(self.smoothFromId, self.smoothToId, picked)
     elseif self.tool == t.NAME then
         return L("Click a waypoint to name it.")
     elseif self.tool == t.SPLINE and self:splineIsMultiPoint() and self.splineEditMode then
@@ -220,57 +292,53 @@ function ADFlyoverEditor:getNextStepLines()
         end
         return L("Click where the siding should sit - the click is its centre.")
     elseif self.tool == t.PARALLEL then
+        local picked
         if self.offsetToId ~= nil then
             if self.offsetBlockedBy ~= nil then
-                return L("Too tight to offset that far. Wheel it back, or swap sides.")
+                picked = L("Too tight to offset that far. Wheel it back, or swap sides.")
+            else
+                picked = string.format(L("Wheel sets distance (%.1fm %s). Flip the side on the panel. Right-click applies."),
+                    self.offsetDistance, side())
             end
-            return string.format(L("Wheel sets offset (%.1fm %s). Flip the side on the panel. Right-click applies."),
-                self.offsetDistance, side())
         end
-        if self.offsetFromId ~= nil then
-            return L("Click the far end of the span.")
-        end
-        return L("Click one end of a span to run a track alongside it, or double-click for the whole run.")
+        return self:spanPickNextStep(self.offsetFromId, self.offsetToId, picked)
     elseif self.tool == t.GROUND then
         if self.groundToId ~= nil or self.groundUsesSelection then
             local n = self.groundPreview ~= nil and #self.groundPreview or 0
+            local picked
             if n == 0 then
-                return string.format(L("Nothing over %.1fm off the ground. Wheel the tolerance down to see more."), self.groundTolerance)
+                picked = string.format(L("Nothing over %.1fm off the ground. Wheel the tolerance down to see more."), self.groundTolerance)
+            else
+                picked = string.format(L("%d of %d waypoint(s) off the ground. Right-click re-seats them."), n, self.groundChecked or 0)
             end
-            return string.format(L("%d of %d waypoint(s) off the ground. Right-click re-seats them."), n, self.groundChecked or 0)
+            if self.groundUsesSelection then
+                return picked
+            end
+            return self:spanPickNextStep(self.groundFromId, self.groundToId, picked)
         end
-        if self.groundFromId ~= nil then
-            return L("Click the far end of the span.")
-        end
-        return L("Click a span or double-click a run, or select points (box, circle, Ctrl-click) - connected or not - to find waypoints off the ground.")
+        return self:spanPickNextStep(self.groundFromId, self.groundToId, nil, { selectToo = true })
     elseif self.tool == t.STRAIGHTEN then
+        local picked
         if self.straightenToId ~= nil then
-            return string.format(L("Wheel sets tolerance (%.2fm). Right-click straightens the span."), self.straightenTolerance)
+            picked = string.format(L("Wheel sets tolerance (%.2fm). Right-click straightens the span."), self.straightenTolerance)
         end
-        if self.straightenFromId ~= nil then
-            return L("Click the far end of the span.")
-        end
-        return L("Click one end of a span to straighten it, or double-click for the whole run.")
+        return self:spanPickNextStep(self.straightenFromId, self.straightenToId, picked)
     elseif self.tool == t.DIVIDE then
+        local picked
         if self.divideToId ~= nil then
-            return string.format(L("Wheel sets the count (%d). Right-click applies it."), self.divideCount)
+            picked = string.format(L("Wheel sets the count (%d). Right-click applies it."), self.divideCount)
         end
-        if self.divideFromId ~= nil then
-            return L("Click the far end of the span.")
-        end
-        return L("Click one end of the span to divide.")
+        return self:spanPickNextStep(self.divideFromId, self.divideToId, picked)
     elseif self.tool == t.CONVERT then
         return string.format(L("Click to make it %s (%s)."),
             L(self.CONVERT_OP_NAMES[self.convertDirection]) .. ", " .. L(self.CONVERT_OP_NAMES[self.convertPriority]),
             self.convertScope == self.DELETE_SCOPE.RUN and L("whole run") or L("this waypoint"))
     elseif self.tool == t.MERGE then
+        local picked
         if self.mergeToId ~= nil then
-            return L("Green marks what would be absorbed. Click the OTHER track to merge (right-click if it is the only one).")
+            picked = L("Green marks what would be absorbed. Click the OTHER track to merge (right-click if it is the only one).")
         end
-        if self.mergeFromId ~= nil then
-            return L("Click the far end of the span, on the SAME track.")
-        end
-        return L("Click one end of the span to merge, or double-click for the whole run.")
+        return self:spanPickNextStep(self.mergeFromId, self.mergeToId, picked, { sameTrack = true })
     elseif self.tool == t.JUNCTION then
         local jp = self.junctionPreview
         -- Clear + build (doc 12): the card says what each half will do; this says what the clicks do.

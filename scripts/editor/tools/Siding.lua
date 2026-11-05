@@ -679,8 +679,10 @@ function ADFlyoverEditor:offsetSpanPoints()
     end
     -- Whole-run scope has already decided the route by walking the collected run, and that decision
     -- has to survive: re-deriving it here would put the path finder back in charge and send a
-    -- siding's offset down the main line.
-    local span = self.spanIds or self:runPathBetween(self.offsetFromId, self.offsetToId)
+    -- siding's offset down the main line. spanBetween, like every other span tool: the picked route
+    -- when it belongs to these two ends (a span carried round a loop keeps its way round), never a
+    -- route left over from another pick.
+    local span = self:spanBetween(self.offsetFromId, self.offsetToId)
 
     -- Only when the shortest path doubles back. On a plain span the path finder is right and
     -- cheaper, so it keeps the job; the straight walk is the answer to intersections specifically.

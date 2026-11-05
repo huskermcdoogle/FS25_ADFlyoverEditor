@@ -22,6 +22,10 @@ function ADFlyoverEditor:mouseEvent(posX, posY, isDown, isUp, button)
         and (button == Input.MOUSE_BUTTON_WHEEL_UP or button == Input.MOUSE_BUTTON_WHEEL_DOWN) then
         ADFlyoverWrappers.counts.rawWheel = ADFlyoverWrappers.counts.rawWheel + 1
     end
+    if isDown and self.active and (button == Input.MOUSE_BUTTON_WHEEL_UP or button == Input.MOUSE_BUTTON_WHEEL_DOWN) then
+        tryCall("wheelProbeRaw", function() self:wheelProbeRaw(posX, posY, button) end)
+        tryCall("wheelWatchRaw", function() self:wheelWatchRaw(button) end)
+    end
 
     -- Logged BEFORE the guard, and only for real button presses, so a click that is being thrown
     -- away still leaves a trace. A siding previewed on foot and then did nothing, with no log line
@@ -241,7 +245,7 @@ function ADFlyoverEditor:onLeftPress()
     -- Only the move tool cares about the press itself; every other tool acts on release, so that
     -- a click that turns out to be a camera drag does not commit an edit. Span is the exception:
     -- picking its two ends (and later replacing one) is a plain click, not a drag, so it is left
-    -- for onLeftRelease/moveSpanClick - a press only ever begins a drag once the span already
+    -- for onLeftRelease/moveGestureClick - a press only ever begins a drag once the span already
     -- exists AND the hovered point is actually a member of it.
     -- Multi-point spline: a press on one of its points may become a drag of that point.
     if self.tool == self.TOOL.SPLINE and self.splineHoverIdx ~= nil and self:splineIsMultiPoint() then

@@ -669,7 +669,7 @@ function E:roadRunsHandleAtCursor()
         bestD = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS * AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
         for i, h in ipairs(pk.handles) do
             local ok, sx, sy, depth = pcall(project, h.x, (h.y or terrainY(h.x, h.z)) + 0.8, h.z)
-            if ok and sx ~= nil and depth ~= nil and depth > 0 then
+            if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                 local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
                 if dx * dx + dy * dy < bestD then best, bestD = i, dx * dx + dy * dy end
             end
@@ -693,7 +693,7 @@ function E:roadRunsHandlePiece()
     if seg == nil then return nil end
     if project ~= nil and g_lastMousePosX ~= nil and g_lastMousePosY ~= nil then
         local ok, sx, sy, depth = pcall(project, px, (py or self.cursorY or 0) + 0.6, pz)
-        if ok and sx ~= nil and depth ~= nil and depth > 0 then
+        if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
             local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
             local r = AutoDrive.FLYOVER_PICK_SCREEN_RADIUS
             if dx * dx + dy * dy <= r * r then return seg, px, pz end

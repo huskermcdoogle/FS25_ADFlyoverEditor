@@ -365,7 +365,9 @@ end
 -- How far a waypoint may sit off the ground before the ground tool calls it out, in meters. The
 -- band starts well below a hand's width because the point of the tool is finding drift you cannot
 -- see, and reaches high enough to ignore a genuine bridge or gantry rather than dragging it down.
-AutoDrive.FLYOVER_GROUND_MIN = 0.1
+AutoDrive.FLYOVER_GROUND_MIN = 0.0   -- 2026-11-04: down to 0 (a floor a few cm over the terrain, Welker Farms)
+-- A point this far under a floor or road mesh is flagged by the ground tool whatever the tolerance.
+AutoDrive.FLYOVER_GROUND_UNDER = 0.02
 AutoDrive.FLYOVER_GROUND_MAX = 10.0
 AutoDrive.FLYOVER_GROUND_STEP = 0.1
 AutoDrive.FLYOVER_GROUND_DEFAULT = 0.5
@@ -1048,8 +1050,12 @@ end
 
 --- Last-resort recovery for a stranded input context, from the console.
 ---
---- Reverting more than once is normally wrong, which is why this is a deliberate command and not
---- something disable() does. It exists because the alternative has twice been restarting the game.
+--- It only ever undoes OUR context. It used to revert five times whatever was on top: run on foot
+--- after a clean exit (2026-10-30, build 719 test card), that popped the game's own PLAYER context
+--- and left ROOT, where none of the player's controls exist - the very thing it was meant to mend.
+--- If it finds the game on ROOT (stranded by that, or by anything else), it puts the gameplay
+--- context back: VEHICLE in a vehicle, PLAYER on foot. setContext with createNew false re-uses the
+--- existing context, so the game's own action events in it come back with it.
 function ADFlyoverEditor:resetInput()
     ADFlyoverSettings.debugLog("[FlyoverEditor]: input state before reset - %s", self:describeInputState())
 
@@ -1058,17 +1064,40 @@ function ADFlyoverEditor:resetInput()
         self:disable()
     end
 
-    for i = 1, 5 do
-        local reverted = tryCall("revertContext " .. i, function() g_inputBinding:revertContext(false) end)
-        if not reverted then
-            break
-        end
-        ADFlyoverSettings.debugLog("[FlyoverEditor]: reverted a context (%d) - %s", i, self:describeInputState())
+    local function current()
+        return g_inputBinding ~= nil and g_inputBinding.currentContextName or nil
     end
 
+    local undone = 0
+    for i = 1, 5 do
+        if current() ~= self.INPUT_CONTEXT then
+            break
+        end
+        if not tryCall("revertContext " .. i, function() g_inputBinding:revertContext(false) end) then
+            break
+        end
+        undone = undone + 1
+        ADFlyoverSettings.debugLog("[FlyoverEditor]: reverted the editor's context (%d) - %s", i, self:describeInputState())
+    end
     self.contextPushed = false
+
+    local putBack = nil
+    local root = (InputBinding ~= nil and InputBinding.ROOT_CONTEXT_NAME) or "ROOT"
+    if current() == root then
+        local okVehicle, vehicle = pcall(function() return AutoDrive.getControlledVehicle() end)
+        local name = (okVehicle and vehicle ~= nil) and "VEHICLE"
+            or (PlayerInputComponent ~= nil and PlayerInputComponent.INPUT_CONTEXT_NAME) or "PLAYER"
+        if g_inputBinding.contexts ~= nil and g_inputBinding.contexts[name] ~= nil
+            and tryCall("setContext " .. name, function() g_inputBinding:setContext(name, false, false) end) then
+            putBack = name
+        end
+    end
+
     ADFlyoverSettings.debugLog("[FlyoverEditor]: input state after reset - %s", self:describeInputState())
-    ADFlyoverSettings.debugLog("[FlyoverEditor]: if movement is still dead, the gameplay action events are gone rather than shadowed, and only a reload restores them.")
+    Logging.info("[FlyoverEditor]: input reset: undid %d editor context(s)%s; now in '%s'.", undone,
+        putBack ~= nil and (", put '" .. putBack .. "' back over '" .. root .. "'") or "", tostring(current()))
+    return string.format("Input reset: undid %d editor context(s)%s. Now in '%s'.", undone,
+        putBack ~= nil and (", put " .. putBack .. " back") or "", tostring(current()))
 end
 
 function ADFlyoverEditor:isAvailable()
@@ -1178,6 +1207,10 @@ function ADFlyoverEditor:enable()
         return
     end
     self.camera, self.cursor = camera, cursor
+    -- Before activate(), which already positions the camera: with "camera through buildings" on,
+    -- this instance keeps clear of the terrain only, so it can fly under roofs (tools/Camera.lua).
+    tryCall("installCameraThroughBuildings", function() self:installCameraThroughBuildings(camera) end)
+    tryCall("wheelProbeArm", function() self:wheelProbeArm() end)
 
     -- Start the camera over whatever the player is currently at, so the mode opens somewhere
     -- recognisable rather than at the map origin.
@@ -1429,6 +1462,8 @@ function ADFlyoverEditor:disable()
         -- rather than by the ids the camera created, taking the player's bindings for those same
         -- actions with it - attach/detach stopped responding until this was dropped. The camera's
         -- events belong to our context and go when it is reverted.
+        -- The height slice's near clip goes back first (the camera is deleted next anyway).
+        tryCall("sliceRestore", function() self:sliceRestore() end)
         tryCall("camera:deactivate", function() self.camera:deactivate() end)
         tryCall("camera:delete", function() self.camera:delete() end)
     end
@@ -1863,6 +1898,15 @@ function ADFlyoverEditor:keyEvent(unicode, sym, modifier, isDown)
         return
     end
 
+    -- Height slice on/off (tools/Camera.lua). G, because the top-down camera takes Z/X (zoom),
+    -- C/V (turn), Home/End (tilt) and WASD (AXIS_CONSTRUCTION_CAMERA_* and AXIS_MOVE_*_PLAYER in the
+    -- player's inputBinding.xml), and X was its zoom out (build 717 test). G is bound to nothing in
+    -- our context and sits beside F, so the left hand stays on WASD.
+    if isKey("KEY_g") then
+        self:toggleHeightSlice()
+        return
+    end
+
     -- Show/hide the contextual help panel. The / key is also ?, which reads as "help".
     if isKey("KEY_slash") then
         self:toggleHelp()
@@ -1928,7 +1972,12 @@ function ADFlyoverEditor:update(dt)
         return
     end
 
+    tryCall("wheelWatchUpdate", function() self:wheelWatchUpdate() end)
+    local zoomBefore = self.camera ~= nil and {
+        input = self.camera.inputZoom, target = self.camera.targetZoomFactor, zoom = self.camera.zoomFactor } or nil
     tryCall("camera:update", function() self.camera:update(dt) end)
+    tryCall("wheelProbeAfterUpdate", function() self:wheelProbeAfterUpdate(zoomBefore) end)
+    tryCall("cameraCoverCheck", function() self:cameraCoverCheck(dt) end)
     tryCall("cursor:setCameraRay", function() self.cursor:setCameraRay(self.camera:getPickRay()) end)
     tryCall("cursor:update", function()
         if self.cursor.update ~= nil then self.cursor:update(dt) end
@@ -1950,7 +1999,7 @@ function ADFlyoverEditor:update(dt)
     local overPanel = self.mouseX ~= nil and ADFlyoverHud ~= nil
         and ADFlyoverHud:isMouseOver(self.mouseX, self.mouseY)
     if not overPanel or self.dragId ~= nil then
-        local ok, x, y, z = pcall(function() return self.cursor:getPosition() end)
+        local ok, x, y, z = pcall(function() return self:cursorPosition() end)
         if ok and x ~= nil and z ~= nil then
             self.cursorX, self.cursorZ, self.cursorY = x, z, y
         end
@@ -1969,6 +2018,9 @@ function ADFlyoverEditor:update(dt)
 
     -- Nothing in the world is under the mouse while it is on the panel, so nothing is highlighted.
     self.hoverId = not overPanel and self:findWayPointNearCursor() or nil
+    if self.hoverId ~= nil and self.sliceApplied then
+        tryCall("noteSliceHover", function() self:noteSliceHover(self.hoverId) end)
+    end
     -- Remember the last waypoint pointed at while the move tool is up, so the falloff preview keeps a
     -- centre after the cursor moves onto the tool card to wheel the radius.
     if self.tool == self.TOOL.MOVE and self.hoverId ~= nil then
@@ -2086,11 +2138,13 @@ function ADFlyoverEditor:findWayPointNearCursor()
             local wdx, wdz = wp.x - self.cursorX, wp.z - self.cursorZ
             -- Only project what is plausibly on screen; projecting the whole graph every frame is
             -- wasted work on a network of several thousand waypoints.
-            if wdx * wdx + wdz * wdz < searchRadiusSq then
+            -- Under the height slice a point above the cut is not drawn, so it does not pick either
+            -- (a road over a shed would otherwise take the clicks meant for the floor under it).
+            if wdx * wdx + wdz * wdz < searchRadiusSq and not self:hiddenBySlice(wp.y) then
                 local ok, sx, sy, depth = pcall(project, wp.x, wp.y + 0.5, wp.z)
-                -- depth <= 0 means the point is behind the camera, where project still returns
-                -- coordinates but mirrored ones - they would pick as if in front.
-                if ok and sx ~= nil and depth ~= nil and depth > 0 then
+                -- A point behind the camera still projects, but mirrored - it would pick as if in
+                -- front. inFrontDepth (tools/Camera.lua) says which.
+                if ok and sx ~= nil and ADFlyoverEditor.inFrontDepth(depth) then
                     local dx, dy = sx - g_lastMousePosX, sy - g_lastMousePosY
                     local distSq = dx * dx + dy * dy
                     if distSq < bestDistSq then

@@ -24,60 +24,280 @@ local heightAlongChain = ADFlyoverEditor.shared.heightAlongChain
 -- flatten a deliberately raised bridge.
 -- ---------------------------------------------------------------------------------------------
 
--- The same collision the mod's own height lookup uses, so "the ground" means to this tool what it
--- means to AutoDrive when it drives the route.
+-- The road probe's collision (isRoadAt below): what AutoDrive's own height lookup sees.
 local GROUND_MASK = nil
-local groundHit = nil
 
-local function groundRayCallback(_, hitObjectId, x, y, z, distance)
-    if y ~= nil then
-        groundHit = y
+-- ---------------------------------------------------------------------------------------------
+-- THE SURFACE RULE - one rule for every tool that puts a point on the ground (2026-11-04).
+--
+-- Reported on Welker Farms: a floor a few centimetres above the terrain, and our points went under
+-- it, onto the terrain. Two causes, both here:
+--   1. The rays used DEFAULT + ROAD + TERRAIN, AutoDrive's own mask. In FS25 a building or static
+--      object (the game's BUILDING, PLACEABLE_BUILDING and STATIC_OBJECT presets in
+--      shared/collisionMaskFlags.xml) has no DEFAULT bit in its collision group, so sheds, concrete
+--      pads and placeable floors were never hit at all. Only road meshes and old-style DEFAULT
+--      meshes were.
+--   2. Even a floor that was hit lost to the terrain under it: the terrain stayed in the list, and
+--      "nearest to the expected height" picked it whenever the point started at terrain level.
+--
+-- The rule:
+--   * Cast down with BUILDING and STATIC_OBJECT added, stepping from hit to hit (bridge deck, then
+--     the road under it, then the terrain).
+--   * Terrain hits and ROAD hits are surfaces anywhere (decks, roads, bridges - as before).
+--   * Any other hit near the terrain (within FLOOR_REACH) counts only if it is a FLOOR: flat
+--     (hit normal) and wide (a surface at about the same height a short step away on at least 3 of
+--     4 sides). That keeps poles, fence rails, kerbs and sign posts out. Higher building hits are
+--     roofs and wall tops and are stepped past; higher DEFAULT hits stay surfaces, as before.
+--   * A surface with another surface less than BURY_GAP above it is buried and dropped: the terrain
+--     under a floor, a ramp or a road mesh. No vehicle fits in a gap that small. A bridge deck is
+--     well above its road, so both stay and the expected height still chooses.
+-- ---------------------------------------------------------------------------------------------
+local SURFACE = {
+    FLOOR_REACH = 1.5,       -- m over the terrain: a building/static hit higher than this is not a floor
+    FLOOR_FLAT = 0.85,       -- hit normal's up part; under this (about 32 deg) it is a wall or a roof slope
+    FLOOR_WIDE_STEP = 0.4,   -- m to each side for the width check
+    FLOOR_WIDE_MATCH = 0.25, -- m: a side counts if it finds a non-terrain surface this close in height
+    FLOOR_WIDE_SIDES = 3,    -- of 4
+    BURY_GAP = 2.0,          -- m: a surface with another this close above it is buried (no vehicle fits in less)
+    STEP = 0.1,              -- m under a hit for the next cast
+    MAX_CASTS = 12,
+}
+ADFlyoverEditor.SURFACE = SURFACE
+
+local SURFACE_MASK = nil
+local function surfaceMask()
+    if SURFACE_MASK == nil then
+        SURFACE_MASK = CollisionFlag.DEFAULT + CollisionFlag.ROAD + CollisionFlag.TERRAIN
+            + (CollisionFlag.BUILDING or 0) + (CollisionFlag.STATIC_OBJECT or 0)
+    end
+    return SURFACE_MASK
+end
+
+-- One bit of a collision group, without bit32 (a group read as a signed number when bit 31 is set).
+local function hasFlag(group, flag)
+    if type(group) ~= "number" or type(flag) ~= "number" or flag <= 0 then return false end
+    if group < 0 then group = group + 4294967296 end
+    return math.floor(group / flag) % 2 == 1
+end
+
+local rayY, rayId, rayNy = nil, nil, nil
+local function surfaceRayCallback(_, hitObjectId, x, y, z, distance, nx, ny, nz)
+    -- Highest wins if the engine ever reports more than one: casting down, that is the closest.
+    if y ~= nil and (rayY == nil or y > rayY) then
+        rayY, rayId, rayNy = y, hitObjectId, ny
     end
 end
-local GroundRay = { callback = groundRayCallback }
+local SurfaceRay = { callback = surfaceRayCallback }
 
---- The highest surface directly beneath (x, fromY, z), searching `length` metres down. Nil if none.
-local function surfaceBelow(x, z, fromY, length)
-    if raycastClosest == nil then
-        return nil
-    end
-    if GROUND_MASK == nil then
-        GROUND_MASK = CollisionFlag.DEFAULT + CollisionFlag.ROAD + CollisionFlag.TERRAIN
-    end
-    groundHit = nil
+--- The first thing straight below (x, fromY, z) within `length` m: its height, object id and normal's up part.
+local function castDown(x, z, fromY, length)
+    if raycastClosest == nil or CollisionFlag == nil then return nil end
+    rayY, rayId, rayNy = nil, nil, nil
     -- raycastClosest calls back synchronously, which is what AutoDrive relies on as well.
     local ok = pcall(raycastClosest, x, fromY, z, 0, -1, 0, math.max(length, 0.5),
-        "callback", GroundRay, GROUND_MASK)
-    if not ok then
-        return nil
-    end
-    return groundHit
+        "callback", SurfaceRay, surfaceMask())
+    if not ok or rayY == nil then return nil end
+    return rayY, rayId, rayNy
 end
 
---- Every surface in the column at (x, z), top down, from `topY` to the terrain.
----
---- Stepped with the one ray call already proven here: cast down, note the hit, cast again from just
---- beneath it, until the terrain. That finds a bridge deck AND the road under it, where a single
---- cast from anywhere finds only whichever it meets first - and which that is depends entirely on
---- where the cast starts, which is exactly the decision that has to be made on purpose.
-local function columnSurfaces(x, z, topY, terrainY)
-    local hits = {}
-    local from = topY
-    for _ = 1, 8 do
-        local h = surfaceBelow(x, z, from, (from - terrainY) + 1)
-        if h == nil then
+local function terrainNode()
+    return g_currentMission ~= nil and g_currentMission.terrainRootNode or nil
+end
+
+--- "terrain", "road", "default" or "object" (building / static object), from the hit's collision group.
+local function hitKind(id)
+    local terrain = terrainNode()
+    if id ~= nil and terrain ~= nil and id == terrain then return "terrain" end
+    if id == nil or id == 0 or getCollisionFilterGroup == nil then return "default" end
+    local ok, group = pcall(getCollisionFilterGroup, id)
+    if not ok or type(group) ~= "number" then return "default" end
+    if hasFlag(group, CollisionFlag.TERRAIN) then return "terrain" end
+    if hasFlag(group, CollisionFlag.ROAD) then return "road" end
+    if hasFlag(group, CollisionFlag.DEFAULT) then return "default" end
+    return "object"
+end
+
+--- Is the surface hit at (x, h, z) wide, like a floor, rather than a pole, a rail or a kerb?
+local function isWide(x, z, h)
+    local s = SURFACE.FLOOR_WIDE_STEP
+    local found = 0
+    for _, d in ipairs({ { s, 0 }, { -s, 0 }, { 0, s }, { 0, -s } }) do
+        local y, id = castDown(x + d[1], z + d[2], h + 0.5, 1.0)
+        if y ~= nil and math.abs(y - h) <= SURFACE.FLOOR_WIDE_MATCH and hitKind(id) ~= "terrain" then
+            found = found + 1
+        end
+    end
+    return found >= SURFACE.FLOOR_WIDE_SIDES
+end
+
+local function objectName(id)
+    if id == nil or id == 0 or getName == nil then return "?" end
+    local ok, name = pcall(getName, id)
+    local text = ok and tostring(name) or "?"
+    if getParent ~= nil then
+        local okP, p = pcall(getParent, id)
+        if okP and p ~= nil and p ~= 0 then
+            local okN, pn = pcall(getName, p)
+            if okN and pn ~= nil then text = tostring(pn) .. "/" .. text end
+        end
+    end
+    return text
+end
+
+local function groupText(id)
+    if id == nil or id == 0 or getCollisionFilterGroup == nil then return "-" end
+    local ok, group = pcall(getCollisionFilterGroup, id)
+    if not ok or type(group) ~= "number" then return "-" end
+    if group < 0 then group = group + 4294967296 end
+    return string.format("0x%x", group)
+end
+
+-- Columns are asked for every frame while a preview is up (the ground tool checks its whole span
+-- each frame), so a column is kept for a second.
+local columnCache, columnCacheCount, columnCacheTime = {}, 0, nil
+local function cachedColumn(key)
+    local now = g_time
+    if type(now) ~= "number" or columnCacheTime == nil or now - columnCacheTime > 1000 or columnCacheCount > 5000 then
+        columnCache, columnCacheCount = {}, 0
+        if type(now) == "number" then columnCacheTime = now else columnCacheTime = nil end
+        return nil
+    end
+    return columnCache[key]
+end
+local function storeColumn(key, value)
+    if columnCacheTime == nil then return end
+    columnCache[key] = value
+    columnCacheCount = columnCacheCount + 1
+end
+
+--- Every surface in the column at (x, z), top down, from `topY` to the terrain, by the rule above.
+--- Returns the heights, and the full list (kept and skipped hits, with their kind and object) for the log.
+local function surfaceColumn(x, z, topY, terrainY)
+    local key = string.format("%.2f|%.2f|%.1f", x, z, topY)
+    local cached = cachedColumn(key)
+    if cached ~= nil then return cached.heights, cached.hits, cached.kinds end
+
+    local hits, kept = {}, {}
+    local from, sawTerrain = topY, false
+    for _ = 1, SURFACE.MAX_CASTS do
+        if from < terrainY - 0.05 then break end           -- already under the terrain
+        local h, id, ny = castDown(x, z, from, (from - terrainY) + 1)
+        if h == nil then break end
+        local kind = hitKind(id)
+        local hit = { y = h, id = id, kind = kind, ny = ny }
+        if kind == "terrain" or kind == "road" then
+            hit.keep = true
+        elseif h > terrainY + SURFACE.FLOOR_REACH then
+            hit.keep = (kind == "default")                 -- old-style meshes: surfaces, as before
+            if not hit.keep then hit.why = "too high for a floor" end
+        elseif ny ~= nil and ny < SURFACE.FLOOR_FLAT then
+            hit.why = "too steep"
+        elseif not isWide(x, z, h) then
+            hit.why = "too narrow"
+        else
+            hit.keep = true
+            if kind == "object" then hit.kind = "floor" end
+        end
+        hits[#hits + 1] = hit
+        if hit.keep then kept[#kept + 1] = hit end
+        if kind == "terrain" then
+            sawTerrain = true
             break
         end
-        hits[#hits + 1] = h
-        if h <= terrainY + 0.05 then
-            break
+        from = h - SURFACE.STEP
+    end
+    if not sawTerrain then
+        local t = { y = terrainY, kind = "terrain", keep = true, plain = true }
+        hits[#hits + 1] = t
+        kept[#kept + 1] = t
+    end
+
+    -- Buried: another kept surface less than BURY_GAP above it.
+    local open = {}
+    for _, s in ipairs(kept) do
+        for _, above in ipairs(kept) do
+            local gap = above.y - s.y
+            if above ~= s and gap > 0.001 and gap < SURFACE.BURY_GAP then
+                s.buried = above
+                break
+            end
         end
-        from = h - 0.1
+        if s.buried == nil then open[#open + 1] = s end
     end
-    if #hits == 0 or hits[#hits] > terrainY + 0.05 then
-        hits[#hits + 1] = terrainY
+    table.sort(open, function(a, b) return a.y > b.y end)
+    local heights, kinds = {}, {}
+    for i, s in ipairs(open) do
+        heights[i], kinds[i] = s.y, s.kind
     end
-    return hits
+    if #heights == 0 then heights[1], kinds[1] = terrainY, "terrain" end   -- cannot happen; never return nothing
+    storeColumn(key, { heights = heights, hits = hits, kinds = kinds })
+    return heights, hits, kinds
+end
+
+local function terrainHeightAt(x, z)
+    local terrain = terrainNode()
+    if terrain == nil or getTerrainHeightAtWorldPos == nil then return nil end
+    return getTerrainHeightAtWorldPos(terrain, x, 1, z)
+end
+
+--- The surfaces at (x, z) by the shared rule, top down, the terrain height, and each surface's kind
+--- ("terrain", "road", "floor", "default"). `aboveY` is the highest height that matters (the column
+--- is searched from 15 m over it). Nil off the map.
+function ADFlyoverEditor:surfacesAt(x, z, aboveY)
+    local terrainY = terrainHeightAt(x, z)
+    if terrainY == nil then return nil end
+    local heights, _, kinds = surfaceColumn(x, z, math.max(aboveY or terrainY, terrainY) + 15, terrainY)
+    return heights, terrainY, kinds
+end
+
+--- The surface nearest `referenceY` at (x, z) by the shared rule; `maxGap` (optional) refuses one
+--- further away than that. Nil when there is none (or off the map).
+function ADFlyoverEditor:surfaceNear(x, z, referenceY, maxGap)
+    local heights, terrainY = self:surfacesAt(x, z, referenceY)
+    if heights == nil then return nil end
+    local ref = referenceY or terrainY
+    local best, bestGap = nil, math.huge
+    for _, h in ipairs(heights) do
+        local gap = math.abs(h - ref)
+        if gap < bestGap then best, bestGap = h, gap end
+    end
+    if maxGap ~= nil and bestGap > maxGap then return nil end
+    return best
+end
+
+--- One log line naming everything the column at (x, z) holds: each hit's height, kind, object and
+--- collision group, and why it was kept, skipped or buried. For in-game tests ("what did the ray see").
+function ADFlyoverEditor:describeSurfaces(x, z, aboveY, label, chosenY)
+    local terrainY = terrainHeightAt(x, z)
+    if terrainY == nil then return end
+    columnCacheTime = nil                                   -- a fresh look, not a cached one
+    local topY = math.max(aboveY or terrainY, terrainY) + 15
+    local _, hits = surfaceColumn(x, z, topY, terrainY)
+    local parts = {}
+    for _, hit in ipairs(hits) do
+        local state
+        if hit.buried ~= nil then
+            state = string.format("buried under %.3f", hit.buried.y)
+        elseif hit.keep then
+            state = "kept"
+        else
+            state = "skipped, " .. tostring(hit.why)
+        end
+        if hit.plain then
+            parts[#parts + 1] = string.format("%.3f terrain (no ray hit) %s", hit.y, state)
+        else
+            local up = ""
+            if hit.ny ~= nil then up = string.format(" up %.2f", hit.ny) end
+            parts[#parts + 1] = string.format("%.3f %s '%s' group %s%s %s", hit.y, hit.kind, objectName(hit.id),
+                groupText(hit.id), up, state)
+        end
+    end
+    local where, chosen = "", ""
+    if label ~= nil then where = " " .. label end
+    if chosenY ~= nil then chosen = string.format(" -> set to %.3f", chosenY) end
+    -- Always on (not debugLog): it fires only on a drop or a ground commit, and the test card reads it.
+    Logging.info("[FlyoverEditor]: surfaces at (%.2f, %.2f)%s: terrain %.3f; cast from %.2f: %s%s",
+        x, z, where, terrainY, topY, table.concat(parts, "; "), chosen)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -254,36 +474,39 @@ function ADFlyoverEditor:groundTargetAt(x, y, z, expectedY, spanLineOnly, keepTo
     end
 
     local reference = expectedY or y
-    -- High enough to include a deck the span passes over, not so high that it reaches for the
-    -- canopy of a tree that happens to overhang the road.
-    local topY = math.max(y, reference, terrainY) + 15
-    local surfaces = columnSurfaces(x, z, topY, terrainY)
+    -- The shared surface rule (top of this file). Searched from 15 m over the higher of the point and
+    -- its line: high enough to include a deck the span passes over, not so high that it reaches for
+    -- the canopy of a tree that happens to overhang the road.
+    local surfaces, _, kinds = self:surfacesAt(x, z, math.max(y, reference))
+    if surfaces == nil then
+        surfaces, kinds = { terrainY }, { "terrain" }
+    end
 
     -- The level toggle belongs to the ground tool. Other callers laying new track want the surface
     -- nearest the line they came from, whatever the ground tool happens to be set to.
     if not spanLineOnly and self.groundLevel == self.GROUND_LEVEL.TOP then
-        return surfaces[1]
+        return surfaces[1], kinds[1]
     end
 
     -- Keep the point on the surface it already sits on, so grounding never pulls a point down off a
     -- ramp or bridge deck it is correctly on; only points off EVERY surface fall through to the span
     -- line below. This is what stops a route over a placed ramp being flattened onto the terrain.
     if keepTolerance ~= nil then
-        for _, h in ipairs(surfaces) do
+        for i, h in ipairs(surfaces) do
             if math.abs(y - h) <= keepTolerance then
-                return h
+                return h, kinds[i]
             end
         end
     end
 
-    local best, bestGap = surfaces[#surfaces], math.huge
-    for _, h in ipairs(surfaces) do
+    local bestIndex, bestGap = #surfaces, math.huge
+    for i, h in ipairs(surfaces) do
         local gap = math.abs(h - reference)
         if gap < bestGap then
-            best, bestGap = h, gap
+            bestIndex, bestGap = i, gap
         end
     end
-    return best
+    return surfaces[bestIndex], kinds[bestIndex]
 end
 
 --- Every waypoint in the span that sits further off the ground than the tolerance.
@@ -333,19 +556,24 @@ function ADFlyoverEditor:updateGroundPreview()
         return firstWp.y + (lastWp.y - firstWp.y) * t
     end
 
-    local offenders, checked = {}, 0
+    local offenders, checked, probe = {}, 0, nil
+    local middle = math.floor((#span + 1) / 2)
     for index, id in ipairs(span) do
         local wp = pts[index]
         if wp ~= nil then
             checked = checked + 1
+            if index == middle or probe == nil then probe = { x = wp.x, y = wp.y, z = wp.z, id = id } end
             -- Its own lookup rather than resolveHeightAt's - see groundTargetAt for why. Bridges are
             -- kept by the downward cast finding the deck, not by refusing to look. keepTolerance =
             -- groundTolerance so a point already sitting on the ramp/bridge deck is left there rather
             -- than dragged down to the terrain the span line runs over.
-            local targetY = self:groundTargetAt(wp.x, wp.y, wp.z, expectedAt(index), false, self.groundTolerance)
+            local targetY, kind = self:groundTargetAt(wp.x, wp.y, wp.z, expectedAt(index), false, self.groundTolerance)
             if targetY ~= nil then
                 local delta = wp.y - targetY
-                if math.abs(delta) > self.groundTolerance then
+                -- Under a floor or a road mesh is wrong at any tolerance: the point is inside it.
+                -- (A floor a few cm over the terrain, Welker Farms 2026-11-03, hid under the 0.5 m default.)
+                local under = kind ~= nil and kind ~= "terrain" and delta < -AutoDrive.FLYOVER_GROUND_UNDER
+                if under or math.abs(delta) > math.max(self.groundTolerance, 0.005) then
                     offenders[#offenders + 1] =
                         { id = id, x = wp.x, y = wp.y, z = wp.z, targetY = targetY, delta = delta }
                 end
@@ -354,6 +582,7 @@ function ADFlyoverEditor:updateGroundPreview()
     end
 
     self.groundChecked = checked
+    self.groundProbe = probe
     self.groundPreview = #offenders > 0 and offenders or nil
     self.groundBlockedBy = nil
 end
@@ -387,6 +616,11 @@ function ADFlyoverEditor:commitGround()
     if self.groundPreview == nil or #self.groundPreview == 0 then
         ADFlyoverSettings.debugLog("[FlyoverEditor]: nothing is further than %.1fm off the ground in that span "
             .. "(%d waypoint(s) checked).", self.groundTolerance, self.groundChecked or 0)
+        local probe = self.groundProbe
+        if probe ~= nil then
+            self:describeSurfaces(probe.x, probe.z, probe.y, string.format("(ground, nothing moved; id=%s at %.3f)",
+                tostring(probe.id), probe.y), nil)
+        end
         self:cancelGround()
         return
     end
@@ -401,6 +635,10 @@ function ADFlyoverEditor:commitGround()
         if wp ~= nil and math.abs(wp.x - p.x) < 0.01 and math.abs(wp.z - p.z) < 0.01 then
             ADGraphManager:moveWayPoint(p.id, p.x, p.targetY, p.z, wp.flags, false)
             moved = moved + 1
+            if moved <= 3 then
+                self:describeSurfaces(p.x, p.z, math.max(p.y, p.targetY),
+                    string.format("(ground id=%s was %.3f)", tostring(p.id), p.y), p.targetY)
+            end
             if p.delta > 0 then
                 lowered = lowered + 1
             else
@@ -608,15 +846,6 @@ function ADFlyoverEditor:divideClick()
             self.divideCount = math.max(0, #span - 2)
         end,
     })
-end
-
---- How many waypoints currently sit between two ends, or 0 if they are not connected.
-function ADFlyoverEditor:currentInteriorCount(fromId, toId)
-    local span = self:runPathBetween(fromId, toId)
-    if span == nil then
-        return 0
-    end
-    return math.max(0, #span - 2)
 end
 
 -- MODSPLIT: SHARED WITH THE FILES LOADED AFTER THIS ONE (tools/modsplit/split.py writes this block)
